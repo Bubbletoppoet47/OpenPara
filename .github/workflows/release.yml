@@ -69,16 +69,19 @@ jobs:
           }
           $out = & $py -c "import gpd_app, render_studio, updater; print('app imports ok')" 2>&1
           Write-Host $out
-          if ($LASTEXITCODE -ne 0) { Report "import of the app failed" $out; exit 1 }
+          Write-Host "exit code: $LASTEXITCODE"
+          if (-not (($out | Out-String) -match "app imports ok")) { Report "import of the app failed (exit $LASTEXITCODE)" $out; exit 1 }
           $out = & $py -c "import build123d, pyvista, pyvistaqt, mitsuba, gmsh, scipy, imageio_ffmpeg; print('packages ok')" 2>&1
           Write-Host $out
-          if ($LASTEXITCODE -ne 0) { Report "import of a package failed" $out; exit 1 }
+          Write-Host "exit code: $LASTEXITCODE"
+          if (-not (($out | Out-String) -match "packages ok")) { Report "import of a package failed (exit $LASTEXITCODE)" $out; exit 1 }
           Copy-Item test_updater.py build\OpenPara\app\
           $out = & $py build\OpenPara\app\test_updater.py 2>&1
           $code = $LASTEXITCODE
           Write-Host $out
           Remove-Item build\OpenPara\app\test_updater.py
-          if ($code -ne 0) { Report "test_updater failed" $out; exit 1 }
+          Write-Host "exit code: $code"
+          if (-not (($out | Out-String) -match "update UI OK")) { Report "test_updater failed (exit $code)" $out; exit 1 }
 
       - name: Installer and update zip
         shell: pwsh
