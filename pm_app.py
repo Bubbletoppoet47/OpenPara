@@ -769,7 +769,7 @@ class MainWindow(QMainWindow):
             it.setData(0, Qt.ItemDataRole.UserRole, ("feature", f["id"]))
             if sk:
                 it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                it.setCheckState(0, Qt.CheckState.Checked if self.sketch_shown(f) else Qt.CheckState.Unchecked)
+                it.setCheckState(0, Qt.CheckState.Checked if self.sketch_flag(f) else Qt.CheckState.Unchecked)
             elif part_refgeo.is_ref(f):
                 it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 it.setCheckState(0, Qt.CheckState.Checked if f.get("show", True) else Qt.CheckState.Unchecked)
@@ -1453,15 +1453,18 @@ class MainWindow(QMainWindow):
         return d.solid
 
     # ------------------------------------------------------------------ what is shown
-    def sketch_shown(self, f):
-        """A sketch is drawn while it is selected or open; otherwise by its checkbox, and by default only while no feature uses it."""
-        if f["id"] == self.sel or (self.ed is not None and self.ed.active and self.ed.sk_id == f["id"]):
-            return True
-        if not self.vis["sketches"]:
-            return False
+    def sketch_flag(self, f):
+        """The sketch's own checkbox in the tree (a sketch no feature uses is on by default, one a feature uses is off)."""
         if f.get("show") is not None:
             return bool(f["show"])
         return not any(g.get("sketch") == f["id"] for g in self.doc.features)
+
+    def sketch_shown(self, f):
+        """Is the sketch drawn?  Show > Sketches off hides all of them; with it on, each sketch's checkbox in the tree decides.
+        Selecting a sketch does not show it.  Only the sketch that is open for editing is always drawn (by the sketch editor)."""
+        if self.ed is not None and self.ed.active and self.ed.sk_id == f["id"]:
+            return True
+        return bool(self.vis["sketches"]) and self.sketch_flag(f)
 
     def set_show(self, key, on):
         self.vis[key] = bool(on)

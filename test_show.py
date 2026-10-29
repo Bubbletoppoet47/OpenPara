@@ -9,7 +9,7 @@ import pm_app, pm_model as pm
 w = pm_app.MainWindow(); d = w.doc; ed = w.ed; ed.size_fn = lambda: (1000.0, 700.0)
 sk = [f for f in d.features if f["kind"] == "sketch"][0]
 print("sketch used by a feature -> shown?", w.sketch_shown(sk)); assert not w.sketch_shown(sk)
-w.sel = sk["id"]; assert w.sketch_shown(sk)                       # selected: shown
+w.sel = sk["id"]; assert not w.sketch_shown(sk)                   # selecting does not show it (its checkbox decides)
 w.sel = None
 sk["show"] = True; assert w.sketch_shown(sk); sk["show"] = None
 # tree checkbox

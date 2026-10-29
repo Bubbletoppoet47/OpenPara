@@ -407,6 +407,21 @@ def draw(name, g):
         g.setPen(pen(QColor("#9aa3b5"), 2))
         g.setBrush(QBrush(QColor("#eef1f7")))
         g.drawRect(QRectF(9, 9, 22, 22))
+    elif n == "reference geometry":
+        # a tilted plane with its grid, an axis through it, and the point where they meet
+        g.setPen(pen(ACC, 2.0))
+        g.setBrush(QBrush(QColor(207, 224, 251, 215)))
+        g.drawPolygon(poly([(3, 29), (12, 14), (37, 14), (28, 29)]))
+        g.setBrush(Qt.BrushStyle.NoBrush)
+        g.setPen(pen(QColor("#7fa6e6"), 1.2))
+        g.drawLine(QPointF(7.5, 21.5), QPointF(32.5, 21.5))
+        g.drawLine(QPointF(20.0, 14), QPointF(15.5, 29))
+        g.drawLine(QPointF(28.5, 14), QPointF(21.5, 29))
+        g.setPen(pen(ACC2, 2.2))
+        g.drawLine(QPointF(20.5, 4), QPointF(20.5, 36))
+        g.drawLine(QPointF(20.5, 4), QPointF(17.5, 8.5))
+        g.drawLine(QPointF(20.5, 4), QPointF(23.5, 8.5))
+        dot(g, 20.5, 21.5, INK, 2.8)
     else:
         return False
     return True

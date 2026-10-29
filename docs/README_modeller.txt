@@ -93,6 +93,10 @@ REVOLVE, PATTERN, MIRROR
   Mirror: tick features (or the whole body); mirror about the Front/Top/Right plane or a flat face you selected.
   Not built: Shell, Draft, Hole Wizard, Sweep, Loft, reference geometry.
 
+SKETCH VISIBILITY
+  View > Show > Sketches off hides every sketch. With it on, each sketch's checkbox in the feature tree decides whether it is drawn
+  (selecting a sketch does not show it). The sketch you are editing is always drawn.
+
 CONFIGURATIONS: FEATURE VALUES AND NAMED DIMENSIONS
   Add Column lists, besides globals and Suppress, the numbers of each feature (Depth, Depth2, Draft, Wall, Angle, Radius / Distance,
   Copies, Spacing, Offset ...). A feature with nothing to size (for example a Through All cut) has only its Suppress column.
