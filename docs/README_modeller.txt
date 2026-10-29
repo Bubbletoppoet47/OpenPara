@@ -93,12 +93,27 @@ REVOLVE, PATTERN, MIRROR
   Mirror: tick features (or the whole body); mirror about the Front/Top/Right plane or a flat face you selected.
   Not built: Shell, Draft, Hole Wizard, Sweep, Loft, reference geometry.
 
+UNITS  (File > Units)
+  One unit system for the whole program: sketch dimensions, feature boxes, globals, assemblies (positions, mates, pattern spacing),
+  Measure and Mass Properties, the slice plane offset, the Renderer, and the 1D FEA / 2D FEA / 2D CFD tabs.
+  Systems: Metric (mm, kg, N, s, MPa) [default], (cm, ... N/cm2), (m, ... Pa), (m, kN, kPa), (mm, kN, kN/mm2),
+           US (in, lbf, psi), (in, kip, ksi), (ft, lbf, psf), (ft, kip, ksf).
+  Speed is a separate choice (m/s, km/h, mph, ft/s, mm/s, in/s), so a wind speed can be in mph with metric lengths.
+  Your files are not changed: geometry is always stored in millimetres, so switching units only changes what is shown and how
+  typed numbers are read. A simulation (.gps) is converted to the new units (its mesh/result is converted in place when possible
+  and cleared otherwise); a .gps saved in other units is converted when opened.
+  Typing: a plain number in a length box is in the current unit. You can also type a unit:  3 in,  25 mm,  2 ft + 10 cm.
+  Formulas: a number added or subtracted (W/2 + 3), alone (40) or inside min/max/abs/round is a length; a number that multiplies or
+  divides (2*W, W/3) is just a factor. In the Globals table every global has a Type: length (default), number or angle - number and
+  angle are never converted (use them for counts, ratios and degrees).
+  The choice is remembered between sessions (units.json in the data folder).
+
 EVALUATE TAB
-  Mass Properties: pick a material (or type a density), choose the unit system (mm/g, m/kg, in/lb). Shows mass, volume, surface area,
+  Mass Properties: pick a material (or type a density), units follow File > Units (mm and cm show grams, m kilograms, in and ft pounds). Shows mass, volume, surface area,
   center of mass, principal axes and moments, and the moment of inertia at the center of mass and at the origin
   (positive tensor notation). The material is saved in the .gpd file. Copy to Clipboard copies the text.
   Measure: press it, then click points (vertices), edges or faces. One item gives its coordinates / length (and radius of circles) / area.
-  Two items give distances: tick Minimum, Maximum and Center to center as you like, XYZ adds the dX dY dZ split, mm / in switches units.
+  Two items give distances: tick Minimum, Maximum and Center to center as you like, XYZ adds the dX dY dZ split. Lengths are shown in the program's unit (File > Units).
   The measured line is drawn in orange. Maximum distance is found from points sampled along the shapes.
 
 ASSEMBLIES AND TABS  (start with:  python gpd_app.py   or   python pm_app.py)

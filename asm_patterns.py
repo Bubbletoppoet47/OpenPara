@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLa
 from PyQt6.QtGui import QFont, QGuiApplication
 
 import asm_model as am
+import unitctl
 
 AX = {"X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0), "Z": (0.0, 0.0, 1.0)}
 BASE_PLANE_N = {"Front": (0.0, -1.0, 0.0), "Top": (0.0, 0.0, 1.0), "Right": (1.0, 0.0, 0.0)}
@@ -273,18 +274,20 @@ def panel(win):
     lay.addWidget(box)
 
     def num(label, key, integer=False):
-        e = QLineEdit(str(p.get(key)))
+        length = "(mm)" in label                            # held in mm, shown and typed in the program's unit
+        show = lambda: unitctl.num(unitctl.to_disp(p.get(key)), 8) if length else str(p.get(key))
+        e = QLineEdit(show())
 
         def done():
             try:
-                v = float(e.text())
+                v = unitctl.read_length(e.text()) if length else float(e.text())
                 p[key] = int(round(v)) if integer else v
             except ValueError:
-                e.setText(str(p.get(key)))
+                e.setText(show())
                 return
             refresh_keep(win)
         e.editingFinished.connect(done)
-        form.addRow(label, e)
+        form.addRow(unitctl.label(label), e)
 
     def choose(label, key, extra_label):
         cb = QComboBox()
@@ -382,8 +385,8 @@ class AsmMass(QDialog):
         self.setWindowTitle("Mass Properties - assembly")
         self.resize(560, 620)
         lay = QVBoxLayout(self)
-        self.units = QComboBox()
-        self.units.addItems(list(evaluate.UNITS))
+        self.units = QLabel()                                   # follows File > Units
+        self.units_changed(refresh=False)
         form = QFormLayout()
         form.addRow("Units", self.units)
         lay.addLayout(form)
@@ -401,8 +404,13 @@ class AsmMass(QDialog):
         b.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.out.toPlainText()))
         row.addWidget(b)
         lay.addLayout(row)
-        self.units.currentTextChanged.connect(lambda _t: self.refresh())
         self.refresh()
+
+    def units_changed(self, refresh=True):
+        u = self.ev.unit_tuple(self.ev.GLOBAL)
+        self.units.setText(f"{u[0]}, {u[2]}   (set in File > Units)")
+        if refresh:
+            self.refresh()
 
     def refresh(self):
         try:
@@ -411,7 +419,7 @@ class AsmMass(QDialog):
                 self.out.setPlainText("There is nothing with a solid in the assembly yet.")
                 return
             dens = pr["mass"] / pr["volume"] * 1e9
-            self.out.setPlainText(self.ev.mass_text(self.win.title(), pr, self.units.currentText(), dens)
+            self.out.setPlainText(self.ev.mass_text(self.win.title(), pr, self.ev.GLOBAL, dens)
                                   + "\n\n(The density shown is the average of the whole assembly.)")
         except Exception as ex:
             self.out.setPlainText(f"Could not compute the mass properties: {ex}")

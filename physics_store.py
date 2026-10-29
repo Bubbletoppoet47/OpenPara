@@ -220,6 +220,8 @@ def save(skt_path, tabs, extras=None):
         st = tab.export_state() if tab is not None and getattr(tab, "model", None) is not None else None
         if st is None:
             continue
+        import units
+        st["speed_unit"] = units.speed_unit()               # the speed numbers in this state are in this unit (it is a separate setting)
         raw = pickle.dumps(st, protocol=4)
         _loads(raw)                                     # it must be readable again, or do not touch the old file
         raws[key] = raw
@@ -555,7 +557,6 @@ def convert_beam_state(st, old, new, convert):
         elif ld["kind"] == "dist":
             _sc(ld, ("q1", "q2"), ff / lf)
         elif ld["kind"] == "wind":
-            _sc(ld, ("V",), units.speed_factor(old, new))
             _sc(ld, ("rho",), units.density_factor(old, new))
         elif ld["kind"] == "snow":
             _sc(ld, ("h",), lf)
@@ -577,7 +578,6 @@ def convert_cfd_state(st, old, new, convert):
         lf = units.length_factor(old, new)
         for n in ("e_hb", "e_hf", "e_first", "e_bt"):
             _scale_text(st["inputs"], n, lf)
-        _scale_text(st["inputs"], "e_speed", units.speed_factor(old, new))
         _scale_text(st["inputs"], "e_rho", units.density_factor(old, new))
         _scale_text(st["inputs"], "e_mu", units.viscosity_factor(old, new))
         st["body_size"] = st.get("body_size", 1.0) * lf
@@ -596,3 +596,60 @@ def convert_cfd_state(st, old, new, convert):
     st["setup_used"] = None
     st["res_html"] = ""
     return st
+
+
+# --- opening a saved simulation in a program whose units differ (File > Units is program-wide; the speed unit is separate)
+def speed_state(st, old_u, new_u):
+    """The state with its speed numbers (CFD flow speed, 1D wind loads) in another speed unit."""
+    import units
+    st = dict(st)
+    st["speed_unit"] = new_u
+    if old_u == new_u:
+        return st
+    f = units.speed_factor(old_u, new_u)
+    st["inputs"] = dict(st.get("inputs", {}))
+    _scale_text(st["inputs"], "e_speed", f)
+    loads = []
+    for ld in st.get("loads", []):
+        ld = dict(ld)
+        if ld.get("kind") == "wind" and ld.get("V") is not None:
+            ld["V"] = ld["V"] * f
+        loads.append(ld)
+    st["loads"] = loads
+    return st
+
+
+def state_units(st):
+    """(unit system name, speed unit) a saved state is in.  Old files name three '... mph' systems and store no speed unit."""
+    import sketcher_core as sc
+    import units
+    d = json.loads(st["model_json"]) if isinstance(st.get("model_json"), str) else {}
+    raw = d.get("unit") or units.DEFAULT
+    sysname = units.canon(raw) if units.valid(raw) else units.DEFAULT
+    sp = st.get("speed_unit")
+    if sp not in units.SPEEDS:
+        sp = units.legacy_speed_unit(raw)
+    return sysname, sp
+
+
+def to_current_units(kind, st, system, speed):
+    """A saved tab state in the program's current units (system + speed unit).  Raises ValueError when the sketch cannot be
+    converted safely (a formula that mixes lengths with fixed numbers); the caller then keeps the file's own units."""
+    import units
+    old, old_v = state_units(st)
+    st = dict(st)
+    st["inputs"] = dict(st.get("inputs", {}))
+    # old '... mph' system names are the base system now
+    _m = json.loads(st["model_json"])
+    if _m.get("unit") and units.canon(_m["unit"]) != _m["unit"]:
+        _m["unit"] = units.canon(_m["unit"])
+        st["model_json"] = json.dumps(_m)
+    for k in ("unit_combo",):
+        if st["inputs"].get(k) and units.canon(st["inputs"][k]) != st["inputs"][k]:
+            st["inputs"][k] = units.canon(st["inputs"][k])
+    if st.get("cur_unit"):
+        st["cur_unit"] = units.canon(st["cur_unit"])
+    if old != system:
+        conv = {"fea": convert_fea_state, "beam": convert_beam_state, "cfd": convert_cfd_state}[kind]
+        st = conv(st, old, system, True)
+    return speed_state(st, old_v, speed)

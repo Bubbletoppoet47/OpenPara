@@ -18,6 +18,19 @@ UNITS = {
 }
 
 
+GLOBAL = "@global"                      # 'the program's units' (File > Units)
+
+
+def unit_tuple(system):
+    """(length unit, length units per mm, mass unit, mass per kg, density unit, density per kg/m3) of a display system;
+    GLOBAL = the one chosen in File > Units."""
+    if system in UNITS:
+        return UNITS[system]
+    import unitctl
+    lu, mu, du, mf, df = unitctl.mass_units()
+    return (lu, 1.0 / unitctl.mm_per_unit(), mu, mf, du, df)
+
+
 def mass_properties(solid, density):
     """dict of volume (mm3), area (mm2), com (mm), mass (kg), inertia about the centre of mass and about the origin (kg mm2),
     principal moments / axes.  density in kg/m3."""
@@ -41,7 +54,7 @@ def mass_properties(solid, density):
 
 
 def mass_text(name, props, system, density):
-    lu, lf, mu, mf, du, df = UNITS[system]
+    lu, lf, mu, mf, du, df = unit_tuple(system)
     L, Mf = lf, mf
     p = props
     f = lambda x: f"{x:.5f}"
@@ -78,9 +91,7 @@ class MassDialog(QDialog):
         for n, d in MATERIALS:
             self.mat.addItem(f"{n}   ({d:g} kg/m3)", (n, d))
         self.mat.addItem("Custom", ("Custom", None))
-        self.units = QComboBox()
-        self.units.addItems(list(UNITS))
-        self.units.setCurrentText(app.mass_units)
+        self.units = QLabel()                                   # the units follow File > Units
         self.dens = QLineEdit()
         self.dlabel = QLabel()
         row = QHBoxLayout()
@@ -89,6 +100,7 @@ class MassDialog(QDialog):
         form.addRow("Material", self.mat)
         form.addRow("Density", row)
         form.addRow("Units", self.units)
+        self.set_units_label()
         lay.addLayout(form)
         self.out = QPlainTextEdit()
         self.out.setReadOnly(True)
@@ -107,13 +119,12 @@ class MassDialog(QDialog):
         idx = next((i for i, (n, d) in enumerate(MATERIALS) if n == mat.get("name")), len(MATERIALS))
         self.mat.setCurrentIndex(idx)
         self.mat.currentIndexChanged.connect(self.pick_material)
-        self.units.currentTextChanged.connect(self.change_units)
         self.dens.editingFinished.connect(self.typed_density)
         self.show_density()
         self.refresh()
 
     def show_density(self):
-        u = UNITS[self.units.currentText()]
+        u = unit_tuple(GLOBAL)
         self.dens.setText(f"{self.app.doc.material['density'] * u[5]:.6g}")
         self.dlabel.setText(u[4])
 
@@ -130,7 +141,7 @@ class MassDialog(QDialog):
 
     def typed_density(self):
         try:
-            v = float(self.dens.text()) / UNITS[self.units.currentText()][5]
+            v = float(self.dens.text()) / unit_tuple(GLOBAL)[5]
             if v <= 0:
                 raise ValueError
         except ValueError:
@@ -143,8 +154,12 @@ class MassDialog(QDialog):
         self.app.refresh_tree()
         self.refresh()
 
-    def change_units(self, name):
-        self.app.mass_units = name
+    def set_units_label(self):
+        u = unit_tuple(GLOBAL)
+        self.units.setText(f"{u[0]}, {u[2]}   (set in File > Units)")
+
+    def units_changed(self):
+        self.set_units_label()
         self.show_density()
         self.refresh()
 
@@ -155,7 +170,7 @@ class MassDialog(QDialog):
             return
         try:
             p = mass_properties(solid, self.app.doc.material["density"])
-            self.out.setPlainText(mass_text("Part", p, self.units.currentText(), self.app.doc.material["density"]))
+            self.out.setPlainText(mass_text("Part", p, GLOBAL, self.app.doc.material["density"]))
         except Exception as ex:
             self.out.setPlainText(f"Could not compute the mass properties: {ex}")
 
@@ -212,7 +227,10 @@ def describe(it, L, lu):
 
 def measure_report(items, opts, unit):
     """(text, [(p, q) segments to draw])  for the picked items; opts = dict(xyz, cc, mn, mx)."""
-    L = 1.0 if unit == "mm" else 1 / 25.4
+    import unitctl
+    if unit is None or unit == GLOBAL:
+        unit = unitctl.length_unit()
+    L = 1.0 / unitctl.SUFFIX_MM.get(unit, 1.0)              # length units per mm
     lu = unit
     if not items:
         return "Click a point, an edge or a face in the view.\nClick a second item to measure between them.", []
@@ -257,12 +275,11 @@ class MeasurePanel(QDialog):
         self.resize(430, 300)
         lay = QVBoxLayout(self)
         row = QHBoxLayout()
-        self.unit = QComboBox()
-        self.unit.addItems(["mm", "in"])
-        self.unit.setCurrentText(app.measure_unit)
-        self.unit.setToolTip("Units shown")
+        self.unit = QLabel()
+        self.unit.setToolTip("The units follow File > Units")
         row.addWidget(QLabel("Units"))
         row.addWidget(self.unit)
+        self.units_changed(refresh=False)
         self.opt = {}
         for key, text, tip, on in (("xyz", "XYZ", "Also show the X, Y and Z differences", True),
                                    ("mn", "Minimum", "Minimum distance between the two items", True),
@@ -283,13 +300,19 @@ class MeasurePanel(QDialog):
         b = QPushButton("Clear selection")
         b.clicked.connect(app.measure_clear)
         lay.addWidget(b)
-        self.unit.currentTextChanged.connect(self.changed)
 
     def options(self):
         return {k: c.isChecked() for k, c in self.opt.items()}
 
+    def units_changed(self, refresh=True):
+        import unitctl
+        self.unit.setText(unitctl.length_unit())
+        self.app.measure_unit = unitctl.length_unit()
+        if refresh:
+            self.app.measure_update()
+
     def changed(self, *_a):
-        self.app.measure_unit = self.unit.currentText()
+        self.app.measure_unit = self.unit.text()
         self.app.measure_update()
 
     def closeEvent(self, e):

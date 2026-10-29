@@ -3,6 +3,7 @@ asm_refs.py - the assembly's own reference geometry: its origin and Front / Top 
 edges, points and planes of the components), the Show menu, picking them in the view and in the (small) tree.
 Attached to assembly.AssemblyWindow by install().
 """
+import unitctl
 import numpy as np
 from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QFormLayout, QHBoxLayout, QLabel, QListWidget, QMenu, QPushButton, QRadioButton,
@@ -360,16 +361,19 @@ def panel(win):
     lay.addWidget(box)
     from PyQt6.QtWidgets import QLineEdit
 
-    def num(label, key):
-        e = QLineEdit(str(st[key]))
+    def num(label, key, length=False):
+        shown = unitctl.expr_to_display(str(st[key])) if length else str(st[key])
+        e = QLineEdit(shown)
 
         def done():
-            st[key] = e.text()
+            if e.text() == shown:
+                return                                         # not edited: the stored text stays exactly as it is
+            st[key] = unitctl.expr_from_display(e.text()) if length else e.text()
             refresh(win)
         e.editingFinished.connect(done)
-        form.addRow(label, e)
+        form.addRow(unitctl.label(label) if length else label, e)
     if plane and st["ptype"] == "offset":
-        num("Distance (mm)", "d")
+        num("Distance (mm)", "d", True)
     if plane and st["ptype"] == "angle":
         num("Angle (deg)", "ang")
     if plane:

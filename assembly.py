@@ -27,6 +27,7 @@ import config_panels
 import mini_tree
 import icons
 import pm_model as pm
+import unitctl
 import pm_app
 import nav
 import viewpick
@@ -258,6 +259,21 @@ class AssemblyWindow(QMainWindow):
         from PyQt6.QtGui import QKeySequence, QShortcut
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=lambda: self.set_mode(None))
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.delete_selected)
+
+    def units_changed(self, *_a):
+        """File > Units was changed: what shows a length is redrawn (the stored positions stay in mm)."""
+        d = getattr(self, "mass_dlg", None)
+        if d is not None:
+            try:
+                d.units_changed()
+            except RuntimeError:
+                pass
+        try:
+            self.refresh_tree()
+            if self.sel_comp:
+                self.show_comp_props()
+        except Exception:
+            pass
 
     def say(self, text):
         self.statusBar().showMessage(text)
@@ -999,19 +1015,22 @@ class AssemblyWindow(QMainWindow):
                 w.deleteLater()
 
     def num_edit(self, form, label, getter, setter):
-        e = QLineEdit(f"{getter():.4f}".rstrip("0").rstrip("."))
+        """A number box.  A length (label with '(mm)') is held in mm but shown / typed in the program's unit (File > Units)."""
+        length = "(mm)" in label
+        show = (lambda: unitctl.to_disp(getter())) if length else getter
+        e = QLineEdit(f"{show():.5f}".rstrip("0").rstrip("."))
 
         def done():
             try:
-                v = float(e.text())
+                v = unitctl.read_length(e.text()) if length else float(e.text())
             except ValueError:
-                e.setText(f"{getter():.4f}")
+                e.setText(f"{show():.5f}".rstrip("0").rstrip("."))
                 return
-            if abs(v - getter()) > 1e-9:
+            if abs(v - getter()) > 1e-7:
                 self.snapshot()
                 setter(v)
         e.editingFinished.connect(done)
-        form.addRow(label, e)
+        form.addRow(unitctl.label(label), e)
 
     def show_comp_props(self):
         self.clear_props()
@@ -1422,16 +1441,18 @@ class AssemblyWindow(QMainWindow):
             self.props_lay.addWidget(rb)
         if self.mate_type in ("distance", "angle"):
             form = QFormLayout()
-            e = QLineEdit(str(self.mate_opts.get("value", "")))
+            dist = self.mate_type == "distance"
+            v0 = self.mate_opts.get("value", "")
+            e = QLineEdit(unitctl.num(unitctl.to_disp(v0), 8) if dist and v0 != "" else str(v0))
 
             def done():
                 try:
-                    self.mate_opts["value"] = float(e.text())
+                    self.mate_opts["value"] = unitctl.read_length(e.text()) if dist else float(e.text())
                 except ValueError:
                     return
                 self.mate_preview()
             e.editingFinished.connect(done)
-            form.addRow("Distance (mm)" if self.mate_type == "distance" else "Angle (deg)", e)
+            form.addRow(unitctl.label("Distance (mm)") if dist else "Angle (deg)", e)
             w = QWidget()
             w.setLayout(form)
             self.props_lay.addWidget(w)
@@ -1527,11 +1548,12 @@ class AssemblyWindow(QMainWindow):
             self.props_lay.addWidget(QLabel(f"{r['k']}  of  {c['name'] if c else ('the assembly' if r['c'] == '@' else '?')}"))
         if m["type"] in ("distance", "angle"):
             form = QFormLayout()
-            e = QLineEdit(str(m.get("value")))
+            dist = m["type"] == "distance"
+            e = QLineEdit(unitctl.num(unitctl.to_disp(m.get("value")), 8) if dist else str(m.get("value")))
 
             def done():
                 try:
-                    v = float(e.text())
+                    v = unitctl.read_length(e.text()) if dist else float(e.text())
                 except ValueError:
                     return
                 if v != m.get("value"):
@@ -1540,7 +1562,7 @@ class AssemblyWindow(QMainWindow):
                     self.solve_all()
                     self.update_all()
             e.editingFinished.connect(done)
-            form.addRow("Distance (mm)" if m["type"] == "distance" else "Angle (deg)", e)
+            form.addRow(unitctl.label("Distance (mm)") if dist else "Angle (deg)", e)
             w = QWidget()
             w.setLayout(form)
             self.props_lay.addWidget(w)

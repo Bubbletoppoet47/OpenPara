@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (QWidgetAction, QApplication, QFrame, QTabWidget, QT
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import pm_model as pm
+import unitctl
 import evaluate
 import config_panels
 import sketch_edit
@@ -58,7 +59,7 @@ class MainWindow(QMainWindow):
         self.sel_edges = []              # edge refs picked in the view (Shift adds); Fillet / Chamfer / Convert Entities use them
         self.nav = None
         self.mass_units = "Metric (mm, g)"
-        self.measure_unit = "mm"
+        self.measure_unit = unitctl.length_unit()
         self.measuring = False
         self.meas_items, self.meas_segs, self.meas_sig = [], [], None
         self.measure_panel = self.mass_dialog = None
@@ -206,8 +207,8 @@ class MainWindow(QMainWindow):
         gl = QVBoxLayout(gw)
         gl.setContentsMargins(6, 6, 6, 6)
         gl.addWidget(QLabel("Equations (global variables). Use the names in any number field."))
-        self.gtab = QTableWidget(0, 3)
-        self.gtab.setHorizontalHeaderLabels(["Name", "Equation", "Value"])
+        self.gtab = QTableWidget(0, 4)
+        self.gtab.setHorizontalHeaderLabels(["Name", "Equation", "Value", "Type"])
         self.gtab.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.gtab.itemChanged.connect(self.global_edited)
         gl.addWidget(self.gtab)
@@ -452,10 +453,10 @@ class MainWindow(QMainWindow):
                 return
             self.ed.poly_n = max(3, int(round(r[0][0])))
         elif name == "fillet":
-            r = sketch_edit.ask_form(self, "Sketch fillet", [("Radius (mm)", float(self.ed.fillet_r))])
+            r = sketch_edit.ask_form(self, "Sketch fillet", [(unitctl.label("Radius (mm)"), unitctl.to_disp(float(self.ed.fillet_r)))])
             if r is None or r[0][0] <= 0:
                 return
-            self.ed.fillet_r = r[0][0]
+            self.ed.fillet_r = unitctl.from_disp(r[0][0])
         self.ed.reset_tool(name)
         self.sync_tool()
         self.ed.say_prompt()
@@ -715,7 +716,7 @@ class MainWindow(QMainWindow):
         d = self.doc
         self.busy = True
         self.tree.clear()
-        root = QTreeWidgetItem(self.tree, ["⬢  Part1" + (f"   ({d.solid.volume:,.0f} mm³)" if d.solid is not None else "")])
+        root = QTreeWidgetItem(self.tree, ["⬢  Part1" + (f"   ({unitctl.volume_text(d.solid.volume, 5)})" if d.solid is not None else "")])
         root.setExpanded(True)
         QTreeWidgetItem(root, [f"▣  Solid Bodies({1 if d.solid is not None else 0})"])
         QTreeWidgetItem(root, ["∑  Equations" + (f"  ({len(d.params)})" if d.params else "")]).setData(0, Qt.ItemDataRole.UserRole, ("equations", None))
@@ -894,18 +895,28 @@ class MainWindow(QMainWindow):
                 w.setParent(None)
                 w.deleteLater()
 
-    def expr_edit(self, form, label, feat, key, store=None):
-        e = QLineEdit(str(feat[key] if store is None else store[key]))
-        e.setToolTip("A number or an expression using the Globals, e.g.  Width/2 + 3")
+    def expr_edit(self, form, label, feat, key, store=None, kind=None):
+        """A box for a number / formula.  A length (label with '(mm)', or an Offset) is shown and read in the current unit
+        (File > Units) and kept in mm; a count or an angle is shown as it is."""
+        if kind is None:
+            kind = "length" if ("(mm)" in label or key == "offset") else "number"
+        tgt0 = feat if store is None else store
+        shown = unitctl.expr_to_display(str(tgt0[key]), kind)
+        e = QLineEdit(shown)
+        e.setToolTip("A number or an expression using the Globals, e.g.  Width/2 + 3"
+                     + ("\nA length is in " + unitctl.length_unit() + "; you can also type  3 in,  25 mm,  2 ft ..." if kind == "length" else ""))
 
         def done():
             tgt = feat if store is None else store
-            if str(tgt[key]) != e.text():
+            if e.text() == shown:
+                return                                         # nothing was typed: keep the stored value exactly
+            new = unitctl.expr_from_display(e.text(), kind)
+            if str(tgt[key]) != new:
                 self.snapshot()
-                tgt[key] = e.text()
+                tgt[key] = new
                 self.update_all(keep_props=True)
         e.editingFinished.connect(done)
-        form.addRow(label, e)
+        form.addRow(unitctl.label(label) if kind == "length" else label, e)
         return e
 
     def combo(self, form, label, feat, key, options, default):
@@ -948,7 +959,7 @@ class MainWindow(QMainWindow):
             polys = d.region_polys(sk_)
             import pm_model
             for n, (area, pt) in enumerate(info):
-                c = QCheckBox(f"Region {n + 1}   area {area:.1f} mm²")
+                c = QCheckBox(f"Region {n + 1}   area {unitctl.area_text(area, 5)}")
                 on = (not chosen) or any(pm_model._inside(p, polys[n][0], polys[n][1]) for p in chosen)
                 c.setChecked(on)
 
@@ -1300,28 +1311,77 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    def units_changed(self, *_a):
+        """File > Units was changed: everything that shows a length is redrawn in the new unit (nothing stored changes)."""
+        self.measure_unit = unitctl.length_unit()
+        if self.mass_dialog is not None:
+            self.mass_dialog.units_changed()
+        if self.measure_panel is not None:
+            self.measure_panel.units_changed()
+        self.refresh_tree()
+        self.refresh_globals()
+        try:
+            self.cfg_panel.refresh()
+        except Exception:
+            pass
+        self.show_props()
+        if self.ed is not None and self.ed.active:
+            self.ed.redraw()
+        if self.doc.solid is not None:
+            self.say(f"Units: {unitctl.length_unit()}  -  volume {unitctl.volume_text(self.doc.solid.volume, 5)}")
+
     def refresh_globals(self):
+        """The Globals table.  A 'length' global is shown in the current unit (File > Units) although it is kept in mm; a 'number'
+        (a count, a ratio) or an 'angle' is shown as it is."""
         self.busy = True
         t = self.gtab
         t.setRowCount(len(self.doc.params))
+        t.setHorizontalHeaderLabels(["Name", f"Equation ({unitctl.length_unit()})", "Value", "Type"])
         for r, (k, e) in enumerate(self.doc.params.items()):
+            kind = self.doc.param_kinds.get(k, "length")
             t.setItem(r, 0, QTableWidgetItem(k))
-            t.setItem(r, 1, QTableWidgetItem(str(e)))
-            v = QTableWidgetItem(f"{self.doc.values[k]:.6g}" if k in self.doc.values else "?")
+            t.setItem(r, 1, QTableWidgetItem(unitctl.expr_to_display(str(e), kind)))
+            val = self.doc.values.get(k)
+            if val is not None and kind == "length":
+                val = unitctl.to_disp(val)
+            v = QTableWidgetItem(f"{val:.6g}" if val is not None else "?")
             v.setFlags(Qt.ItemFlag.ItemIsEnabled)
             t.setItem(r, 2, v)
+            cb = QComboBox()
+            cb.addItems(["length", "number", "angle"])
+            cb.setCurrentText(kind)
+            cb.setToolTip("length: shown in the program's unit (File > Units).  number / angle: never converted (a count, a ratio, degrees)")
+            cb.currentTextChanged.connect(lambda txt, k=k: self.global_kind(k, txt))
+            t.setCellWidget(r, 3, cb)
         self.busy = False
+
+    def global_kind(self, name, kind):
+        """The Type of a global was changed: its number is kept (in mm / as it is) and only its meaning changes."""
+        if self.busy:
+            return
+        self.snapshot()
+        if kind == "length":
+            self.doc.param_kinds.pop(name, None)
+        else:
+            self.doc.param_kinds[name] = kind
+        self.update_all(keep_props=True)
 
     def global_edited(self, _item):
         if self.busy:
             return
         self.snapshot()
-        new = {}
+        new, old = {}, self.doc.params
+        shown = {}
         for r in range(self.gtab.rowCount()):
             k = (self.gtab.item(r, 0).text() if self.gtab.item(r, 0) else "").strip()
             e = (self.gtab.item(r, 1).text() if self.gtab.item(r, 1) else "").strip()
             if k and k.isidentifier():
-                new[k] = e or "0"
+                kind = self.doc.param_kinds.get(k, "length")
+                if k in old and e == unitctl.expr_to_display(str(old[k]), kind):
+                    new[k] = old[k]                                # not edited: keep the stored text exactly
+                else:
+                    new[k] = unitctl.expr_from_display(e, kind) if e else "0"
+        self.doc.param_kinds = {k: v for k, v in self.doc.param_kinds.items() if k in new}
         self.doc.params = new
         self.update_all(keep_props=True)
 
@@ -1330,7 +1390,7 @@ class MainWindow(QMainWindow):
         n = 1
         while f"P{n}" in self.doc.params:
             n += 1
-        self.doc.params[f"P{n}"] = "10"
+        self.doc.params[f"P{n}"] = unitctl.expr_from_display("10")        # 10 in the current unit, kept in mm
         self.update_all(keep_props=True)
 
     def global_del(self):
@@ -1359,7 +1419,7 @@ class MainWindow(QMainWindow):
             self.say("Rebuild error - " + errs[0])
         elif self.doc.solid is not None:
             self.say(f"Rebuilt: {len([f for f in self.doc.features if self.doc.status.get(f['id']) == 'ok'])} features, "
-                     f"volume {self.doc.solid.volume:,.0f} mm³")
+                     f"volume {unitctl.volume_text(self.doc.solid.volume, 5)}")
 
     def shown_solid(self):
         """The solid drawn in the view: the part (while a fillet / chamfer is selected it shows the rounded result, as a preview)."""
@@ -1583,7 +1643,7 @@ class MainWindow(QMainWindow):
     def measure_update(self):
         if self.measure_panel is None:
             return
-        text, self.meas_segs = evaluate.measure_report(self.meas_items, self.measure_panel.options(), self.measure_unit)
+        text, self.meas_segs = evaluate.measure_report(self.meas_items, self.measure_panel.options(), unitctl.length_unit())
         self.measure_panel.out.setPlainText(text)
         self.draw()
 

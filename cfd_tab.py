@@ -1024,7 +1024,7 @@ class CFDTab(QWidget):
             return
         lf = units.length_factor(old, new)
         for e, f in ((self.e_hb, lf), (self.e_hf, lf), (self.e_first, lf), (self.e_bt, lf),
-                     (self.e_speed, units.speed_factor(old, new)), (self.e_rho, units.density_factor(old, new)),
+                     (self.e_rho, units.density_factor(old, new)),
                      (self.e_mu, units.viscosity_factor(old, new))):
             txt = e.text().strip()
             if txt:

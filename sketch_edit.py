@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBo
                              QMessageBox, QVBoxLayout)
 
 import sk_tools as sk
+import unitctl
 import sketcher_core as sc
 import sketcher_offset as skoff
 
@@ -41,6 +42,12 @@ SNAP_PX, PICK_PX, TAG_PX, EDGE_ON_COS = 12.0, 9.0, 16.0, 0.12
 CONSTRAINTS = ("horizontal", "vertical", "parallel", "perpendicular", "collinear", "coincident", "concentric", "tangent", "equal", "fixed",
                "midpoint")
 DIMS = tuple(sc.DIMENSIONS)
+
+
+def disp(v, c_or_type=None):
+    """A value of a sketch for the screen: a length in the current unit, an angle as it is."""
+    t = c_or_type["type"] if isinstance(c_or_type, dict) else c_or_type
+    return float(v) if t == "dim_ang" else unitctl.to_disp(float(v))
 
 
 def fmt(v):
@@ -721,11 +728,12 @@ class SketchEditor:
             else:
                 cur = m.measure(tool, refs)
             nxt = m.next_dim_name(tool, list(self.app.doc.params))
-            txt = ask_dim(self.app, "Dimension " + nxt, f"{cur:g}", list(m.params))
+            txt = ask_dim(self.app, "Dimension " + nxt + ("" if tool == "dim_ang" else f"  ({unitctl.length_unit()})"),
+                          f"{disp(cur, tool):.8g}", list(m.params))
             if txt is None:
                 return
             try:
-                expr, val = self.dim_from_text(m, txt, cur)
+                expr, val = self.dim_from_text(m, txt, cur, tool)
             except ValueError as ex:
                 self.app.say(str(ex))
                 return
@@ -754,15 +762,23 @@ class SketchEditor:
     last_con = None
 
     @staticmethod
-    def dim_from_text(m, text, value):
-        """What was typed -> (expression or None, number).  A new name makes a symbol.  Raises ValueError."""
+    def dim_from_text(m, text, value, dtype=None):
+        """What was typed -> (expression or None, number in mm / degrees).  A new name makes a symbol.  Raises ValueError.
+        A length is typed in the current unit (File > Units), or with its own unit ('3 in')."""
         t = text.strip().lstrip("=").strip()
+        length = dtype is not None and dtype != "dim_ang"
         if not t:
             return None, value
         try:
-            return None, float(t)
+            return None, (unitctl.from_disp(float(t)) if length else float(t))
         except ValueError:
             pass
+        if length:
+            t = unitctl.expr_from_display(t)
+            try:
+                return None, float(eval(t, {"__builtins__": {}}, {}))      # '3 in', '25 mm + 1 in'
+            except Exception:
+                pass
         try:
             syms = sc.expr_symbols(t)
         except SyntaxError:
@@ -783,7 +799,9 @@ class SketchEditor:
         c = m.con_by_id(cid)
         if not c or c["type"] not in DIMS:
             return
-        txt = ask_dim(self.app, "Dimension " + c.get("name", ""), c.get("expr") or f"{c['value']:g}", list(m.params))
+        length = c["type"] != "dim_ang"
+        shown = unitctl.expr_to_display(c["expr"], "length" if length else "number") if c.get("expr") else f"{disp(c['value'], c):.8g}"
+        txt = ask_dim(self.app, "Dimension " + c.get("name", "") + (f"  ({unitctl.length_unit()})" if length else ""), shown, list(m.params))
         if txt is None:
             return
         self.set_dimension(cid, txt)
@@ -791,7 +809,7 @@ class SketchEditor:
     def set_dimension(self, cid, txt):
         def build(m):
             c = m.con_by_id(cid)
-            expr, val = self.dim_from_text(m, txt, c["value"])
+            expr, val = self.dim_from_text(m, txt, c["value"], c["type"])
             c["value"] = val
             if expr:
                 c["expr"] = expr
@@ -890,9 +908,11 @@ class SketchEditor:
         if not ents:
             self.app.say("Select what to copy first.")
             return
-        r = ask_form(self.app, "Linear sketch pattern", [("Number of extra copies", 2), ("Step X (mm)", 10.0), ("Step Y (mm)", 0.0)])
+        r = ask_form(self.app, "Linear sketch pattern", [("Number of extra copies", 2), (unitctl.label("Step X (mm)"), unitctl.to_disp(10.0)),
+                                                         (unitctl.label("Step Y (mm)"), 0.0)])
         if r:
             n, dx, dy = r[0]
+            dx, dy = unitctl.from_disp(dx), unitctl.from_disp(dy)
             self.commit(lambda m: sk.linear_pattern(m, ents, int(n), dx, dy))
 
     def command_circular(self):
@@ -901,9 +921,10 @@ class SketchEditor:
             self.app.say("Select what to copy first.")
             return
         r = ask_form(self.app, "Circular sketch pattern", [("Number of extra copies", 3), ("Angle between copies (deg)", 90.0),
-                                                            ("Centre X (mm)", 0.0), ("Centre Y (mm)", 0.0)])
+                                                            (unitctl.label("Centre X (mm)"), 0.0), (unitctl.label("Centre Y (mm)"), 0.0)])
         if r:
             n, a, cx, cy = r[0]
+            cx, cy = unitctl.from_disp(cx), unitctl.from_disp(cy)
             self.commit(lambda m: sk.circular_pattern(m, ents, int(n), a, cx, cy))
 
     def command_move(self):
@@ -911,9 +932,9 @@ class SketchEditor:
         if not ents:
             self.app.say("Select what to move first.")
             return
-        r = ask_form(self.app, "Move entities", [("Move X (mm)", 0.0), ("Move Y (mm)", 0.0)])
+        r = ask_form(self.app, "Move entities", [(unitctl.label("Move X (mm)"), 0.0), (unitctl.label("Move Y (mm)"), 0.0)])
         if r:
-            dx, dy = r[0]
+            dx, dy = (unitctl.from_disp(x) for x in r[0])
             self.commit(lambda m: sk.move(m, [k for k in ents if k[0] != "con"], dx, dy))
 
     def command_offset(self):
@@ -922,11 +943,11 @@ class SketchEditor:
         if not sel:
             self.app.say("Select the lines, arcs and circles to offset first, then press Offset.")
             return
-        r = ask_form(self.app, "Offset entities", [("Distance (mm; + = outward / left)", round(0.05 * max(m.extent(), 1.0), 3) or 1.0)],
+        r = ask_form(self.app, "Offset entities", [(unitctl.label("Distance (mm; + = outward / left)"), round(unitctl.to_disp(0.05 * max(m.extent(), 1.0)), 4) or 1.0)],
                      [("Both sides", False), ("Keep linked to the originals (an offset dimension)", True), ("Select the whole closed loop", True)])
         if not r:
             return
-        dist = r[0][0]
+        dist = unitctl.from_disp(r[0][0])
         both, link, chain = r[1]
         if abs(dist) < 1e-12:
             return
@@ -1171,7 +1192,7 @@ class SketchEditor:
                 if a is not None:
                     self.tags.append((a[0], a[1], c["id"]))
                     sel_c = ("con", c["id"]) in self.sel
-                    self.text(a, f"{c.get('name', '')} = {c['value']:.4g}", COL_SEL if sel_c else COL_TAG)
+                    self.text(a, f"{c.get('name', '')} = {disp(c['value'], c):.4g}", COL_SEL if sel_c else COL_TAG)
         self.draw_preview()
         self.pl.render()
 

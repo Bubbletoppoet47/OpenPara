@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, Q
 
 import render_core as rc
 import render_scene as rs
+import unitctl
 
 try:
     import pyvista as pv
@@ -76,6 +77,33 @@ def dspin(lo, hi, val, step=1.0, dec=2, w=84):
     s = QDoubleSpinBox()
     s.setRange(lo, hi)
     s.setDecimals(dec)
+    s.setSingleStep(step)
+    s.setValue(val)
+    s.setFixedWidth(w)
+    s.setKeyboardTracking(False)
+    return s
+
+
+class LenSpin(QDoubleSpinBox):
+    """A length box: its value is always in millimetres, but it is shown and typed in the program's unit (File > Units)."""
+
+    def textFromValue(self, v):
+        return unitctl.num(unitctl.to_disp(v), 7)
+
+    def valueFromText(self, t):
+        try:
+            return unitctl.from_disp(float(t.replace(",", ".").split()[0]))
+        except (ValueError, IndexError):
+            return self.value()
+
+    def refresh_unit(self):
+        self.lineEdit().setText(self.textFromValue(self.value()))
+
+
+def dlen(lo, hi, val, step=10.0, w=78):
+    s = LenSpin()
+    s.setRange(lo, hi)
+    s.setDecimals(6)
     s.setSingleStep(step)
     s.setValue(val)
     s.setFixedWidth(w)
@@ -404,14 +432,17 @@ class RenderStudio(QMainWindow):
         self.s_spot = Section("Spot light", False)
         f = self.s_spot.form
         self.sp_on = QCheckBox("Spot light")
-        self.sp_pos = [dspin(-1e6, 1e6, 0, 10, 1, 78) for _ in range(3)]
-        self.sp_tgt = [dspin(-1e6, 1e6, 0, 10, 1, 78) for _ in range(3)]
+        self.sp_pos = [dlen(-1e6, 1e6, 0) for _ in range(3)]
+        self.sp_tgt = [dlen(-1e6, 1e6, 0) for _ in range(3)]
         self.sp_pow = slider(50, 1, 300)
         self.sp_cone = dspin(5, 85, 35, 5, 0)
         self.sp_col = color_button([1, 1, 1])
         f.addRow(self.sp_on)
-        f.addRow("Position x y z (mm)", row(*self.sp_pos))
-        f.addRow("Aims at x y z (mm)", row(*self.sp_tgt))
+        self.len_labels = []
+        for text, ws in (("Position x y z (mm)", self.sp_pos), ("Aims at x y z (mm)", self.sp_tgt)):
+            lb = QLabel(unitctl.label(text))
+            self.len_labels.append((lb, text))
+            f.addRow(lb, row(*ws))
         f.addRow("Power", self.sp_pow)
         f.addRow("Cone angle (deg)", self.sp_cone)
         f.addRow("Colour", self.sp_col)
@@ -420,14 +451,16 @@ class RenderStudio(QMainWindow):
         self.s_floor = Section("Floor")
         f = self.s_floor.form
         self.fl_on = QCheckBox("Floor")
-        self.fl_z = dspin(-1e6, 1e6, 0, 1, 2)
-        self.fl_z.setToolTip("Height of the floor along the model's up direction, in mm.")
+        self.fl_z = dlen(-1e6, 1e6, 0, 1.0, 84)
+        self.fl_z.setToolTip("Height of the floor along the model's up direction (in the program's length unit, File > Units).")
         b1 = QPushButton("At the bottom of the model")
         b1.clicked.connect(self.floor_bottom)
         self.fl_col = color_button([0.6, 0.6, 0.6])
         self.fl_rough = slider(80)
         f.addRow(self.fl_on)
-        f.addRow("Height (mm)", row(self.fl_z, b1))
+        lb = QLabel(unitctl.label("Height (mm)"))
+        self.len_labels.append((lb, "Height (mm)"))
+        f.addRow(lb, row(self.fl_z, b1))
         f.addRow("Colour", self.fl_col)
         f.addRow("Roughness", self.fl_rough)
         lay.addWidget(self.s_floor)
@@ -466,12 +499,14 @@ class RenderStudio(QMainWindow):
         b_del = QPushButton("Delete")
         b_del.clicked.connect(self.cam_delete)
         f.addRow(row(b_look, b_upd, b_del))
-        self.cam_o = [dspin(-1e6, 1e6, 0, 10, 1, 78) for _ in range(3)]
-        self.cam_t = [dspin(-1e6, 1e6, 0, 10, 1, 78) for _ in range(3)]
+        self.cam_o = [dlen(-1e6, 1e6, 0) for _ in range(3)]
+        self.cam_t = [dlen(-1e6, 1e6, 0) for _ in range(3)]
         self.cam_fov = dspin(5, 120, 35, 1, 1)
         self.cam_fov.setToolTip("Vertical field of view in degrees (small = telephoto, large = wide).")
-        f.addRow("Position x y z", row(*self.cam_o))
-        f.addRow("Looks at x y z", row(*self.cam_t))
+        for text, ws in (("Position x y z (mm)", self.cam_o), ("Looks at x y z (mm)", self.cam_t)):
+            lb = QLabel(unitctl.label(text))
+            self.len_labels.append((lb, text))
+            f.addRow(lb, row(*ws))
         f.addRow("Field of view (deg)", self.cam_fov)
         lay.addWidget(self.s_cam)
         # ---- animation
@@ -1068,6 +1103,13 @@ class RenderStudio(QMainWindow):
     # ================================================================ floor / up axis
     def model_bounds(self):
         return rs.bounds_of(self.meshes)
+
+    def units_changed(self, *_a):
+        """File > Units changed: length boxes and their labels show the new unit (the values stay in mm)."""
+        for lb, text in getattr(self, "len_labels", []):
+            lb.setText(unitctl.label(text))
+        for w in self.sp_pos + self.sp_tgt + self.cam_o + self.cam_t + [self.fl_z]:
+            w.refresh_unit()
 
     def floor_bottom(self):
         if self.proj is None:

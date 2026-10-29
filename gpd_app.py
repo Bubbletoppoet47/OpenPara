@@ -11,6 +11,7 @@ from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget
 
 import pm_app
+import unitctl
 import pm_model as pm
 
 
@@ -36,6 +37,7 @@ class AppShell(QMainWindow):
         import update_ui
         self.updates = update_ui.UpdateController(self)
         self.build_menus()
+        unitctl.on_change(self.units_changed)
         opened = False
         for f in files or []:
             if os.path.exists(f):
@@ -68,6 +70,8 @@ class AppShell(QMainWindow):
         add(fm, "Save", lambda: self.cur_call("save"), "Ctrl+S")
         add(fm, "Save As...", lambda: self.cur_call("save", True), "Ctrl+Shift+S")
         fm.addSeparator()
+        add(fm, "Units...", self.units_dialog)
+        fm.addSeparator()
         add(fm, "Close Tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
         add(fm, "Exit", self.close)
         am = mb.addMenu("&Add")
@@ -97,6 +101,25 @@ class AppShell(QMainWindow):
         add(hm, "Open the data folder", self.open_data_folder)
         hm.addSeparator()
         add(hm, "About OpenPara", lambda: self.updates.about())
+
+    def units_dialog(self):
+        import units_dialog
+        d = units_dialog.UnitsDialog(self)
+        if d.exec():
+            sysname, speed = d.choice()
+            unitctl.set_units(sysname, speed)              # tells units_changed() below
+
+    def units_changed(self, old_s, new_s, old_v, new_v):
+        """The program's units were changed: every open document shows / converts to the new ones."""
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            if hasattr(w, "units_changed"):
+                try:
+                    w.units_changed(old_s, new_s, old_v, new_v)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+        self.statusBar().showMessage(f"Units: {new_s}   speed: {new_v}", 8000)
 
     def open_data_folder(self):
         import paths
@@ -310,6 +333,7 @@ class AppShell(QMainWindow):
                     pass
         for i in range(self.tabs.count()):
             self.tabs.widget(i).saved_json = getattr(self.tabs.widget(i), "saved_json", None)
+        unitctl.off_change(self.units_changed)
         ev.accept()
 
 

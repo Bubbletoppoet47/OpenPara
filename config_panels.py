@@ -1,9 +1,10 @@
-from PyQt6.QtCore import QTimer
 """The Configurations and Display tabs of the left panel (for parts and for assemblies)."""
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont
 from PyQt6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMenu, QMessageBox,
                              QPushButton, QSlider, QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+
+import unitctl
 
 
 def color_css(c):
@@ -112,7 +113,39 @@ class ConfigPanel(QWidget):
             cb.currentTextChanged.connect(lambda txt, n=name, k=key: self.set_value(n, k, txt))
             t.setCellWidget(r, col, cb)
         else:
-            t.setItem(r, col, QTableWidgetItem("" if val is None else (f"{val:.6g}" if isinstance(val, float) else str(val))))
+            t.setItem(r, col, QTableWidgetItem(self.cell_text(key, val)))
+
+    def is_length(self, key):
+        """Does this column hold a length (mm in the file, shown in the program's unit)?  A count, an angle or a flag does not."""
+        kind, _, rest = key.partition(":")
+        m = self.m
+        try:
+            if kind == "g":
+                return getattr(m, "param_kinds", {}).get(rest, "length") == "length"
+            if kind == "d":
+                fid, _, cid = rest.partition(":")
+                f = m.feature(fid)
+                if f is None or f["kind"] != "sketch":
+                    return False
+                c = m.sketch_model_raw(f).con_by_id(int(cid) if cid.isdigit() else cid)
+                return bool(c) and c["type"] != "dim_ang"
+            if kind == "v":
+                mt = next((x for x in m.mates if x["id"] == rest), None)
+                return mt is not None and mt["type"] == "distance"
+            if kind == "n":
+                return rest.rpartition(":")[2] in ("s1", "s2")
+        except Exception:
+            return False
+        return False
+
+    def cell_text(self, key, val):
+        if val is None:
+            return ""
+        if self.is_length(key):
+            if isinstance(val, str):
+                return unitctl.expr_to_display(val)
+            return f"{unitctl.to_disp(float(val)):.6g}"
+        return f"{val:.6g}" if isinstance(val, float) else str(val)
 
     def is_flag(self, key):
         return key.startswith(("s:", "x:", "m:"))
@@ -145,10 +178,13 @@ class ConfigPanel(QWidget):
             self.set_value(name, key, it.checkState() == Qt.CheckState.Checked)
         else:
             txt = it.text().strip()
+            length = self.is_length(key)
             try:
                 val = float(txt) if self.numeric(key) else txt
+                if length:
+                    val = unitctl.from_disp(val) if isinstance(val, float) else unitctl.expr_from_display(val)
             except ValueError:
-                val = txt
+                val = unitctl.expr_from_display(txt) if length else txt
             self.set_value(name, key, val)
 
     def numeric(self, key):

@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
                              QVBoxLayout, QWidget)
 
 import refgeo
+import unitctl
 import slice3d
 
 try:
@@ -216,16 +217,16 @@ class SliceDialog(QDialog):
         sl.addWidget(self.lst)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("Offset (mm)"))
+        row.addWidget(QLabel(unitctl.label("Offset (mm)")))
         self.b_minus = QPushButton("-")
         self.b_plus = QPushButton("+")
         for b in (self.b_minus, self.b_plus):
             b.setFixedWidth(30)
         self.offset = QLineEdit("0")
-        self.offset.setToolTip("Moves the plane along its arrow (its normal), in mm.  Negative values move it the other way.")
-        self.step = QLineEdit(f"{self.default_step():g}")
+        self.offset.setToolTip(f"Moves the plane along its arrow (its normal), in {unitctl.length_unit()}.  Negative values move it the other way.")
+        self.step = QLineEdit(f"{unitctl.to_disp(self.default_step()):.2g}")
         self.step.setFixedWidth(50)
-        self.step.setToolTip("How far - / + move the plane (mm).")
+        self.step.setToolTip(f"How far - / + move the plane ({unitctl.length_unit()}).")
         self.b_rev = QPushButton("Reverse")
         self.b_rev.setToolTip("Swaps the sign of the offset (moves the plane to the other side of the starting plane).")
         row.addWidget(self.b_minus)
@@ -287,7 +288,7 @@ class SliceDialog(QDialog):
                 i = next((k for k, (nm, _) in enumerate(self.planes) if nm == last.get("plane")), -1)
                 if i >= 0:
                     self.lst.setCurrentRow(i)
-            self.offset.setText(f"{last.get('offset', 0):g}")
+            self.offset.setText(f"{unitctl.to_disp(last.get('offset', 0)):.8g}")
             self.flip.setChecked(bool(last.get("flip")))
         elif self.planes:
             self.lst.setCurrentRow(0)
@@ -390,22 +391,22 @@ class SliceDialog(QDialog):
 
     def value(self):
         try:
-            return float(self.offset.text())
+            return unitctl.read_length(self.offset.text())          # millimetres
         except ValueError:
             return None
 
     def nudge(self, sign):
         try:
-            st = abs(float(self.step.text()))
+            st = abs(unitctl.read_length(self.step.text()))
         except ValueError:
-            st = 1.0
+            st = unitctl.from_disp(1.0)
         v = self.value() or 0.0
-        self.offset.setText(f"{v + sign * st:g}")
+        self.offset.setText(f"{unitctl.to_disp(v + sign * st):.8g}")
 
     def reverse(self):
         v = self.value()
         if v:
-            self.offset.setText(f"{-v:g}")
+            self.offset.setText(f"{unitctl.to_disp(-v):.8g}")
         else:
             self.flip.setChecked(not self.flip.isChecked())
 

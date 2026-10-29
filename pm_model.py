@@ -38,6 +38,7 @@ def new_feature(kind, **kw):
 class Document:
     def __init__(self):
         self.params = {}
+        self.param_kinds = {}                # {global name: 'number' | 'angle'}; anything else is a length (units follow File > Units)
         self.sims = []                       # linked simulation files (sim_links.py)
         self.renders = []                    # linked render projects (.gpr)
         self.material = {"name": "Steel (generic)", "density": 7850.0, "E_MPa": 200000.0, "nu": 0.30, "Sy_MPa": 250.0, "Su_MPa": 400.0}   # density kg/m3, see mat_lib.py
@@ -791,7 +792,7 @@ class Document:
 
     # ------------------------------------------------------------------ files
     def to_json(self):
-        return json.dumps({"version": 1, "params": self.params, "features": self.features, "rollback": self.rollback,
+        return json.dumps({"version": 1, "params": self.params, "kinds": self.param_kinds, "features": self.features, "rollback": self.rollback,
                            "counter": self.counter, "material": self.material, "sims": self.sims, "renders": self.renders,
                            "display": self.display, "cfg": self.cfg_snapshot()}, indent=1)
 
@@ -800,6 +801,7 @@ class Document:
         d = json.loads(text)
         doc = cls()
         doc.params, doc.features, doc.rollback, doc.counter = d["params"], d["features"], d.get("rollback"), d.get("counter", {})
+        doc.param_kinds = d.get("kinds") or {}
         doc.material = d.get("material") or doc.material
         doc.sims = d.get("sims") or []
         doc.renders = d.get("renders") or []

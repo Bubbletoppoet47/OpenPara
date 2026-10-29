@@ -26,10 +26,19 @@ import sim_slice
 import sketcher_core as sc
 import slice3d
 import slice_sketch as ss
+import unitctl
 import units
 
 KINDS = {"beam": ("1D FEA", beam_tab.BeamTab), "fea": ("2D FEA", physics_tab.PhysicsTab), "cfd": ("2D CFD", cfd_tab.CFDTab)}
 SLICE_NEW, SLICE_LAST = "__slice_new__", "__slice_last__"
+
+
+class _HostModel:
+    """The solver tabs read `win.m.unit_system`: it is the program's unit system (File > Units)."""
+
+    @property
+    def unit_system(self):
+        return unitctl.system()
 
 
 class SimHost:
@@ -38,7 +47,7 @@ class SimHost:
     def __init__(self, sim):
         self.sim = sim
         self.doc = None
-        self.m = types.SimpleNamespace(unit_system=units.DEFAULT)
+        self.m = _HostModel()
         self._restoring = False
 
     def status(self, text):
@@ -187,6 +196,12 @@ class SimWindow(QWidget):
         w.show_source()
         st = data.get("main")
         if st is not None:
+            note = ""
+            try:                                           # a file saved in other units opens converted to the program's units
+                st = pstore.to_current_units(kind, st, unitctl.system(), unitctl.speed())
+            except (ValueError, KeyError) as ex:
+                note = f"kept in its own units ({ex})"
+            w.units_note = note
             w.host._restoring = True
             try:
                 w.tab.import_state(st)
@@ -197,6 +212,36 @@ class SimWindow(QWidget):
 
     def update_all(self, fit=False):
         pass
+
+    def units_changed(self, old_s, new_s, old_v, new_v):
+        """File > Units was changed: the solver tab's sketch copy, numbers, loads and results are converted (a mesh or result that
+        cannot be converted is cleared - solve again).  The speed unit is converted separately."""
+        t = self.tab
+        msgs = []
+        if getattr(t, "model", None) is None:
+            try:                                           # nothing imported yet: only the boxes hold numbers
+                if units.canon(old_s) != units.canon(new_s):
+                    if hasattr(t, "convert_input_units"):
+                        t.convert_input_units(new_s)
+                    elif hasattr(t, "apply_units"):
+                        t.apply_units(new_s)
+                if old_v != new_v and hasattr(t, "e_speed"):
+                    txt = t.e_speed.text().strip()
+                    if txt:
+                        t.e_speed.setText(f"{float(txt) * units.speed_factor(old_v, new_v):.6g}")
+            except Exception:
+                pass
+            return
+        if units.canon(old_s) != units.canon(new_s):
+            try:
+                m = t.change_units(old_s, new_s, True)
+                if m:
+                    msgs.append(m)
+            except ValueError as ex:
+                msgs.append(f"kept in {old_s}: {ex}")
+        if old_v != new_v and self.kind in ("cfd", "beam"):
+            t.import_state(pstore.speed_state(t.export_state(), old_v, new_v))
+        self.status_lbl.setText(f"Units: {new_s}, speed in {new_v}." + ((" " + " ".join(msgs)) if msgs else ""))
 
     # ------------------------------------------------------------------ the source
     def live_source(self):
@@ -276,7 +321,7 @@ class SimWindow(QWidget):
 
     @staticmethod
     def slice_text(sl):
-        return f"{sl['plane']} {sl.get('offset', 0):+g} mm" + (" (flipped)" if sl.get("flip") else "")
+        return f"{sl['plane']} {unitctl.to_disp(sl.get('offset', 0)):+.6g} {unitctl.length_unit()}" + (" (flipped)" if sl.get("flip") else "")
 
     def source_json(self, sid):
         """(name, sketch JSON text) for an item of the picker, or None."""

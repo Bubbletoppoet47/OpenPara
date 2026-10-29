@@ -32,7 +32,7 @@ w.meas_items = [it("face", 0, topf), it("face", 1, botf)]
 for k in ("cc", "mx"): w.measure_panel.opt[k].setChecked(True)
 w.measure_update(); print(w.measure_panel.out.toPlainText())
 w.meas_items = [it("vertex", 0, verts[0]), it("vertex", 1, verts[-1])]; w.measure_update(); print(w.measure_panel.out.toPlainText())
-w.measure_panel.unit.setCurrentText("in"); print(w.measure_panel.out.toPlainText().split("\n")[:4])
+import unitctl; unitctl.set_units("US (in, lbf, psi)", persist=False, notify=False); w.units_changed(); txt = w.measure_panel.out.toPlainText(); print(txt.split("\n")[:4]); assert " in" in txt and w.measure_panel.unit.text() == "in"; unitctl.set_units("Metric (mm, kg, N, s, MPa)", persist=False, notify=False); w.units_changed()
 edges = sol.edges(); w.meas_items = [it("edge", 0, edges[0])]; w.measure_update(); print(w.measure_panel.out.toPlainText())
 w.measure_toggle(); assert not w.measuring
 print("OK")
