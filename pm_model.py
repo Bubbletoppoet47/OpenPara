@@ -1,0 +1,1024 @@
+"""
+pm_model.py - the document of the parametric modeller: an ordered FEATURE TREE per part, rebuilt from the top (SolidWorks style).
+
+    Document
+      params   {name: expression}          global equations ("Globals"), e.g. {"W": "40", "H": "W/2"}
+      features [Feature, ...]              sketch / extrude / fillet / chamfer, in order
+      rollback index of the last feature that is built (None = all)
+
+Every number in a feature is an EXPRESSION (a string such as "H*2+1") that may use the globals.  rebuild() runs the features in order on the
+OpenCascade kernel (build123d); a feature that fails is marked with its error and the ones after it are not built (as in SolidWorks).
+
+References to faces and edges are not numbers ("Face7" breaks when the model changes): a face is stored as the point + normal where you
+clicked it, an edge as its midpoint + direction; on every rebuild they are matched to the closest face / edge of the new solid.
+"""
+import json
+import math
+
+import numpy as np
+from build123d import Align, Axis, Box, Compound, Edge, Face, Location, Plane, Vector, Wire, extrude, revolve
+
+import refgeo
+import sk_tools as sk
+import sketcher_core as sc
+
+BASE_PLANES = {"Front": Plane.XZ, "Top": Plane.XY, "Right": Plane.YZ}     # normals: -Y (to the viewer in front), +Z, +X
+FUNCS = {k: getattr(math, k) for k in ("sin", "cos", "tan", "atan", "sqrt", "pi", "radians", "degrees", "floor", "ceil")}
+FUNCS.update({"abs": abs, "min": min, "max": max, "round": round})
+
+
+class ModelError(Exception):
+    pass
+
+
+def new_feature(kind, **kw):
+    return {"id": None, "name": None, "kind": kind, "suppressed": False, **kw}
+
+
+class Document:
+    def __init__(self):
+        self.params = {}
+        self.sims = []                       # linked simulation files (sim_links.py)
+        self.renders = []                    # linked render projects (.gpr)
+        self.material = {"name": "Steel (generic)", "density": 7850.0, "E_MPa": 200000.0, "nu": 0.30, "Sy_MPa": 250.0, "Su_MPa": 400.0}   # density kg/m3, see mat_lib.py
+        self.display = {"color": None, "opacity": 1.0}                      # how the part is drawn (Display tab)
+        self.cfg = {"active": "Default", "names": ["Default"], "cols": [], "cells": {"Default": {}}}
+        self.features = []
+        self.rollback = None            # index of the last built feature (None = the end)
+        self.counter = {}
+        self.values = {}                # evaluated globals
+        self.solid = None               # the part after the last built feature
+        self.status = {}                # feature id -> "ok" | "error: ..." | "not built" | "suppressed"
+        self.planes = {}                # sketch id -> build123d Plane (where it ended up)
+        self.refgeo = {}                # reference plane / axis feature id -> entity (see refgeo.py)
+        self.after = {}                 # feature id -> the solid after that feature (for rollback and picking)
+        self.models = {}                # sketch id -> its solved sketcher_core.Model (live: the sketch editor works on it)
+        self.reports = {}               # sketch id -> the solver report (degrees of freedom, conflicts)
+
+    # ------------------------------------------------------------------ editing
+    def add(self, feat):
+        k = feat["kind"]
+        self.counter[k] = self.counter.get(k, 0) + 1
+        title = {"sketch": "Sketch", "extrude": "Boss-Extrude", "cut": "Cut-Extrude", "fillet": "Fillet", "chamfer": "Chamfer",
+                 "revolve": "Boss-Revolve", "revolve_cut": "Cut-Revolve", "pattern": "Pattern", "mirror": "Mirror",
+                 "refplane": "Plane", "refaxis": "Axis"}[k]
+        if k == "pattern":
+            title = "LPattern" if feat.get("ptype") == "linear" else "CirPattern"
+        feat["name"] = feat["name"] or f"{title}{self.counter[k]}"
+        feat["id"] = f"F{sum(self.counter.values())}"
+        i = len(self.features) if self.rollback is None else self.rollback + 1     # a new feature goes after the rollback bar
+        self.features.insert(i, feat)
+        if self.rollback is not None:
+            self.rollback = i
+        return feat
+
+    def feature(self, fid):
+        return next((f for f in self.features if f["id"] == fid), None)
+
+    def remove(self, fid):
+        self.features = [f for f in self.features if f["id"] != fid]
+        if self.rollback is not None:
+            self.rollback = min(self.rollback, len(self.features) - 1)
+
+    # ------------------------------------------------------------------ expressions
+    def evaluate_params(self):
+        """Resolve the globals (they may use each other, in any order)."""
+        vals, pending = {}, dict(self.params)
+        for _ in range(len(pending) + 1):
+            for k, e in list(pending.items()):
+                try:
+                    vals[k] = float(eval(str(e), {"__builtins__": {}}, {**FUNCS, **vals}))
+                    del pending[k]
+                except NameError:
+                    pass
+                except Exception as ex:
+                    raise ModelError(f"global '{k}' = {e}: {ex}")
+        if pending:
+            raise ModelError("globals cannot be resolved (a loop or an unknown name): " + ", ".join(pending))
+        self.values = vals
+
+    def num(self, expr):
+        try:
+            return float(eval(str(expr), {"__builtins__": {}}, {**FUNCS, **self.values}))
+        except Exception as ex:
+            raise ModelError(f"'{expr}': {ex}")
+
+    # ------------------------------------------------------------------ rebuild
+    def rebuild(self):
+        """Run the features in order.  Fills self.solid, self.status, self.planes."""
+        self.status, self.planes, self.after, self.models, self.reports = {}, {}, {}, {}, {}
+        self.refgeo = {}
+        solid = None
+        try:
+            self.evaluate_params()
+        except ModelError as ex:
+            self.solid = None
+            for f in self.features:
+                self.status[f["id"]] = "error: " + str(ex) if f is self.features[0] else "not built"
+            return
+        last = len(self.features) - 1 if self.rollback is None else self.rollback
+        failed = False
+        for i, f in enumerate(self.features):
+            if i > last:
+                self.status[f["id"]] = "rolled back"
+                continue
+            if failed:
+                self.status[f["id"]] = "not built"
+                continue
+            if f["suppressed"]:
+                self.status[f["id"]] = "suppressed"
+                self.after[f["id"]] = solid
+                continue
+            try:
+                solid = self.run(f, solid)
+                self.status[f["id"]] = "ok"
+            except Exception as ex:
+                self.status[f["id"]] = "error: " + (str(ex) or type(ex).__name__)
+                failed = True
+            self.after[f["id"]] = solid
+        self.solid = solid
+
+    def run(self, f, solid):
+        k = f["kind"]
+        if k == "sketch":
+            self.planes[f["id"]] = self.resolve_plane(f["plane"], solid)
+            self.load_sketch(f)
+            return solid
+        if k in ("refplane", "refaxis"):
+            return self.run_refgeo(f, solid)
+        if k in ("extrude", "cut"):
+            return self.run_extrude(f, solid)
+        if k in ("revolve", "revolve_cut"):
+            return self.run_revolve(f, solid)
+        if k == "pattern":
+            return self.run_pattern(f, solid)
+        if k == "mirror":
+            return self.run_mirror(f, solid)
+        if k in ("fillet", "chamfer"):
+            if solid is None:
+                raise ModelError("nothing to round yet")
+            if not f["edges"]:
+                raise ModelError("no edges selected")
+            r = self.num(f["size"])
+            if r <= 0:
+                raise ModelError("the size must be positive")
+            bodies = solid.solids()
+            if not bodies:
+                raise ModelError("nothing to round yet")
+            done, used = [], 0
+            for b in bodies:                                   # each body gets the edges that belong to it
+                es = []
+                for ref in f["edges"]:
+                    try:
+                        es.append(self.resolve_edge(ref, b))
+                    except ModelError:
+                        pass
+                if es:
+                    used += len(es)
+                    done.append(b.fillet(r, es) if k == "fillet" else b.chamfer(r, None, es))
+                else:
+                    done.append(b)
+            if not used:
+                raise ModelError("an edge it refers to no longer exists")
+            out = done[0] if len(done) == 1 else Compound(done)
+            return self.clean(out)
+        raise ModelError(f"unknown feature kind {k}")
+
+    @staticmethod
+    def clean(shape):
+        solids = shape.solids() if hasattr(shape, "solids") else []
+        if not solids:
+            raise ModelError("the result has no volume")
+        return solids[0] if len(solids) == 1 else shape
+
+    # ------------------------------------------------------------------ sketches
+    # ------------------------------------------------------------------ the sketch model
+    def load_sketch(self, f):
+        """Make the live Model of a sketch feature: from its saved text (or from the old entity list), with the globals added as symbols,
+        solved.  Dimensions that use a global (e.g. 'Width/2') follow it."""
+        if not f.get("model"):
+            f["model"] = self.legacy_model(f)
+            f.pop("entities", None)
+        m = sc.Model()
+        m.from_json(f["model"])
+        for k, e in self.params.items():
+            m.params[k] = {"vals": [0.0] * len(m.configs), "input": False, "expr": str(e), "doc": True}
+        self.reports[f["id"]] = sk.solve_model(m)
+        self.models[f["id"]] = m
+        return m
+
+    def store_sketch(self, fid):
+        """Write the live Model of sketch `fid` back into its feature (without the globals)."""
+        f, m = self.feature(fid), self.models[fid]
+        keep = m.params
+        m.params = {k: v for k, v in keep.items() if not v.get("doc")}
+        try:
+            f["model"] = m.to_json()
+        finally:
+            m.params = keep
+
+    def legacy_model(self, f):
+        """Sketch given as a list of rectangles / circles / lines (older files, tests) -> Model text."""
+        m = sk.new_model()
+        for e in f.get("entities", []):
+            try:
+                if e["kind"] == "rect":
+                    cx, cy, w, h = (self.num(e.get(x, 0)) for x in ("cx", "cy", "w", "h"))
+                    r = sk.add_rect_corner(m, (cx - w / 2, cy - h / 2), (cx + w / 2, cy + h / 2))
+                    for t, ln, ex in (("dim_h", r["lns"][0], e["w"]), ("dim_v", r["lns"][1], e["h"])):
+                        m.add_con(t, [("ln", ln)], value=self.num(ex), sign=1, **({"expr": str(ex)} if not _is_number(ex) else {}))
+                elif e["kind"] == "circle":
+                    cx, cy, d = (self.num(e.get(x, 0)) for x in ("cx", "cy", "d"))
+                    cid = sk.add_circle(m, (cx, cy), (cx + d / 2, cy))
+                    m.add_con("dim_dia", [("ci", cid)], value=d, **({"expr": str(e["d"])} if not _is_number(e["d"]) else {}))
+                elif e["kind"] == "line":
+                    ends = []
+                    for q in ((self.num(e["x1"]), self.num(e["y1"])), (self.num(e["x2"]), self.num(e["y2"]))):
+                        hit = next((i for i, p in m.pts.items() if abs(p[0] - q[0]) < 1e-9 and abs(p[1] - q[1]) < 1e-9), None)
+                        ends.append(("pt", hit) if hit is not None else q)
+                    sk.add_line(m, ends[0], ends[1], auto=False)
+            except Exception:
+                pass
+        return m.to_json()
+
+    # ------------------------------------------------------------------ extrude / cut
+    @staticmethod
+    def end_condition(f, which=1):
+        """('blind' | 'mid' | 'through' | 'face', ...) of end 1 (older files kept 'through' / 'midplane' flags)."""
+        if which == 1:
+            return f.get("end1") or ("through" if f.get("through") else "mid" if f.get("midplane") else "blind")
+        return f.get("end2") or "blind"
+
+    def run_extrude(self, f, solid, tool_only=False):
+        k = f["kind"]
+        sk_ = self.feature(f["sketch"])
+        if sk_ is None or sk_["id"] not in self.planes:
+            raise ModelError("its sketch is missing or suppressed")
+        if k == "cut" and solid is None:
+            raise ModelError("nothing to cut yet")
+        faces = self.profile(sk_, f.get("pts") or None)
+        plane = self.planes[sk_["id"]]
+        zdir = np.array(tuple(plane.z_dir))
+        diag = 200.0
+        if solid is not None:
+            b = solid.bounding_box()
+            diag = 2.0 * float(np.linalg.norm([b.size.X, b.size.Y, b.size.Z])) + 10.0
+        e1, e2 = self.end_condition(f, 1), self.end_condition(f, 2)
+        d1 = self.num(f.get("depth", "10")) if e1 in ("blind", "mid") else diag
+        if e1 in ("blind", "mid") and d1 <= 0:
+            raise ModelError("the depth must be positive")
+        two = bool(f.get("dir2"))
+        d2 = (self.num(f.get("depth2", "10")) if e2 == "blind" else diag) if two else 0.0
+        if two and e2 == "blind" and d2 <= 0:
+            raise ModelError("the depth of direction 2 must be positive")
+        taper = self.num(f.get("draft", "0")) if f.get("draft_on") else 0.0
+        if taper and f.get("draft_out"):
+            taper = -taper
+        if f.get("thin"):
+            t = self.num(f.get("thickness", "1"))
+            if t <= 0:
+                raise ModelError("the wall thickness must be positive")
+            faces = [self.thin_face(p, t, f.get("thin_side", "inside")) for p in faces]
+
+        def prism(direction, amount, tp, only_to=None):
+            tool = None
+            for prof in faces:
+                try:
+                    t_ = extrude(prof, amount=amount, dir=Vector(*direction), taper=tp)
+                except Exception as ex:
+                    raise ModelError("the draft angle is too large for this depth" if tp else f"cannot extrude this profile ({ex})")
+                tool = t_ if tool is None else tool + t_
+            if only_to is not None:
+                tool = self.stop_at_face(tool, only_to, direction)
+            return tool
+
+        face_ref = None
+        if e1 == "face" or (two and e2 == "face"):
+            if solid is None or not f.get("to_face"):
+                raise ModelError("pick the face to extrude up to")
+            face_ref = self.resolve_face(f["to_face"], solid)
+
+        def build(sign):
+            direction = zdir * sign
+            if e1 == "mid":
+                tool = prism(direction, d1 / 2.0, taper) + prism(-direction, d1 / 2.0, taper)
+            else:
+                tool = prism(direction, d1, taper, face_ref if e1 == "face" else None)
+            if two:
+                tool = tool + prism(-direction, d2, taper, face_ref if e2 == "face" else None)
+            return tool
+
+        rev = -1.0 if f.get("reverse") else 1.0
+        if k == "extrude":
+            tool = build(rev)
+            if tool_only:
+                return tool
+            return self.clean(tool if solid is None else (solid + tool if f.get("merge", True)
+                                                          else Compound(solid.solids() + tool.solids())))
+        # cut: the first time, go the way that removes material; the choice is kept so that the cut does not jump around later
+        if f.get("dir") not in (1, -1):
+            best, bv = 1, -1.0
+            for sg in (1, -1):
+                try:
+                    v = (solid & build(float(sg))).volume
+                except Exception:
+                    v = 0.0
+                if v > bv + 1e-9:
+                    best, bv = sg, v
+            f["dir"] = best
+        tool = build(float(f["dir"]) * rev)
+        if tool_only:
+            return tool
+        out = solid & tool if f.get("flip_side") else solid - tool
+        before = sum(x.volume for x in solid.solids())
+        after = sum(x.volume for x in out.solids()) if out.solids() else 0.0
+        if abs(before - after) < 1e-9 * max(1.0, before) and not f.get("flip_side"):
+            raise ModelError("the cut does not touch the part (try Reverse direction, or check the sketch position)")
+        return self.clean(out)
+
+    @staticmethod
+    def stop_at_face(tool, face, direction):
+        """Keep the part of `tool` that lies on the near side of the plane of `face` (seen from the sketch)."""
+        n = face.normal_at()
+        n = np.array([n.X, n.Y, n.Z])
+        c = face.center()
+        big = 1.0e5
+        side = Plane(origin=c, z_dir=Vector(*(n if float(n @ np.array(direction)) > 0 else -n)))
+        box = side.location * Box(big, big, big, align=(Align.CENTER, Align.CENTER, Align.MAX))
+        out = tool & box
+        if not out.solids():
+            raise ModelError("the face it extrudes up to is behind the sketch")
+        return out
+
+    @staticmethod
+    def thin_face(face, t, side):
+        """A closed profile -> the ring of wall thickness t inside / outside / half each side of its outline."""
+        w = face.outer_wire()
+        def off(dist):
+            r = w.offset_2d(dist)
+            return r if isinstance(r, Wire) else Wire(r)
+        a1, a2 = Face(off(t)).area, Face(off(-t)).area
+        out_d = t if a1 > a2 else -t                    # the sign that makes the outline bigger
+        if side == "outside":
+            outer, inner = off(out_d), w
+        elif side == "mid":
+            outer, inner = off(out_d / 2.0), off(-out_d / 2.0)
+        else:
+            outer, inner = w, off(-out_d)
+        return Face(outer, [inner])
+
+    def region_info(self, sketch):
+        """[(area, interior point (u, v))] of the closed regions of a sketch (for the contour list of an extrude)."""
+        m = self.models.get(sketch["id"])
+        out = []
+        if m is None:
+            return out
+        for outer, holes in self.region_polys(sketch):
+            area = abs(_area(outer)) - sum(abs(_area(h)) for h in holes)
+            out.append((area, _interior(outer, holes)))
+        return out
+
+    def region_polys(self, sketch):
+        m = self.models[sketch["id"]]
+        return [(self.loop_poly(m, r["outer"]), [self.loop_poly(m, h) for h in r["holes"]]) for r in sk.regions(m)]
+
+    @staticmethod
+    def loop_poly(m, loop):
+        pts = []
+        for item in loop:
+            kind, i = item[0], item[1]
+            fwd = item[2] if len(item) > 2 else True
+            p = sk.polyline(m, (kind, i), 48)
+            pts.extend(p if fwd else p[::-1])
+        return np.array(pts)
+
+    # ------------------------------------------------------------------ revolve
+    def sketch_axis(self, sketch, spec):
+        """Axis (3D) from a sketch axis spec: "sx" / "sy" (the sketch axes), ("ln", id) / {"ln": id} (a line of the sketch) or "auto"."""
+        plane = self.planes[sketch["id"]]
+        o = np.array(tuple(plane.origin))
+        xd, yd = np.array(tuple(plane.x_dir)), np.array(tuple(plane.y_dir))
+        m = self.models[sketch["id"]]
+        if spec in (None, "auto"):
+            cl = [i for i in m.lns if ("ln", i) in m.constr]
+            spec = {"ln": cl[0]} if cl else "sy"
+        if spec == "sx":
+            return Axis(Vector(*o), Vector(*xd))
+        if spec == "sy":
+            return Axis(Vector(*o), Vector(*yd))
+        lid = spec["ln"] if isinstance(spec, dict) else spec[1]
+        if lid not in m.lns:
+            raise ModelError("the axis line it revolves about no longer exists")
+        a, b = m.line_pts(lid)
+        d = (b[0] - a[0], b[1] - a[1])
+        if math.hypot(*d) < 1e-9:
+            raise ModelError("the axis line has no length")
+        return Axis(Vector(*(o + a[0] * xd + a[1] * yd)), Vector(*(d[0] * xd + d[1] * yd)))
+
+    def run_revolve(self, f, solid, tool_only=False):
+        k = f["kind"]
+        sk_ = self.feature(f["sketch"])
+        if sk_ is None or sk_["id"] not in self.planes:
+            raise ModelError("its sketch is missing or suppressed")
+        if k == "revolve_cut" and solid is None:
+            raise ModelError("nothing to cut yet")
+        faces = self.profile(sk_, f.get("pts") or None)
+        axis = self.sketch_axis(sk_, f.get("axis"))
+        if f.get("reverse"):
+            axis = Axis(axis.position, -axis.direction)
+        ang = self.num(f.get("angle", "360"))
+        if not 0 < ang <= 360:
+            raise ModelError("the angle must be between 0 and 360 degrees")
+        tool = None
+        for prof in faces:
+            try:
+                t_ = revolve(prof, axis=axis, revolution_arc=ang)
+            except Exception as ex:
+                raise ModelError(f"cannot revolve this profile ({ex}); it must not cross the axis")
+            tool = t_ if tool is None else tool + t_
+        if tool_only:
+            return tool
+        if k == "revolve":
+            return self.clean(tool if solid is None else (solid + tool if f.get("merge", True)
+                                                          else Compound(solid.solids() + tool.solids())))
+        out = solid - tool
+        before = sum(x.volume for x in solid.solids())
+        after = sum(x.volume for x in out.solids()) if out.solids() else 0.0
+        if abs(before - after) < 1e-9 * max(1.0, before):
+            raise ModelError("the cut does not touch the part")
+        return self.clean(out)
+
+    # ------------------------------------------------------------------ patterns and mirror of features
+    def feature_tool(self, g, solid_before):
+        """(tool shape, 'add' | 'cut') of an extrude / cut / revolve feature, for patterning it."""
+        k = g["kind"]
+        if k == "extrude":
+            return self.run_extrude(g, solid_before, tool_only=True), "add"
+        if k == "cut":
+            return self.run_extrude(g, solid_before, tool_only=True), "cut"
+        if k == "revolve":
+            return self.run_revolve(g, solid_before, tool_only=True), "add"
+        if k == "revolve_cut":
+            return self.run_revolve(g, solid_before, tool_only=True), "cut"
+        raise ModelError(f"{g['name']} cannot be patterned (only extrudes, cuts and revolves)")
+
+    def source_tools(self, f, solid):
+        """[(tool, mode)] of the features listed in f['features'] (each rebuilt from the part before it)."""
+        out = []
+        for gid in f.get("features", []):
+            g = self.feature(gid)
+            if g is None:
+                raise ModelError("a feature it repeats no longer exists")
+            i = self.features.index(g)
+            if self.features.index(f) <= i:
+                raise ModelError("it can only repeat features that come before it")
+            before = self.after.get(self.features[i - 1]["id"]) if i > 0 else None
+            if self.status.get(g["id"]) != "ok":
+                raise ModelError(f"{g['name']} is not built")
+            out.append(self.feature_tool(g, before))
+        if not out:
+            raise ModelError("pick the features to repeat (or the whole body)")
+        return out
+
+    @staticmethod
+    def global_dir(spec):
+        return {"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}[spec]
+
+    def edge_vec(self, ref, solid):
+        e = self.resolve_edge(ref, solid)
+        t = e.tangent_at(0.5)
+        return np.array([t.X, t.Y, t.Z])
+
+    def pattern_moves(self, f, solid):
+        """[function(shape) -> moved copy] for every copy of a pattern (not the original)."""
+        moves = []
+        if f.get("ptype") == "linear":
+            n1 = int(round(self.num(f.get("count", "3"))))
+            s1 = self.num(f.get("spacing", "10"))
+            if n1 < 1:
+                raise ModelError("the number of copies must be at least 1")
+            if f.get("dir1") == "edge":
+                if not f.get("edge1"):
+                    raise ModelError("pick the edge that gives the direction")
+                d1 = self.edge_vec(f["edge1"], solid)
+            else:
+                d1 = np.array(self.global_dir(f.get("dir1", "X")), float)
+            d1 = d1 / np.linalg.norm(d1) * (-1.0 if f.get("reverse") else 1.0)
+            two = bool(f.get("dir2_on"))
+            n2 = int(round(self.num(f.get("count2", "2")))) if two else 1
+            s2 = self.num(f.get("spacing2", "10")) if two else 0.0
+            d2 = np.array(self.global_dir(f.get("dir2", "Y")), float)
+            for i in range(n1):
+                for j in range(n2):
+                    if i == 0 and j == 0:
+                        continue
+                    v = d1 * s1 * i + d2 * s2 * j
+                    moves.append(lambda sh, v=v: sh.moved(Location(tuple(v))))
+            return moves
+        n = int(round(self.num(f.get("count", "4"))))
+        total = self.num(f.get("angle", "360"))
+        if n < 2:
+            raise ModelError("the number of copies must be at least 2")
+        if f.get("axis") == "edge":
+            if not f.get("edge1"):
+                raise ModelError("pick the edge that gives the axis")
+            e = self.resolve_edge(f["edge1"], solid)
+            if e.geom_type.name == "CIRCLE":
+                c = e.arc_center
+                nrm = e.normal()
+                axis = Axis(Vector(c.X, c.Y, c.Z), Vector(nrm.X, nrm.Y, nrm.Z))
+            else:
+                p, t = e.position_at(0.5), e.tangent_at(0.5)
+                axis = Axis(Vector(p.X, p.Y, p.Z), Vector(t.X, t.Y, t.Z))
+        else:
+            axis = Axis(Vector(0, 0, 0), Vector(*self.global_dir(f.get("axis", "Z"))))
+        step = total / n if abs(total - 360.0) < 1e-9 else total / (n - 1)
+        if f.get("reverse"):
+            step = -step
+        for i in range(1, n):
+            moves.append(lambda sh, a=step * i: sh.rotate(axis, a))
+        return moves
+
+    def apply_copies(self, f, solid, moves):
+        """Add / cut the moved copies of the chosen features (or of the whole body)."""
+        if solid is None:
+            raise ModelError("nothing to repeat yet")
+        if f.get("source") == "body":
+            out = solid
+            for mv in moves:
+                out = out + mv(solid)
+            return self.clean(out)
+        out = solid
+        for tool, mode in self.source_tools(f, solid):
+            for mv in moves:
+                t = mv(tool)
+                out = out + t if mode == "add" else out - t
+        return self.clean(out)
+
+    def run_pattern(self, f, solid):
+        return self.apply_copies(f, solid, self.pattern_moves(f, solid))
+
+    def mirror_plane(self, f, solid):
+        spec = f.get("plane") or {"base": "Front"}
+        if "ref" in spec:
+            return self.ref_plane(spec["ref"])
+        if "base" in spec:
+            return BASE_PLANES[spec["base"]]
+        if solid is None:
+            raise ModelError("the face it mirrors about does not exist yet")
+        return Plane(self.resolve_face(spec["face"], solid))
+
+    def run_mirror(self, f, solid):
+        pl = self.mirror_plane(f, solid)
+        return self.apply_copies(f, solid, [lambda sh: sh.mirror(pl)])
+
+    # ------------------------------------------------------------------ sketches -> faces
+    def profile(self, sketch, pts=None):
+        """The closed regions of a sketch as faces in 3D (a list); regions inside regions become holes.  `pts` [(u, v)]: only the regions
+        that contain one of these points."""
+        m = self.models.get(sketch["id"])
+        if m is None:
+            raise ModelError("the sketch is not built")
+        plane = self.planes[sketch["id"]]
+        o = np.array(tuple(plane.origin))
+        xd, yd = np.array(tuple(plane.x_dir)), np.array(tuple(plane.y_dir))
+        w3 = lambda p: Vector(*(o + p[0] * xd + p[1] * yd))
+        P = m.pts
+
+        def wire(loop):
+            if len(loop) == 1 and loop[0][0] == "ci":
+                c = m.pts[m.cis[loop[0][1]]["c"]]
+                r = m.cis[loop[0][1]]["r"]
+                pl = Plane(origin=w3(c), x_dir=plane.x_dir, z_dir=plane.z_dir)
+                return Wire([Edge.make_circle(r, plane=pl)])
+            edges = []
+            for kind, i, fwd in loop:
+                if kind == "ln":
+                    a, b = m.lns[i]
+                    a, b = (a, b) if fwd else (b, a)
+                    edges.append(Edge.make_line(w3(P[a]), w3(P[b])))
+                else:
+                    c, r, t0, sw = sk.arc_span(m, i)
+                    ar = m.ars[i]
+                    mid = (c[0] + r * math.cos(t0 + sw / 2), c[1] + r * math.sin(t0 + sw / 2))
+                    s, e = P[ar["s"]], P[ar["e"]]
+                    s, e = (s, e) if fwd else (e, s)
+                    edges.append(Edge.make_three_point_arc(w3(s), w3(mid), w3(e)))
+            return Wire(edges)
+        faces = []
+        polys = self.region_polys(sketch) if pts else None
+        for n, reg in enumerate(sk.regions(m)):
+            if pts and not any(_inside(p, polys[n][0], polys[n][1]) for p in pts):
+                continue
+            try:
+                outer = wire(reg["outer"])
+                inner = [wire(h) for h in reg["holes"]]
+                faces.append(Face(outer, inner) if inner else Face(outer))
+            except Exception as ex:
+                raise ModelError(f"{sketch['name']}: cannot make a face ({ex})")
+        if not faces:
+            raise ModelError(f"{sketch['name']} has no closed profile")
+        return faces
+
+    # ------------------------------------------------------------------ reference planes and axes
+    def spec_entity(self, spec, solid):
+        """The geometry (refgeo entity) that a reference of a plane / axis feature points at."""
+        import asm_model as am
+        k = spec["k"]
+        if k == "base":
+            pl = BASE_PLANES[spec["n"]]
+            return {"t": "plane", "p": np.zeros(3), "n": np.array(tuple(pl.z_dir)), "x": np.array(tuple(pl.x_dir))}
+        if k == "origin":
+            return {"t": "point", "p": np.zeros(3)}
+        if k == "ref":
+            e = self.refgeo.get(spec["id"])
+            if e is None:
+                raise ModelError("it refers to a plane / axis that is not built (yet)")
+            return e
+        if solid is None:
+            raise ModelError("the geometry it refers to does not exist yet")
+        r = spec["r"]
+        try:
+            if k == "face":
+                if r.get("g", "PLANE") == "PLANE":
+                    f = self.resolve_face(r, solid)
+                    pl = Plane(f)
+                    return {"t": "plane", "p": np.array(tuple(pl.origin)), "n": np.array(tuple(pl.z_dir)), "x": np.array(tuple(pl.x_dir))}
+                best, sc = None, 1e18
+                c0 = np.array(r["c"])
+                for f in solid.faces():
+                    if f.geom_type.name != r["g"]:
+                        continue
+                    c = f.center()
+                    s_ = float(np.linalg.norm(np.array([c.X, c.Y, c.Z]) - c0))
+                    if s_ < sc:
+                        best, sc = f, s_
+                if best is None:
+                    raise ModelError("the face it refers to no longer exists")
+                return am.face_entity(best)
+            if k == "edge":
+                return am.edge_entity(self.resolve_edge(r, solid))
+            if k == "vertex":
+                q = np.array(r["p"])
+                best, sc = None, 1e18
+                for v in solid.vertices():
+                    c = v.center()
+                    s_ = float(np.linalg.norm(np.array([c.X, c.Y, c.Z]) - q))
+                    if s_ < sc:
+                        best, sc = np.array([c.X, c.Y, c.Z]), s_
+                if best is None or sc > 1.0:
+                    raise ModelError("the point it refers to no longer exists")
+                return {"t": "point", "p": best}
+        except am.MateError as ex:
+            raise ModelError(str(ex))
+        raise ModelError(f"unknown reference {k}")
+
+    def run_refgeo(self, f, solid):
+        ents = [self.spec_entity(s, solid) for s in f.get("refs", [])]
+        try:
+            if f["kind"] == "refplane":
+                e = refgeo.compute_plane(f.get("ptype"), ents, self.num(f.get("d", "10")), self.num(f.get("ang", "45")), bool(f.get("flip")))
+            else:
+                e = refgeo.compute_axis(f.get("ptype"), ents)
+        except refgeo.RefError as ex:
+            raise ModelError(str(ex))
+        self.refgeo[f["id"]] = e
+        return solid
+
+    def ref_plane(self, fid):
+        e = self.refgeo.get(fid)
+        if e is None:
+            raise ModelError("the plane it refers to is not built")
+        return Plane(origin=Vector(*e["p"]), x_dir=Vector(*e["x"]), z_dir=Vector(*e["n"]))
+
+    def resolve_plane(self, spec, solid):
+        if "ref" in spec:
+            return self.ref_plane(spec["ref"])
+        if "base" in spec:
+            p = BASE_PLANES[spec["base"]]
+            off = self.num(spec.get("offset", 0))
+            return p.offset(off) if off else p
+        if solid is None:
+            raise ModelError("the face it was drawn on does not exist yet")
+        face = self.resolve_face(spec["face"], solid)
+        return Plane(face)
+
+    # ------------------------------------------------------------------ references that survive a rebuild
+    @staticmethod
+    def face_ref(face):
+        c, n = face.center(), face.normal_at()
+        return {"c": [c.X, c.Y, c.Z], "n": [n.X, n.Y, n.Z]}
+
+    @staticmethod
+    def resolve_face(ref, solid):
+        c0, n0 = np.array(ref["c"]), np.array(ref["n"])
+        best, score = None, 1e18
+        for f in solid.faces():
+            if f.geom_type.name != "PLANE":
+                continue
+            n = f.normal_at()
+            n = np.array([n.X, n.Y, n.Z])
+            if float(n @ n0) < 0.98:
+                continue
+            c = f.center()
+            d = np.array([c.X, c.Y, c.Z]) - c0
+            s = 3.0 * abs(float(d @ n0)) + float(np.linalg.norm(d))      # the plane position counts most, then where on it
+            if s < score:
+                best, score = f, s
+        if best is None:
+            raise ModelError("the face it refers to no longer exists")
+        return best
+
+    @staticmethod
+    def edge_ref(edge):
+        m, t = edge.position_at(0.5), edge.tangent_at(0.5)
+        return {"m": [m.X, m.Y, m.Z], "d": [t.X, t.Y, t.Z]}
+
+    @staticmethod
+    def resolve_edge(ref, solid):
+        m0, d0 = np.array(ref["m"]), np.array(ref["d"])
+        best, score = None, 1e18
+        for e in solid.edges():
+            t = e.tangent_at(0.5)
+            if abs(float(np.array([t.X, t.Y, t.Z]) @ d0)) < 0.9:
+                continue
+            m = e.position_at(0.5)
+            s = float(np.linalg.norm(np.array([m.X, m.Y, m.Z]) - m0))
+            if s < score:
+                best, score = e, s
+        if best is None or score > 0.5 * max(1.0, float(np.linalg.norm(m0)) + 50.0):
+            raise ModelError("an edge it refers to no longer exists")
+        return best
+
+    # ------------------------------------------------------------------ geometry for the viewer
+    def mesh(self, solid=None, tol=0.05):
+        """[(face index, vertices Nx3, triangles Mx3)] of a solid."""
+        out = []
+        solid = solid or self.solid
+        if solid is None:
+            return out
+        for i, f in enumerate(solid.faces()):
+            v, t = f.tessellate(tol, 0.2)
+            if v and t:
+                out.append((i, np.array([[p.X, p.Y, p.Z] for p in v]), np.array(t, dtype=np.int64)))
+        return out
+
+    def edge_lines(self, solid=None, n=24):
+        solid = solid or self.solid
+        out = []
+        if solid is None:
+            return out
+        for e in solid.edges():
+            k = 2 if e.geom_type.name == "LINE" else n
+            out.append(np.array([[p.X, p.Y, p.Z] for p in (e.position_at(i / (k - 1)) for i in range(k))]))
+        return out
+
+    def sketch_lines(self, sketch, n=48):
+        """Outline of a sketch in 3D (for drawing it in the view): a list of (N, 3) arrays."""
+        m = self.models.get(sketch["id"])
+        if m is None or sketch["id"] not in self.planes:
+            return []
+        plane = self.planes[sketch["id"]]
+        o = np.array(tuple(plane.origin))
+        xd, yd = np.array(tuple(plane.x_dir)), np.array(tuple(plane.y_dir))
+        out = []
+        for key in sk.all_keys(m):
+            if key in m.constr:
+                continue
+            p = sk.polyline(m, key, n)
+            out.append(o + p[:, :1] * xd + p[:, 1:2] * yd)
+        return out
+
+    # ------------------------------------------------------------------ files
+    def to_json(self):
+        return json.dumps({"version": 1, "params": self.params, "features": self.features, "rollback": self.rollback,
+                           "counter": self.counter, "material": self.material, "sims": self.sims, "renders": self.renders,
+                           "display": self.display, "cfg": self.cfg_snapshot()}, indent=1)
+
+    @classmethod
+    def from_json(cls, text):
+        d = json.loads(text)
+        doc = cls()
+        doc.params, doc.features, doc.rollback, doc.counter = d["params"], d["features"], d.get("rollback"), d.get("counter", {})
+        doc.material = d.get("material") or doc.material
+        doc.sims = d.get("sims") or []
+        doc.renders = d.get("renders") or []
+        doc.display = d.get("display") or doc.display
+        doc.cfg = d.get("cfg") or doc.cfg
+        return doc
+
+    def copy(self):
+        return Document.from_json(self.to_json())
+
+    # ------------------------------------------------------------------ configurations
+    # A configuration is a named set of values for the columns of the configuration table:
+    #   "g:<global>"            the equation of a global variable
+    #   "d:<sketch id>:<con>"   one sketch dimension (a number or an equation)
+    #   "s:<feature id>"        True = that feature is suppressed
+    # The document always holds the values of the ACTIVE configuration; the table keeps one row of values per configuration.
+    def cfg_read(self, key):
+        kind, _, rest = key.partition(":")
+        if kind == "g":
+            return self.params.get(rest)
+        if kind == "s":
+            f = self.feature(rest)
+            return None if f is None else bool(f.get("suppressed"))
+        if kind == "d":
+            fid, _, cid = rest.partition(":")
+            f = self.feature(fid)
+            if f is None or f["kind"] != "sketch":
+                return None
+            m = self.sketch_model_raw(f)
+            c = m.con_by_id(int(cid)) if cid.isdigit() else m.con_by_id(cid)
+            if not c:
+                return None
+            return str(c["expr"]) if c.get("expr") else float(c["value"])
+        return None
+
+    def cfg_write(self, key, val):
+        kind, _, rest = key.partition(":")
+        if val is None:
+            return
+        if kind == "g":
+            if rest in self.params:
+                self.params[rest] = str(val)
+        elif kind == "s":
+            f = self.feature(rest)
+            if f is not None:
+                f["suppressed"] = bool(val)
+        elif kind == "d":
+            fid, _, cid = rest.partition(":")
+            f = self.feature(fid)
+            if f is None or f["kind"] != "sketch":
+                return
+            m = self.sketch_model_raw(f)
+            c = m.con_by_id(int(cid)) if cid.isdigit() else m.con_by_id(cid)
+            if not c:
+                return
+            if isinstance(val, (int, float)) or _is_number(val):
+                c["value"] = float(val)
+                c.pop("expr", None)
+            else:
+                c["expr"] = str(val)
+                try:
+                    c["value"] = float(self.num(str(val)))
+                except Exception:
+                    pass
+            f["model"] = m.to_json()
+
+    def sketch_model_raw(self, f):
+        """The Model of a sketch straight from its saved text (no globals added)."""
+        if not f.get("model"):
+            f["model"] = self.legacy_model(f)
+            f.pop("entities", None)
+        m = sc.Model()
+        m.from_json(f["model"])
+        return m
+
+    def cfg_capture(self):
+        """Copy the document's current values into the row of the active configuration."""
+        c = self.cfg
+        row = c["cells"].setdefault(c["active"], {})
+        for key in c["cols"]:
+            v = self.cfg_read(key)
+            if v is not None:
+                row[key] = v
+
+    def cfg_snapshot(self):
+        self.cfg_capture()
+        return self.cfg
+
+    def cfg_apply(self, name):
+        """Make `name` the active configuration: write its values into the document."""
+        if name not in self.cfg["names"]:
+            raise ModelError(f"no configuration called {name}")
+        self.cfg_capture()
+        self.cfg["active"] = name
+        row = self.cfg["cells"].get(name, {})
+        for key in self.cfg["cols"]:
+            if key in row:
+                self.cfg_write(key, row[key])
+
+    def cfg_add(self, name, copy_of=None):
+        name = name.strip()
+        if not name or name in self.cfg["names"]:
+            raise ModelError("that configuration name is empty or already used")
+        self.cfg_capture()
+        src = copy_of or self.cfg["active"]
+        self.cfg["names"].append(name)
+        self.cfg["cells"][name] = dict(self.cfg["cells"].get(src, {}))
+
+    def cfg_delete(self, name):
+        if len(self.cfg["names"]) < 2:
+            raise ModelError("a part needs at least one configuration")
+        if name == self.cfg["active"]:
+            self.cfg_apply(next(n for n in self.cfg["names"] if n != name))
+        self.cfg["names"].remove(name)
+        self.cfg["cells"].pop(name, None)
+
+    def cfg_rename(self, name, new):
+        new = new.strip()
+        if not new or (new in self.cfg["names"] and new != name):
+            raise ModelError("that configuration name is empty or already used")
+        i = self.cfg["names"].index(name)
+        self.cfg["names"][i] = new
+        self.cfg["cells"][new] = self.cfg["cells"].pop(name, {})
+        if self.cfg["active"] == name:
+            self.cfg["active"] = new
+
+    def cfg_add_col(self, key):
+        if key in self.cfg["cols"]:
+            return
+        self.cfg_capture()
+        v = self.cfg_read(key)
+        if v is None:
+            raise ModelError("that item cannot be put in the table")
+        self.cfg["cols"].append(key)
+        for n in self.cfg["names"]:
+            self.cfg["cells"].setdefault(n, {})[key] = v
+
+    def cfg_del_col(self, key):
+        if key in self.cfg["cols"]:
+            self.cfg["cols"].remove(key)
+            for row in self.cfg["cells"].values():
+                row.pop(key, None)
+
+    def cfg_set_cell(self, name, key, val):
+        self.cfg["cells"].setdefault(name, {})[key] = val
+        if name == self.cfg["active"]:
+            self.cfg_write(key, val)
+
+    def cfg_label(self, key):
+        kind, _, rest = key.partition(":")
+        if kind == "g":
+            return rest
+        if kind == "s":
+            f = self.feature(rest)
+            return f"$SUPPRESS@{f['name']}" if f else key
+        fid, _, cid = rest.partition(":")
+        f = self.feature(fid)
+        if f is None:
+            return key
+        m = self.sketch_model_raw(f)
+        dims = [c for c in m.cons if c["type"] in sc.DIMENSIONS]
+        for i, c in enumerate(dims):
+            if str(c["id"]) == cid:
+                return f"D{i + 1}@{f['name']}"
+        return key
+
+    def cfg_candidates(self):
+        """[(key, label, current value)] of everything that can be a column."""
+        out = [(f"g:{k}", k, e) for k, e in self.params.items()]
+        for f in self.features:
+            if f["kind"] == "sketch":
+                try:
+                    m = self.sketch_model_raw(f)
+                except Exception:
+                    continue
+                dims = [c for c in m.cons if c["type"] in sc.DIMENSIONS]
+                for i, c in enumerate(dims):
+                    out.append((f"d:{f['id']}:{c['id']}", f"D{i + 1}@{f['name']}", str(c['expr']) if c.get('expr') else c['value']))
+            else:
+                out.append((f"s:{f['id']}", f"$SUPPRESS@{f['name']}", bool(f.get("suppressed"))))
+        return out
+
+
+def _is_number(x):
+    try:
+        float(x)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _area(p):
+    x, y = p[:, 0], p[:, 1]
+    return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
+def _in_poly(pt, poly):
+    x, y = pt
+    px, py = poly[:, 0], poly[:, 1]
+    qx, qy = np.roll(px, -1), np.roll(py, -1)
+    cond = (py > y) != (qy > y)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        xi = (qx - px) * (y - py) / (qy - py) + px
+    return bool(np.sum(cond & (x < xi)) % 2)
+
+
+def _inside(pt, outer, holes):
+    return _in_poly(pt, outer) and not any(_in_poly(pt, h) for h in holes)
+
+
+def _interior(outer, holes):
+    """A point well inside a region (grid search for the one farthest from the outline)."""
+    lo, hi = outer.min(axis=0), outer.max(axis=0)
+    allp = np.vstack([outer] + list(holes))
+    best, bs = (float(outer[:, 0].mean()), float(outer[:, 1].mean())), -1.0
+    for u in np.linspace(lo[0], hi[0], 27)[1:-1]:
+        for v in np.linspace(lo[1], hi[1], 27)[1:-1]:
+            if _inside((u, v), outer, holes):
+                sc_ = float(np.min(np.hypot(allp[:, 0] - u, allp[:, 1] - v)))
+                if sc_ > bs:
+                    best, bs = (float(u), float(v)), sc_
+    return best

@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pre_*.py
+*.pre_*.bat
+*.orig.py
+# your own work files
+*.gpd
+*.gpa
+*.gps
+*.gpr
+gpd_error.log

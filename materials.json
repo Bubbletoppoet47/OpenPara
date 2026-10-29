@@ -1,0 +1,95 @@
+{
+  "materials": [
+    {
+      "name": "Structural steel (A36)",
+      "E_MPa": 200000.0,
+      "nu": 0.26,
+      "Sy_MPa": 250,
+      "Su_MPa": 400
+    },
+    {
+      "name": "Steel AISI 1018",
+      "E_MPa": 205000.0,
+      "nu": 0.29,
+      "Sy_MPa": 370,
+      "Su_MPa": 440
+    },
+    {
+      "name": "Stainless steel 304",
+      "E_MPa": 193000.0,
+      "nu": 0.29,
+      "Sy_MPa": 215,
+      "Su_MPa": 505
+    },
+    {
+      "name": "Stainless steel 316",
+      "E_MPa": 193000.0,
+      "nu": 0.3,
+      "Sy_MPa": 205,
+      "Su_MPa": 515
+    },
+    {
+      "name": "Aluminium 6061-T6",
+      "E_MPa": 68900.0,
+      "nu": 0.33,
+      "Sy_MPa": 276,
+      "Su_MPa": 310
+    },
+    {
+      "name": "Aluminium 7075-T6",
+      "E_MPa": 71700.0,
+      "nu": 0.33,
+      "Sy_MPa": 503,
+      "Su_MPa": 572
+    },
+    {
+      "name": "Aluminium 2024-T3",
+      "E_MPa": 73100.0,
+      "nu": 0.33,
+      "Sy_MPa": 345,
+      "Su_MPa": 483
+    },
+    {
+      "name": "Titanium Ti-6Al-4V",
+      "E_MPa": 113800.0,
+      "nu": 0.342,
+      "Sy_MPa": 880,
+      "Su_MPa": 950
+    },
+    {
+      "name": "Copper",
+      "E_MPa": 117000.0,
+      "nu": 0.34,
+      "Sy_MPa": 70,
+      "Su_MPa": 220
+    },
+    {
+      "name": "Brass (cartridge)",
+      "E_MPa": 110000.0,
+      "nu": 0.34,
+      "Sy_MPa": 125,
+      "Su_MPa": 340
+    },
+    {
+      "name": "Gray cast iron",
+      "E_MPa": 110000.0,
+      "nu": 0.26,
+      "Sy_MPa": 0,
+      "Su_MPa": 200
+    },
+    {
+      "name": "Magnesium AZ31B",
+      "E_MPa": 45000.0,
+      "nu": 0.35,
+      "Sy_MPa": 200,
+      "Su_MPa": 260
+    },
+    {
+      "name": "Nickel alloy (Inconel 718)",
+      "E_MPa": 200000.0,
+      "nu": 0.29,
+      "Sy_MPa": 1030,
+      "Su_MPa": 1240
+    }
+  ]
+}
