@@ -1,11 +1,16 @@
 name: Release (Windows installer)
 
 # Run it by pushing a tag that equals version.py, e.g.   git tag v0.1.0 && git push origin v0.1.0
-# or by hand from the Actions tab (then it builds but only uploads the files as a workflow artifact, no release).
+# or by hand from the Actions tab (with 'publish' ticked it creates the tag and the release itself; without it only a workflow artifact is made).
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a release v<version> (creates the tag)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -102,9 +107,9 @@ jobs:
           retention-days: 14
 
       - name: Publish the release
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || inputs.publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME dist\* --title "OpenPara $env:VERSION" --notes "Install: download OpenPara-Setup-$env:VERSION.exe and run it. An installed OpenPara offers this update by itself (Help > Check for updates)."
+          gh release create "v$env:VERSION" dist\* --target $env:GITHUB_SHA --title "OpenPara $env:VERSION" --notes "Install: download OpenPara-Setup-$env:VERSION.exe and run it. An installed OpenPara offers later updates by itself (Help > Check for updates)."
