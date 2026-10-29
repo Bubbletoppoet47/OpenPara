@@ -56,8 +56,13 @@ def fmt(v):
 
 
 # ---------------------------------------------------------------------------------------------------- dialogs (module functions: tests replace them)
-def ask_form(parent, title, fields, checks=()):
-    """fields [(label, default)], checks [(label, default)] -> ([floats], [bools]) or None."""
+LAST_EXPRS = []            # after ask_form: per numeric field, the formula in mm / degrees when a name was typed, else None
+
+
+def ask_form(parent, title, fields, checks=(), evaluator=None):
+    """fields [(label, default)], checks [(label, default)] -> ([floats], [bools]) or None.
+    With an evaluator(text, label) -> (number shown in the current unit, formula in mm or None) a field is a text box that takes
+    a number, a global name or a formula (Width/2); the formulas typed are left in LAST_EXPRS."""
     d = QDialog(parent)
     d.setWindowTitle(title)
     lay = QVBoxLayout(d)
@@ -65,10 +70,13 @@ def ask_form(parent, title, fields, checks=()):
     lay.addLayout(form)
     spins = []
     for label, val in fields:
-        s = QDoubleSpinBox()
-        s.setRange(-1e9, 1e9)
-        s.setDecimals(6)
-        s.setValue(val)
+        if evaluator is not None:
+            s = QLineEdit(unitctl.num(val, 8) if isinstance(val, (int, float)) else str(val))
+        else:
+            s = QDoubleSpinBox()
+            s.setRange(-1e9, 1e9)
+            s.setDecimals(6)
+            s.setValue(val)
         form.addRow(label, s)
         spins.append(s)
     boxes = []
@@ -78,12 +86,31 @@ def ask_form(parent, title, fields, checks=()):
         lay.addWidget(c)
         boxes.append(c)
     bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-    bb.accepted.connect(d.accept)
     bb.rejected.connect(d.reject)
     lay.addWidget(bb)
+    result = {}
+
+    def accept():
+        if evaluator is None:
+            result["v"] = ([s.value() for s in spins], [None] * len(spins))
+            d.accept()
+            return
+        vals, exprs = [], []
+        for (label, _), s in zip(fields, spins):
+            try:
+                v, e = evaluator(s.text(), label)
+            except ValueError as ex:
+                QMessageBox.warning(d, title, f"{label}: {ex}")
+                return
+            vals.append(v)
+            exprs.append(e)
+        result["v"] = (vals, exprs)
+        d.accept()
+    bb.accepted.connect(accept)
     if d.exec() != QDialog.DialogCode.Accepted:
         return None
-    return [s.value() for s in spins], [c.isChecked() for c in boxes]
+    LAST_EXPRS[:] = result["v"][1]
+    return result["v"][0], [c.isChecked() for c in boxes]
 
 
 def ask_dim(parent, title, text, symbols):
@@ -193,6 +220,7 @@ class SketchEditor:
         self.sel = []                     # selected keys: ("pt", id) ("ln", id) ("ci", id) ("ar", id) ("con", id)
         self.picks = []                   # picks of the relation / dimension tool in progress
         self.press_px = None
+        self.box = None                   # selection box being dragged on empty space
         self.press_first = False
         self.drag = None                  # [point id, moved?]
         self.host = None                  # tangent arc: the line / arc it continues
@@ -239,6 +267,8 @@ class SketchEditor:
 
     def end(self):
         self.sk_id, self.pending, self.cursor, self.sel, self.picks = None, [], None, [], []
+        self.box = None
+        self.hide_band()
         self.clear_actors()
         try:
             self.pl.camera.ParallelProjectionOff()
@@ -464,11 +494,8 @@ class SketchEditor:
             tag = self.pick_tag(px, py)
             key = ("con", tag) if tag is not None else self.pick(px, py)
             if key is None:
-                if not shift:
-                    self.sel = []
-                self.after_select()
-                self.redraw()
-                self.app.pick_model(px, py, shift)             # nothing of the sketch here: pick an edge / face of the part
+                # empty space: a click picks the part under it, a drag draws a selection box (released in release())
+                self.box = {"start": (px, py), "end": (px, py), "shift": shift, "active": False}
                 return True
             elif shift:
                 self.sel = [k for k in self.sel if k != key] if key in self.sel else self.sel + [key]
@@ -558,6 +585,10 @@ class SketchEditor:
             if moved:
                 self.finish_drag()
             return True
+        if self.box is not None:
+            self.finish_box(px, py)
+            self.press_px = None
+            return True
         if self.press_px is None:
             return False
         moved = math.hypot(px - self.press_px[0], py - self.press_px[1]) > 6 * self.pl.devicePixelRatioF()
@@ -582,6 +613,14 @@ class SketchEditor:
             self.m.solve(pin=(self.drag[0], round(uv[0], 3), round(uv[1], 3)))
             self.redraw()
             return
+        if self.box is not None:
+            b = self.box
+            b["end"] = (px, py)
+            if not b["active"] and math.hypot(px - b["start"][0], py - b["start"][1]) > 6 * self.pl.devicePixelRatioF():
+                b["active"] = True
+            if b["active"]:
+                self.show_band()
+            return
         if self.tool == "select":
             return
         hit = self.point_at(px, py)
@@ -593,6 +632,100 @@ class SketchEditor:
                 self.arc_acc += wrap_pi(a - self.arc_last)
             self.arc_last = a
         self.redraw()
+
+    # ------------------------------------------------------------------ selection box
+    def show_band(self):
+        """The rubber band: solid blue for a window (left to right), dashed green for a crossing (right to left)."""
+        b = self.box
+        try:
+            from PyQt6.QtCore import QRect, QPoint
+            from PyQt6.QtWidgets import QRubberBand
+            if getattr(self, "band", None) is None:
+                self.band = QRubberBand(QRubberBand.Shape.Rectangle, self.pl)
+            r = self.pl.devicePixelRatioF()
+            H = self.pl.height()
+            (x0, y0), (x1, y1) = b["start"], b["end"]
+            a = QPoint(int(x0 / r), int(H - y0 / r))
+            c = QPoint(int(x1 / r), int(H - y1 / r))
+            self.band.setGeometry(QRect(a, c).normalized())
+            self.band.show()
+        except Exception:
+            pass
+
+    def hide_band(self):
+        try:
+            if getattr(self, "band", None) is not None:
+                self.band.hide()
+        except Exception:
+            pass
+
+    @staticmethod
+    def seg_hits_rect(a, b, x0, y0, x1, y1):
+        """True when the segment a-b touches the rectangle (Liang-Barsky)."""
+        t0, t1 = 0.0, 1.0
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        for p, q in ((-dx, a[0] - x0), (dx, x1 - a[0]), (-dy, a[1] - y0), (dy, y1 - a[1])):
+            if abs(p) < 1e-12:
+                if q < 0:
+                    return False
+            else:
+                t = q / p
+                if p < 0:
+                    t0 = max(t0, t)
+                else:
+                    t1 = min(t1, t)
+                if t0 > t1:
+                    return False
+        return True
+
+    def box_select(self, start, end, add=False):
+        """Selects what is inside the box (dragged left to right) or what the box touches (right to left)."""
+        x0, x1 = sorted((start[0], end[0]))
+        y0, y1 = sorted((start[1], end[1]))
+        crossing = end[0] < start[0]
+        found = []
+        for key in self.keys():
+            if key == ("pt", 0):
+                continue
+            try:
+                if key[0] == "pt":
+                    s = self.screen_of(np.array([self.m.pts[key[1]]]))
+                    hit = bool(x0 <= s[0][0] <= x1 and y0 <= s[0][1] <= y1)
+                elif key[0] in ("ln", "ci", "ar"):
+                    s = self.poly_screen(key)
+                    inside = (s[:, 0] >= x0) & (s[:, 0] <= x1) & (s[:, 1] >= y0) & (s[:, 1] <= y1)
+                    if crossing:
+                        hit = bool(inside.any()) or any(self.seg_hits_rect(s[i], s[i + 1], x0, y0, x1, y1) for i in range(len(s) - 1))
+                    else:
+                        hit = bool(inside.all())
+                else:
+                    continue
+            except Exception:
+                continue
+            if hit:
+                found.append(key)
+        for u, v, cid in (self.tags or []):
+            s = self.screen_of(np.array([(u, v)]))[0]
+            if x0 <= s[0] <= x1 and y0 <= s[1] <= y1:
+                found.append(("con", cid))
+        if add:
+            found = list(self.sel) + [k for k in found if k not in self.sel]
+        self.sel = found
+        return found
+
+    def finish_box(self, px, py):
+        b, self.box = self.box, None
+        self.hide_band()
+        if b["active"]:
+            self.box_select(b["start"], (px, py), add=b["shift"])
+            self.after_select()
+            self.redraw()
+            return
+        if not b["shift"]:                                      # a plain click on empty space
+            self.sel = []
+        self.after_select()
+        self.redraw()
+        self.app.pick_model(b["start"][0], b["start"][1], b["shift"])
 
     def double_click(self, px=None, py=None):
         if self.tool in CHAIN:
@@ -903,13 +1036,40 @@ class SketchEditor:
         self.app.say("Now click the line to mirror about.")
         return True
 
+    def eval_field(self, text, label):
+        """A dialog box value -> (number in the current unit, formula in mm or None).  Takes a number, a global or sketch
+        symbol, or a formula; a length may carry a unit ('2 in').  Raises ValueError."""
+        t = text.strip().lstrip("=").strip()
+        length = ("(" + unitctl.length_unit()) in label
+        if not t:
+            raise ValueError("empty")
+        try:
+            return float(t), None
+        except ValueError:
+            pass
+        mm_text = unitctl.expr_from_display(t) if length else t
+        try:
+            syms = sc.expr_symbols(mm_text)
+        except SyntaxError:
+            raise ValueError(f"'{t}' is not a valid expression")
+        names = self.m.param_values() if self.m is not None else {}
+        missing = [x for x in syms if x not in names]
+        if missing:
+            raise ValueError("Unknown name(s): " + ", ".join(missing))
+        try:
+            val = float(sc.safe_eval(mm_text, names))
+        except Exception:
+            raise ValueError(f"Cannot evaluate '{t}'")
+        shown = unitctl.to_disp(val) if length else val
+        return shown, (mm_text if syms else None)
+
     def command_linear(self):
         ents = self.entities_selected()
         if not ents:
             self.app.say("Select what to copy first.")
             return
         r = ask_form(self.app, "Linear sketch pattern", [("Number of extra copies", 2), (unitctl.label("Step X (mm)"), unitctl.to_disp(10.0)),
-                                                         (unitctl.label("Step Y (mm)"), 0.0)])
+                                                         (unitctl.label("Step Y (mm)"), 0.0)], evaluator=self.eval_field)
         if r:
             n, dx, dy = r[0]
             dx, dy = unitctl.from_disp(dx), unitctl.from_disp(dy)
@@ -921,7 +1081,7 @@ class SketchEditor:
             self.app.say("Select what to copy first.")
             return
         r = ask_form(self.app, "Circular sketch pattern", [("Number of extra copies", 3), ("Angle between copies (deg)", 90.0),
-                                                            (unitctl.label("Centre X (mm)"), 0.0), (unitctl.label("Centre Y (mm)"), 0.0)])
+                                                            (unitctl.label("Centre X (mm)"), 0.0), (unitctl.label("Centre Y (mm)"), 0.0)], evaluator=self.eval_field)
         if r:
             n, a, cx, cy = r[0]
             cx, cy = unitctl.from_disp(cx), unitctl.from_disp(cy)
@@ -932,7 +1092,7 @@ class SketchEditor:
         if not ents:
             self.app.say("Select what to move first.")
             return
-        r = ask_form(self.app, "Move entities", [(unitctl.label("Move X (mm)"), 0.0), (unitctl.label("Move Y (mm)"), 0.0)])
+        r = ask_form(self.app, "Move entities", [(unitctl.label("Move X (mm)"), 0.0), (unitctl.label("Move Y (mm)"), 0.0)], evaluator=self.eval_field)
         if r:
             dx, dy = (unitctl.from_disp(x) for x in r[0])
             self.commit(lambda m: sk.move(m, [k for k in ents if k[0] != "con"], dx, dy))
@@ -943,11 +1103,14 @@ class SketchEditor:
         if not sel:
             self.app.say("Select the lines, arcs and circles to offset first, then press Offset.")
             return
+        LAST_EXPRS[:] = []
         r = ask_form(self.app, "Offset entities", [(unitctl.label("Distance (mm; + = outward / left)"), round(unitctl.to_disp(0.05 * max(m.extent(), 1.0)), 4) or 1.0)],
-                     [("Both sides", False), ("Keep linked to the originals (an offset dimension)", True), ("Select the whole closed loop", True)])
+                     [("Both sides", False), ("Keep linked to the originals (an offset dimension)", True), ("Select the whole closed loop", True)],
+                     evaluator=self.eval_field)
         if not r:
             return
         dist = unitctl.from_disp(r[0][0])
+        dist_expr = LAST_EXPRS[0] if LAST_EXPRS else None          # a formula / global typed in the distance box
         both, link, chain = r[1]
         if abs(dist) < 1e-12:
             return
@@ -967,6 +1130,8 @@ class SketchEditor:
             used = set(self.app.doc.params) | set(mm.params)
             name = mm.next_dim_name("dim_off", used)
             skoff.apply_plan(mm, plans, link, name if link else None)
+            if link and dist_expr and name in mm.params:
+                mm.params[name]["expr"] = dist_expr                 # the offset follows the global / formula
         self.commit(build)
 
     def command_convert(self):
@@ -1264,7 +1429,7 @@ class SketchHook(QObject):
         try:
             t = ev.type()
             if t == QEvent.Type.MouseButtonPress and ev.button() == Qt.MouseButton.LeftButton:
-                self.ed.app.shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                self.ed.app.shift = bool(ev.modifiers() & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier))
                 self.down = ed.press(*self.xy(obj, ev))
                 return self.down
             if t == QEvent.Type.MouseButtonDblClick and ev.button() == Qt.MouseButton.LeftButton:

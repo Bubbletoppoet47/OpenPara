@@ -453,7 +453,7 @@ class MainWindow(QMainWindow):
                 return
             self.ed.poly_n = max(3, int(round(r[0][0])))
         elif name == "fillet":
-            r = sketch_edit.ask_form(self, "Sketch fillet", [(unitctl.label("Radius (mm)"), unitctl.to_disp(float(self.ed.fillet_r)))])
+            r = sketch_edit.ask_form(self, "Sketch fillet", [(unitctl.label("Radius (mm)"), unitctl.to_disp(float(self.ed.fillet_r)))], evaluator=self.ed.eval_field)
             if r is None or r[0][0] <= 0:
                 return
             self.ed.fillet_r = unitctl.from_disp(r[0][0])

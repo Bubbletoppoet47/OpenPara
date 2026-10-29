@@ -3,7 +3,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PyQt6.QtWidgets import QApplication, QToolButton
 app = QApplication([])
 import pm_app, sketch_edit as se
-se.ask_form = lambda p, t, f, c=(): ([6.0], [])
+se.ask_form = lambda p, t, f, c=(), **kw: ([6.0], [])
 w = pm_app.MainWindow(); w.sel_plane = "Front"; w.command("sketch")
 n = 0
 for b, names in w.menu_btns.items():

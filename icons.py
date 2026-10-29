@@ -217,6 +217,13 @@ def draw(name, g):
         g.setPen(pen(QColor("#2e9e47"), 3.0))
         g.drawLine(QPointF(8, 27), QPointF(10, 29))
         g.drawLine(QPointF(10, 29), QPointF(13, 25))
+    elif n == "tab equations":           # f(x) = : the globals
+        g.setPen(pen(INK, 2.6))
+        g.drawLine(QPointF(7, 14), QPointF(19, 14))
+        g.drawLine(QPointF(7, 26), QPointF(19, 26))
+        g.setPen(pen(ACC, 2.6))
+        g.drawLine(QPointF(23, 10), QPointF(33, 30))
+        g.drawLine(QPointF(33, 10), QPointF(23, 30))
     elif n == "tab display":             # a colourful sphere
         from PyQt6.QtGui import QRadialGradient
         gr = QRadialGradient(QPointF(16, 14), 20)

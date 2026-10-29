@@ -5,7 +5,7 @@
 An open-source parametric CAD modeller written in Python (working title: *Gen Parametric Designer*).
 
 - Parametric parts: sketches with a constraint solver, extrude / cut / revolve, fillet / chamfer, configurations
-- Assemblies with mates and sub-assemblies
+- Assemblies with mates, sub-assemblies and their own Globals (positions, mate values and pattern spacing take formulas)
 - One program-wide unit system (File > Units: mm, cm, m, in, ft, N, kN, kip, ... and a separate speed unit)
 - Built-in simulations: 1D beam / frame FEA, 2D FEA, 2D CFD (results and slicing)
 - Photorealistic renderer ("Renderer" tab): sun and sky from date / time / place, spot light, floor, several cameras, still pictures and MP4 videos (Mitsuba 3)

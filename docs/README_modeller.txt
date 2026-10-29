@@ -231,3 +231,18 @@ live model, so unsaved edits are rendered too.  Same window as run_render_studio
 - Video: tick the cameras that belong to the video, order them with the arrows, choose Curved or Straight path (3 cameras = start,
   middle, end; the path passes through the middle one), seconds and fps.  Output is an MP4 only.
 Not tested by me: the real 3D window, CUDA rendering and the OptiX denoiser (no NVIDIA card in my workspace).
+
+
+VERSION 0.2.3
+Box selection in a sketch: with the Select tool, press on empty space and drag.  Dragging left to right selects what lies completely
+inside the box; right to left selects everything the box touches (dimension labels inside the box too).  Shift or Ctrl adds to the
+selection.  A click without a drag still clears the selection and picks the part's edge / face under it.  Dragging a point or a
+line still moves it; Alt+drag orbits.
+
+Every modelling number takes a global or a formula.
+ - Sketch tools: the Offset distance, Linear / Circular pattern step and centre, Move X / Y and the Fillet radius accept a number,
+   a global (Width), a formula (Width/2 + 3) or a length with a unit (2 in).  A linked Offset keeps the formula, so changing the global
+   moves the offset.  Fillet, Move and the patterns create plain geometry once (their result is the value at that moment).
+ - Assemblies have their own Globals (the equations tab of the assembly window).  Component position / rotation, the Distance / Angle of
+   a mate (while adding and when editing it) and the Spacing / Angle / Instances of a pattern accept those names or formulas.  The
+   formula stays stored in the file, so changing a global moves the assembly.  Typing a plain number again removes the formula.

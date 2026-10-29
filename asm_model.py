@@ -17,6 +17,9 @@ import numpy as np
 
 import refgeo
 
+FUNCS = {k: getattr(math, k) for k in ("sin", "cos", "tan", "atan", "sqrt", "pi", "radians", "degrees", "floor", "ceil")}
+FUNCS.update({"abs": abs, "min": min, "max": max, "round": round})
+
 TYPES = ["coincident", "parallel", "perpendicular", "tangent", "concentric", "lock", "distance", "angle", "symmetric"]
 LINELIKE = ("axis", "circle", "line")
 BASE_N = {"Front": (0.0, -1.0, 0.0), "Top": (0.0, 0.0, 1.0), "Right": (1.0, 0.0, 0.0)}
@@ -308,8 +311,65 @@ class Assembly:
         self.refgeo_fn = None              # function(component) -> {feature id: entity} reference planes / axes of its part
         self.part_cfg_fn = None            # function(component) -> name of the configuration its part is in now
         self.part_cfgs_fn = None           # function(component) -> [configuration names of its part]
+        self.params = {}                   # the assembly's own globals: name -> formula (lengths held in mm)
+        self.param_kinds = {}              # name -> "number" / "angle" (a length when absent)
+        self.values = {}                   # evaluated globals
+        self.exprs = {}                    # formulas that drive a number: "pos:C1:0" "rv:C1:2" "val:M1" "pat:P1:s1" -> text (mm / deg)
         self.cfg = {"active": "Default", "names": ["Default"], "cols": [], "cells": {"Default": {}}}
         self._cache = {}
+
+    # ------------------------------------------------------------------ globals and formulas
+    def evaluate_params(self):
+        """Resolve the globals (they may use each other, in any order).  Raises MateError."""
+        vals, pending = {}, dict(self.params)
+        for _ in range(len(pending) + 1):
+            for k, e in list(pending.items()):
+                try:
+                    vals[k] = float(eval(str(e), {"__builtins__": {}}, {**FUNCS, **vals}))
+                    del pending[k]
+                except NameError:
+                    pass
+                except Exception as ex:
+                    raise MateError(f"global '{k}' = {e}: {ex}")
+        if pending:
+            raise MateError("globals cannot be resolved (a loop or an unknown name): " + ", ".join(pending))
+        self.values = vals
+
+    def eval_expr(self, text):
+        try:
+            return float(eval(str(text), {"__builtins__": {}}, {**FUNCS, **self.values}))
+        except Exception as ex:
+            raise MateError(f"'{text}': {ex}")
+
+    def set_target(self, key, v):
+        kind, _, rest = key.partition(":")
+        if kind in ("pos", "rv"):
+            cid, _, i = rest.partition(":")
+            c = self.comp(cid)
+            if c is not None:
+                c[kind][int(i)] = math.radians(v) if kind == "rv" else v
+        elif kind == "val":
+            m = self.mate(rest)
+            if m is not None:
+                m["value"] = v
+        elif kind == "pat":
+            pid, _, field = rest.partition(":")
+            p = next((x for x in self.patterns if x["id"] == pid), None)
+            if p is not None:
+                p[field] = int(round(v)) if field in ("n", "n1", "n2") else v
+
+    def apply_exprs(self):
+        """Evaluate the globals and write every formula's number into the component / mate / pattern it drives.  Raises MateError."""
+        self.evaluate_params()
+        for key, text in list(self.exprs.items()):
+            self.set_target(key, self.eval_expr(text))
+
+    def set_expr(self, key, text):
+        """text None / '' removes the formula (the number stays as it is)."""
+        if text:
+            self.exprs[key] = text
+        else:
+            self.exprs.pop(key, None)
 
     # ------------------------------------------------------------------ bookkeeping
     def next_id(self, kind):
@@ -367,7 +427,7 @@ class Assembly:
     def to_json(self):
         return json.dumps({"version": 1, "components": [c for c in self.components if not c.get("derived")], "mates": self.mates,
                            "counter": self.counter,
-                           "patterns": self.patterns, "cfg": self.cfg_snapshot(), "refs": self.refs, "world_show": self.world_show, "sims": self.sims, "renders": self.renders}, indent=1)
+                           "patterns": self.patterns, "params": self.params, "kinds": self.param_kinds, "exprs": self.exprs, "cfg": self.cfg_snapshot(), "refs": self.refs, "world_show": self.world_show, "sims": self.sims, "renders": self.renders}, indent=1)
 
     @classmethod
     def from_json(cls, text):
@@ -375,6 +435,7 @@ class Assembly:
         a = cls()
         a.components, a.mates, a.counter, a.patterns = d["components"], d.get("mates", []), d.get("counter", {}), d.get("patterns", [])
         a.cfg = d.get("cfg") or a.cfg
+        a.params, a.param_kinds, a.exprs = d.get("params") or {}, d.get("kinds") or {}, d.get("exprs") or {}
         a.refs = d.get("refs", [])
         a.sims = d.get("sims") or []
         a.renders = d.get("renders") or []
@@ -517,6 +578,8 @@ class Assembly:
     def solve(self, drag=None, weight=0.02, extra=None, iters=80, limit=None):
         """Move the floating components so that all mates hold.  drag = {component id: (R, t)} pulls those gently to a target pose.
         Returns True when every mate is satisfied.  Fills self.status and self.dof."""
+        if drag is None and (self.params or self.exprs):
+            self.apply_exprs()
         fl = [c for c in self.floating() if limit is None or c["id"] in limit]
         idx = {c["id"]: i for i, c in enumerate(fl)}
         mates = self.active_mates() + list(extra or [])
@@ -700,11 +763,13 @@ def _cfg_write(self, key, val):
             m["suppressed"] = bool(val)
         elif _num(val) is not None:
             m["value"] = float(val)
+            self.exprs.pop(f"val:{rest}", None)
     elif kind == "n":
         pid, _, field = rest.partition(":")
         p = next((x for x in self.patterns if x["id"] == pid), None)
         if p is not None and _num(val) is not None:
             p[field] = int(round(float(val))) if field in ("n", "n1", "n2") else float(val)
+            self.exprs.pop(f"pat:{pid}:{field}", None)
 
 
 def _cfg_label(self, key):

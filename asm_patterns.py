@@ -275,16 +275,19 @@ def panel(win):
 
     def num(label, key, integer=False):
         length = "(mm)" in label                            # held in mm, shown and typed in the program's unit
-        show = lambda: unitctl.num(unitctl.to_disp(p.get(key)), 8) if length else str(p.get(key))
-        e = QLineEdit(show())
+        xk = f"pat:{p['id']}:{key}"
+        e = QLineEdit(win.field_text(xk, p.get(key), length) if p.get(key) is not None else "")
+        e.setToolTip("A number, or a formula using the assembly's Globals, e.g.  Gap*2")
 
         def done():
             try:
-                v = unitctl.read_length(e.text()) if length else float(e.text())
-                p[key] = int(round(v)) if integer else v
+                v, expr = win.parse_field(e.text(), length)
             except ValueError:
-                e.setText(show())
+                e.setText(win.field_text(xk, p.get(key), length))
                 return
+            win.snapshot()
+            win.asm.set_expr(xk, expr)
+            p[key] = int(round(v)) if integer else v
             refresh_keep(win)
         e.editingFinished.connect(done)
         form.addRow(unitctl.label(label), e)

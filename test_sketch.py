@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import QApplication
 app = QApplication([])
 import pm_app, pm_model as pm, sketch_edit as se, sk_tools as sk
 w = pm_app.MainWindow()
-def _form(parent, title, fields, checks=()):
+def _form(parent, title, fields, checks=(), **kw):
     if "Polygon" in title: return ([6.0], [])
     if "fillet" in title: return ([4.0], [])
     if "Linear" in title: return ([2.0, 5.0, 0.0], [])

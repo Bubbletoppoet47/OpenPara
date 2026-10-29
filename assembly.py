@@ -8,6 +8,7 @@ assembly.py - the assembly workspace (one tab of the program).
   * Component patterns and Mirror Components: derived copies of the chosen components.
   * Edit Component opens the part in its own tab.
 """
+import ast
 import copy
 import math
 import os
@@ -18,7 +19,7 @@ from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PyQt6.QtGui import QAction, QBrush, QColor
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                              QListWidget, QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton, QButtonGroup, QTabWidget,
-                             QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                             QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox)
 
 import asm_model as am
 import asm_refs
@@ -217,6 +218,7 @@ class AssemblyWindow(QMainWindow):
         self.disp_panel = config_panels.DisplayPanel(self)
         self.left.addTab(self.disp_panel, icons.icon("tab display", 26), "")
         self.left.setTabToolTip(3, "Display")
+        self.build_globals_tab()
         self.left.setMinimumWidth(340)
         self.left.setMaximumWidth(460)
         view = QWidget()
@@ -490,6 +492,7 @@ class AssemblyWindow(QMainWindow):
         self.rebuild_scene(fit)
         self.cfg_panel.refresh()
         self.disp_panel.refresh()
+        self.refresh_globals()
 
     def entry_mesh(self, c):
         d = self.part_doc(c if not c.get("derived") else (self.asm.comp(c["derived"]["src"]) or c))
@@ -1014,20 +1017,152 @@ class AssemblyWindow(QMainWindow):
                 w.setParent(None)
                 w.deleteLater()
 
-    def num_edit(self, form, label, getter, setter):
-        """A number box.  A length (label with '(mm)') is held in mm but shown / typed in the program's unit (File > Units)."""
+    # ------------------------------------------------------------------ globals of the assembly
+    def build_globals_tab(self):
+        """The assembly's own Globals: a name and an equation.  Any number box of the assembly (component position, mate
+        distance / angle, pattern spacing) takes these names or a formula, so changing a global moves the model."""
+        self.gbusy = False
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.addWidget(QLabel("Globals of this assembly.  Type a name or formula (e.g.  Gap*2 + 5) in a position, mate distance or pattern spacing box."))
+        self.gtab = QTableWidget(0, 4)
+        self.gtab.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.gtab.itemChanged.connect(self.global_edited)
+        lay.addWidget(self.gtab)
+        row = QHBoxLayout()
+        b = QPushButton("+ Global")
+        b.clicked.connect(self.global_add)
+        row.addWidget(b)
+        b = QPushButton("- Delete")
+        b.clicked.connect(self.global_del)
+        row.addWidget(b)
+        lay.addLayout(row)
+        self.left.addTab(box, icons.icon("tab equations", 26), "")
+        self.left.setTabToolTip(self.left.count() - 1, "Globals (equations)")
+
+    def refresh_globals(self):
+        self.gbusy = True
+        t = self.gtab
+        t.setRowCount(len(self.asm.params))
+        t.setHorizontalHeaderLabels(["Name", f"Equation ({unitctl.length_unit()})", "Value", "Type"])
+        try:
+            self.asm.evaluate_params()
+        except am.MateError:
+            pass
+        for r, (k, e) in enumerate(self.asm.params.items()):
+            kind = self.asm.param_kinds.get(k, "length")
+            t.setItem(r, 0, QTableWidgetItem(k))
+            t.setItem(r, 1, QTableWidgetItem(unitctl.expr_to_display(str(e), kind)))
+            val = self.asm.values.get(k)
+            if val is not None and kind == "length":
+                val = unitctl.to_disp(val)
+            v = QTableWidgetItem(f"{val:.6g}" if val is not None else "?")
+            v.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            t.setItem(r, 2, v)
+            cb = QComboBox()
+            cb.addItems(["length", "number", "angle"])
+            cb.setCurrentText(kind)
+            cb.currentTextChanged.connect(lambda txt, k=k: self.global_kind(k, txt))
+            t.setCellWidget(r, 3, cb)
+        self.gbusy = False
+
+    def global_kind(self, name, kind):
+        if self.gbusy:
+            return
+        self.snapshot()
+        if kind == "length":
+            self.asm.param_kinds.pop(name, None)
+        else:
+            self.asm.param_kinds[name] = kind
+        self.refresh_globals()
+
+    def global_edited(self, _item):
+        if self.gbusy:
+            return
+        self.snapshot()
+        new, old = {}, self.asm.params
+        for r in range(self.gtab.rowCount()):
+            k = (self.gtab.item(r, 0).text() if self.gtab.item(r, 0) else "").strip()
+            e = (self.gtab.item(r, 1).text() if self.gtab.item(r, 1) else "").strip()
+            if k and k.isidentifier():
+                kind = self.asm.param_kinds.get(k, "length")
+                if k in old and e == unitctl.expr_to_display(str(old[k]), kind):
+                    new[k] = old[k]
+                else:
+                    new[k] = unitctl.expr_from_display(e, kind) if e else "0"
+        self.asm.param_kinds = {k: v for k, v in self.asm.param_kinds.items() if k in new}
+        self.asm.params = new
+        self.solve_all()
+        self.update_all()
+
+    def global_add(self):
+        self.snapshot()
+        n = 1
+        while f"P{n}" in self.asm.params:
+            n += 1
+        self.asm.params[f"P{n}"] = unitctl.expr_from_display("10")
+        self.solve_all()
+        self.update_all()
+
+    def global_del(self):
+        r = self.gtab.currentRow()
+        if r >= 0 and self.gtab.item(r, 0):
+            self.snapshot()
+            self.asm.params.pop(self.gtab.item(r, 0).text(), None)
+            self.solve_all()
+            self.update_all()
+
+    def parse_field(self, text, length):
+        """What was typed in a number box -> (number in mm / degrees / as it is, formula in mm or None).  A number, a number with a
+        unit ('2 in'), a global name or a formula (Gap*2 + 3).  Raises ValueError."""
+        t = str(text).strip().lstrip("=").strip()
+        if not t:
+            raise ValueError("empty")
+        try:
+            return (unitctl.from_disp(float(t)) if length else float(t)), None
+        except ValueError:
+            pass
+        mm_text = unitctl.expr_from_display(t, "length" if length else "number")
+        try:
+            self.asm.evaluate_params()
+            val = self.asm.eval_expr(mm_text)
+        except am.MateError as ex:
+            raise ValueError(str(ex))
+        has_name = any(isinstance(n, ast.Name) and n.id not in am.FUNCS for n in ast.walk(ast.parse(mm_text, mode="eval")))
+        return val, (mm_text if has_name else None)
+
+    def field_text(self, key, value, length):
+        """The text a number box starts with: the formula when the number is driven by one."""
+        ex = self.asm.exprs.get(key) if key else None
+        if ex:
+            return unitctl.expr_to_display(ex, "length" if length else "number")
+        return unitctl.num(unitctl.to_disp(value), 8) if length else unitctl.num(value, 8)
+
+    def num_edit(self, form, label, getter, setter, key=None):
+        """A number box.  A length (label with '(mm)') is held in mm but shown / typed in the program's unit (File > Units).  With a
+        key it also takes a global name or a formula, which stays stored so that changing the global moves the model."""
         length = "(mm)" in label
-        show = (lambda: unitctl.to_disp(getter())) if length else getter
-        e = QLineEdit(f"{show():.5f}".rstrip("0").rstrip("."))
+        e = QLineEdit(self.field_text(key, getter(), length))
+        e.setToolTip("A number, or a formula using the assembly's Globals, e.g.  Gap*2 + 5")
 
         def done():
             try:
-                v = unitctl.read_length(e.text()) if length else float(e.text())
+                v, expr = self.parse_field(e.text(), length)
             except ValueError:
-                e.setText(f"{show():.5f}".rstrip("0").rstrip("."))
+                e.setText(self.field_text(key, getter(), length))
                 return
-            if abs(v - getter()) > 1e-7:
+            if key and expr:
+                if expr != self.asm.exprs.get(key):
+                    self.snapshot()
+                    self.asm.set_expr(key, expr)
+                    self.solve_all()
+                    self.update_all()
+                return
+            had = bool(key and key in self.asm.exprs)
+            if abs(v - getter()) > 1e-7 or had:
                 self.snapshot()
+                if had:
+                    self.asm.set_expr(key, None)
                 setter(v)
         e.editingFinished.connect(done)
         form.addRow(unitctl.label(label), e)
@@ -1054,9 +1189,9 @@ class AssemblyWindow(QMainWindow):
         form.addRow(QLabel(f"Degrees of freedom left: {self.asm.dof.get(c['id'], 6) if not c.get('fixed') else 0}"))
         if not c.get("fixed"):
             for i, ax in enumerate("XYZ"):
-                self.num_edit(form, f"Position {ax} (mm)", lambda i=i: c["pos"][i], lambda v, i=i: self.set_pose(c, "pos", i, v))
+                self.num_edit(form, f"Position {ax} (mm)", lambda i=i: c["pos"][i], lambda v, i=i: self.set_pose(c, "pos", i, v), key=f"pos:{c['id']}:{i}")
             for i, ax in enumerate("XYZ"):
-                self.num_edit(form, f"Rotation vector {ax} (deg)", lambda i=i: np.degrees(c["rv"][i]), lambda v, i=i: self.set_pose(c, "rv", i, np.radians(v)))
+                self.num_edit(form, f"Rotation vector {ax} (deg)", lambda i=i: np.degrees(c["rv"][i]), lambda v, i=i: self.set_pose(c, "rv", i, np.radians(v)), key=f"rv:{c['id']}:{i}")
 
     def set_pose(self, c, key, i, v):
         c[key][i] = float(v)
@@ -1321,6 +1456,8 @@ class AssemblyWindow(QMainWindow):
         self.mate_sel = [s for s in self.mate_sel if s["idx"] != -1 or s["kind"] in ("plane", "origin")]
         self.mate_type = m["type"]
         self.mate_opts = {"value": m["value"]} if m.get("value") is not None else {}
+        if self.asm.exprs.get(f"val:{m['id']}"):
+            self.mate_opts["expr"] = self.asm.exprs[f"val:{m['id']}"]
         self.mate_pre = {c["id"]: (list(c["pos"]), list(c["rv"])) for c in self.asm.components}
         idx = self.asm.mates.index(m)
         self.mate_edit = {"orig": copy.deepcopy(m), "idx": idx}
@@ -1443,13 +1580,18 @@ class AssemblyWindow(QMainWindow):
             form = QFormLayout()
             dist = self.mate_type == "distance"
             v0 = self.mate_opts.get("value", "")
-            e = QLineEdit(unitctl.num(unitctl.to_disp(v0), 8) if dist and v0 != "" else str(v0))
+            ex0 = self.mate_opts.get("expr")
+            e = QLineEdit(unitctl.expr_to_display(ex0, "length" if dist else "number") if ex0 else
+                          (unitctl.num(unitctl.to_disp(v0), 8) if dist and v0 != "" else str(v0)))
+            e.setToolTip("A number, or a formula using the assembly's Globals, e.g.  Gap*2 + 5")
 
             def done():
                 try:
-                    self.mate_opts["value"] = unitctl.read_length(e.text()) if dist else float(e.text())
+                    v, expr = self.parse_field(e.text(), dist)
                 except ValueError:
                     return
+                self.mate_opts["value"] = v
+                self.mate_opts["expr"] = expr
                 self.mate_preview()
             e.editingFinished.connect(done)
             form.addRow(unitctl.label("Distance (mm)") if dist else "Angle (deg)", e)
@@ -1507,6 +1649,8 @@ class AssemblyWindow(QMainWindow):
         else:
             m["id"] = self.asm.next_id("M")
             self.asm.mates.append(m)
+        if m["type"] in ("distance", "angle"):
+            self.asm.set_expr(f"val:{m['id']}", self.mate_opts.get("expr"))      # a formula / global keeps driving the value
         self.solve_all()
         self.finish_mate()
         self.say(f"{MATE_NAMES[m['type']]} mate {'updated' if ed else 'added'}.")
@@ -1549,15 +1693,18 @@ class AssemblyWindow(QMainWindow):
         if m["type"] in ("distance", "angle"):
             form = QFormLayout()
             dist = m["type"] == "distance"
-            e = QLineEdit(unitctl.num(unitctl.to_disp(m.get("value")), 8) if dist else str(m.get("value")))
+            vkey = f"val:{m['id']}"
+            e = QLineEdit(self.field_text(vkey, m.get("value") or 0.0, dist))
+            e.setToolTip("A number, or a formula using the assembly's Globals, e.g.  Gap*2 + 5")
 
             def done():
                 try:
-                    v = unitctl.read_length(e.text()) if dist else float(e.text())
+                    v, expr = self.parse_field(e.text(), dist)
                 except ValueError:
                     return
-                if v != m.get("value"):
+                if expr != self.asm.exprs.get(vkey) or (not expr and v != m.get("value")):
                     self.snapshot()
+                    self.asm.set_expr(vkey, expr)
                     m["value"] = v
                     self.solve_all()
                     self.update_all()
