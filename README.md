@@ -9,7 +9,17 @@ An open-source parametric CAD modeller written in Python (working title: *Gen Pa
 
 Built on [build123d](https://github.com/gumyr/build123d) (OpenCascade), PyQt6, pyvista / VTK, gmsh and Mitsuba 3.
 
-## Run
+## Install (Windows)
+
+1. Go to the [Releases](https://github.com/Bubbletoppoet47/OpenPara/releases) page and download `OpenPara-Setup-<version>.exe`.
+2. Run it. It installs OpenPara for your user (no administrator rights), with its own Python and all packages inside, and adds a Start-menu entry.
+3. Start **OpenPara** from the Start menu.
+
+OpenPara looks for updates at start-up (Help > Check for updates...) and installs them for you. Your own data (error log, material library, settings)
+is kept in `%LOCALAPPDATA%\OpenPara` (Help > Open the data folder) and is never touched by an update.
+
+## Run from source
+
 
 Windows: double-click `run_modeller.bat` (installs the packages the first time), or
 
@@ -34,3 +44,10 @@ Early and in active development. Not everything is tested on every machine (for 
 ## License
 
 GNU General Public License v3.0 - see `LICENSE`.
+
+## For the maintainer: making a release
+
+1. Raise `__version__` in `version.py` (and `RUNTIME` only when the Python or the packages change).
+2. Commit, then tag: `git tag v<version> && git push origin v<version>`.
+3. The workflow `.github/workflows/release.yml` builds the Windows folder on GitHub, makes `OpenPara-Setup-<version>.exe` and
+   `OpenPara-app-<version>.zip` (the small update zip) and publishes them as a release.

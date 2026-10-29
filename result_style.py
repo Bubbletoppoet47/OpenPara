@@ -26,7 +26,8 @@ _ANCH = {
 
 
 def _settings_path():
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "gpd_settings.json")
+    import paths
+    return paths.user_file("gpd_settings.json")
 
 
 def _load():

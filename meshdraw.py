@@ -93,7 +93,7 @@ def _probe():
         kw = {}
         if os.name == "nt":
             kw["creationflags"] = 0x08000000            # no console window
-        r = subprocess.run([sys.executable, "-c", _PROBE], cwd=os.path.dirname(os.path.abspath(__file__)),
+        r = subprocess.run([__import__("paths").python_exe(), "-c", _PROBE], cwd=os.path.dirname(os.path.abspath(__file__)),
                            capture_output=True, text=True, timeout=40, **kw)
     except subprocess.TimeoutExpired:
         return False, "the OpenGL test timed out"

@@ -1,0 +1,95 @@
+name: Release (Windows installer)
+
+# Run it by pushing a tag that equals version.py, e.g.   git tag v0.1.0 && git push origin v0.1.0
+# or by hand from the Actions tab (then it builds but only uploads the files as a workflow artifact, no release).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PYTHON_VERSION: "3.12.8"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        shell: pwsh
+        run: |
+          $v = (python -c "import version; print(version.__version__)")
+          $rt = (python -c "import version; print(version.RUNTIME)")
+          "VERSION=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "RUNTIME=$rt" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$v") { throw "tag $env:GITHUB_REF_NAME does not match version.py ($v)" }
+
+      - name: Bundled Python with the packages
+        shell: pwsh
+        run: |
+          $py = "build\OpenPara\python"
+          New-Item -ItemType Directory -Force $py | Out-Null
+          Invoke-WebRequest "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-embed-amd64.zip" -OutFile embed.zip
+          Expand-Archive embed.zip -DestinationPath $py
+          $pth = Get-ChildItem $py -Filter "python*._pth" | Select-Object -First 1
+          # search path: the python files, its packages, the program folder; and site (so pip-installed packages are found)
+          @("python312.zip", ".", "Lib\site-packages", "..\app", "import site") | Set-Content $pth.FullName
+          Invoke-WebRequest "https://bootstrap.pypa.io/get-pip.py" -OutFile get-pip.py
+          & "$py\python.exe" get-pip.py --no-warn-script-location
+          & "$py\python.exe" -m pip install --no-warn-script-location -r requirements.txt
+          & "$py\python.exe" -m pip freeze | Set-Content requirements-lock.txt
+          Copy-Item "$py\pythonw.exe" "$py\OpenPara.exe"          # the process shows up as OpenPara.exe
+
+      - name: Program files
+        shell: pwsh
+        run: |
+          $app = "build\OpenPara\app"
+          New-Item -ItemType Directory -Force $app | Out-Null
+          Get-ChildItem -File | Where-Object { $_.Extension -in ".py", ".json", ".ico", ".txt", ".md" -or $_.Name -eq "LICENSE" } |
+            Where-Object { $_.Name -notlike "test_*" -and $_.Name -ne "requirements-lock.txt" -and $_.Name -ne "get-pip.py" } | Copy-Item -Destination $app
+          Copy-Item docs -Destination "$app\docs" -Recurse
+          '{"runtime": ' + $env:RUNTIME + ', "version": "' + $env:VERSION + '"}' | Set-Content "$app\runtime.json"
+
+      - name: Smoke test (imports and the updater test, no window)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $py = "build\OpenPara\python\python.exe"
+          & $py -c "import gpd_app, render_studio, updater, build123d, pyvista, mitsuba, gmsh, scipy; print('imports ok')"
+          if ($LASTEXITCODE -ne 0) { throw "imports failed" }
+          Copy-Item test_updater.py build\OpenPara\app\
+          & $py build\OpenPara\app\test_updater.py
+          $code = $LASTEXITCODE
+          Remove-Item build\OpenPara\app\test_updater.py
+          if ($code -ne 0) { throw "test_updater failed" }
+
+      - name: Installer and update zip
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          New-Item -ItemType Directory -Force dist | Out-Null
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DVersion=$env:VERSION" installer\OpenPara.iss
+          if ($LASTEXITCODE -ne 0) { throw "installer build failed" }
+          7z a -tzip "dist\OpenPara-app-$env:VERSION.zip" ".\build\OpenPara\app\*" | Out-Null
+          Copy-Item requirements-lock.txt dist\
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Upload (workflow artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenPara-${{ env.VERSION }}
+          path: dist/*
+          retention-days: 14
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME dist\* --title "OpenPara $env:VERSION" --notes "Install: download OpenPara-Setup-$env:VERSION.exe and run it. An installed OpenPara offers this update by itself (Help > Check for updates)."

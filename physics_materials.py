@@ -42,7 +42,8 @@ EPS_U_DEFAULT = 0.10     # typical plastic strain at the ultimate strength (a 10
 
 
 def library_path():
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "materials.json")
+    import paths
+    return paths.user_file("materials.json")
 
 
 def to_mpa(value, unit):

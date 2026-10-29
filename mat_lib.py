@@ -44,7 +44,8 @@ def _entry(t):
 
 
 def user_path():
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "gpd_materials.json")
+    import paths
+    return paths.user_file("gpd_materials.json")
 
 
 def user_materials():

@@ -17,7 +17,7 @@ import pm_model as pm
 class AppShell(QMainWindow):
     def __init__(self, files=None):
         super().__init__()
-        self.setWindowTitle("Gen Parametric Designer")
+        self.setWindowTitle("OpenPara")
         self.resize(1400, 860)
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.TabPosition.South)
@@ -33,6 +33,8 @@ class AppShell(QMainWindow):
         self.stack.addWidget(self.blank)
         self.stack.addWidget(self.tabs)
         self.setCentralWidget(self.stack)
+        import update_ui
+        self.updates = update_ui.UpdateController(self)
         self.build_menus()
         opened = False
         for f in files or []:
@@ -85,6 +87,22 @@ class AppShell(QMainWindow):
         self.flip_act.setChecked(True)
         self.flip_act.toggled.connect(self.flip_changed)
         vm.addAction(self.flip_act)
+        hm = mb.addMenu("&Help")
+        add(hm, "Check for updates...", lambda: self.updates.check_now())
+        self.auto_upd = QAction("Check for updates at start-up", self)
+        self.auto_upd.setCheckable(True)
+        self.auto_upd.setChecked(self.updates.auto_enabled())
+        self.auto_upd.toggled.connect(lambda on: self.updates.set_auto(on))
+        hm.addAction(self.auto_upd)
+        add(hm, "Open the data folder", self.open_data_folder)
+        hm.addSeparator()
+        add(hm, "About OpenPara", lambda: self.updates.about())
+
+    def open_data_folder(self):
+        import paths
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(paths.user_dir()))
 
     def cur(self):
         return self.tabs.currentWidget()
@@ -303,7 +321,8 @@ def install_excepthook():
     def hook(et, ev, tb):
         text = "".join(traceback.format_exception(et, ev, tb))
         try:
-            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gpd_error.log"), "a", encoding="utf-8") as fh:
+            import paths
+            with open(os.path.join(paths.user_dir(), "gpd_error.log"), "a", encoding="utf-8") as fh:
                 fh.write(f"--- {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n{text}\n")
         except OSError:
             pass
@@ -313,7 +332,7 @@ def install_excepthook():
             box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Error")
             box.setText("Something went wrong in the last action (the program keeps running).\n"
-                        "Please send me this text; it is also saved in gpd_error.log next to the program.")
+                        "Please send me this text; it is also saved in gpd_error.log (Help > Open the data folder).")
             box.setDetailedText(text)
             box.exec()
         except Exception:
@@ -322,11 +341,22 @@ def install_excepthook():
 
 
 def main():
+    if sys.platform == "win32":                      # own taskbar icon / grouping instead of python's
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("OpenPara.CAD")
+        except Exception:
+            pass
     app = QApplication(sys.argv)
+    ico = os.path.join(os.path.dirname(os.path.abspath(__file__)), "OpenPara.ico")
+    if os.path.exists(ico):
+        from PyQt6.QtGui import QIcon
+        app.setWindowIcon(QIcon(ico))
     install_excepthook()
     pm_app.apply_theme(app)
     w = AppShell(sys.argv[1:])
     w.show()
+    w.updates.check_later()
     sys.exit(app.exec())
 
 

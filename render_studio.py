@@ -1393,7 +1393,7 @@ class RenderStudio(QMainWindow):
         self.bar.setValue(0)
         self.set_busy(True)
         proc = QProcess(self)
-        proc.setProgram(sys.executable)
+        proc.setProgram(__import__("paths").python_exe())
         proc.setWorkingDirectory(HERE)
         args = ["-u", os.path.join(HERE, "render_core.py"), sc_path, folder] + ([json.dumps(names)] if names else [])
         proc.setArguments(args)
@@ -1503,7 +1503,9 @@ class RenderStudio(QMainWindow):
         box = QTextEdit()
         box.setReadOnly(True)
         try:
-            with open(os.path.join(HERE, "README_render.txt"), "r", encoding="utf-8") as fh:
+            gp = next((q for q in (os.path.join(HERE, "docs", "README_render.txt"), os.path.join(HERE, "README_render.txt")) if os.path.exists(q)),
+                      os.path.join(HERE, "README_render.txt"))
+            with open(gp, "r", encoding="utf-8") as fh:
                 box.setPlainText(fh.read())
         except OSError:
             box.setPlainText("README_render.txt was not found next to the program.")
