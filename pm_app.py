@@ -1225,15 +1225,33 @@ class MainWindow(QMainWindow):
         t.setMaximumHeight(170)
         for r, c in enumerate(dims):
             n = QTableWidgetItem(str(c.get("name", c["type"])))
-            n.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            n.setToolTip(c["type"])
+            n.setToolTip(c["type"] + "  -  double-click to rename; the name can be used in formulas and is listed in Configurations")
             t.setItem(r, 0, n)
-            t.setItem(r, 1, QTableWidgetItem(str(c.get("expr") or f"{c['value']:.6g}")))
+            ang = c["type"] == "dim_ang"
+            if c.get("expr"):
+                shown = unitctl.expr_to_display(str(c["expr"]), "number" if ang else "length")
+            else:
+                shown = f"{(c['value'] if ang else unitctl.to_disp(c['value'])):.6g}"
+            t.setItem(r, 1, QTableWidgetItem(shown))
+        t.horizontalHeaderItem(1).setText("Value / equation" + ("" if unitctl.is_mm() else f" ({unitctl.length_unit()})"))
         ids = [c["id"] for c in dims]
+        shown_txt = {(r, 1): t.item(r, 1).text() for r in range(len(dims))}
 
         def edited(item):
-            if item.column() == 1:
-                self.set_sketch_dimension(sk["id"], ids[item.row()], item.text())
+            r = item.row()
+            if item.column() == 1 and item.text() != shown_txt.get((r, 1)):
+                self.set_sketch_dimension(sk["id"], ids[r], item.text())
+            elif item.column() == 0 and item.text() != str(dims[r].get("name", dims[r]["type"])):
+                self.snapshot()
+                try:
+                    self.doc.rename_dimension(sk["id"], ids[r], item.text())
+                except pm.ModelError as ex:
+                    self.undo_pop()
+                    self.say(f"Not renamed: {ex}")
+                    self.show_props()
+                    return
+                self.doc.models.pop(sk["id"], None)
+                self.update_all()
         t.itemChanged.connect(edited)
         self.props_lay.addWidget(t)
         rels = [c for c in m.cons if c["type"] not in sketch_edit.DIMS]
@@ -1262,7 +1280,7 @@ class MainWindow(QMainWindow):
             return
         self.snapshot()
         try:
-            expr, val = sketch_edit.SketchEditor.dim_from_text(m, txt, c["value"])
+            expr, val = sketch_edit.SketchEditor.dim_from_text(m, txt, c["value"], c["type"])
         except ValueError as ex:
             self.undo_pop()
             self.say(str(ex))

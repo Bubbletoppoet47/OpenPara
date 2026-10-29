@@ -93,6 +93,13 @@ REVOLVE, PATTERN, MIRROR
   Mirror: tick features (or the whole body); mirror about the Front/Top/Right plane or a flat face you selected.
   Not built: Shell, Draft, Hole Wizard, Sweep, Loft, reference geometry.
 
+CONFIGURATIONS: FEATURE VALUES AND NAMED DIMENSIONS
+  Add Column lists, besides globals and Suppress, the numbers of each feature (Depth, Depth2, Draft, Wall, Angle, Radius / Distance,
+  Copies, Spacing, Offset ...). A feature with nothing to size (for example a Through All cut) has only its Suppress column.
+  Sketch dimensions can be renamed: double-click the name in the sketch's dimension table. A name is unique in the part (not a global,
+  a function name, or another named dimension). A named dimension is listed by its name in Add Column, and can be used in formulas of
+  features and of later sketches (e.g. Depth = FlangeWidth/4). A dimension driven by a symbol shows the symbol's number in the table.
+
 UNITS  (File > Units)
   One unit system for the whole program: sketch dimensions, feature boxes, globals, assemblies (positions, mates, pattern spacing),
   Measure and Mass Properties, the slice plane offset, the Renderer, and the 1D FEA / 2D FEA / 2D CFD tabs.

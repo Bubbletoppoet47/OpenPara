@@ -129,6 +129,8 @@ class ConfigPanel(QWidget):
                     return False
                 c = m.sketch_model_raw(f).con_by_id(int(cid) if cid.isdigit() else cid)
                 return bool(c) and c["type"] != "dim_ang"
+            if kind == "f":
+                return m.cfg_kind(key) == "length"
             if kind == "v":
                 mt = next((x for x in m.mates if x["id"] == rest), None)
                 return mt is not None and mt["type"] == "distance"

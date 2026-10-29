@@ -37,6 +37,7 @@ def new_feature(kind, **kw):
 
 class Document:
     def __init__(self):
+        self.dimvals = {}                    # values of the dimensions the user gave a name, for formulas (filled by rebuild)
         self.params = {}
         self.param_kinds = {}                # {global name: 'number' | 'angle'}; anything else is a length (units follow File > Units)
         self.sims = []                       # linked simulation files (sim_links.py)
@@ -100,7 +101,7 @@ class Document:
 
     def num(self, expr):
         try:
-            return float(eval(str(expr), {"__builtins__": {}}, {**FUNCS, **self.values}))
+            return float(eval(str(expr), {"__builtins__": {}}, {**FUNCS, **self.dimvals, **self.values}))
         except Exception as ex:
             raise ModelError(f"'{expr}': {ex}")
 
@@ -109,6 +110,7 @@ class Document:
         """Run the features in order.  Fills self.solid, self.status, self.planes."""
         self.status, self.planes, self.after, self.models, self.reports = {}, {}, {}, {}, {}
         self.refgeo = {}
+        self.dimvals = {}
         solid = None
         try:
             self.evaluate_params()
@@ -204,9 +206,70 @@ class Document:
         m.from_json(f["model"])
         for k, e in self.params.items():
             m.params[k] = {"vals": [0.0] * len(m.configs), "input": False, "expr": str(e), "doc": True}
+        for k, v in self.dimvals.items():                      # named dimensions of the sketches before this one
+            if k not in m.params:
+                m.params[k] = {"vals": [float(v)] * len(m.configs), "input": False, "expr": repr(float(v)), "doc": True}
         self.reports[f["id"]] = sk.solve_model(m)
         self.models[f["id"]] = m
+        for c in m.cons:                                      # and this one's, for the features and sketches after it
+            if c["type"] in sc.DIMENSIONS and c.get("user_name") and c.get("name"):
+                self.dimvals[c["name"]] = float(c["value"])
         return m
+
+    # ------------------------------------------------------------------ named dimensions
+    def dim_name_taken(self, name, ignore=None):
+        """Why `name` cannot be a dimension name (a text), or None.  Names are unique over the globals and the named dimensions."""
+        if not name.isidentifier() or name.startswith("__"):
+            return "a name uses letters, digits and _ and does not start with a digit"
+        if name in FUNCS or name in ("e", "pi", "True", "False", "None"):
+            return f"'{name}' is a function / constant name"
+        if name in self.params:
+            return f"'{name}' is already a global"
+        for f in self.features:
+            if f["kind"] != "sketch":
+                continue
+            m = self.sketch_model_raw(f)
+            for c in m.cons:
+                if c["type"] in sc.DIMENSIONS and c.get("name") == name and (f["id"], c["id"]) != ignore:
+                    if c.get("user_name") or f["id"] == (ignore or (None,))[0]:
+                        return f"'{name}' is already used by a dimension of {f['name']}"
+            if f["id"] == (ignore or (None,))[0] and name in m.params:
+                return f"'{name}' is already a symbol of this sketch"
+        return None
+
+    def rename_dimension(self, fid, cid, new):
+        """Give a sketch dimension a name of your choice (unique in the part, usable in formulas).  Raises ModelError."""
+        import re
+        new = new.strip()
+        f = self.feature(fid)
+        if f is None or f["kind"] != "sketch":
+            raise ModelError("no such sketch")
+        m = self.sketch_model_raw(f)
+        c = m.con_by_id(int(cid) if str(cid).isdigit() else cid)
+        if not c or c["type"] not in sc.DIMENSIONS:
+            raise ModelError("no such dimension")
+        old = c.get("name")
+        if new == old:
+            return
+        why = self.dim_name_taken(new, ignore=(fid, c["id"]))
+        if why:
+            raise ModelError(why)
+        sym = c.get("expr") == old and old in m.params and not m.params[old].get("doc")
+        if sym:                                               # the dimension is a named symbol: the symbol is renamed everywhere
+            pat = re.compile(r"\b" + re.escape(old) + r"\b")
+            m.params[new] = m.params.pop(old)
+            for k in m.cons:
+                if k.get("expr"):
+                    k["expr"] = pat.sub(new, str(k["expr"]))
+                if k.get("name") == old:
+                    k["name"] = new
+            for p in m.params.values():
+                if p.get("expr"):
+                    p["expr"] = pat.sub(new, str(p["expr"]))
+        else:
+            c["name"] = new
+        c["user_name"] = True
+        f["model"] = m.to_json()
 
     def store_sketch(self, fid):
         """Write the live Model of sketch `fid` back into its feature (without the globals)."""
@@ -834,7 +897,30 @@ class Document:
             c = m.con_by_id(int(cid)) if cid.isdigit() else m.con_by_id(cid)
             if not c:
                 return None
+            sym = self.dim_symbol(m, c)
+            if sym:                                            # a dimension driven by a named symbol: the column holds the symbol's number
+                return float(m.params[sym]["vals"][m.active if 0 <= m.active < len(m.params[sym]["vals"]) else 0])
             return str(c["expr"]) if c.get("expr") else float(c["value"])
+        if kind == "f":
+            fid, _, field = rest.partition(":")
+            f = self.feature(fid)
+            if f is None:
+                return None
+            if field == "offset":
+                v = (f.get("plane") or {}).get("offset")
+            else:
+                v = f.get(field)
+            return None if v is None else str(v)
+        return None
+
+    @staticmethod
+    def dim_symbol(m, c):
+        """The name of the plain symbol (a number you can change) that drives dimension c, or None."""
+        e = c.get("expr")
+        if e and str(e).isidentifier() and e in m.params:
+            p = m.params[e]
+            if not p.get("expr") and not p.get("doc"):
+                return e
         return None
 
     def cfg_write(self, key, val):
@@ -857,7 +943,14 @@ class Document:
             c = m.con_by_id(int(cid)) if cid.isdigit() else m.con_by_id(cid)
             if not c:
                 return
-            if isinstance(val, (int, float)) or _is_number(val):
+            sym = self.dim_symbol(m, c)
+            if sym and val == sym:
+                return                                          # an older file stored the symbol's name here: keep the symbol's number
+            if sym and (isinstance(val, (int, float)) or _is_number(val)):
+                p = m.params[sym]
+                p["vals"] = [float(val)] * len(p["vals"]) if len(p["vals"]) < 2 else [float(val) if i == m.active else v for i, v in enumerate(p["vals"])]
+                c["value"] = float(val)
+            elif isinstance(val, (int, float)) or _is_number(val):
                 c["value"] = float(val)
                 c.pop("expr", None)
             else:
@@ -867,6 +960,61 @@ class Document:
                 except Exception:
                     pass
             f["model"] = m.to_json()
+        elif kind == "f":
+            fid, _, field = rest.partition(":")
+            f = self.feature(fid)
+            if f is None:
+                return
+            if field == "offset":
+                if "plane" in f:
+                    f["plane"]["offset"] = str(val)
+            else:
+                f[field] = str(val)
+
+    # the numbers of a feature that a configuration can change:  (field, label, kind)  kind = length | number | angle
+    def feature_fields(self, f):
+        k = f["kind"]
+        out = []
+        if k in ("extrude", "cut"):
+            if self.end_condition(f, 1) in ("blind", "mid") and "depth" in f:
+                out.append(("depth", "Depth", "length"))
+            if f.get("dir2") and self.end_condition(f, 1) != "mid" and self.end_condition(f, 2) == "blind" and "depth2" in f:
+                out.append(("depth2", "Depth2", "length"))
+            if f.get("draft_on") and "draft" in f:
+                out.append(("draft", "Draft", "angle"))
+            if f.get("thin") and "thickness" in f:
+                out.append(("thickness", "Wall", "length"))
+        elif k in ("revolve", "revolve_cut"):
+            out.append(("angle", "Angle", "angle"))
+        elif k in ("fillet", "chamfer"):
+            out.append(("size", "Radius" if k == "fillet" else "Distance", "length"))
+        elif k == "pattern":
+            if f.get("ptype") == "linear":
+                out += [("count", "Copies", "number"), ("spacing", "Spacing", "length")]
+                if f.get("dir2_on"):
+                    out += [("count2", "Copies2", "number"), ("spacing2", "Spacing2", "length")]
+            else:
+                out += [("count", "Copies", "number"), ("angle", "Angle", "angle")]
+        elif k == "refplane":
+            if f.get("ptype") == "offset" and "d" in f:
+                out.append(("d", "Distance", "length"))
+            if f.get("ptype") == "angle" and "ang" in f:
+                out.append(("ang", "Angle", "angle"))
+        elif k == "sketch":
+            if "base" in (f.get("plane") or {}) and "offset" in f["plane"]:
+                out.append(("offset", "Offset", "length"))
+        return out
+
+    def cfg_kind(self, key):
+        """'length' | 'number' | 'angle' for a feature-value column, else None."""
+        kind, _, rest = key.partition(":")
+        if kind != "f":
+            return None
+        fid, _, field = rest.partition(":")
+        f = self.feature(fid)
+        if f is None:
+            return None
+        return next((kd for fl, _l, kd in self.feature_fields(f) if fl == field), "length" if field in ("depth", "depth2", "thickness", "size", "spacing", "spacing2", "d", "offset") else "number")
 
     def sketch_model_raw(self, f):
         """The Model of a sketch straight from its saved text (no globals added)."""
@@ -957,6 +1105,13 @@ class Document:
         if kind == "s":
             f = self.feature(rest)
             return f"$SUPPRESS@{f['name']}" if f else key
+        if kind == "f":
+            fid, _, field = rest.partition(":")
+            f = self.feature(fid)
+            if f is None:
+                return key
+            lab = next((l for fl, l, _k in self.feature_fields(f) if fl == field), field.capitalize())
+            return f"{lab}@{f['name']}"
         fid, _, cid = rest.partition(":")
         f = self.feature(fid)
         if f is None:
@@ -965,8 +1120,15 @@ class Document:
         dims = [c for c in m.cons if c["type"] in sc.DIMENSIONS]
         for i, c in enumerate(dims):
             if str(c["id"]) == cid:
-                return f"D{i + 1}@{f['name']}"
+                return f"{self.dim_label(m, c, i)}@{f['name']}"
         return key
+
+    def dim_label(self, m, c, i):
+        """What a dimension is called: the name you gave it, the symbol that drives it, else D<number>."""
+        sym = self.dim_symbol(m, c)
+        if c.get("user_name") or sym:
+            return sym or c["name"]
+        return f"D{i + 1}"
 
     def cfg_candidates(self):
         """[(key, label, current value)] of everything that can be a column."""
@@ -979,9 +1141,12 @@ class Document:
                     continue
                 dims = [c for c in m.cons if c["type"] in sc.DIMENSIONS]
                 for i, c in enumerate(dims):
-                    out.append((f"d:{f['id']}:{c['id']}", f"D{i + 1}@{f['name']}", str(c['expr']) if c.get('expr') else c['value']))
+                    out.append((f"d:{f['id']}:{c['id']}", f"{self.dim_label(m, c, i)}@{f['name']}", self.cfg_read(f"d:{f['id']}:{c['id']}")))
             else:
                 out.append((f"s:{f['id']}", f"$SUPPRESS@{f['name']}", bool(f.get("suppressed"))))
+            for fl, lab, _kd in self.feature_fields(f):
+                key = f"f:{f['id']}:{fl}"
+                out.append((key, f"{lab}@{f['name']}", self.cfg_read(key)))
         return out
 
 
