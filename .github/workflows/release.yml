@@ -59,14 +59,26 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          $py = "build\OpenPara\python\python.exe"
-          & $py -c "import gpd_app, render_studio, updater, build123d, pyvista, mitsuba, gmsh, scipy; print('imports ok')"
-          if ($LASTEXITCODE -ne 0) { throw "imports failed" }
+          $ErrorActionPreference = "Continue"
+          $py = (Resolve-Path "build\OpenPara\python\python.exe").Path
+          function Report($title, $text) {          # the job log can not be read from outside, so the end of the output goes into an annotation
+            $t = ($text | Out-String)
+            if ($t.Length -gt 3500) { $t = $t.Substring($t.Length - 3500) }
+            $t = $t -replace "%", "%25" -replace "`r", "" -replace "`n", "%0A"
+            Write-Host "::error title=$title::$t"
+          }
+          $out = & $py -c "import gpd_app, render_studio, updater; print('app imports ok')" 2>&1
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { Report "import of the app failed" $out; exit 1 }
+          $out = & $py -c "import build123d, pyvista, pyvistaqt, mitsuba, gmsh, scipy, imageio_ffmpeg; print('packages ok')" 2>&1
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { Report "import of a package failed" $out; exit 1 }
           Copy-Item test_updater.py build\OpenPara\app\
-          & $py build\OpenPara\app\test_updater.py
+          $out = & $py build\OpenPara\app\test_updater.py 2>&1
           $code = $LASTEXITCODE
+          Write-Host $out
           Remove-Item build\OpenPara\app\test_updater.py
-          if ($code -ne 0) { throw "test_updater failed" }
+          if ($code -ne 0) { Report "test_updater failed" $out; exit 1 }
 
       - name: Installer and update zip
         shell: pwsh
