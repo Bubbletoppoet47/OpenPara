@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/openpara-logo.svg" width="140" alt="OpenPara logo"></p>
+
 # OpenPara
 
 An open-source parametric CAD modeller written in Python (working title: *Gen Parametric Designer*).
