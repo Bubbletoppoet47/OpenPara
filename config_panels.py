@@ -43,6 +43,19 @@ class ConfigPanel(QWidget):
         b.clicked.connect(self.remove_column)
         row.addWidget(b)
         lay.addLayout(row)
+        frow = QHBoxLayout()                 # which kind of column Add Column offers
+        frow.addWidget(QLabel("Add Column shows:"))
+        self.col_group = QComboBox()
+        self.col_group.addItems(["All"] + list(self.GROUPS[noun].values()))
+        self.col_group.setToolTip("Filter the Add Column list: only this kind of item is offered")
+        self.col_sub = QComboBox()
+        self.col_sub.setToolTip("Only the items of one sketch or feature")
+        self.col_sub.addItem("All")
+        self.col_sub.setVisible(False)
+        self.col_group.currentTextChanged.connect(lambda _t: self.fill_sub())
+        frow.addWidget(self.col_group, 1)
+        frow.addWidget(self.col_sub, 1)
+        lay.addLayout(frow)
         self.table = QTableWidget(0, 1)
         self.table.itemChanged.connect(self.cell_changed)
         if noun == "part":
@@ -263,18 +276,56 @@ class ConfigPanel(QWidget):
             return
         self.owner.config_changed()
 
-    def fill_col_menu(self):
-        menu = self.col_menu
-        menu.clear()
+    # the kinds of column, by the first letter of the column's key
+    GROUPS = {"part": {"g": "Globals", "d": "Sketch dimensions", "f": "Feature values", "s": "Suppress switches"},
+              "assembly": {"c": "Components", "x": "Suppress switches", "m": "Suppress switches", "v": "Mate values", "n": "Patterns"}}
+
+    def candidates(self):
+        """[(key, label, group, sub)] of the columns not in the table yet: group = the kind, sub = its sketch / feature (or '')."""
         cols = set(self.m.cfg["cols"])
-        any_ = False
+        names = self.GROUPS.get(self.noun, self.GROUPS["part"])
+        out = []
         for key, label, _v in self.owner.cfg_candidates():
             if key in cols:
                 continue
-            any_ = True
-            menu.addAction(label).triggered.connect(lambda _c=False, k=key: self.add_column(k))
-        if not any_:
-            menu.addAction("(everything is already in the table)").setEnabled(False)
+            g = names.get(key.split(":", 1)[0], "Other")
+            sub = label.rsplit("@", 1)[1] if g in ("Sketch dimensions", "Feature values") and "@" in label else ""
+            out.append((key, label, g, sub))
+        return out
+
+    def fill_sub(self):
+        """The second drop-down: the sketches (or features) that have something to offer in the chosen kind."""
+        g = self.col_group.currentText()
+        keep = self.col_sub.currentText()
+        subs = []
+        if g in ("Sketch dimensions", "Feature values"):
+            for _k, _l, gg, sub in self.candidates():
+                if gg == g and sub and sub not in subs:
+                    subs.append(sub)
+        self.col_sub.blockSignals(True)
+        self.col_sub.clear()
+        self.col_sub.addItem("All")
+        self.col_sub.addItems(subs)
+        if keep in subs:
+            self.col_sub.setCurrentText(keep)
+        self.col_sub.blockSignals(False)
+        self.col_sub.setVisible(bool(subs))
+
+    def fill_col_menu(self):
+        menu = self.col_menu
+        menu.clear()
+        self.fill_sub()
+        g, sub = self.col_group.currentText(), self.col_sub.currentText()
+        shown = [c for c in self.candidates() if (g == "All" or c[2] == g) and (sub == "All" or self.col_sub.isHidden() or c[3] == sub)]
+        last = None
+        for key, label, grp, sb in shown:
+            if g == "All" and grp != last:
+                menu.addSection(grp)
+                last = grp
+            text = f"{sb} · {label.rsplit('@', 1)[0]}" if sb and sub == "All" else label.rsplit("@", 1)[0] if sb else label
+            menu.addAction(text).triggered.connect(lambda _c=False, k=key: self.add_column(k))
+        if not shown:
+            menu.addAction("(nothing of this kind is left to add)" if (g != "All" or sub != "All") else "(everything is already in the table)").setEnabled(False)
 
     def add_column(self, key):
         try:

@@ -1273,32 +1273,41 @@ class AssemblyWindow(QMainWindow):
         M = self.asm.T4(c)
         wpp = viewpick.world_per_pixel(self.plotter)
         flt = self.pick_filter
-        tol = max(1e-6, settings.get("pick3d_px") * wpp)         # a few screen pixels, so a thin face is still reachable
-        if not flt["face"]:
-            tol *= 3.0                                           # nothing else to hit: be generous with edges and points
-        # a vertex close to the hit point
+        px = settings.get("pick3d_px") * (1.0 if flt["face"] else 3.0)    # nothing else to hit when faces are off: be generous
+        near = max(1e-6, 30.0 * px * wpp)           # only a loose test in space (an edge behind the surface is not meant); the real one is in pixels
+        cur = np.array([float(x), float(y)])
+        # a vertex close to the cursor (measured on the screen, in pixels)
         verts = solid.vertices() if flt["vertex"] else []
         if verts:
             P = np.array([[v.center().X, v.center().Y, v.center().Z] for v in verts])
             W = (P @ M[:3, :3].T) + M[:3, 3]
-            dist = np.linalg.norm(W - hit, axis=1)
-            i = int(np.argmin(dist))
-            if dist[i] <= tol:
+            S = viewpick.project_display(self.plotter, W)
+            dpx = np.linalg.norm(S - cur, axis=1)
+            dpx[np.isnan(dpx)] = 1e18
+            dpx[np.linalg.norm(W - hit, axis=1) > near] = 1e18
+            i = int(np.argmin(dpx))
+            if dpx[i] <= px:
                 return {"cid": cid, "kind": "vertex", "idx": i, "pt": list(P[i]), "ref": {"c": cid, "k": "vertex", "r": am.vertex_ref(verts[i])},
                         "label": "Point"}
-        # an edge close to the hit point
+        # an edge close to the cursor
         best, bd = None, 1e18
         for i, pts in enumerate(e["polys"] if flt["edge"] else []):
             if len(pts) < 2:
                 continue
             Wp = (pts @ M[:3, :3].T) + M[:3, 3]
-            a, b = Wp[:-1], Wp[1:]
-            ab = b - a
-            t = np.clip(np.einsum("ij,ij->i", hit - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0, 1)
-            dd = np.linalg.norm(a + ab * t[:, None] - hit, axis=1).min()
+            a3, b3 = Wp[:-1], Wp[1:]
+            ab3 = b3 - a3
+            t3 = np.clip(np.einsum("ij,ij->i", hit - a3, ab3) / np.maximum(np.einsum("ij,ij->i", ab3, ab3), 1e-12), 0, 1)
+            if float(np.linalg.norm(a3 + ab3 * t3[:, None] - hit, axis=1).min()) > near:     # nowhere near the point on the surface that was hit
+                continue
+            Sp = viewpick.project_display(self.plotter, Wp)
+            if np.isnan(Sp).any():
+                continue
+            a_, b_ = Sp[:-1], Sp[1:]
+            dd = float(viewpick.seg_distance_px(cur, a_, b_).min())
             if dd < bd:
                 best, bd = i, dd
-        if best is not None and bd <= tol:
+        if best is not None and bd <= px:
             return {"cid": cid, "kind": "edge", "idx": best, "pt": None, "ref": {"c": cid, "k": "edge", "r": am.edge_ref(solid.edges()[best])},
                     "label": "Edge"}
         if not flt["face"]:

@@ -111,3 +111,31 @@ def world_per_pixel(plotter):
         return 2.0 * cam.GetDistance() * math.tan(math.radians(cam.GetViewAngle()) / 2.0) / h
     except Exception:
         return 0.0
+
+
+def project_display(plotter, pts):
+    """Screen position (pixels, origin bottom-left, the same as a click's x, y) of world points (N, 3); NaN for a point behind the camera.
+    This is the true picture of the view, so a distance measured here is a distance in pixels whatever the zoom or the angle."""
+    import numpy as np
+    pts = np.asarray(pts, float).reshape(-1, 3)
+    ren = plotter.renderer
+    cam = ren.GetActiveCamera()
+    w, h = ren.GetSize()
+    aspect = w / max(1.0, float(h))
+    mat = cam.GetCompositeProjectionTransformMatrix(aspect, -1, 1)
+    M = np.array([[mat.GetElement(i, j) for j in range(4)] for i in range(4)])
+    hom = np.hstack([pts, np.ones((len(pts), 1))]) @ M.T
+    with np.errstate(divide="ignore", invalid="ignore"):
+        x = hom[:, 0] / hom[:, 3]
+        y = hom[:, 1] / hom[:, 3]
+    out = np.stack([(x + 1) * 0.5 * w, (y + 1) * 0.5 * h], axis=1)
+    out[hom[:, 3] <= 1e-12] = np.nan
+    return out
+
+
+def seg_distance_px(P, a, b):
+    """Distance in pixels from point P (2,) to each segment a[i]-b[i] (arrays (N, 2))."""
+    import numpy as np
+    ab = b - a
+    t = np.clip(np.einsum("ij,ij->i", P - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0, 1)
+    return np.linalg.norm(a + ab * t[:, None] - P, axis=1)

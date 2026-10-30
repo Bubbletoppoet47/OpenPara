@@ -132,15 +132,36 @@ e0 = w.entries[c0["id"]]
 cells = np.where(np.array(e0["mesh"].cell_data["face"]) == fidx)[0]; cell = int(cells[0])
 M = A.T4(c0)
 ctr = np.array(tuple(fa.center())); hit = M[:3, :3] @ ctr + M[:3, 3]            # the middle of the strip: 0.6 mm from both long edges
-viewpick.world_per_pixel = lambda pl: 0.1                                       # 1 px = 0.1 mm
+w.plotter.ren_win.SetSize(900, 700); w.plotter.camera_position = "iso"; w.plotter.reset_camera()
+Pw = viewpick.project_display(w.plotter, hit[None, :])[0]
+polys = [(M[:3, :3] @ p.T).T + M[:3, 3] for p in e0["polys"]]
+dmin = min(float(viewpick.seg_distance_px(Pw, viewpick.project_display(w.plotter, q)[:-1], viewpick.project_display(w.plotter, q)[1:]).min()) for q in polys if len(q) > 1)
+print("strip middle is", round(dmin, 2), "px from the nearest edge on screen")
+assert dmin > 1.0
 w.surface_hit = lambda x, y: (hit, c0["id"], cell)
-it = w.pick_item(10, 10); print("middle of the thin cut face ->", it["kind"]); assert it["kind"] == "face"
-settings.set_many({"pick3d_px": 8.0}); it = w.pick_item(10, 10); print("with 8 px ->", it["kind"]); assert it["kind"] == "edge"
+cx, cy = float(Pw[0]), float(Pw[1])
+settings.set_many({"pick3d_px": max(1.0, dmin * 0.5)})
+it = w.pick_item(cx, cy); print("zone smaller than the distance ->", it["kind"]); assert it["kind"] == "face"
+settings.set_many({"pick3d_px": min(20.0, dmin * 1.6 + 1)}); it = w.pick_item(cx, cy); print("zone larger ->", it["kind"]); assert it["kind"] == "edge"
+# the zone is in pixels whatever the zoom: zooming in makes the same pixel distance cover less of the part
+for zoom in (1.0, 2.5, 6.0):
+    w.plotter.reset_camera(); w.plotter.camera.Zoom(zoom)
+    Pw = viewpick.project_display(w.plotter, hit[None, :])[0]
+    ds = []
+    for q in polys:
+        if len(q) > 1:
+            S = viewpick.project_display(w.plotter, q); ds.append(float(viewpick.seg_distance_px(Pw, S[:-1], S[1:]).min()))
+    dd = min(ds)
+    settings.set_many({"pick3d_px": 4.0})
+    got = w.pick_item(float(Pw[0]), float(Pw[1]))["kind"]
+    print("zoom", zoom, "nearest edge", round(dd, 1), "px ->", got)
+    assert got == ("edge" if dd <= 4.0 else "face")
+w.plotter.reset_camera(); Pw = viewpick.project_display(w.plotter, hit[None, :])[0]; cx, cy = float(Pw[0]), float(Pw[1])
 settings.set_many({"pick3d_px": 4.0})
-w.pick_filter.update(edge=False, vertex=False); assert w.pick_item(10, 10)["kind"] == "face"
-w.pick_filter.update(face=False, edge=True); assert w.pick_item(10, 10)["kind"] == "edge", "faces off: edges get a wider reach"
+w.pick_filter.update(edge=False, vertex=False); assert w.pick_item(cx, cy)["kind"] == "face"
+w.pick_filter.update(face=False, edge=True); assert w.pick_item(cx, cy)["kind"] == "edge", "faces off: edges get a wider reach"
 w.pick_filter.update(face=False, edge=False, vertex=True)
-assert w.pick_item(10, 10) is None, "nothing picked when only points are on and none is near"
+assert w.pick_item(cx, cy) is None, "nothing picked when only points are on and none is near"
 w.pick_filter.update(face=True, edge=True, vertex=True)
 w.mate_start(); bar = w.pick_filter_bar(); assert len(bar.findChildren(type(w.hover_actor) if False else __import__("PyQt6.QtWidgets").QtWidgets.QCheckBox)) == 3
 w.set_pick_filter("face", False); w.set_pick_filter("edge", False); w.set_pick_filter("vertex", False)
@@ -148,11 +169,11 @@ assert any(w.pick_filter.values()), "one kind always stays on"
 w.pick_filter.update(face=True, edge=True, vertex=True)
 # hover
 w.hover_key = None
-w.on_hover(10, 10); print("hover", w.hover_key, w.hover_actor is not None); assert w.hover_key is not None and w.hover_actor is not None
-k0 = w.hover_key; w.on_hover(10, 10); assert w.hover_key == k0
-settings.set_many({"hover": False}); w.on_hover(10, 10); assert w.hover_actor is None and w.hover_key is None
+w.on_hover(cx, cy); print("hover", w.hover_key, w.hover_actor is not None); assert w.hover_key is not None and w.hover_actor is not None
+k0 = w.hover_key; w.on_hover(cx, cy); assert w.hover_key == k0
+settings.set_many({"hover": False}); w.on_hover(cx, cy); assert w.hover_actor is None and w.hover_key is None
 settings.set_many({"hover": True}); w.mate_cancel()
-w.on_hover(10, 10); assert w.hover_actor is None, "no hover outside the picking tools"
+w.on_hover(cx, cy); assert w.hover_actor is None, "no hover outside the picking tools"
 
 # ---- lines and the pull follow the settings
 w.mate_cancel() if w.mode == "mate" else None

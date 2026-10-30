@@ -12,6 +12,7 @@ OpenCascade kernel (build123d); a feature that fails is marked with its error an
 References to faces and edges are not numbers ("Face7" breaks when the model changes): a face is stored as the point + normal where you
 clicked it, an edge as its midpoint + direction; on every rebuild they are matched to the closest face / edge of the new solid.
 """
+import copy
 import json
 import math
 
@@ -1152,6 +1153,52 @@ class Document:
         m.from_json(f["model"])
         return m
 
+    # Where the labels of the sketch dimensions were put is kept per configuration as well: cfg["offs"][configuration]["<sketch id>:<con id>"]
+    # = {"off": ..., "aoff": ...}.  A new configuration starts as a copy of the one it was made from.
+    LABEL_KEYS = ("off", "aoff")
+
+    def label_offsets(self):
+        """{"<sketch id>:<con id>": {"off": .., "aoff": ..}} of the labels moved in the document right now."""
+        out = {}
+        for f in self.features:
+            if f["kind"] != "sketch" or not f.get("model"):
+                continue
+            try:
+                m = self.sketch_model_raw(f)
+            except Exception:
+                continue
+            for c in m.cons:
+                if c["type"] in sc.DIMENSIONS:
+                    e = {k: c[k] for k in self.LABEL_KEYS if c.get(k)}
+                    if e:
+                        out[f"{f['id']}:{c['id']}"] = e
+        return out
+
+    def apply_label_offsets(self, row):
+        """Put the saved label positions of a configuration into the sketches (a label not in `row` goes back to its automatic place)."""
+        for f in self.features:
+            if f["kind"] != "sketch" or not f.get("model"):
+                continue
+            try:
+                m = self.sketch_model_raw(f)
+            except Exception:
+                continue
+            changed = False
+            for c in m.cons:
+                if c["type"] not in sc.DIMENSIONS:
+                    continue
+                want = row.get(f"{f['id']}:{c['id']}", {})
+                for k in self.LABEL_KEYS:
+                    if want.get(k):
+                        if c.get(k) != want[k]:
+                            c[k] = want[k]
+                            changed = True
+                    elif k in c:
+                        c.pop(k)
+                        changed = True
+            if changed:
+                f["model"] = m.to_json()
+
     def cfg_capture(self):
         """Copy the document's current values into the row of the active configuration."""
         c = self.cfg
@@ -1160,6 +1207,7 @@ class Document:
             v = self.cfg_read(key)
             if v is not None:
                 row[key] = v
+        c.setdefault("offs", {})[c["active"]] = self.label_offsets()
 
     def cfg_snapshot(self):
         self.cfg_capture()
@@ -1175,6 +1223,9 @@ class Document:
         for key in self.cfg["cols"]:
             if key in row:
                 self.cfg_write(key, row[key])
+        offs = self.cfg.get("offs", {})
+        if name in offs:                                     # (a file from before this was kept leaves the labels where they are)
+            self.apply_label_offsets(offs[name])
 
     def cfg_add(self, name, copy_of=None):
         name = name.strip()
@@ -1184,6 +1235,8 @@ class Document:
         src = copy_of or self.cfg["active"]
         self.cfg["names"].append(name)
         self.cfg["cells"][name] = dict(self.cfg["cells"].get(src, {}))
+        offs = self.cfg.setdefault("offs", {})
+        offs[name] = copy.deepcopy(offs.get(src, {}))
 
     def cfg_delete(self, name):
         if len(self.cfg["names"]) < 2:
@@ -1192,6 +1245,7 @@ class Document:
             self.cfg_apply(next(n for n in self.cfg["names"] if n != name))
         self.cfg["names"].remove(name)
         self.cfg["cells"].pop(name, None)
+        self.cfg.get("offs", {}).pop(name, None)
 
     def cfg_rename(self, name, new):
         new = new.strip()
@@ -1200,6 +1254,8 @@ class Document:
         i = self.cfg["names"].index(name)
         self.cfg["names"][i] = new
         self.cfg["cells"][new] = self.cfg["cells"].pop(name, {})
+        if "offs" in self.cfg:
+            self.cfg["offs"][new] = self.cfg["offs"].pop(name, {})
         if self.cfg["active"] == name:
             self.cfg["active"] = new
 

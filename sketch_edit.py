@@ -18,6 +18,7 @@ from PyQt6.QtCore import QEvent, QObject, Qt
 from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QInputDialog, QLineEdit,
                              QLabel, QMessageBox, QVBoxLayout)
 
+import sk_dimlines
 import sk_tools as sk
 import suggest
 import settings
@@ -559,10 +560,9 @@ class SketchEditor:
                 self.select_click(px, py, shift, key)
                 c = self.m.con_by_id(tag)
                 uv = self.to_plane(px, py)
-                base = self.tag_base(c) if c else None
-                if c is not None and uv is not None and base is not None:
-                    off = list(c.get("off") or (0.0, 0.0))
-                    self.tdrag = {"cid": tag, "start": uv, "pos0": (base[0] + off[0], base[1] + off[1]), "moved": False}
+                pos0 = self.tag_anchor(c) if c else None
+                if c is not None and uv is not None and pos0 is not None:
+                    self.tdrag = {"cid": tag, "start": uv, "pos0": pos0, "moved": False}
                 return True
             if key is None:
                 # empty space: a click picks the part under it, a drag draws a selection box (released in release())
@@ -947,6 +947,9 @@ class SketchEditor:
         if base is None:
             return
         pos = (d["pos0"][0] + uv[0] - d["start"][0], d["pos0"][1] + uv[1] - d["start"][1])
+        if c["type"] == "dim_ang" and sk_dimlines.set_angle_label(self, c, pos):
+            self.redraw()                  # an angle's label slides along its arc, between its two lines
+            return
         c["off"] = [round(pos[0] - base[0], 4), round(pos[1] - base[1], 4)]
         self.redraw()
 
@@ -1195,7 +1198,7 @@ class SketchEditor:
             cons = [self.m.con_by_id(k[1]) for k in self.sel if k[0] == "con"]
             if any(c and c["type"] == "dim_ang" for c in cons):
                 out.append(("Change which angle...", lambda: [self.change_angle(c["id"]) for c in cons if c and c["type"] == "dim_ang"][:1]))
-            if any(c and c.get("off") for c in cons):
+            if any(c and (c.get("off") or c.get("aoff")) for c in cons):
                 out.append(("Reset label position", self.reset_labels))
         if not out:
             out = [("Select", lambda: self.app.set_tool("select"))]
@@ -1210,6 +1213,7 @@ class SketchEditor:
                 c = m.con_by_id(i)
                 if c:
                     c.pop("off", None)
+                    c.pop("aoff", None)
         self.commit(go)
 
     def delete_selected(self):
@@ -1555,11 +1559,8 @@ class SketchEditor:
 
     def tag_anchor(self, c):
         """Where the label of a dimension is drawn (plane coordinates): its automatic place plus the offset it was dragged to."""
-        a = self.tag_base(c)
-        if a is None:
-            return None
-        o = c.get("off")
-        return (a[0] + o[0], a[1] + o[1]) if o else a
+        sh = sk_dimlines.shapes(self, c)
+        return None if sh is None else sh["label"]
 
     def redraw(self):
         if not self.active or pv is None:
@@ -1601,10 +1602,16 @@ class SketchEditor:
         self.tags = []
         for c in m.cons:
             if c["type"] in DIMS and c.get("grp") is None and self.app.vis["dims"]:
-                a = self.tag_anchor(c)
+                sh = sk_dimlines.shapes(self, c)
+                a = None if sh is None else sh["label"]
                 if a is not None:
                     self.tags.append((a[0], a[1], c["id"]))
                     sel_c = ("con", c["id"]) in self.sel
+                    lcol = COL_SEL if sel_c else COL_TAG
+                    for sg in sh["segs"]:
+                        self.polyline(sg, lcol, 1.6 if sel_c else 1.1)
+                    for ar in sh["arrows"]:
+                        self.polyline(np.array(ar), lcol, 1.6 if sel_c else 1.1)
                     txt = f"{c.get('name', '')} = {disp(c['value'], c):.4g}"
                     self.tag_len[c["id"]] = len(txt)
                     self.text(a, txt, COL_SEL if sel_c else COL_TAG)

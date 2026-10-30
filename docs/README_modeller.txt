@@ -319,3 +319,19 @@ Assemblies.
  - Mates, reference geometry and patterns: tick boxes Faces / Edges / Points choose what a click may pick.  The zone around an edge or corner
    is now measured in screen pixels (default 4; before at least 0.4 mm whatever the zoom), so the narrow cut face of a thin pipe can be picked.
  - The face, edge or point under the cursor lights up while you pick (can be switched off in Settings).
+
+VERSION 0.3.1
+Sketch dimensions are now drawn like a drawing.
+ - Length (horizontal / vertical / length): two extension lines from the measured points, a dimension line with an arrowhead at each, and the label on
+   that line.  Dragging the label moves the dimension line (how far out it is) and slides the text along it.  The lines are worked out from the
+   geometry each time, so they always join what is measured.  A new dimension starts a little outside the drawing.
+ - Radius / diameter: a line from the circle (through the centre for a diameter) with arrowheads on the circle, running out to the label.
+ - Angle: an arc between the two lines with arrowheads, and extension lines when the lines stop short of it.  The label slides along the arc but
+   can only stay between the two lines (inside the acute or obtuse angle that was chosen); dragging it farther out or in changes the arc's radius.
+   Dragging it across the corner still switches to the opposite sector (the same angle).
+ - Each configuration keeps its own label positions.  A new configuration starts as a copy of the one it was made from; moving a label while
+   another configuration is active changes only that configuration.  Files from before open with every label where it was.
+Configurations > Add Column: a "shows" drop-down (All / Globals / Sketch dimensions / Feature values / Suppress switches; for assemblies Components /
+ Suppress switches / Mate values / Patterns) and, for sketch dimensions and feature values, a second one to pick one sketch or feature.
+Assemblies: the 3D pick distance is now measured on the screen in pixels (the edges and corners are projected to the view), so it means the same
+ number of pixels at any zoom or angle.  Before, it was converted to a distance in the model and could be wider than set when zoomed in.
