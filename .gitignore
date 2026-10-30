@@ -9,3 +9,4 @@ __pycache__/
 *.gps
 *.gpr
 gpd_error.log
+__pycache__/
