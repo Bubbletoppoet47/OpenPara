@@ -16,7 +16,7 @@ import numpy as np
 from PyQt6.QtCore import QSettings, QSize, Qt
 from PyQt6.QtGui import QAction, QBrush, QColor, QKeySequence
 from PyQt6.QtWidgets import (QWidgetAction, QApplication, QFrame, QTabWidget, QToolButton, QCheckBox, QComboBox, QDockWidget, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
-                             QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QToolBar,
+                             QInputDialog, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QToolBar,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import pm_model as pm
@@ -322,6 +322,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Select a plane, then press Sketch.")
         self.created_new = None          # feature id made by the command now open in the PropertyManager
         from PyQt6.QtGui import QShortcut
+        QShortcut(QKeySequence(Qt.Key.Key_F2), self.tree, activated=lambda: self.rename_feature(), context=Qt.ShortcutContext.WidgetShortcut)
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=lambda: self.ed.cancel() if self.ed is not None and self.ed.active else None)
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=lambda: self.ed.delete_selected() if self.ed is not None and self.ed.active else None)
 
@@ -859,12 +860,39 @@ class MainWindow(QMainWindow):
         if part_refgeo.is_ref(f):
             m.addAction("Edit references", lambda: (self.left.setCurrentIndex(1), self.rg_begin(f)))
             m.addSeparator()
+        m.addAction("Rename...   (F2)", lambda: self.rename_feature(key))
         m.addAction("Roll back to here", lambda: self.set_rollback(key))
         m.addAction("Roll forward (to the end)", lambda: self.set_rollback(None))
         m.addSeparator()
         m.addAction("Unsuppress" if f["suppressed"] else "Suppress", lambda: self.toggle_suppress(key))
         m.addAction("Delete", lambda: self.delete_feature(key))
         m.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def rename_feature(self, fid=None, new=None):
+        """Right-click > Rename or F2 on a tree item.  The Configurations headers follow (they read the live name)."""
+        if fid is None:
+            it = self.tree.currentItem()
+            kind, key = (it.data(0, Qt.ItemDataRole.UserRole) or (None, None)) if it is not None else (None, None)
+            if kind != "feature":
+                return
+            fid = key
+        f = self.doc.feature(fid)
+        if f is None:
+            return
+        if new is None:
+            new, ok = QInputDialog.getText(self, "Rename", "New name:", QLineEdit.EchoMode.Normal, f["name"])
+            if not ok:
+                return
+        if new.strip() == f["name"]:
+            return
+        self.snapshot()
+        try:
+            self.doc.rename_feature(fid, new)
+        except pm.ModelError as ex:
+            self.undo_pop()
+            self.say(f"Not renamed: {ex}")
+            return
+        self.update_all(keep_props=True)
 
     def set_rollback(self, fid):
         self.snapshot()
@@ -1397,6 +1425,22 @@ class MainWindow(QMainWindow):
     def global_edited(self, _item):
         if self.busy:
             return
+        old_names = list(self.doc.params)
+        row_names = [(self.gtab.item(r, 0).text() if self.gtab.item(r, 0) else "").strip() for r in range(self.gtab.rowCount())]
+        if len(row_names) == len(old_names):
+            diff = [i for i, (a, b) in enumerate(zip(old_names, row_names)) if a != b]
+            if len(diff) == 1 and row_names[diff[0]]:
+                self.snapshot()
+                try:
+                    self.doc.rename_global(old_names[diff[0]], row_names[diff[0]])
+                except pm.ModelError as ex:
+                    self.undo_pop()
+                    self.say(f"Not renamed: {ex}")
+                    self.refresh_globals()
+                    return
+                self.say(f"Renamed {old_names[diff[0]]} to {row_names[diff[0]]}; the formulas and Configurations that used it follow.")
+                self.update_all(keep_props=True)
+                return
         self.snapshot()
         new, old = {}, self.doc.params
         shown = {}

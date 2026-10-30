@@ -19,7 +19,7 @@ from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PyQt6.QtGui import QAction, QBrush, QColor
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                              QListWidget, QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton, QButtonGroup, QTabWidget,
-                             QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox)
+                             QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QInputDialog, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox)
 
 import asm_model as am
 import asm_refs
@@ -259,6 +259,7 @@ class AssemblyWindow(QMainWindow):
         self.setCentralWidget(view)
         self.statusBar().showMessage("Insert Components to start the assembly.")
         from PyQt6.QtGui import QKeySequence, QShortcut
+        QShortcut(QKeySequence(Qt.Key.Key_F2), self.tree, activated=lambda: self.rename_item(), context=Qt.ShortcutContext.WidgetShortcut)
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=lambda: self.set_mode(None))
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.delete_selected)
 
@@ -768,7 +769,7 @@ class AssemblyWindow(QMainWindow):
         for m in a.mates:
             st = a.status.get(m["id"], "")
             names = ", ".join(sorted({"Assembly" if r["c"] == "@" else (a.comp(r["c"]) or {"name": "?"})["name"] for r in m["refs"]}))
-            it = QTreeWidgetItem(mm, [f"{MATE_NAMES[m['type']]}{m['id'][1:]}  ({names})" + ("  ✖" if st.startswith("error") else "  (suppressed)" if m.get("suppressed") else "")])
+            it = QTreeWidgetItem(mm, [f"{m.get('name') or MATE_NAMES[m['type']] + m['id'][1:]}  ({names})" + ("  ✖" if st.startswith("error") else "  (suppressed)" if m.get("suppressed") else "")])
             it.setData(0, Qt.ItemDataRole.UserRole, ("mate", m["id"]))
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             it.setCheckState(0, Qt.CheckState.Unchecked if m.get("suppressed") else Qt.CheckState.Checked)
@@ -810,6 +811,9 @@ class AssemblyWindow(QMainWindow):
             return
         data = it.data(0, Qt.ItemDataRole.UserRole) or (None,)
         menu = QMenu(self)
+        if data[0] in ("comp", "mate", "pattern", "aref") and not (data[0] == "comp" and (self.asm.comp(data[1]) or {}).get("derived")):
+            menu.addAction("Rename...   (F2)").triggered.connect(lambda: self.rename_item(data[0], data[1]))
+            menu.addSeparator()
         if data[0] == "comp":
             self.component_menu(menu, data[1])
         elif data[0] == "render":
@@ -831,6 +835,33 @@ class AssemblyWindow(QMainWindow):
             menu.addAction("Delete").triggered.connect(lambda: self.pattern_delete(data[1]))
         if menu.actions():
             menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def rename_item(self, kind=None, iid=None, new=None):
+        """Right-click > Rename or F2 on a component, mate, pattern or reference item."""
+        if kind is None:
+            it = self.tree.currentItem()
+            data = (it.data(0, Qt.ItemDataRole.UserRole) or (None, None)) if it is not None else (None, None)
+            kind, iid = data[0], data[1]
+        group = {"comp": self.asm.components, "mate": self.asm.mates, "pattern": self.asm.patterns, "aref": self.asm.refs}.get(kind)
+        item = next((x for x in group if x["id"] == iid), None) if group is not None else None
+        if item is None or item.get("derived"):
+            return
+        cur = self.asm.mate_label(item) if kind == "mate" else item["name"]
+        if new is None:
+            new, ok = QInputDialog.getText(self, "Rename", "New name:", QLineEdit.EchoMode.Normal, cur)
+            if not ok:
+                return
+        if new.strip() == cur:
+            return
+        self.snapshot()
+        try:
+            self.asm.rename(kind, iid, new)
+        except am.MateError as ex:
+            self.undo_pop()
+            self.say(f"Not renamed: {ex}")
+            return
+        self.refresh_derived()
+        self.update_all()
 
     def component_menu(self, menu, cid):
         c = self.asm.comp(cid)
@@ -1680,7 +1711,7 @@ class AssemblyWindow(QMainWindow):
         m = self.asm.mate(mid)
         if m is None:
             return
-        self.props_lay.addWidget(QLabel(f"<b>{MATE_NAMES[m['type']]}{mid[1:]}</b>"))
+        self.props_lay.addWidget(QLabel(f"<b>{m.get('name') or MATE_NAMES[m['type']] + mid[1:]}</b>"))
         st = self.asm.status.get(mid, "")
         if st.startswith("error"):
             er = QLabel(st)

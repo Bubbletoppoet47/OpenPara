@@ -270,6 +270,82 @@ class Document:
             c["name"] = new
         c["user_name"] = True
         f["model"] = m.to_json()
+        self.rename_refs(old, new, skip=fid)                  # later features / sketches / globals that used the name follow
+
+    # ------------------------------------------------------------------ renames that follow everywhere
+    FORMULA_KEYS = ("depth", "depth2", "draft", "thickness", "angle", "size", "count", "spacing", "count2", "spacing2", "d", "ang", "offset")
+
+    def rename_refs(self, old, new, skip=None):
+        """Every formula that uses the name `old` (whole word) now uses `new`: globals, feature values, sketch dimensions / symbols, and the
+        cells of the Configurations table.  `skip` = a sketch id that was already rewritten."""
+        import re
+        if not old or old == new:
+            return
+        pat = re.compile(r"(?<![\w.])" + re.escape(old) + r"\b")
+
+        def sub(t):
+            return pat.sub(new, t) if isinstance(t, str) else t
+        self.params = {k: sub(v) for k, v in self.params.items()}
+        for f in self.features:
+            for key in self.FORMULA_KEYS:
+                if key in f and isinstance(f[key], str):
+                    f[key] = sub(f[key])
+            pl = f.get("plane")
+            if isinstance(pl, dict) and isinstance(pl.get("offset"), str):
+                pl["offset"] = sub(pl["offset"])
+            if f["kind"] == "sketch" and f["id"] != skip:
+                try:
+                    m = self.sketch_model_raw(f)
+                except Exception:
+                    continue
+                changed = False
+                for c in m.cons:
+                    if isinstance(c.get("expr"), str) and sub(c["expr"]) != c["expr"]:
+                        c["expr"] = sub(c["expr"])
+                        changed = True
+                for p_ in m.params.values():
+                    if isinstance(p_.get("expr"), str) and sub(p_["expr"]) != p_["expr"]:
+                        p_["expr"] = sub(p_["expr"])
+                        changed = True
+                if changed:
+                    f["model"] = m.to_json()
+        for row in self.cfg.get("cells", {}).values():
+            for k, v in list(row.items()):
+                if isinstance(v, str):
+                    row[k] = sub(v)
+        self.models = {}
+
+    def rename_global(self, old, new):
+        """Rename a global.  Every formula that used it, and its column in the Configurations table, follow.  Raises ModelError."""
+        new = new.strip()
+        if old not in self.params:
+            raise ModelError(f"no global called {old}")
+        if new == old:
+            return
+        why = self.dim_name_taken(new)
+        if why:
+            raise ModelError(why)
+        self.params = {(new if k == old else k): v for k, v in self.params.items()}
+        if old in self.param_kinds:
+            self.param_kinds[new] = self.param_kinds.pop(old)
+        cfg = self.cfg
+        cfg["cols"] = [f"g:{new}" if k == f"g:{old}" else k for k in cfg.get("cols", [])]
+        for row in cfg.get("cells", {}).values():
+            if f"g:{old}" in row:
+                row[f"g:{new}"] = row.pop(f"g:{old}")
+        self.rename_refs(old, new)
+
+    def rename_feature(self, fid, new):
+        """Give a feature (sketch, extrude, plane ...) a new name, unique among the features.  Raises ModelError."""
+        new = new.strip()
+        f = self.feature(fid)
+        if f is None:
+            raise ModelError("no such feature")
+        if not new:
+            raise ModelError("the name is empty")
+        if new in ("Front", "Top", "Right") or any(g["name"].lower() == new.lower() for g in self.features if g["id"] != fid):
+            raise ModelError(f"'{new}' is already used")
+        f["name"] = new
 
     def store_sketch(self, fid):
         """Write the live Model of sketch `fid` back into its feature (without the globals)."""

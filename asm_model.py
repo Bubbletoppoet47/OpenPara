@@ -371,6 +371,27 @@ class Assembly:
         else:
             self.exprs.pop(key, None)
 
+    # ------------------------------------------------------------------ names
+    def mate_label(self, m):
+        return m.get("name") or f"{m['type'].capitalize()}{m['id'][1:]}"
+
+    def rename(self, kind, iid, new):
+        """Give a component, mate, pattern or reference item of the assembly a new name, unique in its group.  Raises MateError.
+        Everything else refers to them by id, so the Configurations headers and mates simply show the new name."""
+        new = new.strip()
+        group = {"comp": self.components, "mate": self.mates, "pattern": self.patterns, "aref": self.refs}.get(kind)
+        if group is None:
+            raise MateError("this item cannot be renamed")
+        item = next((x for x in group if x["id"] == iid), None)
+        if item is None:
+            raise MateError("no such item")
+        if not new:
+            raise MateError("the name is empty")
+        label = lambda x: (self.mate_label(x) if kind == "mate" else x["name"]).lower()
+        if any(label(x) == new.lower() for x in group if x["id"] != iid):
+            raise MateError(f"'{new}' is already used")
+        item["name"] = new
+
     # ------------------------------------------------------------------ bookkeeping
     def next_id(self, kind):
         self.counter[kind] = self.counter.get(kind, 0) + 1
@@ -780,7 +801,7 @@ def _cfg_label(self, key):
         return f"Configuration@{nm}" if kind == "c" else f"$SUPPRESS@{nm}"
     if kind in ("m", "v"):
         m = self.mate(rest)
-        nm = f"{m['type'].capitalize()}{rest[1:]}" if m else rest
+        nm = self.mate_label(m) if m else rest
         return f"$SUPPRESS@{nm}" if kind == "m" else f"Value@{nm}"
     if kind == "n":
         pid, _, field = rest.partition(":")

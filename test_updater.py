@@ -84,4 +84,21 @@ sh.updates.checked({"version": version.__version__, "notes": "", "page": "", "ap
 offered = []; sh.updates.offer = lambda rel: offered.append(rel)
 sh.updates.checked({"version": "99.0.0", "notes": "", "page": "", "app": None, "setup": None}); assert offered
 sh.updates.manual = False; update_ui.save_state({"skip": "99.0.0"}); sh.updates.checked({"version": "99.0.0", "notes": "", "page": "", "app": None, "setup": None}); assert len(offered) == 1, "skipped version must not be offered at start-up"
+# start-up check: runs at EVERY start (a recent check does not block it), prompts when a newer version exists
+import time as _t
+from PyQt6.QtWidgets import QApplication as _A
+from PyQt6.QtCore import QEventLoop, QTimer
+update_ui.save_state({"auto": True, "last": _t.time()})                    # checked a minute ago
+newer = {"version": "99.1.0", "notes": "", "page": "", "app": None, "setup": None}
+update_ui.updater.fetch_latest = lambda *a, **k: newer
+offered.clear(); sh.updates.manual = False
+sh.updates.check_later(ms=10)
+loop = QEventLoop(); QTimer.singleShot(1500, loop.quit); loop.exec()
+assert offered and offered[-1]["version"] == "99.1.0", "start-up check must prompt even right after another check"
+# a failed automatic check says why in the status bar, no pop-up
+msgs.clear(); sh.updates.manual = False; sh.updates.checked(None)
+assert not msgs and "check for updates" in sh.statusBar().currentMessage().lower(), sh.statusBar().currentMessage()
+# switched off in Help: no start-up check
+update_ui.save_state({"auto": False}); offered.clear(); sh.updates.check_later(ms=10)
+loop = QEventLoop(); QTimer.singleShot(600, loop.quit); loop.exec(); assert not offered
 print("update UI OK")

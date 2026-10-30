@@ -276,3 +276,15 @@ Where: feature boxes, the Globals equation column, the sketch dimension table an
 Sketch patterns.  Circular Sketch Pattern no longer repeats Horizontal / Vertical relations on the turned copies (they could not hold); the other
 relations (parallel, perpendicular, equal, tangent, concentric, coincident, collinear, midpoint) are repeated.  Mirror Entities repeats
 Horizontal / Vertical only when the mirror line is itself horizontal or vertical.  Linear pattern and Move are unchanged.
+
+
+VERSION 0.2.8
+Rename tree items.  Select an item in the feature tree (part) or the assembly tree and press F2, or right-click > Rename.
+ - Part: features, sketches, reference planes and axes.  Assembly: components, mates, patterns and the assembly's reference items.
+ - Names must be unique in their group and not empty; a rename can be undone.  The Configurations table headers show the new name.
+ - Globals: edit the Name cell of the Equations table to rename a global.  Every formula that used it (other globals, feature values, sketch
+   dimensions and symbols, Configurations cells) and its Configurations column follow.  Only whole words are replaced (renaming W leaves
+   Width alone).  Renaming a sketch dimension does the same for the later formulas that used its name.
+
+Update prompt.  The program looks for a newer version every time it starts (Help > Check for updates at start-up switches this off) and asks
+"Update now?".  Help > Check for updates still works by hand.  A failed automatic check only writes a note in the status bar.

@@ -83,7 +83,8 @@ class UpdateController(QObject):
         save_state(st)
 
     def check_later(self, ms=4000):
-        if self.auto_enabled() and time.time() - load_state().get("last", 0) > 20 * 3600:
+        """At every start-up (unless switched off in Help): look for a newer version a few seconds after the window opened."""
+        if self.auto_enabled():
             QTimer.singleShot(ms, lambda: self.check(False))
 
     def check_now(self):
@@ -103,6 +104,11 @@ class UpdateController(QObject):
         st["last"] = time.time()
         save_state(st)
         if rel is None:
+            if not self.manual:
+                try:
+                    self.shell.statusBar().showMessage("Could not check for updates (no internet connection?).", 8000)
+                except Exception:
+                    pass
             if self.manual:
                 QMessageBox.information(self.shell, "Updates", "Could not reach GitHub to look for updates (no internet, or the project is private "
                                         "and no access token is set).")
@@ -119,13 +125,13 @@ class UpdateController(QObject):
         box = QMessageBox(self.shell)
         box.setWindowTitle("Update available")
         box.setIcon(QMessageBox.Icon.Information)
-        box.setText(f"OpenPara {rel['version']} is available (you have {version.__version__}).")
+        box.setText(f"OpenPara {rel['version']} is available (you have {version.__version__}).\n\nUpdate now?")
         notes = (rel.get("notes") or "").strip()
         if notes:
             box.setDetailedText(notes)
         lay = updater.installed_layout()
         can_app = lay is not None and rel.get("app") is not None
-        b_inst = box.addButton("Install update", QMessageBox.ButtonRole.AcceptRole) if can_app else None
+        b_inst = box.addButton("Update now", QMessageBox.ButtonRole.AcceptRole) if can_app else None
         b_page = box.addButton("Open download page", QMessageBox.ButtonRole.ActionRole)
         b_skip = box.addButton("Skip this version", QMessageBox.ButtonRole.RejectRole)
         box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
