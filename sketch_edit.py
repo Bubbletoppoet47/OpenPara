@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBo
 
 import sk_tools as sk
 import suggest
+import settings
 import unitctl
 import sketcher_core as sc
 import sketcher_offset as skoff
@@ -38,7 +39,7 @@ COL_FREE, COL_FIXED, COL_BAD = (0.05, 0.30, 0.85), (0.10, 0.60, 0.20), (0.85, 0.
 COL_SEL, COL_CONSTR, COL_PREVIEW, COL_TAG = (1.0, 0.45, 0.0), (0.50, 0.55, 0.70), (0.45, 0.55, 0.75), (0.10, 0.10, 0.10)
 COL_ORIGIN = (0.80, 0.15, 0.55)
 AX_U, AX_V = (0.85, 0.15, 0.15), (0.15, 0.65, 0.15)
-SNAP_PX, PICK_PX, TAG_PX, EDGE_ON_COS = 12.0, 9.0, 16.0, 0.12
+EDGE_ON_COS = 0.12          # the snap / pick / label distances are File > Settings
 
 CONSTRAINTS = ("horizontal", "vertical", "parallel", "perpendicular", "collinear", "coincident", "concentric", "tangent", "equal", "fixed",
                "midpoint")
@@ -447,7 +448,7 @@ class SketchEditor:
             return best
         d = np.linalg.norm(scr - np.array([px, py]), axis=1)
         j = int(np.argmin(d))
-        return self.tags[j][2] if d[j] <= TAG_PX * r else None
+        return self.tags[j][2] if d[j] <= settings.get("label_px") * r else None
 
     def pick(self, px, py, kinds=None):
         """The entity under the pixel: points first, then the closest line / arc / circle.  -> ("pt", id) ... or None."""
@@ -456,10 +457,10 @@ class SketchEditor:
             return None
         r = self.pl.devicePixelRatioF()
         if kinds is None or "pt" in kinds:
-            p = self.pick_point(px, py, PICK_PX * r)
+            p = self.pick_point(px, py, settings.get("pick_px") * r)
             if p is not None:
                 return ("pt", p)
-        best, bd = None, PICK_PX * r
+        best, bd = None, settings.get("pick_px") * r
         for key in self.keys():
             if kinds is not None and key[0] not in kinds:
                 continue
@@ -474,10 +475,10 @@ class SketchEditor:
     def snap(self, uv, px, py):
         """-> (spec, (u, v), kind).  spec: ("pt", id) an existing point, ("on", key, u, v) a spot on an entity, or (u, v) a free spot."""
         r = self.pl.devicePixelRatioF()
-        p = self.pick_point(px, py, SNAP_PX * r)
+        p = self.pick_point(px, py, settings.get("snap_px") * r)
         if p is not None:
             return ("pt", p), tuple(self.m.pts[p]), "pt"
-        mv = self.model_vertex(px, py, SNAP_PX * r)
+        mv = self.model_vertex(px, py, settings.get("snap_px") * r)
         if mv is not None:
             return mv, mv, "pt"
         key = self.pick(px, py, kinds=("ln", "ci", "ar"))
@@ -585,7 +586,7 @@ class SketchEditor:
             self.commit(lambda m: sk.trim(m, key, uv))
             return True
         if t == "fillet":
-            p = self.pick_point(px, py, SNAP_PX * self.pl.devicePixelRatioF())
+            p = self.pick_point(px, py, settings.get("snap_px") * self.pl.devicePixelRatioF())
             if p is None:
                 self.app.say("Click the corner (the point where two lines meet).")
                 return True

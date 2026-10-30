@@ -33,7 +33,7 @@ class SubDoc(pm.Document):
     def mass_pr(self):
         return self._mass
 
-    def mesh(self, solid=None, tol=0.05):
+    def mesh(self, solid=None, tol=None):
         """Like a part's, but the faces buried where two parts touch are left out: they lie exactly in the plane of the other part's
         face, fight with it for the pixels and hide the outline of the joint."""
         hid = getattr(self, "hidden_faces", ())

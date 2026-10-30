@@ -19,6 +19,7 @@ import numpy as np
 from build123d import Align, Axis, Box, Compound, Edge, Face, Location, Plane, Vector, Wire, extrude, revolve
 
 import refgeo
+import settings
 import sk_tools as sk
 import sketcher_core as sc
 
@@ -939,26 +940,28 @@ class Document:
         return best
 
     # ------------------------------------------------------------------ geometry for the viewer
-    def mesh(self, solid=None, tol=0.05):
-        """[(face index, vertices Nx3, triangles Mx3)] of a solid."""
+    def mesh(self, solid=None, tol=None):
+        """[(face index, vertices Nx3, triangles Mx3)] of a solid; tol (mm) defaults to File > Settings > Surface accuracy."""
+        tol = settings.get("surf_gap") if tol is None else tol
         out = []
         solid = solid or self.solid
         if solid is None:
             return out
         for i, f in enumerate(solid.faces()):
-            v, t = f.tessellate(tol, 0.2)
+            v, t = f.tessellate(tol, settings.surface_angle(tol))
             if v and t:
                 out.append((i, np.array([[p.X, p.Y, p.Z] for p in v]), np.array(t, dtype=np.int64)))
         return out
 
-    def edge_lines(self, solid=None, n=24):
+    def edge_lines(self, solid=None, gap=None):
+        """One polyline per edge; a curve is cut into straight pieces so that none lies further than `gap` mm (File > Settings >
+        Curve accuracy) from the true curve."""
         solid = solid or self.solid
         out = []
         if solid is None:
             return out
         for e in solid.edges():
-            k = 2 if e.geom_type.name == "LINE" else n
-            out.append(np.array([[p.X, p.Y, p.Z] for p in (e.position_at(i / (k - 1)) for i in range(k))]))
+            out.append(np.array(settings.edge_points(e, gap)))
         return out
 
     def sketch_lines(self, sketch, n=48):

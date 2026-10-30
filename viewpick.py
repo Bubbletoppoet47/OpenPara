@@ -5,6 +5,7 @@ pick_surface(plotter, x, y)  -> (world point, actor, cell id) of the surface und
 world_per_pixel(plotter)     -> how many model units one screen pixel covers at the middle of the view
 """
 import math
+import time
 
 from PyQt6.QtCore import QEvent, QObject, Qt
 from PyQt6.QtWidgets import QWidget
@@ -19,9 +20,10 @@ class ClickHook(QObject):
     """Calls on_click(x, y) (VTK display pixels, origin bottom-left) for a left click that did not move.  Uses Qt's own mouse events
     on the viewport widget, so it does not depend on how VTK forwards events; a drag still rotates the view."""
 
-    def __init__(self, plotter, on_click, slop=4):
+    def __init__(self, plotter, on_click, slop=4, on_move=None):
         super().__init__(plotter)
         self.plotter, self.on_click, self.slop = plotter, on_click, slop
+        self.on_move, self._t_move = on_move, 0.0
         self.down = None
         self.enabled = True
         self.ok = True
@@ -38,6 +40,13 @@ class ClickHook(QObject):
             if t == QEvent.Type.MouseButtonPress and ev.button() == Qt.MouseButton.LeftButton:
                 p = ev.position()
                 self.down = (p.x(), p.y())
+            elif t == QEvent.Type.MouseMove and self.on_move is not None and self.enabled and not ev.buttons():
+                now = time.monotonic()
+                if now - self._t_move >= 0.06:               # at most ~16 picks a second
+                    self._t_move = now
+                    p = ev.position()
+                    ratio = obj.devicePixelRatioF()
+                    self.on_move(int(round(p.x() * ratio)), int(round((obj.height() - p.y() - 1) * ratio)))
             elif t == QEvent.Type.MouseButtonRelease and ev.button() == Qt.MouseButton.LeftButton and self.down is not None:
                 p = ev.position()
                 x0, y0 = self.down

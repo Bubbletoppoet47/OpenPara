@@ -11,6 +11,7 @@ from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget
 
 import pm_app
+import settings
 import unitctl
 import pm_model as pm
 
@@ -38,6 +39,7 @@ class AppShell(QMainWindow):
         self.updates = update_ui.UpdateController(self)
         self.build_menus()
         unitctl.on_change(self.units_changed)
+        settings.on_change(self.settings_changed)
         opened = False
         for f in files or []:
             if os.path.exists(f):
@@ -71,6 +73,7 @@ class AppShell(QMainWindow):
         add(fm, "Save As...", lambda: self.cur_call("save", True), "Ctrl+Shift+S")
         fm.addSeparator()
         add(fm, "Units...", self.units_dialog)
+        add(fm, "Settings...", self.settings_dialog)
         fm.addSeparator()
         add(fm, "Close Tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
         add(fm, "Exit", self.close)
@@ -101,6 +104,21 @@ class AppShell(QMainWindow):
         add(hm, "Open the data folder", self.open_data_folder)
         hm.addSeparator()
         add(hm, "About OpenPara", lambda: self.updates.about())
+
+    def settings_dialog(self):
+        import settings_dialog
+        settings_dialog.SettingsDialog(self).exec()
+
+    def settings_changed(self, keys):
+        """File > Settings was applied: every open document redraws with the new values."""
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            if hasattr(w, "settings_changed"):
+                try:
+                    w.settings_changed(keys)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
 
     def units_dialog(self):
         import units_dialog

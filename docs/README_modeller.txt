@@ -304,3 +304,18 @@ Dimensions in a sketch.
    with it.
  - The Dimensions and Relations tables look and work alike (spreadsheet style, whole-row selection, Shift / Ctrl for several, a Delete button).
    Selecting a row lights the label and the lines / points it concerns in the sketch; selecting a label in the sketch selects its row.
+
+VERSION 0.3.0
+File > Settings (new).  Typed values, applied to every part and assembly (kept in your data folder, not inside files).  Reset to defaults,
+Apply and OK buttons.  Each drawing setting has a small picture beside it that redraws as you type:
+ - Curve accuracy (edges): the most a drawn line may stray from the true curve.  Shown on a 90 degree bend with the straight pieces drawn over
+   the true curve.  Edges are now cut into as many pieces as that needs (before: always 24).
+ - Surface accuracy (shading): how finely round surfaces are shaded; shown as the facets of a circle cut across.  The finest values warn that
+   big assemblies get slow.
+ - Outline thickness (pixels) and Outline pull toward viewer (pixels; a sketch of why the outline is brought forward).  Defaults are thinner and
+   pull less than before, so thin faces are no longer covered.
+ - Picking: the 3D pick distance, the sketch snap / pick distances and the dimension label click area, and a switch for the hover highlight.
+Assemblies.
+ - Mates, reference geometry and patterns: tick boxes Faces / Edges / Points choose what a click may pick.  The zone around an edge or corner
+   is now measured in screen pixels (default 4; before at least 0.4 mm whatever the zoom), so the narrow cut face of a thin pipe can be picked.
+ - The face, edge or point under the cursor lights up while you pick (can be switched off in Settings).

@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QWidgetAction, QApplication, QFr
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import pm_model as pm
+import settings
 import unitctl
 import suggest
 import sketch_tables
@@ -302,7 +303,7 @@ class MainWindow(QMainWindow):
                     import vtk
                     vtk.vtkMapper.SetResolveCoincidentTopologyToPolygonOffset()
                     vtk.vtkMapper.SetResolveCoincidentTopologyPolygonOffsetParameters(1.5, 1.5)
-                    vtk.vtkMapper.SetResolveCoincidentTopologyLineOffsetParameters(-2.0, -2.0)
+                    vtk.vtkMapper.SetResolveCoincidentTopologyLineOffsetParameters(-settings.get("pull_px"), -settings.get("pull_px"))
                 except Exception:
                     pass
             except Exception:
@@ -1411,6 +1412,23 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    def settings_changed(self, keys):
+        """File > Settings was changed: the view is redrawn with the new accuracy / line values."""
+        keys = set(keys)
+        if "pull_px" in keys:
+            try:
+                import vtk
+                vtk.vtkMapper.SetResolveCoincidentTopologyLineOffsetParameters(-settings.get("pull_px"), -settings.get("pull_px"))
+            except Exception:
+                pass
+        if keys & {"edge_gap", "surf_gap", "line_px", "pull_px"} and self.plotter is not None:
+            try:
+                self.draw()
+            except Exception:
+                pass
+        if self.ed is not None and self.ed.active and keys & {"snap_px", "pick_px", "label_px"}:
+            self.ed.redraw()
+
     def units_changed(self, *_a):
         """File > Units was changed: everything that shows a length is redrawn in the new unit (nothing stored changes)."""
         self.measure_unit = unitctl.length_unit()
@@ -1649,7 +1667,7 @@ class MainWindow(QMainWindow):
             if self.vis["edges"]:
                 ml = self.merged_lines(self.edge_polys)
                 if ml is not None:
-                    pl.add_mesh(ml, color=(0.13, 0.15, 0.20) if pick is solid else (0.45, 0.50, 0.60), line_width=2.0 if pick is solid else 1.2,
+                    pl.add_mesh(ml, color=(0.13, 0.15, 0.20) if pick is solid else (0.45, 0.50, 0.60), line_width=settings.get("line_px") if pick is solid else 0.7 * settings.get("line_px"),
                                 pickable=False, reset_camera=False)
             f = d.feature(self.sel) if self.sel else None
             hot = list(self.sel_edges) + (list(f["edges"]) if f is not None and f["kind"] in ("fillet", "chamfer") else [])

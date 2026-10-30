@@ -28,6 +28,7 @@ import config_panels
 import mini_tree
 import icons
 import pm_model as pm
+import settings
 import unitctl
 import pm_app
 import nav
@@ -147,6 +148,8 @@ class AssemblyWindow(QMainWindow):
         asm_refs.init_vis(self)
         self.entries = {}                 # component id -> scene data
         self.hi_actors = []
+        self.pick_filter = {"face": True, "edge": True, "vertex": True}     # what a click in the mate / reference tools may pick
+        self.hover_key, self.hover_actor = None, None
         self.mesh_cache = {}              # (part path, id(solid)) -> (mesh, edge polylines, local bbox centre)
         self.part_cache = {}              # absolute path -> (mtime, Document)
         self.doc_memo = {}                # (part path, configuration) -> Document, cleared when parts may have changed
@@ -249,7 +252,7 @@ class AssemblyWindow(QMainWindow):
                 pass
             self.plotter.add_axes()
             self.ed = ViewGeom(self.plotter)
-            self.hook = viewpick.ClickHook(self.plotter, self.on_click)
+            self.hook = viewpick.ClickHook(self.plotter, self.on_click, on_move=self.on_hover)
             self.drag_hook = DragHook(self.plotter, self)
             self.nav = nav.NavHook(self.plotter, self)         # installed last: it sees the mouse events first
             self.flip_act.blockSignals(True)
@@ -535,10 +538,10 @@ class AssemblyWindow(QMainWindow):
             if dist < 1e-9:
                 return
             if cam.GetParallelProjection():
-                eps = 4.0 * 2.0 * cam.GetParallelScale() / max(300, pl.window_size[1])
+                eps = settings.get("pull_px") * 2.0 * cam.GetParallelScale() / max(300, pl.window_size[1])
                 off = v / dist * eps * 2.0
             else:
-                eps = 4.0 * 2.0 * dist * math.tan(math.radians(cam.GetViewAngle()) / 2) / max(300, pl.window_size[1])
+                eps = settings.get("pull_px") * 2.0 * dist * math.tan(math.radians(cam.GetViewAngle()) / 2) / max(300, pl.window_size[1])
                 off = v / dist * eps
             for e in self.entries.values():
                 if e.get("edges") is not None:
@@ -568,6 +571,7 @@ class AssemblyWindow(QMainWindow):
             self.cam = None
         pl.clear()
         pl.add_axes()
+        self.hover_key, self.hover_actor = None, None
         self.entries, self.hi_actors = {}, []
         for k, c in enumerate(self.asm.components):
             if c.get("hidden") or c.get("suppressed"):
@@ -580,10 +584,11 @@ class AssemblyWindow(QMainWindow):
             a = pl.add_mesh(m, color=col, opacity=self.opacity_of(c), smooth_shading=False, pickable=True, show_edges=False, reset_camera=False,
                             ambient=0.28, diffuse=0.78, specular=0.30, specular_power=22)
             ml = pm_app.MainWindow.merged_lines(polys)
-            ea = pl.add_mesh(ml, color=(0.13, 0.15, 0.20), line_width=1.6, pickable=False, reset_camera=False) if ml is not None else None
+            ea = pl.add_mesh(ml, color=(0.13, 0.15, 0.20), line_width=settings.get("line_px"), pickable=False, reset_camera=False) if ml is not None else None
             if ea is not None:              # pull the outlines a little more towards the viewer, so a joint between two parts always shows its line
                 try:
-                    ea.mapper.SetRelativeCoincidentTopologyLineOffsetParameters(-4.0, -4.0)
+                    pp = settings.get("pull_px")
+                    ea.mapper.SetRelativeCoincidentTopologyLineOffsetParameters(-pp, -pp)
                 except Exception:
                     pass
             self.entries[c["id"]] = {"actor": a, "edges": ea, "mesh": m, "polys": polys, "lc": lc, "k": k}
@@ -1267,9 +1272,12 @@ class AssemblyWindow(QMainWindow):
             return None
         M = self.asm.T4(c)
         wpp = viewpick.world_per_pixel(self.plotter)
-        tol = max(0.4, 7.0 * wpp)
+        flt = self.pick_filter
+        tol = max(1e-6, settings.get("pick3d_px") * wpp)         # a few screen pixels, so a thin face is still reachable
+        if not flt["face"]:
+            tol *= 3.0                                           # nothing else to hit: be generous with edges and points
         # a vertex close to the hit point
-        verts = solid.vertices()
+        verts = solid.vertices() if flt["vertex"] else []
         if verts:
             P = np.array([[v.center().X, v.center().Y, v.center().Z] for v in verts])
             W = (P @ M[:3, :3].T) + M[:3, 3]
@@ -1280,7 +1288,7 @@ class AssemblyWindow(QMainWindow):
                         "label": "Point"}
         # an edge close to the hit point
         best, bd = None, 1e18
-        for i, pts in enumerate(e["polys"]):
+        for i, pts in enumerate(e["polys"] if flt["edge"] else []):
             if len(pts) < 2:
                 continue
             Wp = (pts @ M[:3, :3].T) + M[:3, 3]
@@ -1293,10 +1301,73 @@ class AssemblyWindow(QMainWindow):
         if best is not None and bd <= tol:
             return {"cid": cid, "kind": "edge", "idx": best, "pt": None, "ref": {"c": cid, "k": "edge", "r": am.edge_ref(solid.edges()[best])},
                     "label": "Edge"}
+        if not flt["face"]:
+            return None
         fi = int(e["mesh"].cell_data["face"][cell])
         face = solid.faces()[fi]
         return {"cid": cid, "kind": "face", "idx": fi, "pt": None, "ref": {"c": cid, "k": "face", "r": am.face_ref(face)},
                 "label": {"PLANE": "Face", "CYLINDER": "Cylindrical face", "SPHERE": "Spherical face"}.get(face.geom_type.name, "Face")}
+
+    # ------------------------------------------------------------------ hover highlight and settings
+    HOVER_COL = (1.0, 0.85, 0.25)
+
+    def settings_changed(self, keys):
+        """File > Settings was changed: redraw what depends on it."""
+        keys = set(keys)
+        if keys & {"edge_gap", "surf_gap"}:
+            self.mesh_cache.clear()
+        if keys & {"edge_gap", "surf_gap", "line_px", "pull_px"}:
+            try:
+                self.rebuild_scene()
+            except Exception:
+                pass
+        if "hover" in keys and not settings.get("hover"):
+            self.clear_hover()
+
+    def clear_hover(self, render=True):
+        a, self.hover_actor, self.hover_key = self.hover_actor, None, None
+        if a is not None and self.plotter is not None:
+            try:
+                self.plotter.remove_actor(a)
+                if render:
+                    self.plotter.render()
+            except Exception:
+                pass
+
+    def on_hover(self, x, y):
+        """The cursor moved over the view while picking: light up the face / edge / point a click would take."""
+        if self.mode not in ("mate", "refgeo", "pattern", "mirror_plane", "axis_pick") or not settings.get("hover") or self.plotter is None:
+            if self.hover_actor is not None:
+                self.clear_hover()
+            return
+        it = self.pick_item(x, y)
+        key = None if it is None else (it["cid"], it["kind"], it["idx"])
+        if key == self.hover_key:
+            return
+        self.clear_hover(render=False)
+        self.hover_key = key
+        if it is None:
+            self.plotter.render()
+            return
+        pl, e = self.plotter, self.entries.get(it["cid"])
+        a = None
+        if e is not None:
+            if it["kind"] == "face":
+                cs = np.where(np.array(e["mesh"].cell_data["face"]) == it["idx"])[0]
+                if len(cs):
+                    a = pl.add_mesh(e["mesh"].extract_cells(cs), color=self.HOVER_COL, lighting=False, pickable=False, reset_camera=False, opacity=0.8)
+            elif it["kind"] == "edge" and it["idx"] < len(e["polys"]):
+                a = pl.add_mesh(pm_app.MainWindow.merged_lines([e["polys"][it["idx"]]]), color=self.HOVER_COL, line_width=4, pickable=False, reset_camera=False)
+            elif it["kind"] == "vertex":
+                a = pl.add_mesh(pv.PolyData(np.array([it["pt"]])), color=self.HOVER_COL, point_size=10, render_points_as_spheres=True,
+                                pickable=False, reset_camera=False)
+            if a is not None:
+                try:
+                    a.user_matrix = e["actor"].user_matrix       # it sits where its component sits
+                except Exception:
+                    pass
+                self.hover_actor = a
+        pl.render()
 
     def on_click(self, x, y):
         if self.mode in ("move", "rotate"):
@@ -1576,6 +1647,29 @@ class AssemblyWindow(QMainWindow):
         if "tk" in m:
             m["tk"] = "int" if m["tk"] == "ext" else "ext"
 
+    def pick_filter_bar(self):
+        """Faces / Edges / Points tick boxes: what a click may pick (a thin cut face is easiest with Edges and Points off)."""
+        w = QWidget()
+        row = QHBoxLayout(w)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Pick:"))
+        for key, text, tip in (("face", "Faces", "Faces can be picked"), ("edge", "Edges", "Edges can be picked"), ("vertex", "Points", "Points (corners) can be picked")):
+            cb = QCheckBox(text)
+            cb.setToolTip(tip + ".  With only Faces ticked a click never lands on a neighbouring edge or corner; with Faces off, edges and points get a wider reach.")
+            cb.setChecked(self.pick_filter[key])
+            cb.toggled.connect(lambda on, k=key: self.set_pick_filter(k, on))
+            row.addWidget(cb)
+        row.addStretch(1)
+        return w
+
+    def set_pick_filter(self, key, on):
+        self.pick_filter[key] = bool(on)
+        if not any(self.pick_filter.values()):          # at least one kind must stay on
+            self.pick_filter[key] = True
+            if self.mode == "mate":
+                self.show_mate_panel()
+        self.clear_hover()
+
     def show_mate_panel(self):
         self.clear_props()
         lab = QLabel("<b>Mate</b>")
@@ -1599,6 +1693,7 @@ class AssemblyWindow(QMainWindow):
         w = QWidget()
         w.setLayout(row)
         self.props_lay.addWidget(w)
+        self.props_lay.addWidget(self.pick_filter_bar())
         grp = QButtonGroup(self.props)
         for ty in am.TYPES:
             rb = QRadioButton(MATE_NAMES[ty])
