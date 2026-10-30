@@ -15,13 +15,14 @@ import traceback
 import numpy as np
 from PyQt6.QtCore import QSettings, QSize, Qt
 from PyQt6.QtGui import QAction, QBrush, QColor, QKeySequence
-from PyQt6.QtWidgets import (QWidgetAction, QApplication, QFrame, QTabWidget, QToolButton, QCheckBox, QComboBox, QDockWidget, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
+from PyQt6.QtWidgets import (QAbstractItemView, QWidgetAction, QApplication, QFrame, QTabWidget, QToolButton, QCheckBox, QComboBox, QDockWidget, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
                              QInputDialog, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QToolBar,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import pm_model as pm
 import unitctl
 import suggest
+import sketch_tables
 import evaluate
 import config_panels
 import sketch_edit
@@ -324,7 +325,7 @@ class MainWindow(QMainWindow):
         from PyQt6.QtGui import QShortcut
         QShortcut(QKeySequence(Qt.Key.Key_F2), self.tree, activated=lambda: self.rename_feature(), context=Qt.ShortcutContext.WidgetShortcut)
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=lambda: self.ed.cancel() if self.ed is not None and self.ed.active else None)
-        QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=lambda: self.ed.delete_selected() if self.ed is not None and self.ed.active else None)
+        QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.delete_key)
 
     def add_sim(self, kind):
         sh = self.window()
@@ -1254,25 +1255,23 @@ class MainWindow(QMainWindow):
                       "Fully defined." if rep.dof == 0 else f"Under defined: {rep.dof} degrees of freedom left.") if rep else "")
         lab.setStyleSheet("font-weight:bold; color:" + ("#c00000" if rep and rep.conflicts else "#1a7f1a" if rep and rep.dof == 0 else "#1f4fb4"))
         self.props_lay.addWidget(lab)
+        if self.ed is not None:
+            self.ed.hl = set()
         dims = [c for c in m.cons if c["type"] in sketch_edit.DIMS]
-        t = QTableWidget(len(dims), 2)
-        t.setHorizontalHeaderLabels(["Dimension", "Value / equation"])
-        t.verticalHeader().setVisible(False)
-        t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        t.setMaximumHeight(170)
-        for r, c in enumerate(dims):
-            n = QTableWidgetItem(str(c.get("name", c["type"])))
-            n.setToolTip(c["type"] + "  -  double-click to rename; the name can be used in formulas and is listed in Configurations")
-            t.setItem(r, 0, n)
+        vhead = "Value / equation" + ("" if unitctl.is_mm() else f" ({unitctl.length_unit()})")
+        t = sketch_tables.ConTable(["Dimension", vhead], editable=(0, 1))
+        rows, tips = [], {}
+        for c in dims:
             ang = c["type"] == "dim_ang"
             if c.get("expr"):
                 shown = unitctl.expr_to_display(str(c["expr"]), "number" if ang else "length")
             else:
                 shown = f"{(c['value'] if ang else unitctl.to_disp(c['value'])):.6g}"
-            t.setItem(r, 1, QTableWidgetItem(shown))
-        t.horizontalHeaderItem(1).setText("Value / equation" + ("" if unitctl.is_mm() else f" ({unitctl.length_unit()})"))
+            rows.append((c["id"], [str(c.get("name", c["type"])), shown]))
+            tips[c["id"]] = c["type"] + "  -  double-click to rename or change; the name can be used in formulas and is listed in Configurations"
+        t.fill(rows, tips)
         ids = [c["id"] for c in dims]
-        shown_txt = {(r, 1): t.item(r, 1).text() for r in range(len(dims))}
+        shown_txt = {(r, 1): rows[r][1][1] for r in range(len(rows))}
 
         def edited(item):
             r = item.row()
@@ -1291,25 +1290,70 @@ class MainWindow(QMainWindow):
                 self.update_all()
         t.itemChanged.connect(edited)
         t.setItemDelegateForColumn(1, suggest.SuggestDelegate(self.suggest_names, t))
-        self.props_lay.addWidget(t)
         rels = [c for c in m.cons if c["type"] not in sketch_edit.DIMS]
-        self.props_lay.addWidget(QLabel(f"Relations ({len(rels)}):"))
-        from PyQt6.QtWidgets import QListWidget
-        lw = QListWidget()
-        lw.setMaximumHeight(150)
-        for c in rels:
-            lw.addItem(f"{c['type']}{'  (auto)' if c.get('auto') else ''}   {' '.join(k + str(i) for k, i in c['refs'])}")
-        self.props_lay.addWidget(lw)
-        b = QPushButton("Delete selected relation")
+        rt = sketch_tables.ConTable(["Relation", "Applies to", ""])
+        rt.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        rt.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        rt.fill([(c["id"], [c["type"], " ".join(k + str(i) for k, i in c["refs"]), "auto" if c.get("auto") else ""]) for c in rels])
+        self.sk_tables = {"dims": t, "rels": rt, "sid": sk["id"]}
 
-        def dele():
-            r = lw.currentRow()
-            if 0 <= r < len(rels):
-                self.snapshot()
-                m.delete([("con", rels[r]["id"])])
-                self.finish_sketch_edit(sk["id"])
-        b.clicked.connect(dele)
-        self.props_lay.addWidget(b)
+        def lit(table, which):
+            """A row was selected in a table: light up what it concerns in the sketch."""
+            if self.ed is None or not self.ed.active or self.ed.sk_id != sk["id"]:
+                return
+            picked = table.selected_ids()
+            other = self.sk_tables["rels" if which == "dims" else "dims"]
+            other.blockSignals(True)
+            other.clearSelection()
+            other.blockSignals(False)
+            cons = [m.con_by_id(i) for i in picked]
+            self.ed.hl = {tuple(r) for c in cons if c for r in c["refs"]}
+            self.ed.sel = [("con", i) for i in picked] if which == "dims" else []
+            self.ed.redraw()
+            if picked:
+                self.say(f"{len(picked)} {'dimension' if which == 'dims' else 'relation'}(s) selected - lit in the sketch; Delete removes them.")
+        t.itemSelectionChanged.connect(lambda: lit(t, "dims"))
+        rt.itemSelectionChanged.connect(lambda: lit(rt, "rels"))
+        self.props_lay.addWidget(sketch_tables.panel(f"Dimensions ({len(dims)}):", t, "Delete selected dimension(s)",
+                                                     lambda: self.delete_sketch_rows(t)))
+        self.props_lay.addWidget(sketch_tables.panel(f"Relations ({len(rels)}):", rt, "Delete selected relation(s)",
+                                                     lambda: self.delete_sketch_rows(rt)))
+
+    def delete_key(self):
+        fw = QApplication.focusWidget()
+        if fw is not None and fw.property("sk_table") and fw.state() != QAbstractItemView.State.EditingState:
+            self.delete_sketch_rows(fw)
+        elif self.ed is not None and self.ed.active:
+            self.ed.delete_selected()
+
+    def delete_sketch_rows(self, table):
+        """The Delete button / key of a sketch table."""
+        if self.ed is None or not self.ed.active or self.ed.m is None:
+            return
+        ids = table.selected_ids()
+        if not ids:
+            self.say("Select a row first.")
+            return
+        items = [("con", i) for i in ids]
+        if not self.ed.confirm_delete(items):
+            return
+        self.ed.sel, self.ed.hl = [], set()
+        self.ed.commit(lambda mm: mm.delete(items))
+        self.doc.prune_cfg()
+        self.update_all()
+
+    def sync_sketch_tables(self):
+        """The selection in the sketch changed: select the matching dimension rows in the table."""
+        tabs = getattr(self, "sk_tables", None)
+        if not tabs or self.ed is None or not self.ed.active or tabs.get("sid") != self.ed.sk_id:
+            return
+        try:
+            tabs["dims"].select_ids({i for k, i in self.ed.sel if k == "con"})
+            tabs["rels"].blockSignals(True)
+            tabs["rels"].clearSelection()
+            tabs["rels"].blockSignals(False)
+        except RuntimeError:
+            pass                                                # the tables were rebuilt
 
     def set_sketch_dimension(self, sid, cid, txt):
         m = self.doc.models.get(sid)

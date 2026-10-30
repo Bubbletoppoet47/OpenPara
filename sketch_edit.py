@@ -116,6 +116,31 @@ def ask_form(parent, title, fields, checks=(), evaluator=None, names=None):
     return result["v"][0], [c.isChecked() for c in boxes]
 
 
+def ask_angle(parent, acute, obtuse, default, preview=None):
+    """Which angle is meant when two lines cross: 'acute' / 'obtuse' (None = cancelled).  preview(kind) lights the sector on the sketch."""
+    d = QDialog(parent)
+    d.setWindowTitle("Which angle?")
+    lay = QVBoxLayout(d)
+    lay.addWidget(QLabel("The two lines make two different angles.  Which one do you mean?"))
+    from PyQt6.QtWidgets import QRadioButton
+    ra = QRadioButton(f"Acute angle  (less than 90°):   {acute:.4g}°")
+    ro = QRadioButton(f"Obtuse angle  (more than 90°):   {obtuse:.4g}°")
+    (ra if default == "acute" else ro).setChecked(True)
+    lay.addWidget(ra)
+    lay.addWidget(ro)
+    if preview is not None:
+        ra.toggled.connect(lambda on: on and preview("acute"))
+        ro.toggled.connect(lambda on: on and preview("obtuse"))
+        preview("acute" if ra.isChecked() else "obtuse")
+    bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+    bb.accepted.connect(d.accept)
+    bb.rejected.connect(d.reject)
+    lay.addWidget(bb)
+    if d.exec() != QDialog.DialogCode.Accepted:
+        return None
+    return "acute" if ra.isChecked() else "obtuse"
+
+
 def ask_dim(parent, title, text, symbols, names=None):
     """A number, a symbol name or an expression (e.g. Width/2) -> text or None.  `names` (a function) feeds the suggestion list."""
     d = QDialog(parent)
@@ -240,6 +265,10 @@ class SketchEditor:
         self.box = None                   # selection box being dragged on empty space
         self.press_first = False
         self.drag = None                  # [point id, moved?]
+        self.tdrag = None                 # a dimension label being dragged
+        self.hl = set()                   # entities lit up because a row of the dimension / relation table is selected
+        self.angle_prev = None            # (s1, s2, constraint refs) of the sector shown while the angle dialog is open
+        self.tag_len = {}                 # dimension id -> characters of its label
         self.host = None                  # tangent arc: the line / arc it continues
         self.poly_n = 6
         self.fillet_r = 5.0
@@ -401,12 +430,24 @@ class SketchEditor:
         return ids[j] if d[j] <= px_tol else None
 
     def pick_tag(self, px, py):
+        """The dimension whose label is under the pixel: the whole text box counts, not only its anchor point."""
         if not self.tags:
             return None
+        r = self.pl.devicePixelRatioF()
         scr = self.screen_of(np.array([(u, v) for u, v, _ in self.tags]))
+        best, bd = None, 1e18
+        for (u, v, cid), (sx, sy) in zip(self.tags, scr):
+            w = self.tag_len.get(cid, 8) * 9.5 * r
+            x0, x1, y0, y1 = sx + 2 * r, sx + 10 * r + w, sy + 2 * r, sy + 28 * r        # the text sits up and right of its anchor
+            if x0 <= px <= x1 and y0 <= py <= y1:
+                d = math.hypot(px - (x0 + x1) / 2, py - (y0 + y1) / 2)
+                if d < bd:
+                    best, bd = cid, d
+        if best is not None:
+            return best
         d = np.linalg.norm(scr - np.array([px, py]), axis=1)
         j = int(np.argmin(d))
-        return self.tags[j][2] if d[j] <= TAG_PX * self.pl.devicePixelRatioF() else None
+        return self.tags[j][2] if d[j] <= TAG_PX * r else None
 
     def pick(self, px, py, kinds=None):
         """The entity under the pixel: points first, then the closest line / arc / circle.  -> ("pt", id) ... or None."""
@@ -513,6 +554,15 @@ class SketchEditor:
         if t == "select":
             tag = self.pick_tag(px, py)
             key = ("con", tag) if tag is not None else self.pick(px, py)
+            if tag is not None:
+                self.select_click(px, py, shift, key)
+                c = self.m.con_by_id(tag)
+                uv = self.to_plane(px, py)
+                base = self.tag_base(c) if c else None
+                if c is not None and uv is not None and base is not None:
+                    off = list(c.get("off") or (0.0, 0.0))
+                    self.tdrag = {"cid": tag, "start": uv, "pos0": (base[0] + off[0], base[1] + off[1]), "moved": False}
+                return True
             if key is None:
                 # empty space: a click picks the part under it, a drag draws a selection box (released in release())
                 self.box = {"start": (px, py), "end": (px, py), "shift": shift, "active": False}
@@ -584,7 +634,12 @@ class SketchEditor:
         return True
 
     def after_select(self):
+        self.hl = set()
         self.app.say(self.describe_selection())
+        try:
+            self.app.sync_sketch_tables()
+        except Exception:
+            pass
 
     def describe_selection(self):
         if not self.sel:
@@ -619,6 +674,13 @@ class SketchEditor:
             if moved:
                 self.finish_drag()
             return True
+        if self.tdrag is not None:
+            moved = self.tdrag["moved"]
+            self.tdrag = None
+            self.press_px = None
+            if moved:
+                self.finish_drag()
+            return True
         if self.box is not None:
             self.finish_box(px, py)
             self.press_px = None
@@ -646,6 +708,9 @@ class SketchEditor:
                 self.drag[1] = True
             self.m.solve(pin=(self.drag[0], round(uv[0], 3), round(uv[1], 3)))
             self.redraw()
+            return
+        if self.tdrag is not None:
+            self.drag_label(px, py)
             return
         if self.box is not None:
             b = self.box
@@ -859,6 +924,87 @@ class SketchEditor:
             self.app.update_all(keep_props=False)
         return res
 
+    def drag_label(self, px, py):
+        """Dragging a dimension label.  An angle label that is carried over the intersection to the opposite sector flips to that sector (the same
+        angle, so the constraint is still right); anywhere else the label just moves."""
+        d = self.tdrag
+        if not d["moved"]:
+            if math.hypot(px - self.press_px[0], py - self.press_px[1]) <= 6 * self.pl.devicePixelRatioF():
+                return
+            d["moved"] = True
+            self.app.snapshot()
+        uv = self.to_plane(px, py)
+        c = self.m.con_by_id(d["cid"])
+        if uv is None or c is None:
+            return
+        if c["type"] == "dim_ang" and self.m.line_intersection(c["refs"]) is not None:
+            self.m.ensure_angle(c)
+            s1, s2, _eps, _v = self.m.angle_default(c["refs"], hint=uv)
+            if (s1, s2) == (-c["s1"], -c["s2"]):                     # the opposite sector: same angle, same constraint
+                c["s1"], c["s2"] = s1, s2
+        base = self.tag_base(c)
+        if base is None:
+            return
+        pos = (d["pos0"][0] + uv[0] - d["start"][0], d["pos0"][1] + uv[1] - d["start"][1])
+        c["off"] = [round(pos[0] - base[0], 4), round(pos[1] - base[1], 4)]
+        self.redraw()
+
+    def choose_angle(self, refs):
+        """(s1, s2, eps, value) for a new angle dimension.  When the two lines cross, a dialog asks which angle is meant (acute / obtuse), with
+        the chosen sector lit on the sketch; the side under the cursor is the suggestion."""
+        m = self.m
+        s1, s2, eps, val = m.angle_default(refs, hint=self.cursor)
+        if m.line_intersection(refs) is None:
+            return s1, s2, eps, val
+        combos = [(a, b) for a in (1, -1) for b in (1, -1)]
+        vals = {c: m._sector(refs, *c)[0] for c in combos}
+        acute = min(vals.values())
+        obtuse = 180.0 - acute
+        if abs(acute - 90.0) < 1e-6:
+            return s1, s2, eps, val
+        want = "acute" if val <= 90.0 + 1e-9 else "obtuse"
+
+        def pick_for(kind):
+            ok = [c for c in combos if (vals[c] <= 90.0 + 1e-9) == (kind == "acute")]
+            return (s1, s2) if (s1, s2) in ok else ok[0]
+
+        def preview(kind):
+            self.angle_prev = (pick_for(kind), refs)
+            self.redraw()
+        try:
+            kind = ask_angle(self.app, acute, obtuse, want, preview)
+        finally:
+            self.angle_prev = None
+            self.redraw()
+        if kind is None:
+            return None
+        a, b = pick_for(kind)
+        v, e = m._sector(refs, a, b)
+        return a, b, e, v
+
+    def change_angle(self, cid):
+        """Right-click > Change which angle: the dimension measures the neighbouring sector instead (acute <-> obtuse).  The drawing does not
+        move: the dimension's value becomes the value of that sector."""
+        m = self.m
+        c = m.con_by_id(cid)
+        if c is None or c["type"] != "dim_ang" or m.line_intersection(c["refs"]) is None:
+            self.app.say("This angle cannot change sector (its lines are parallel).")
+            return
+        if c.get("expr"):
+            self.app.say("This angle is driven by a symbol / equation: remove the equation first (Edit dimension), then change the angle.")
+            return
+        m.ensure_angle(c)
+        a, b = c["s1"], -c["s2"]
+        v, e = m._sector(c["refs"], a, b)
+        if abs(v - 90.0) < 1e-6:
+            self.app.say("Both sides are 90 degrees: nothing to change.")
+            return
+
+        def go(mm):
+            cc = mm.con_by_id(cid)
+            cc["s1"], cc["s2"], cc["eps"], cc["value"] = a, b, e, v
+        self.commit(go)
+
     def finish_drag(self):
         m = self.m
         self.app.doc.reports[self.sk_id] = sk.solve_model(m)
@@ -885,7 +1031,12 @@ class SketchEditor:
             kw["xy"] = tuple(m.pts[refs[0][1]])
         if tool in DIMS:
             if tool == "dim_ang":
-                s1, s2, eps, cur = m.angle_default(refs, hint=self.cursor)
+                ch = self.choose_angle(refs)
+                if ch is None:
+                    self.picks = []
+                    self.redraw()
+                    return
+                s1, s2, eps, cur = ch
                 kw.update(s1=s1, s2=s2, eps=eps)
             else:
                 cur = m.measure(tool, refs)
@@ -1040,17 +1191,54 @@ class SketchEditor:
             out.append(("Delete", self.delete_selected))
         if any(k[0] == "con" for k in self.sel):
             out.append(("Edit dimension...", lambda: [self.edit_dimension(k[1]) for k in self.sel[:1] if k[0] == "con"]))
+            cons = [self.m.con_by_id(k[1]) for k in self.sel if k[0] == "con"]
+            if any(c and c["type"] == "dim_ang" for c in cons):
+                out.append(("Change which angle...", lambda: [self.change_angle(c["id"]) for c in cons if c and c["type"] == "dim_ang"][:1]))
+            if any(c and c.get("off") for c in cons):
+                out.append(("Reset label position", self.reset_labels))
         if not out:
             out = [("Select", lambda: self.app.set_tool("select"))]
         out += [("Normal To", self.normal_to), ("Exit Sketch", self.app.leave_sketch)]
         return out
 
+    def reset_labels(self):
+        ids = [k[1] for k in self.sel if k[0] == "con"]
+
+        def go(m):
+            for i in ids:
+                c = m.con_by_id(i)
+                if c:
+                    c.pop("off", None)
+        self.commit(go)
+
     def delete_selected(self):
         if not self.active or not self.sel or self.m is None:
             return
         items = list(self.sel)
+        if not self.confirm_delete(items):
+            return
+        gone = [i for k, i in items if k == "con"]
         self.commit(lambda m: m.delete(items))
         self.sel = []
+        self.hl = set()
+        if gone:
+            self.app.doc.prune_cfg()
+            self.app.update_all(keep_props=False)
+
+    def confirm_delete(self, items):
+        """Deleting a dimension whose name a formula elsewhere uses would break that formula: say so first."""
+        used = []
+        for k, i in items:
+            if k == "con":
+                c = self.m.con_by_id(i)
+                if c and c["type"] in DIMS and c.get("name"):
+                    where = self.app.doc.uses_name(c["name"], skip_sketch=self.sk_id)
+                    if where:
+                        used.append(f"{c['name']} (used in {', '.join(where[:3])}{' ...' if len(where) > 3 else ''})")
+        if used:
+            return ask_yes(self.app, "Delete dimension", "These names are used by formulas elsewhere, which will fail without them:\n\n  "
+                           + "\n  ".join(used) + "\n\nDelete anyway?")
+        return True
 
     # ------------------------------------------------------------------ edit commands that act on the selection
     def entities_selected(self):
@@ -1312,7 +1500,7 @@ class SketchEditor:
 
     def entity_color(self, key):
         m, rep = self.m, self.rep
-        if key in self.sel:
+        if key in self.sel or key in getattr(self, '_lit', ()):
             return COL_SEL, 4.0
         if key in m.constr:
             return COL_CONSTR, 1.5
@@ -1330,8 +1518,8 @@ class SketchEditor:
             free = any(p in rep.free_pts for p in (a["c"], a["s"], a["e"]))
         return (COL_FREE if free else COL_FIXED), 3.0
 
-    def tag_anchor(self, c):
-        """Where the label of a dimension is drawn (plane coordinates), or None."""
+    def tag_base(self, c):
+        """The automatic place of a dimension's label (plane coordinates), or None."""
         m, t, refs = self.m, c["type"], c["refs"]
         try:
             if t in ("dim_h", "dim_v", "dim_len"):
@@ -1345,11 +1533,32 @@ class SketchEditor:
                     cc, r = m.pts[m.ars[i]["c"]], sk.arc_span(m, i)[1]
                 return (cc[0] + 0.7 * r, cc[1] + 0.7 * r)
             if t == "dim_ang":
+                I = m.line_intersection(refs)
+                if I is not None:
+                    m.ensure_angle(c)
+                    d1, d2 = m._dir(refs[0][1]), m._dir(refs[1][1])
+                    r1 = (c["s1"] * d1[0], c["s1"] * d1[1])
+                    r2 = (c["s2"] * d2[0], c["s2"] * d2[1])
+                    n1, n2 = math.hypot(*r1) or 1.0, math.hypot(*r2) or 1.0
+                    bx, by = r1[0] / n1 + r2[0] / n2, r1[1] / n1 + r2[1] / n2
+                    if math.hypot(bx, by) < 1e-9:                      # a straight angle: the normal of the first ray
+                        bx, by = -r1[1] / n1, r1[0] / n1
+                    nb = math.hypot(bx, by)
+                    L = 0.3 * (n1 + n2) / 2
+                    return (I[0] + bx / nb * L, I[1] + by / nb * L)
                 pts = [p for k, i in refs for p in m.line_pts(i)]
                 return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
         except Exception:
             return None
         return None
+
+    def tag_anchor(self, c):
+        """Where the label of a dimension is drawn (plane coordinates): its automatic place plus the offset it was dragged to."""
+        a = self.tag_base(c)
+        if a is None:
+            return None
+        o = c.get("off")
+        return (a[0] + o[0], a[1] + o[1]) if o else a
 
     def redraw(self):
         if not self.active or pv is None:
@@ -1358,6 +1567,12 @@ class SketchEditor:
         m = self.m
         if m is None or self.plane() is None:
             return
+        self._lit = set(self.hl)                 # what a selected dimension (or a selected table row) measures lights up
+        for k_, i_ in self.sel:
+            if k_ == "con":
+                c_ = m.con_by_id(i_)
+                if c_:
+                    self._lit |= {tuple(r) for r in c_["refs"]}
         L = 0.04 * self.view_height()
         self.polyline(np.array([(0, 0), (L, 0)]), AX_U, 2.5)
         self.polyline(np.array([(0, 0), (0, L)]), AX_V, 2.5)
@@ -1373,7 +1588,7 @@ class SketchEditor:
             if i == 0:
                 self.actor(pv.PolyData(self.to_world(np.array([p]))), COL_SEL if ("pt", 0) in self.sel else COL_ORIGIN, 11.0, points=True)
                 continue
-            if ("pt", i) in self.sel:
+            if ("pt", i) in self.sel or ("pt", i) in getattr(self, '_lit', ()):
                 sel.append(p)
             elif rep is not None and not rep.conflicts and i not in rep.free_pts:
                 fixed.append(p)
@@ -1389,12 +1604,31 @@ class SketchEditor:
                 if a is not None:
                     self.tags.append((a[0], a[1], c["id"]))
                     sel_c = ("con", c["id"]) in self.sel
-                    self.text(a, f"{c.get('name', '')} = {disp(c['value'], c):.4g}", COL_SEL if sel_c else COL_TAG)
+                    txt = f"{c.get('name', '')} = {disp(c['value'], c):.4g}"
+                    self.tag_len[c["id"]] = len(txt)
+                    self.text(a, txt, COL_SEL if sel_c else COL_TAG)
         self.draw_preview()
         self.pl.render()
 
+    def draw_angle_prev(self):
+        (a, b), refs = self.angle_prev
+        m = self.m
+        I = m.line_intersection(refs)
+        if I is None:
+            return
+        d1, d2 = m._dir(refs[0][1]), m._dir(refs[1][1])
+        r1, r2 = (a * d1[0], a * d1[1]), (b * d2[0], b * d2[1])
+        n1, n2 = math.hypot(*r1) or 1.0, math.hypot(*r2) or 1.0
+        L = 0.35 * (n1 + n2) / 2
+        a1, a2 = math.atan2(r1[1], r1[0]), math.atan2(r2[1], r2[0])
+        da = wrap_pi(a2 - a1)
+        pts = [(I[0] + L * math.cos(a1 + da * k / 24), I[1] + L * math.sin(a1 + da * k / 24)) for k in range(25)]
+        self.polyline(np.array([I] + pts + [I]), COL_SEL, 4.0)
+
     def draw_preview(self):
         self.draw_box()
+        if self.angle_prev is not None:
+            self.draw_angle_prev()
         c, t = self.cursor, self.tool
         if c is not None and t not in ("select", "box_select"):
             self.actor(pv.PolyData(self.to_world(np.array([c]))), (1.0, 0.55, 0.0) if self.snapped else (0.4, 0.4, 0.4),

@@ -288,3 +288,19 @@ Rename tree items.  Select an item in the feature tree (part) or the assembly tr
 
 Update prompt.  The program looks for a newer version every time it starts (Help > Check for updates at start-up switches this off) and asks
 "Update now?".  Help > Check for updates still works by hand.  A failed automatic check only writes a note in the status bar.
+
+
+VERSION 0.2.9
+Dimensions in a sketch.
+ - Drag a dimension's label with the Select tool: it moves to where you drop it (only the label; the drawing does not change).  The position is
+   saved with the sketch.  Right-click > Reset label position puts it back.  A click anywhere on the label's text selects it (not only on a
+   small spot).
+ - An angle's label can be dragged across the corner to the opposite sector (the same angle, so the dimension stays valid) and the arc follows.
+ - New angle dimensions: when the two lines cross, a small dialog asks which angle you mean - the acute one (less than 90 degrees) or the obtuse
+   one - and lights the chosen sector in the sketch.  The side your cursor was on is suggested.  Perpendicular lines are not asked.  Right-click
+   an angle > Change which angle... switches it to the neighbouring sector later (the drawing does not move; the value becomes that sector's).
+ - Delete a dimension: select its label in the sketch and press Delete, right-click > Delete, or select its row in the Dimensions table and press
+   Delete / the button.  The lines stay.  If a formula elsewhere uses the dimension's name you are asked first.  Its Configurations column goes
+   with it.
+ - The Dimensions and Relations tables look and work alike (spreadsheet style, whole-row selection, Shift / Ctrl for several, a Delete button).
+   Selecting a row lights the label and the lines / points it concerns in the sketch; selecting a label in the sketch selects its row.

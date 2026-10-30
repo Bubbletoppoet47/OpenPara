@@ -110,6 +110,10 @@ class Document:
         """Run the features in order.  Fills self.solid, self.status, self.planes."""
         self.status, self.planes, self.after, self.models, self.reports = {}, {}, {}, {}, {}
         self.refgeo = {}
+        try:
+            self.prune_cfg()
+        except Exception:
+            pass
         self.dimvals = {}
         solid = None
         try:
@@ -314,6 +318,50 @@ class Document:
                 if isinstance(v, str):
                     row[k] = sub(v)
         self.models = {}
+
+    def uses_name(self, name, skip_sketch=None):
+        """Where else a name (a global or a named dimension) is used in a formula: a list of short descriptions, empty when nowhere."""
+        import re
+        pat = re.compile(r"(?<![\w.])" + re.escape(name) + r"\b")
+        out = []
+        for k, v in self.params.items():
+            if k != name and pat.search(str(v)):
+                out.append(f"global {k}")
+        for f in self.features:
+            for key in self.FORMULA_KEYS:
+                if isinstance(f.get(key), str) and pat.search(f[key]):
+                    out.append(f"{key} of {f['name']}")
+            if f["kind"] == "sketch" and f["id"] != skip_sketch:
+                try:
+                    m = self.sketch_model_raw(f)
+                except Exception:
+                    continue
+                if any(isinstance(c.get("expr"), str) and pat.search(c["expr"]) for c in m.cons):
+                    out.append(f"a dimension of {f['name']}")
+        for cn, row in self.cfg.get("cells", {}).items():
+            if any(isinstance(v, str) and pat.search(v) for v in row.values()):
+                out.append(f"configuration {cn}")
+        return out
+
+    def prune_cfg(self):
+        """Drop Configurations columns of sketch dimensions that no longer exist."""
+        cols = self.cfg.get("cols", [])
+        keep = []
+        for k in cols:
+            if k.startswith("d:"):
+                _, fid, cid = k.split(":", 2)
+                f = self.feature(fid)
+                try:
+                    m = self.sketch_model_raw(f) if f is not None and f["kind"] == "sketch" else None
+                except Exception:
+                    m = None
+                if m is None or m.con_by_id(int(cid) if cid.isdigit() else cid) is None:
+                    for row in self.cfg.get("cells", {}).values():
+                        row.pop(k, None)
+                    continue
+            keep.append(k)
+        if len(keep) != len(cols):
+            self.cfg["cols"] = keep
 
     def rename_global(self, old, new):
         """Rename a global.  Every formula that used it, and its column in the Configurations table, follow.  Raises ModelError."""
