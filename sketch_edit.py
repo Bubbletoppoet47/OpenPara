@@ -16,9 +16,10 @@ import math
 import numpy as np
 from PyQt6.QtCore import QEvent, QObject, Qt
 from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QInputDialog, QLineEdit,
-                             QMessageBox, QVBoxLayout)
+                             QLabel, QMessageBox, QVBoxLayout)
 
 import sk_tools as sk
+import suggest
 import unitctl
 import sketcher_core as sc
 import sketcher_offset as skoff
@@ -59,7 +60,7 @@ def fmt(v):
 LAST_EXPRS = []            # after ask_form: per numeric field, the formula in mm / degrees when a name was typed, else None
 
 
-def ask_form(parent, title, fields, checks=(), evaluator=None):
+def ask_form(parent, title, fields, checks=(), evaluator=None, names=None):
     """fields [(label, default)], checks [(label, default)] -> ([floats], [bools]) or None.
     With an evaluator(text, label) -> (number shown in the current unit, formula in mm or None) a field is a text box that takes
     a number, a global name or a formula (Width/2); the formulas typed are left in LAST_EXPRS."""
@@ -72,6 +73,8 @@ def ask_form(parent, title, fields, checks=(), evaluator=None):
     for label, val in fields:
         if evaluator is not None:
             s = QLineEdit(unitctl.num(val, 8) if isinstance(val, (int, float)) else str(val))
+            if names is not None:
+                suggest.attach(s, names)
         else:
             s = QDoubleSpinBox()
             s.setRange(-1e9, 1e9)
@@ -113,11 +116,25 @@ def ask_form(parent, title, fields, checks=(), evaluator=None):
     return result["v"][0], [c.isChecked() for c in boxes]
 
 
-def ask_dim(parent, title, text, symbols):
-    """A number, a symbol name or an expression (e.g. Width/2) -> text or None."""
-    t, ok = QInputDialog.getText(parent, title, "Value, symbol or equation  (a new name makes a symbol; globals such as Width can be used):\n"
-                                 + ("Existing: " + ", ".join(symbols) if symbols else ""), QLineEdit.EchoMode.Normal, text)
-    return t.strip() if ok else None
+def ask_dim(parent, title, text, symbols, names=None):
+    """A number, a symbol name or an expression (e.g. Width/2) -> text or None.  `names` (a function) feeds the suggestion list."""
+    d = QDialog(parent)
+    d.setWindowTitle(title)
+    lay = QVBoxLayout(d)
+    lay.addWidget(QLabel("Value, symbol or equation  (a new name makes a symbol; globals such as Width can be used):\n"
+                         + ("Existing: " + ", ".join(symbols) if symbols else "")))
+    e = QLineEdit(text)
+    if names is not None:
+        suggest.attach(e, names)
+    lay.addWidget(e)
+    bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+    bb.accepted.connect(d.accept)
+    bb.rejected.connect(d.reject)
+    lay.addWidget(bb)
+    e.selectAll()
+    if d.exec() != QDialog.DialogCode.Accepted:
+        return None
+    return e.text().strip()
 
 
 def ask_yes(parent, title, text):
@@ -874,7 +891,7 @@ class SketchEditor:
                 cur = m.measure(tool, refs)
             nxt = m.next_dim_name(tool, list(self.app.doc.params))
             txt = ask_dim(self.app, "Dimension " + nxt + ("" if tool == "dim_ang" else f"  ({unitctl.length_unit()})"),
-                          f"{disp(cur, tool):.8g}", list(m.params))
+                          f"{disp(cur, tool):.8g}", list(m.params), names=self.suggest_names)
             if txt is None:
                 return
             try:
@@ -946,7 +963,7 @@ class SketchEditor:
             return
         length = c["type"] != "dim_ang"
         shown = unitctl.expr_to_display(c["expr"], "length" if length else "number") if c.get("expr") else f"{disp(c['value'], c):.8g}"
-        txt = ask_dim(self.app, "Dimension " + c.get("name", "") + (f"  ({unitctl.length_unit()})" if length else ""), shown, list(m.params))
+        txt = ask_dim(self.app, "Dimension " + c.get("name", "") + (f"  ({unitctl.length_unit()})" if length else ""), shown, list(m.params), names=self.suggest_names)
         if txt is None:
             return
         self.set_dimension(cid, txt)
@@ -1048,6 +1065,9 @@ class SketchEditor:
         self.app.say("Now click the line to mirror about.")
         return True
 
+    def suggest_names(self):
+        return suggest.names_of(self.app.doc, self.m)
+
     def eval_field(self, text, label):
         """A dialog box value -> (number in the current unit, formula in mm or None).  Takes a number, a global or sketch
         symbol, or a formula; a length may carry a unit ('2 in').  Raises ValueError."""
@@ -1081,7 +1101,7 @@ class SketchEditor:
             self.app.say("Select what to copy first.")
             return
         r = ask_form(self.app, "Linear sketch pattern", [("Number of extra copies", 2), (unitctl.label("Step X (mm)"), unitctl.to_disp(10.0)),
-                                                         (unitctl.label("Step Y (mm)"), 0.0)], evaluator=self.eval_field)
+                                                         (unitctl.label("Step Y (mm)"), 0.0)], evaluator=self.eval_field, names=self.suggest_names)
         if r:
             n, dx, dy = r[0]
             dx, dy = unitctl.from_disp(dx), unitctl.from_disp(dy)
@@ -1093,7 +1113,7 @@ class SketchEditor:
             self.app.say("Select what to copy first.")
             return
         r = ask_form(self.app, "Circular sketch pattern", [("Number of extra copies", 3), ("Angle between copies (deg)", 90.0),
-                                                            (unitctl.label("Centre X (mm)"), 0.0), (unitctl.label("Centre Y (mm)"), 0.0)], evaluator=self.eval_field)
+                                                            (unitctl.label("Centre X (mm)"), 0.0), (unitctl.label("Centre Y (mm)"), 0.0)], evaluator=self.eval_field, names=self.suggest_names)
         if r:
             n, a, cx, cy = r[0]
             cx, cy = unitctl.from_disp(cx), unitctl.from_disp(cy)
@@ -1104,7 +1124,7 @@ class SketchEditor:
         if not ents:
             self.app.say("Select what to move first.")
             return
-        r = ask_form(self.app, "Move entities", [(unitctl.label("Move X (mm)"), 0.0), (unitctl.label("Move Y (mm)"), 0.0)], evaluator=self.eval_field)
+        r = ask_form(self.app, "Move entities", [(unitctl.label("Move X (mm)"), 0.0), (unitctl.label("Move Y (mm)"), 0.0)], evaluator=self.eval_field, names=self.suggest_names)
         if r:
             dx, dy = (unitctl.from_disp(x) for x in r[0])
             self.commit(lambda m: sk.move(m, [k for k in ents if k[0] != "con"], dx, dy))
@@ -1118,7 +1138,7 @@ class SketchEditor:
         LAST_EXPRS[:] = []
         r = ask_form(self.app, "Offset entities", [(unitctl.label("Distance (mm; + = outward / left)"), round(unitctl.to_disp(0.05 * max(m.extent(), 1.0)), 4) or 1.0)],
                      [("Both sides", False), ("Keep linked to the originals (an offset dimension)", True), ("Select the whole closed loop", True)],
-                     evaluator=self.eval_field)
+                     evaluator=self.eval_field, names=self.suggest_names)
         if not r:
             return
         dist = unitctl.from_disp(r[0][0])

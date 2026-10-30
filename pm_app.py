@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (QWidgetAction, QApplication, QFrame, QTabWidget, QT
 
 import pm_model as pm
 import unitctl
+import suggest
 import evaluate
 import config_panels
 import sketch_edit
@@ -212,6 +213,7 @@ class MainWindow(QMainWindow):
         self.gtab.setHorizontalHeaderLabels(["Name", "Equation", "Value", "Type"])
         self.gtab.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.gtab.itemChanged.connect(self.global_edited)
+        self.gtab.setItemDelegateForColumn(1, suggest.SuggestDelegate(self.suggest_names, self.gtab))
         gl.addWidget(self.gtab)
         row = QHBoxLayout()
         b = QPushButton("+ Add")
@@ -454,7 +456,7 @@ class MainWindow(QMainWindow):
                 return
             self.ed.poly_n = max(3, int(round(r[0][0])))
         elif name == "fillet":
-            r = sketch_edit.ask_form(self, "Sketch fillet", [(unitctl.label("Radius (mm)"), unitctl.to_disp(float(self.ed.fillet_r)))], evaluator=self.ed.eval_field)
+            r = sketch_edit.ask_form(self, "Sketch fillet", [(unitctl.label("Radius (mm)"), unitctl.to_disp(float(self.ed.fillet_r)))], evaluator=self.ed.eval_field, names=self.suggest_names)
             if r is None or r[0][0] <= 0:
                 return
             self.ed.fillet_r = unitctl.from_disp(r[0][0])
@@ -917,8 +919,14 @@ class MainWindow(QMainWindow):
                 tgt[key] = new
                 self.update_all(keep_props=True)
         e.editingFinished.connect(done)
+        suggest.attach(e, self.suggest_names)
         form.addRow(unitctl.label(label) if kind == "length" else label, e)
         return e
+
+    def suggest_names(self):
+        """The names offered under a formula box: globals, named dimensions, the open sketch's symbols, functions."""
+        sm = self.ed.m if (self.ed is not None and self.ed.active) else None
+        return suggest.names_of(self.doc, sm)
 
     def combo(self, form, label, feat, key, options, default):
         cb = QComboBox()
@@ -1254,6 +1262,7 @@ class MainWindow(QMainWindow):
                 self.doc.models.pop(sk["id"], None)
                 self.update_all()
         t.itemChanged.connect(edited)
+        t.setItemDelegateForColumn(1, suggest.SuggestDelegate(self.suggest_names, t))
         self.props_lay.addWidget(t)
         rels = [c for c in m.cons if c["type"] not in sketch_edit.DIMS]
         self.props_lay.addWidget(QLabel(f"Relations ({len(rels)}):"))

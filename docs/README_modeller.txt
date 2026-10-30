@@ -264,3 +264,15 @@ Windows crops it to a circle or a rounded tile.  The logo files are in assets/ (
 
 VERSION 0.2.6
 The selection box now also selects points (sketch points, line ends, circle centres), not only lines, arcs and circles.  The origin is left out.
+
+
+VERSION 0.2.7
+Suggestion lists.  Every box where a number or a formula is typed in a part shows an Excel-style list under it: the globals with their current
+values (in the current unit), the named dimensions, the open sketch's own symbols and the functions (min, max, sqrt, sin ...).  It opens while
+you type a name, when you click into an empty box, and with the Down key; Enter / Tab / a click puts the name in place of the word typed.
+Where: feature boxes, the Globals equation column, the sketch dimension table and the dimension / rename dialogs, the sketch tool dialogs
+(offset, fillet, patterns, move) and the cells of the part's Configurations table.  (Assembly boxes do not have the list yet.)
+
+Sketch patterns.  Circular Sketch Pattern no longer repeats Horizontal / Vertical relations on the turned copies (they could not hold); the other
+relations (parallel, perpendicular, equal, tangent, concentric, coincident, collinear, midpoint) are repeated.  Mirror Entities repeats
+Horizontal / Vertical only when the mirror line is itself horizontal or vertical.  Linear pattern and Move are unchanged.

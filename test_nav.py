@@ -47,7 +47,7 @@ ed.sel = [("ln", list(ed.m.lns)[0])]; ed.command_construction(); assert not ed.m
 print("context actions:", [a for a, _ in ed.context_actions(*ed.to_screen(ed.to_world((20, 10)))[0])])
 # origin: dimension from origin to a corner
 import sketch_edit as se
-se.ask_dim = lambda *a: "15"
+se.ask_dim = lambda *a, **k: "15"
 ed.reset_tool("dim_h"); ed.picks = [("pt", 0)]
 corner = [i for i, p in ed.m.pts.items() if i and abs(p[0] - 30) < 1e-6 and abs(p[1] - 20) < 1e-6][0]
 ed.picks.append(("pt", corner)); ed.try_apply(); print("dims", [(c["type"], c["value"]) for c in ed.m.cons if c["type"].startswith("dim")], "dof", ed.rep.dof)

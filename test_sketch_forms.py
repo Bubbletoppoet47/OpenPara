@@ -21,7 +21,7 @@ def px(u, v): return tuple(ed.to_screen(ed.to_world((u, v)))[0])
 w.set_tool("rect_corner")
 for uv in [(-20, -10), (20, 10)]: ed.press(*px(*uv)); ed.release(*px(*uv))
 ed.reset_tool("select"); ed.sel = [k for k in ed.keys() if k[0] == "ln"]
-def form(parent, title, fields, checks=(), evaluator=None):
+def form(parent, title, fields, checks=(), evaluator=None, names=None):
     v, e = evaluator("Half", fields[0][0]); se.LAST_EXPRS[:] = [e]; return [v], [False, True, True]
 se.ask_form = form
 ed.command_offset()

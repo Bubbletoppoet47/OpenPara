@@ -39,7 +39,7 @@ assert abs(v - (800 - math.pi * 25) * 10) < 1, v
 # --- reopen, dimension the width with a global, check it follows the global
 w.enter_sketch(sid)
 horiz = [i for i, (a, b) in m().lns.items() if abs(m().pts[a][1] - m().pts[b][1]) < 1e-6][0]
-se.ask_dim = lambda parent, title, text, syms: "Length"
+se.ask_dim = lambda parent, title, text, syms, **k: "Length"
 w.relation_command("dim_h"); click(0, -10)          # bottom edge
 print("dims:", [(c["type"], c.get("expr"), round(c["value"], 3)) for c in m().cons if c["type"] in se.DIMS])
 assert any(c.get("expr") == "Length" for c in m().cons)

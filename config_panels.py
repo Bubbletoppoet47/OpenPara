@@ -45,6 +45,9 @@ class ConfigPanel(QWidget):
         lay.addLayout(row)
         self.table = QTableWidget(0, 1)
         self.table.itemChanged.connect(self.cell_changed)
+        if noun == "part":
+            import suggest
+            self.table.setItemDelegate(suggest.SuggestDelegate(lambda: suggest.names_of(self.owner.doc), self.table, exclude=(0,)))
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
         lay.addWidget(self.table, 1)

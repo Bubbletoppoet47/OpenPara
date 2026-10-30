@@ -728,7 +728,7 @@ def entity_points(m, keys):
     return pts
 
 
-def _copy(m, keys, tf, flip=False):
+def _copy(m, keys, tf, flip=False, keep_hv=True):
     """Copy entities through the point map tf((x, y)) -> (x, y).  `flip` = the map turns the plane over (mirror): arcs swap ends.
     Constraints whose references are all inside the copied set are repeated on the copies (types that survive a turn / mirror)."""
     keys = [k for k in keys if k[0] != "pt" or k[1] != 0]
@@ -751,7 +751,7 @@ def _copy(m, keys, tf, flip=False):
     for c in list(m.cons):
         if c["type"] in keep and all(tuple(r) in new for r in c["refs"]) and not c.get("origin"):
             con(m, c["type"], [new[tuple(r)] for r in c["refs"]])
-        elif c["type"] in ("horizontal", "vertical") and all(tuple(r) in new for r in c["refs"]):
+        elif keep_hv and c["type"] in ("horizontal", "vertical") and all(tuple(r) in new for r in c["refs"]):
             con(m, c["type"], [new[tuple(r)] for r in c["refs"]])
     return new, pmap
 
@@ -768,7 +768,8 @@ def mirror(m, keys, axis):
         fx, fy = ax + u[0] * t, ay + u[1] * t
         return (2 * fx - p[0], 2 * fy - p[1])
     keys = [k for k in keys if k != ("ln", axis)]
-    new, pmap = _copy(m, keys, refl, flip=True)
+    axis_hv = abs(u[0]) < 1e-9 or abs(u[1]) < 1e-9        # mirrored about a horizontal / vertical line, horizontal and vertical stay so
+    new, pmap = _copy(m, keys, refl, flip=True, keep_hv=axis_hv)
     ax_pts = set(m.lns[axis])
     for p, q in pmap.items():
         if p in ax_pts or math.dist(m.pts[p], m.pts[q]) < 1e-9:
@@ -800,7 +801,9 @@ def circular_pattern(m, keys, count, step_deg, cx, cy):
     for n in range(1, count + 1):
         a = math.radians(step_deg * n)
         ca, sa = math.cos(a), math.sin(a)
-        new, _ = _copy(m, keys, lambda p, ca=ca, sa=sa: (cx + (p[0] - cx) * ca - (p[1] - cy) * sa, cy + (p[0] - cx) * sa + (p[1] - cy) * ca))
+        # a turned copy cannot stay horizontal / vertical, so those two relations are not repeated (the others survive a turn)
+        new, _ = _copy(m, keys, lambda p, ca=ca, sa=sa: (cx + (p[0] - cx) * ca - (p[1] - cy) * sa, cy + (p[0] - cx) * sa + (p[1] - cy) * ca),
+                       keep_hv=False)
         out += list(new.values())
     return out
 
