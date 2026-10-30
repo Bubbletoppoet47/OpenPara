@@ -21,6 +21,10 @@ n_ln = len(ed.m.lns)
 # window (left->right) around the rectangle only: selects its 4 lines
 drag((-30, -20), (30, 20)); lines = [k for k in ed.sel if k[0] == "ln"]
 assert len(lines) == n_ln == 4 and not [k for k in ed.sel if k[0] == "ci"], ed.sel
+# points: a window around the rectangle selects its 4 corner points too, and a crossing box selects the points it covers
+ed.sel = []; drag((-30, -20), (30, 20)); pts = [k for k in ed.sel if k[0] == "pt"]; assert len(pts) >= 4, ed.sel
+ed.sel = []; drag((15, 5), (25, 15)); assert [k for k in ed.sel if k[0] == "pt"], ed.sel     # a tiny box around one corner
+ed.sel = []; drag((25, 15), (15, 5)); assert [k for k in ed.sel if k[0] == "pt"], ed.sel
 # window that cuts the rectangle: nothing whole inside except nothing
 ed.sel = []; drag((-25, -5), (0, 5)); assert not [k for k in ed.sel if k[0] == "ln"], ed.sel
 # crossing (right->left) with the same box touches the left and parts of lines

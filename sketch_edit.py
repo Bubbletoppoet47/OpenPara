@@ -693,7 +693,7 @@ class SketchEditor:
         y0, y1 = sorted((start[1], end[1]))
         crossing = end[0] < start[0]
         found = []
-        for key in self.keys():
+        for key in self.keys() + [("pt", i) for i in self.m.pts if i != 0]:     # keys() has no points: add them
             if key == ("pt", 0):
                 continue
             try:
