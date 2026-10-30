@@ -128,7 +128,8 @@ class MainWindow(QMainWindow):
             ("exit", "✔", "Exit\nSketch", "Leave the sketch (Esc with the Select tool also leaves it)", lambda: self.leave_sketch()),
             ("normal", "⊡", "Normal To", "Turn the view to face the sketch plane", lambda: self.ed.normal_to() if self.ed.active else None),
             "|",
-            ("tool_select", "➤", "Select", "Pick entities (Shift adds; drag a point to move it; Delete removes)", T("select")),
+            ("menu", "➤", "Select", "Select: click to pick (Shift adds, drag a point to move it, drag on empty space for a box) - or Box Select, where every drag is a box", [
+                ("Select", "select"), ("Box Select", "box_select")]),
             ("menu", "╱", "Line", "Line: click points, each click continues the chain (double-click or Esc ends it)", [
                 ("Line", "line"), ("Centerline", "centerline"), ("Midpoint Line", "midline")]),
             ("menu", "▭", "Rectangle", "Rectangles", [
@@ -166,7 +167,7 @@ class MainWindow(QMainWindow):
         self.ribbon.addTab(self.ribbon_page([("sim_beam", "┼", "1D FEA\n(frames)", "Frames and trusses from a sketch of this part", lambda: self.add_sim("beam")),
                                     ("sim_fea", "▦", "2D FEA", "Plane stress / strain FEA of a sketch or a slice of this part", lambda: self.add_sim("fea")),
                                     ("sim_cfd", "≋", "2D CFD", "Flow around a sketch or a slice of this part", lambda: self.add_sim("cfd"))]), "Simulation")
-        self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "New render", "Photorealistic pictures and videos of this part: sun, lights, floor, cameras", lambda: self.add_render())]), "Renderer")
+        self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "New render", "Photorealistic pictures and videos of this part: sun, lights, floor, cameras", lambda: self.add_render())]), "Render")
         self.ribbon.setCurrentIndex(0)
         # ---- the left panel: FeatureManager / PropertyManager / Equations
         self.left = QTabWidget()

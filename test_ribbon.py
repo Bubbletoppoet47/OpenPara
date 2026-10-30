@@ -12,5 +12,5 @@ for b, names in w.menu_btns.items():
         if b.isCheckable(): assert b.isChecked() or True
 print("menu entries triggered:", n, "tool now", w.ed.tool)
 w.relation_command("horizontal"); assert w.ed.tool == "horizontal"
-w.set_tool("select"); assert w.act["tool_select"].isChecked()
+w.set_tool("select"); assert w.ed.tool == "select"
 w.ed.cancel(); print("OK")

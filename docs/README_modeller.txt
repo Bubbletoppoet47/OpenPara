@@ -246,3 +246,12 @@ Every modelling number takes a global or a formula.
  - Assemblies have their own Globals (the equations tab of the assembly window).  Component position / rotation, the Distance / Angle of
    a mate (while adding and when editing it) and the Spacing / Angle / Instances of a pattern accept those names or formulas.  The
    formula stays stored in the file, so changing a global moves the assembly.  Typing a plain number again removes the formula.
+
+
+VERSION 0.2.4
+Sketch > Select now has a drop-down (like Line or Rectangle): Select and Box Select.
+ - Select: click to pick, Shift / Ctrl adds, drag a point or line to move it, drag on empty space for a selection box.
+ - Box Select: every left drag is a selection box, even when it starts on top of a line or point (nothing is moved).  A click still picks
+   one entity.  Left to right (blue box) selects what is completely inside; right to left (green box) selects everything the box touches.
+The box is drawn inside the 3D view, and the status line says how many items it selected - or that it found nothing and which direction to
+drag.  The ribbon tab "Renderer" is now "Render".

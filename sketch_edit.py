@@ -201,7 +201,7 @@ DRAW = {                                   # name: (clicks, builder(model, specs
 }
 CHAIN = {"line": False, "centerline": True}
 EDIT = ("trim", "fillet", "mirror", "convert")
-ALL_TOOLS = ("select",) + tuple(CHAIN) + tuple(DRAW) + EDIT + CONSTRAINTS + DIMS
+ALL_TOOLS = ("select", "box_select") + tuple(CHAIN) + tuple(DRAW) + EDIT + CONSTRAINTS + DIMS
 
 
 def wrap_pi(a):
@@ -490,6 +490,9 @@ class SketchEditor:
         self.press_px = (px, py)
         shift = bool(getattr(self.app, "shift", False))
         t = self.tool
+        if t == "box_select":                       # every left drag is a box, even from on top of an entity
+            self.box = {"start": (px, py), "end": (px, py), "shift": shift, "active": False}
+            return True
         if t == "select":
             tag = self.pick_tag(px, py)
             key = ("con", tag) if tag is not None else self.pick(px, py)
@@ -497,15 +500,7 @@ class SketchEditor:
                 # empty space: a click picks the part under it, a drag draws a selection box (released in release())
                 self.box = {"start": (px, py), "end": (px, py), "shift": shift, "active": False}
                 return True
-            elif shift:
-                self.sel = [k for k in self.sel if k != key] if key in self.sel else self.sel + [key]
-            else:
-                self.sel = [key]
-                if key[0] == "pt" and key[1] != 0:
-                    self.drag = [key[1], False]
-            self.after_select()
-            self.redraw()
-            return True
+            return self.select_click(px, py, shift, key)
         if t in DRAW or t in CHAIN:
             hit = self.point_at(px, py)
             if hit is None:
@@ -547,6 +542,28 @@ class SketchEditor:
             self.try_apply()
             self.redraw()
             return True
+        return True
+
+    def select_click(self, px, py, shift, key=None):
+        """A click with the Select tool: pick the entity under it (or, on empty space, clear the selection and pick the part)."""
+        if key is None:
+            tag = self.pick_tag(px, py)
+            key = ("con", tag) if tag is not None else self.pick(px, py)
+        if key is None:
+            if not shift:
+                self.sel = []
+            self.after_select()
+            self.redraw()
+            self.app.pick_model(px, py, shift)             # nothing of the sketch here: pick an edge / face of the part
+            return True
+        if shift:
+            self.sel = [k for k in self.sel if k != key] if key in self.sel else self.sel + [key]
+        else:
+            self.sel = [key]
+            if key[0] == "pt" and key[1] != 0 and self.tool == "select":
+                self.drag = [key[1], False]
+        self.after_select()
+        self.redraw()
         return True
 
     def after_select(self):
@@ -621,7 +638,7 @@ class SketchEditor:
             if b["active"]:
                 self.show_band()
             return
-        if self.tool == "select":
+        if self.tool in ("select", "box_select"):
             return
         hit = self.point_at(px, py)
         self.cursor = hit[1] if hit else None
@@ -709,21 +726,22 @@ class SketchEditor:
         b, self.box = self.box, None
         self.hide_band()
         if b["active"]:
-            self.box_select(b["start"], (px, py), add=b["shift"])
+            found = self.box_select(b["start"], (px, py), add=b["shift"])
             self.after_select()
             self.redraw()
+            if found:
+                self.app.say(f"Box selected {len(found)} item(s) ({'touching the box' if px < b['start'][0] else 'inside the box'}).")
+            else:
+                self.app.say("Nothing in the box. Dragging left to right selects what is completely inside; right to left selects "
+                             "everything the box touches.")
             return
-        if not b["shift"]:                                      # a plain click on empty space
-            self.sel = []
-        self.after_select()
-        self.redraw()
-        self.app.pick_model(b["start"][0], b["start"][1], b["shift"])
+        self.select_click(b["start"][0], b["start"][1], b["shift"])
 
     def double_click(self, px=None, py=None):
         if self.tool in CHAIN:
             self.pending = []
             self.redraw()
-        elif self.tool == "select":
+        elif self.tool in ("select", "box_select"):
             for k in self.sel:
                 if k[0] == "con":
                     self.edit_dimension(k[1])
@@ -794,7 +812,9 @@ class SketchEditor:
 
     def say_prompt(self):
         t = self.tool
-        if t in DRAW:
+        if t == "box_select":
+            self.app.say("Drag a box: left to right selects what is completely inside, right to left everything it touches. Shift / Ctrl adds.")
+        elif t in DRAW:
             pr = DRAW[t][2]
             self.app.say(pr[min(len(self.pending), len(pr) - 1)])
         elif t in CHAIN:
@@ -1356,7 +1376,7 @@ class SketchEditor:
     def draw_preview(self):
         self.draw_box()
         c, t = self.cursor, self.tool
-        if c is not None and t != "select":
+        if c is not None and t not in ("select", "box_select"):
             self.actor(pv.PolyData(self.to_world(np.array([c]))), (1.0, 0.55, 0.0) if self.snapped else (0.4, 0.4, 0.4),
                        11.0 if self.snapped else 7.0, points=True)
         if not self.pending or c is None:
