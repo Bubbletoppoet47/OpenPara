@@ -635,29 +635,21 @@ class SketchEditor:
 
     # ------------------------------------------------------------------ selection box
     def show_band(self):
-        """The rubber band: solid blue for a window (left to right), dashed green for a crossing (right to left)."""
-        b = self.box
-        try:
-            from PyQt6.QtCore import QRect, QPoint
-            from PyQt6.QtWidgets import QRubberBand
-            if getattr(self, "band", None) is None:
-                self.band = QRubberBand(QRubberBand.Shape.Rectangle, self.pl)
-            r = self.pl.devicePixelRatioF()
-            H = self.pl.height()
-            (x0, y0), (x1, y1) = b["start"], b["end"]
-            a = QPoint(int(x0 / r), int(H - y0 / r))
-            c = QPoint(int(x1 / r), int(H - y1 / r))
-            self.band.setGeometry(QRect(a, c).normalized())
-            self.band.show()
-        except Exception:
-            pass
+        """The selection box is drawn inside the 3D view (blue = window, left to right; green = crossing, right to left)."""
+        self.redraw()
 
     def hide_band(self):
-        try:
-            if getattr(self, "band", None) is not None:
-                self.band.hide()
-        except Exception:
-            pass
+        pass
+
+    def draw_box(self):
+        b = self.box
+        if b is None or not b["active"]:
+            return
+        (x0, y0), (x1, y1) = b["start"], b["end"]
+        uv = [self.to_plane(x, y) for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0))]
+        if any(u is None for u in uv):
+            return
+        self.polyline(np.array(uv), (0.1, 0.65, 0.25) if x1 < x0 else (0.1, 0.35, 0.9), 2.0)
 
     @staticmethod
     def seg_hits_rect(a, b, x0, y0, x1, y1):
@@ -1362,6 +1354,7 @@ class SketchEditor:
         self.pl.render()
 
     def draw_preview(self):
+        self.draw_box()
         c, t = self.cursor, self.tool
         if c is not None and t != "select":
             self.actor(pv.PolyData(self.to_world(np.array([c]))), (1.0, 0.55, 0.0) if self.snapped else (0.4, 0.4, 0.4),
