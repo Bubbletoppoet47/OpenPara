@@ -255,3 +255,8 @@ Sketch > Select now has a drop-down (like Line or Rectangle): Select and Box Sel
    one entity.  Left to right (blue box) selects what is completely inside; right to left (green box) selects everything the box touches.
 The box is drawn inside the 3D view, and the status line says how many items it selected - or that it found nothing and which direction to
 drag.  The ribbon tab "Renderer" is now "Render".
+
+
+VERSION 0.2.5
+The OpenPara logo / program icon was redrawn with a margin, so the whole logo (the P, both dimension arrows) shows at every size and when
+Windows crops it to a circle or a rounded tile.  The logo files are in assets/ (SVG) and OpenPara.ico / docs/icon.png.
