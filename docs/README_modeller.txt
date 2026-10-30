@@ -335,3 +335,13 @@ Configurations > Add Column: a "shows" drop-down (All / Globals / Sketch dimensi
  Suppress switches / Mate values / Patterns) and, for sketch dimensions and feature values, a second one to pick one sketch or feature.
 Assemblies: the 3D pick distance is now measured on the screen in pixels (the edges and corners are projected to the view), so it means the same
  number of pixels at any zoom or angle.  Before, it was converted to a distance in the model and could be wider than set when zoomed in.
+
+VERSION 0.3.2
+File > Settings is now in sections (list on the left): Curves & Surfaces, Outlines, Dimensions, Picking & Snapping.  The text under the pictures is
+gone; each input has one short line under it.
+Dimensions (new section), with a picture of a length, a diameter and an angle dimension that redraws as you change a value:
+ - Dimension line: thickness and style (Solid, Dashed, Dotted, Dash-dot).
+ - Extension lines: thickness, style, the gap from the part and how far they pass the dimension line (% of the sketch size).
+ - Arrowheads: size (% of the sketch size) and style (Open arrow, Filled arrow, Closed arrow, Solid dot, Empty dot, Tick, None).
+ - Label text size, the colour of dimensions and the colour of a selected dimension.
+ Dashes and dots are drawn as short pieces whose length follows the sketch size.  The settings apply to every sketch (they are not saved in files).

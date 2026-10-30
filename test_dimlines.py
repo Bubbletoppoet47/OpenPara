@@ -48,7 +48,7 @@ c["off"] = [0.0, 25.0]; ed.redraw()
 after = dl.shapes(ed, c); L0, L1 = before["label"], after["label"]
 d0, d1 = before["segs"][0][0][1], after["segs"][0][0][1]
 assert abs(d1 - d0) > 1.0 and near(d1, after["label"][1]), "the dimension line moved with the label"
-assert all(abs(s[1][1] - d1) < 0.9 * 0.022 * dl.extent(ed.m) + 1e-6 for s in after["segs"][1:]), "extension lines reach the new line"
+assert all(abs(s[1][1] - d1) < 1.01 * dl.settings.get("ext_over_pct") / 100 * dl.extent(ed.m) + 1e-6 for s in after["segs"][1:]), "extension lines reach the new line"
 c.pop("off"); ed.redraw()
 
 # ---- circles: a leader from the circle to a label outside it, arrows touching the circle

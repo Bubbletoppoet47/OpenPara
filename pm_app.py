@@ -1426,7 +1426,7 @@ class MainWindow(QMainWindow):
                 self.draw()
             except Exception:
                 pass
-        if self.ed is not None and self.ed.active and keys & {"snap_px", "pick_px", "label_px"}:
+        if self.ed is not None and self.ed.active and keys & {"snap_px", "pick_px", "label_px", "dim_line_px", "dim_line_style", "ext_line_px", "ext_line_style", "ext_gap_pct", "ext_over_pct", "arrow_pct", "arrow_style", "text_pt", "dim_color", "dim_sel_color"}:
             self.ed.redraw()
 
     def units_changed(self, *_a):

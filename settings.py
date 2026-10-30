@@ -11,12 +11,17 @@ apply to every part and assembly.  Lengths are kept in millimetres whatever the 
 import json
 import math
 import os
+import re
 
 import paths
 
 SETTINGS_FILE = "settings.json"
 
-# key: (default, minimum, maximum, label)
+ARROW_STYLES = {"open": "Open arrow", "filled": "Filled arrow", "closed": "Closed arrow", "dot": "Solid dot", "hollow_dot": "Empty dot",
+                "tick": "Tick (slash)", "none": "None"}
+LINE_STYLES = {"solid": "Solid", "dashed": "Dashed", "dotted": "Dotted", "dashdot": "Dash-dot"}
+
+# key: (default, minimum, maximum, label).  A text default is a choice (the maximum is then the dict of choices) or a colour (maximum "color").
 SPEC = {
     "edge_gap": (0.02, 0.001, 1.0, "Curve accuracy (edges)"),
     "surf_gap": (0.05, 0.005, 1.0, "Surface accuracy (shading)"),
@@ -27,6 +32,17 @@ SPEC = {
     "pick_px": (9.0, 3.0, 30.0, "Sketch pick distance"),
     "label_px": (16.0, 6.0, 40.0, "Dimension label click area"),
     "hover": (True, False, True, "Highlight what is under the cursor"),
+    "dim_line_px": (1.1, 0.5, 4.0, "Dimension line thickness"),
+    "dim_line_style": ("solid", None, LINE_STYLES, "Dimension line style"),
+    "ext_line_px": (1.0, 0.5, 4.0, "Extension line thickness"),
+    "ext_line_style": ("solid", None, LINE_STYLES, "Extension line style"),
+    "ext_gap_pct": (0.9, 0.0, 5.0, "Gap between part and extension line"),
+    "ext_over_pct": (2.0, 0.0, 8.0, "Extension past the dimension line"),
+    "arrow_pct": (2.2, 0.5, 8.0, "Arrowhead size"),
+    "arrow_style": ("open", None, ARROW_STYLES, "Arrowhead style"),
+    "text_pt": (14.0, 8.0, 30.0, "Label text size"),
+    "dim_color": ("#1a1a1a", None, "color", "Dimension colour"),
+    "dim_sel_color": ("#ff7300", None, "color", "Selected dimension colour"),
 }
 FINE_EDGE, FINE_SURF = 0.004, 0.02          # below these a big model gets slow: the dialog warns
 _state = {}
@@ -41,6 +57,10 @@ def clamp(key, val):
     d, lo, hi, _ = SPEC[key]
     if isinstance(d, bool):
         return bool(val)
+    if isinstance(d, str):
+        if hi == "color":
+            return val.lower() if isinstance(val, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", val) else d
+        return val if val in hi else d
     try:
         v = float(val)
     except (TypeError, ValueError):
@@ -76,10 +96,30 @@ def save():
         pass
 
 
+_override = {}
+
+
 def get(key):
+    if key in _override:
+        return _override[key]
     if not _state:
         load()
     return _state[key]
+
+
+class overriding:
+    """with settings.overriding({...}): the values are used by get() meanwhile (the live pictures of the settings window)."""
+
+    def __init__(self, values):
+        self.values = {k: clamp(k, v) for k, v in values.items() if k in SPEC}
+
+    def __enter__(self):
+        self.old = dict(_override)
+        _override.update(self.values)
+
+    def __exit__(self, *a):
+        _override.clear()
+        _override.update(self.old)
 
 
 def all_values():
@@ -181,3 +221,9 @@ def circle_facets(radius, gap):
     n_ang = math.ceil(2 * math.pi / ang)
     n_gap = 3 if gap >= radius else math.ceil(math.pi / math.acos(1.0 - gap / radius))
     return max(6, n_ang, n_gap)
+
+
+def rgb(key):
+    """A colour setting as (r, g, b) floats."""
+    c = get(key).lstrip("#")
+    return tuple(int(c[i:i + 2], 16) / 255.0 for i in (0, 2, 4))

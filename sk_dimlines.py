@@ -15,6 +15,8 @@ import math
 
 import numpy as np
 
+import settings
+
 TAU = 2 * math.pi
 
 
@@ -116,14 +118,25 @@ def shapes(ed, c):
     if base is None:
         return None
     ext = extent(m)
-    s = 0.022 * ext                            # arrow size
-    gap, over = 0.4 * s, 0.9 * s
-    segs, arrows = [], []
+    s = settings.get("arrow_pct") / 100.0 * ext            # arrow size
+    gap, over = settings.get("ext_gap_pct") / 100.0 * ext, settings.get("ext_over_pct") / 100.0 * ext
+    segs, arrows, heads, kinds = [], [], [], []
+
+    def add(seg, kind):
+        segs.append(seg)
+        kinds.append(kind)
+
+    def head(tip, inward, size):
+        arrows.append(_arrow(tip, inward, size))
+        heads.append((tuple(tip), tuple(inward), size))
+
+    def out(label):
+        return {"label": label, "segs": segs, "arrows": arrows, "heads": heads, "kinds": kinds}
     try:
         if t in ("dim_h", "dim_v", "dim_len"):
             A, B = m._two_points(c["refs"])
             if A is None:
-                return {"label": base, "segs": [], "arrows": []}
+                return out(base)
             u = (1.0, 0.0) if t == "dim_h" else (0.0, 1.0) if t == "dim_v" else _unit((B[0] - A[0], B[1] - A[1]))
             n = (-u[1], u[0])
             off = c.get("off")
@@ -139,22 +152,22 @@ def shapes(ed, c):
             perp0 = L[0] * n[0] + L[1] * n[1]
             pt = lambda tt: (u[0] * tt + n[0] * perp0, u[1] * tt + n[1] * perp0)
             lo, hi = min(tA, tB, tL), max(tA, tB, tL)
-            segs.append(np.array([pt(lo), pt(hi)]))
+            add(np.array([pt(lo), pt(hi)]), "dim")
             for P, tt in ((A, tA), (B, tB)):
                 d = dist(P)
                 if abs(d) > gap:
                     sg = 1.0 if d > 0 else -1.0
-                    segs.append(np.array([(P[0] + n[0] * sg * gap, P[1] + n[1] * sg * gap), (pt(tt)[0] + n[0] * sg * over, pt(tt)[1] + n[1] * sg * over)]))
+                    add(np.array([(P[0] + n[0] * sg * gap, P[1] + n[1] * sg * gap), (pt(tt)[0] + n[0] * sg * over, pt(tt)[1] + n[1] * sg * over)]), "ext")
             lo_t, hi_t = min(tA, tB), max(tA, tB)
             if hi_t - lo_t > 2.2 * s:
-                arrows.append(_arrow(pt(lo_t), u, s))
-                arrows.append(_arrow(pt(hi_t), (-u[0], -u[1]), s))
+                head(pt(lo_t), u, s)
+                head(pt(hi_t), (-u[0], -u[1]), s)
             else:                              # too short for arrows between the lines: they point in from outside
-                arrows.append(_arrow(pt(lo_t), (-u[0], -u[1]), s))
-                arrows.append(_arrow(pt(hi_t), u, s))
-                segs.append(np.array([pt(lo_t - 2.2 * s), pt(lo_t)]))
-                segs.append(np.array([pt(hi_t), pt(hi_t + 2.2 * s)]))
-            return {"label": L, "segs": segs, "arrows": arrows}
+                head(pt(lo_t), (-u[0], -u[1]), s)
+                head(pt(hi_t), u, s)
+                add(np.array([pt(lo_t - 2.2 * s), pt(lo_t)]), "dim")
+                add(np.array([pt(hi_t), pt(hi_t + 2.2 * s)]), "dim")
+            return out(L)
         if t in ("dim_rad", "dim_dia"):
             k, i = c["refs"][0]
             if k == "ci":
@@ -168,36 +181,117 @@ def shapes(ed, c):
             far = math.hypot(L[0] - C[0], L[1] - C[1]) > r
             if t == "dim_dia":
                 Q = (C[0] - e[0] * r, C[1] - e[1] * r)
-                segs.append(np.array([Q, L if far else P]))
-                arrows.append(_arrow(Q, e, min(s, r * 0.8)))
+                add(np.array([Q, L if far else P]), "dim")
+                head(Q, e, min(s, r * 0.8))
             else:
-                segs.append(np.array([C, L if far else P]))
-            arrows.append(_arrow(P, (-e[0], -e[1]), min(s, r * 0.8)))
-            return {"label": L, "segs": segs, "arrows": arrows}
+                add(np.array([C, L if far else P]), "dim")
+            head(P, (-e[0], -e[1]), min(s, r * 0.8))
+            return out(L)
         if t == "dim_ang":
             fr = angle_frame(ed, c)
             if fr is None:
                 off = c.get("off")
-                return {"label": (base[0] + off[0], base[1] + off[1]) if off else base, "segs": [], "arrows": []}
+                return out((base[0] + off[0], base[1] + off[1]) if off else base)
             I, a1, da, L0, reach1, reach2 = fr
             f, rho = angle_label(ed, c, fr)
             th = a1 + f * da
             L = (I[0] + rho * math.cos(th), I[1] + rho * math.sin(th))
             n = max(8, int(abs(da) / TAU * 96))
             arc = np.array([(I[0] + rho * math.cos(a1 + da * k / n), I[1] + rho * math.sin(a1 + da * k / n)) for k in range(n + 1)])
-            segs.append(arc)
+            add(arc, "dim")
             sg = 1.0 if da > 0 else -1.0
             for a, reach in ((a1, reach1), (a1 + da, reach2)):
                 e = (math.cos(a), math.sin(a))
                 if reach < rho:                # the line stops short of the arc: an extension line takes over
                     lo = max(reach, 0.0) + gap
-                    segs.append(np.array([(I[0] + e[0] * lo, I[1] + e[1] * lo), (I[0] + e[0] * (rho + over), I[1] + e[1] * (rho + over))]))
+                    add(np.array([(I[0] + e[0] * lo, I[1] + e[1] * lo), (I[0] + e[0] * (rho + over), I[1] + e[1] * (rho + over))]), "ext")
             sz = min(s, 0.25 * rho)
             for a, direction in ((a1, 1.0), (a1 + da, -1.0)):
                 tip = (I[0] + rho * math.cos(a), I[1] + rho * math.sin(a))
                 tang = (-math.sin(a) * sg * direction, math.cos(a) * sg * direction)        # along the arc, towards the middle of the angle
-                arrows.append(_arrow(tip, tang, sz))
-            return {"label": L, "segs": segs, "arrows": arrows}
+                head(tip, tang, sz)
+            return out(L)
     except Exception:
-        return {"label": base, "segs": [], "arrows": []}
-    return {"label": base, "segs": [], "arrows": []}
+        return {"label": base, "segs": [], "arrows": [], "heads": [], "kinds": []}
+    return {"label": base, "segs": [], "arrows": [], "heads": [], "kinds": []}
+
+
+# ------------------------------------------------------------------------------------------------------ how it is drawn
+def styled(seg, style, unit):
+    """A polyline (N, 2) cut into the pieces of a line style: solid, dashed, dotted, dash-dot.  `unit` is the pattern's scale (a length)."""
+    seg = np.asarray(seg, float)
+    if style == "solid" or len(seg) < 2:
+        return [seg]
+    pattern = {"dashed": [(4.0, True), (2.5, False)], "dotted": [(0.5, True), (2.0, False)],
+               "dashdot": [(4.0, True), (1.5, False), (0.5, True), (1.5, False)]}.get(style)
+    if pattern is None:
+        return [seg]
+    lens = np.hypot(*(seg[1:] - seg[:-1]).T)
+    total = float(lens.sum())
+    if total < 1e-12:
+        return [seg]
+    cum = np.concatenate([[0.0], np.cumsum(lens)])
+
+    def at(d):
+        i = min(int(np.searchsorted(cum, d, side="right")) - 1, len(lens) - 1)
+        t = (d - cum[i]) / lens[i] if lens[i] > 1e-15 else 0.0
+        return seg[i] + (seg[i + 1] - seg[i]) * t, i
+
+    out, d, k = [], 0.0, 0
+    while d < total - 1e-12:
+        length, on = pattern[k % len(pattern)]
+        e = min(total, d + length * unit)
+        if on:
+            p0, i0 = at(d)
+            p1, i1 = at(e)
+            mid = [seg[j] for j in range(i0 + 1, i1 + 1) if cum[j] > d and cum[j] < e]
+            out.append(np.array([p0] + mid + [p1]))
+        d, k = e, k + 1
+    return out or [seg]
+
+
+def head_items(style, tip, inward, size):
+    """The pieces of an arrowhead style: [("line", points) | ("fill", points)].  `inward` is the direction from the tip back along the line."""
+    if style == "none":
+        return []
+    tip = np.array(tip, float)
+    ux, uy = inward
+    nx, ny = -uy, ux
+    back1 = tip + (ux * size + nx * size * 0.33, uy * size + ny * size * 0.33)
+    back2 = tip + (ux * size - nx * size * 0.33, uy * size - ny * size * 0.33)
+    if style == "open":
+        return [("line", np.array([back1, tip, back2]))]
+    if style == "closed":
+        return [("line", np.array([back1, tip, back2, back1]))]
+    if style == "filled":
+        return [("fill", np.array([tip, back1, back2]))]
+    r = 0.3 * size
+    ring = np.array([(tip[0] + r * math.cos(TAU * k / 16), tip[1] + r * math.sin(TAU * k / 16)) for k in range(17)])
+    if style == "dot":
+        return [("fill", ring[:-1])]
+    if style == "hollow_dot":
+        return [("line", ring)]
+    if style == "tick":                         # a short slash through the tip, at 45 degrees to the line
+        c, sn = math.cos(math.pi / 4), math.sin(math.pi / 4)
+        dx, dy = ux * c - uy * sn, ux * sn + uy * c
+        return [("line", np.array([tip - (dx * size * 0.5, dy * size * 0.5), tip + (dx * size * 0.5, dy * size * 0.5)]))]
+    return [("line", np.array([back1, tip, back2]))]
+
+
+def primitives(sh, ext, selected=False):
+    """What to draw for a dimension's shapes: [("line", points, width, rgb) | ("fill", points, None, rgb)] following File > Settings."""
+    col = settings.rgb("dim_sel_color" if selected else "dim_color")
+    unit = 0.007 * ext
+    items = []
+    for sg, kind in zip(sh["segs"], sh.get("kinds", ["dim"] * len(sh["segs"]))):
+        if kind == "ext":
+            w, st = settings.get("ext_line_px"), settings.get("ext_line_style")
+        else:
+            w, st = settings.get("dim_line_px"), settings.get("dim_line_style")
+        for piece in styled(sg, st, unit):
+            items.append(("line", piece, w + (0.5 if selected else 0.0), col))
+    w = settings.get("dim_line_px") + (0.5 if selected else 0.0)
+    for tip, inward, size in sh.get("heads", []):
+        for kind, pts in head_items(settings.get("arrow_style"), tip, inward, size):
+            items.append((kind, pts, w if kind == "line" else None, col))
+    return items

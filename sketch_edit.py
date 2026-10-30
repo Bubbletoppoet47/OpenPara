@@ -439,8 +439,8 @@ class SketchEditor:
         scr = self.screen_of(np.array([(u, v) for u, v, _ in self.tags]))
         best, bd = None, 1e18
         for (u, v, cid), (sx, sy) in zip(self.tags, scr):
-            w = self.tag_len.get(cid, 8) * 9.5 * r
-            x0, x1, y0, y1 = sx + 2 * r, sx + 10 * r + w, sy + 2 * r, sy + 28 * r        # the text sits up and right of its anchor
+            w = self.tag_len.get(cid, 8) * 9.5 * r * settings.get("text_pt") / 14.0
+            x0, x1, y0, y1 = sx + 2 * r, sx + 10 * r + w, sy + 2 * r, sy + 28 * r * settings.get("text_pt") / 14.0        # the text sits up and right of its anchor
             if x0 <= px <= x1 and y0 <= py <= y1:
                 d = math.hypot(px - (x0 + x1) / 2, py - (y0 + y1) / 2)
                 if d < bd:
@@ -1489,6 +1489,13 @@ class SketchEditor:
         if len(uv) >= 2:
             self.actor(pv.lines_from_points(self.to_world(uv)), color, width)
 
+    def fill(self, uv, color):
+        """A filled flat polygon (an arrowhead or a dot)."""
+        if len(uv) >= 3:
+            w = self.to_world(np.asarray(uv, float))
+            n = len(w)
+            self.actor(pv.PolyData(w, faces=np.hstack([[n], np.arange(n)])), color, 1.0)
+
     def text(self, uv, s, color=COL_TAG, size=14):
         if vtkBillboardTextActor3D is None:
             return
@@ -1607,14 +1614,14 @@ class SketchEditor:
                 if a is not None:
                     self.tags.append((a[0], a[1], c["id"]))
                     sel_c = ("con", c["id"]) in self.sel
-                    lcol = COL_SEL if sel_c else COL_TAG
-                    for sg in sh["segs"]:
-                        self.polyline(sg, lcol, 1.6 if sel_c else 1.1)
-                    for ar in sh["arrows"]:
-                        self.polyline(np.array(ar), lcol, 1.6 if sel_c else 1.1)
+                    for kind, pts, wd, rgb in sk_dimlines.primitives(sh, sk_dimlines.extent(m), sel_c):
+                        if kind == "line":
+                            self.polyline(pts, rgb, wd)
+                        else:
+                            self.fill(pts, rgb)
                     txt = f"{c.get('name', '')} = {disp(c['value'], c):.4g}"
                     self.tag_len[c["id"]] = len(txt)
-                    self.text(a, txt, COL_SEL if sel_c else COL_TAG)
+                    self.text(a, txt, settings.rgb("dim_sel_color" if sel_c else "dim_color"), int(round(settings.get("text_pt"))))
         self.draw_preview()
         self.pl.render()
 
