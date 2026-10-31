@@ -1,22 +1,27 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Guides - OpenPara</title><meta name="description" content="Step-by-step guides: your first part, gear trains and planetary sets.">
-<link rel="icon" type="image/svg+xml" href="assets/openpara-logo-small.svg">
-<meta property="og:title" content="Guides - OpenPara"><meta property="og:description" content="Step-by-step guides: your first part, gear trains and planetary sets."><meta property="og:image" content="img/planetary.jpg">
+<title>Guides - OpenPara</title><meta name="description" content="Step-by-step guides: your first part, gear trains and planetary sets."><meta name="theme-color" content="#071f3a">
+<link rel="icon" type="image/svg+xml" href="assets/openpara-logo-small.svg"><link rel="apple-touch-icon" href="icon.png">
+<meta property="og:type" content="website"><meta property="og:title" content="Guides - OpenPara"><meta property="og:description" content="Step-by-step guides: your first part, gear trains and planetary sets."><meta property="og:image" content="img/planetary.jpg">
 <link rel="stylesheet" href="style.css"></head><body>
-<header class="nav"><div class="wrap"><a class="brand" href="index.html"><img src="assets/openpara-logo-small.svg" alt="">OpenPara</a><nav><a href="index.html">Home</a><a href="download.html">Download</a><a href="features.html">Features</a><a href="guides.html" class=on>Guides</a><a href="about.html">About</a><a href="https://github.com/Bubbletoppoet47/OpenPara">GitHub</a></nav></div></header>
-<section><div class="wrap"><h1 style="font-size:38px;margin:0 0 6px">Guides</h1><p class="lead">Start where you are. Video walk-throughs will be added to each guide.</p>
-<div class="grid"><a class="card" href="#first" style="text-decoration:none;color:inherit"><span class="tag">Beginner</span><h3>Your first part: a gear</h3><p>Ten minutes, no prior CAD.</p></a>
-<a class="card" href="#train" style="text-decoration:none;color:inherit"><span class="tag">Gears</span><h3>A gear train from centre distances</h3><p>Two or three gears that fit your layout.</p></a>
-<a class="card" href="#planetary" style="text-decoration:none;color:inherit"><span class="tag">Gears</span><h3>A planetary set</h3><p>Sun, planets and ring that actually mesh.</p></a></div>
-<h2 id="first" style="margin-top:44px">Your first part: a gear</h2>
+<a class="skip" href="#main">Skip to the content</a>
+<header class="nav"><div class="wrap"><a class="brand" href="index.html"><img src="assets/openpara-logo-small.svg" alt="">OpenPara</a><nav aria-label="Main"><a href="index.html">Home</a><a href="download.html">Download</a><a href="features.html">Features</a><a href="guides.html" class=on aria-current=page>Guides</a><a href="about.html">About</a><a class="gh" href="https://github.com/Bubbletoppoet47/OpenPara">GitHub</a></nav></div></header>
+<main id="main"><div class="page-head"><div class="wrap"><h1>Guides</h1><p>Start where you are. Video walk-throughs will be added to each guide.</p></div></div><section style="padding-top:52px"><div class="wrap"><div class="layout"><aside class="toc" aria-label="On this page"><b>Guides</b><a href="#first">Your first part</a><a href="#train">A gear train</a><a href="#planetary">A planetary set</a></aside>
+<div class="prose">
+<h2 id="first">Your first part: a gear</h2><p>About ten minutes, and no CAD experience needed.</p>
 <ol class="steps"><li>Start OpenPara and press <b>Part Generator</b> on the ribbon.</li><li>Choose <b>Spur gear</b>. Leave Module at 2 and Number of teeth at 20.</li><li>Look at the 3D preview. The numbers on the right (pitch diameter, outside diameter and so on) update as you type.</li><li>Change the face width and the bore diameter to what you need.</li><li>Press <b>OK</b>. The gear is added as one feature. Double-click it in the tree any time to change the numbers.</li><li>Save with <b>File &gt; Save</b>.</li></ol>
-<div class="ph" style="max-width:640px">Video: first part (coming)</div>
-<h2 id="train" style="margin-top:44px">A gear train from centre distances</h2>
+<div class="video"><div><svg viewBox="0 0 24 24" aria-hidden="true" style="fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round"><circle cx="12" cy="12" r="10"/><path d="M10 8.5l6 3.5-6 3.5z"/></svg><br>Video: your first part (coming)</div></div>
+<h2 id="train">A gear train from centre distances</h2>
 <ol class="steps"><li>In the Part Generator, open the <b>Gear systems</b> tab and choose <b>Gear train</b>.</li><li>Define gear 1: module, teeth, pressure angle, width and bore. Use a helix angle above 0 for helical gears; the hands alternate for you.</li><li>For gear 2, choose <b>Centre distance</b> and type the distance you have room for. OpenPara picks the nearest whole tooth count and uses profile shift to make up the small remainder.</li><li>For a third gear, choose another distance, a ratio, or the total of both distances. You can bend the chain at the middle gear.</li><li>Read the results: centre distances, ratios, and each gear's position and turn angle.</li><li>Press <b>Open the parts</b>. Each gear opens as its own part, unsaved. Put them together in an assembly using the positions and turn angles shown.</li></ol>
-<div class="note">If a distance cannot be reached with whole teeth and a small shift, OpenPara says so and tells you the nearest distance it can reach.</div>
-<h2 id="planetary" style="margin-top:44px">A planetary set</h2>
+<div class="note"><div>If a distance cannot be reached with whole teeth and a small shift, OpenPara says so and tells you the nearest distance it can reach.</div></div>
+<h2 id="planetary">A planetary set</h2>
 <ol class="steps"><li>In <b>Gear systems</b>, choose <b>Planetary set</b>.</li><li>Choose which two gears set the size, for example sun and planet teeth. The ring always has sun + 2 &times; planet teeth.</li><li>Choose the number of planets. They must be equally spaced, so the sun plus ring teeth must divide evenly. If your choice does not work, OpenPara lists the counts that do.</li><li>Read the ratios for holding the ring, the sun or the carrier still.</li><li>Press <b>Open the parts</b>: three parts open (sun, planet, ring). Make the assembly yourself, adding as many planets as you chose, using the angles and radius shown. There is no carrier part.</li></ol>
-<div class="ph" style="max-width:640px">Video: planetary set (coming)</div></div></section>
-<footer><div class="wrap"><span>OpenPara is free software, released under the <a href="about.html#licence">GNU GPL v3</a>.</span><span class="r"><a href="https://github.com/Bubbletoppoet47/OpenPara">Source</a> &middot; <a href="https://github.com/Bubbletoppoet47/OpenPara/releases">Releases</a> &middot; <a href="https://github.com/Bubbletoppoet47/OpenPara/issues">Issues</a></span></div></footer>
+<div class="video"><div><svg viewBox="0 0 24 24" aria-hidden="true" style="fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round"><circle cx="12" cy="12" r="10"/><path d="M10 8.5l6 3.5-6 3.5z"/></svg><br>Video: a planetary set (coming)</div></div>
+</div></div></div></section></main>
+<footer><div class="wrap"><div class="cols">
+<div><div class="b"><img src="assets/openpara-logo-small.svg" alt="">OpenPara</div><p style="margin:0;max-width:300px">Free, open-source parametric CAD for everyone from hobbyists to engineers.</p></div>
+<div><h4>Project</h4><a href="download.html">Download</a><a href="features.html">Features</a><a href="guides.html">Guides</a><a href="about.html">About</a></div>
+<div><h4>Community</h4><a href="https://github.com/Bubbletoppoet47/OpenPara">Source code</a><a href="https://github.com/Bubbletoppoet47/OpenPara/releases">Releases</a><a href="https://github.com/Bubbletoppoet47/OpenPara/issues">Report a problem</a></div>
+<div><h4>Legal</h4><a href="about.html#licence">GNU GPL v3 licence</a><a href="https://github.com/Bubbletoppoet47/OpenPara/blob/main/LICENSE">Licence text</a></div></div>
+<div class="legal"><span>OpenPara is free software: you can use, study, change and share it.</span><span>Version <span id="foot-ver">0.4</span></span></div></div></footer>
 <script src="site.js"></script></body></html>
