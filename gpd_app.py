@@ -72,6 +72,9 @@ class AppShell(QMainWindow):
         add(fm, "Save", lambda: self.cur_call("save"), "Ctrl+S")
         add(fm, "Save As...", lambda: self.cur_call("save", True), "Ctrl+Shift+S")
         fm.addSeparator()
+        add(fm, "Import STEP...", self.import_step)
+        add(fm, "Export (STEP, STL)...", self.export_file)
+        fm.addSeparator()
         add(fm, "Units...", self.units_dialog)
         add(fm, "Settings...", self.settings_dialog)
         fm.addSeparator()
@@ -245,6 +248,14 @@ class AppShell(QMainWindow):
     def new_assembly(self):
         import assembly
         return self.add_tab(assembly.AssemblyWindow(shell=self))
+
+    def import_step(self):
+        import exchange_dialog
+        exchange_dialog.run_import(self)
+
+    def export_file(self):
+        import exchange_dialog
+        exchange_dialog.run_export(self, self.tabs.currentWidget())
 
     def open_dialog(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Open", "", "Parts, assemblies, simulations and renders (*.gpd *.gpa *.gps *.gpr);;Part (*.gpd);;Assembly (*.gpa);;Simulation (*.gps);;Render (*.gpr)")

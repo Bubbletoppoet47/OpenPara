@@ -47,7 +47,7 @@ SKETCH_COL, SKETCH_SEL = (0.95, 0.55, 0.05), (0.1, 0.45, 1.0)
 FACE_SEL, EDGE_SEL = (0.3, 0.65, 1.0), (1.0, 0.45, 0.0)
 PLANE_COL = {"Front": (0.35, 0.60, 0.95), "Top": (0.45, 0.80, 0.45), "Right": (0.90, 0.55, 0.40)}
 ICON = {"sketch": "✎", "extrude": "▣", "cut": "▢", "fillet": "◜", "chamfer": "◿",
-        "revolve": "◔", "revolve_cut": "◒", "partgen": "⚙", "sweep": "⥁", "sweep_cut": "⥀", "loft": "⏢", "loft_cut": "⏥", "pattern": "☷", "mirror": "⧓", "refplane": "▱", "refaxis": "⁞"}
+        "revolve": "◔", "revolve_cut": "◒", "partgen": "⚙", "imported": "⇩", "sweep": "⥁", "sweep_cut": "⥀", "loft": "⏢", "loft_cut": "⏥", "pattern": "☷", "mirror": "⧓", "refplane": "▱", "refaxis": "⁞"}
 
 
 class MainWindow(QMainWindow):
@@ -1163,6 +1163,16 @@ class MainWindow(QMainWindow):
             f.setdefault("merge", True)
             self.check(form, "Merge result", f, "merge")
 
+    def imported_panel(self, form, f):
+        """An imported body: where it came from and its size.  Its own dimensions cannot be edited (a STEP file has no sketches), but features can be added on top."""
+        form.addRow("From", QLabel(f.get("source", "a STEP file")))
+        s = self.doc.after.get(f["id"])
+        if s is not None:
+            b = s.bounding_box()
+            form.addRow("Size", QLabel(f"{b.size.X:.4g} x {b.size.Y:.4g} x {b.size.Z:.4g} mm"))
+            form.addRow("Volume", QLabel(f"{s.volume:.5g} mm3"))
+        form.addRow(QLabel("The shape is stored inside this part. Add sketches, cuts, holes and fillets on top of it."))
+
     def partgen_panel(self, form, f):
         """A generated part: a short summary and the button that reopens the Part Generator window on it."""
         import partgen
@@ -1396,6 +1406,8 @@ class MainWindow(QMainWindow):
             self.revolve_panel(form, f)
         elif k == "partgen":
             self.partgen_panel(form, f)
+        elif k == "imported":
+            self.imported_panel(form, f)
         elif k in ("sweep", "sweep_cut"):
             self.sweep_panel(form, f)
         elif k in ("loft", "loft_cut"):
