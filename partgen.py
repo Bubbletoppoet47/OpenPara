@@ -30,10 +30,27 @@ ADVANCED = [
     ("backlash", "Backlash (mm)", "0", "length", "Clearance at the pitch circle. Each gear of a pair gives half of it, so use the same value on both."),
 ]
 
+RING_PARAMS = [
+    ("mode", "Size given as", "module", "choice:module|dp|pitch", "What the Size box below means; the other sizes are worked out and shown on the right."),
+    ("size", "Size", "2", "float", "Module in mm, diametral pitch in teeth per inch, or the pitch diameter in mm, as chosen above."),
+    ("teeth", "Number of teeth", "42", "int", "Exactly this many teeth point inward."),
+    ("pressure", "Pressure angle (deg)", "20", "angle", "Normal pressure angle. 20 is standard."),
+    ("width", "Face width (mm)", "10", "length", "How thick the ring is along its axis."),
+    ("rim", "Rim thickness (mm)", "5", "length", "Radial thickness of the ring outside the bottom of the tooth spaces."),
+]
+RING_ADVANCED = [
+    ("add", "Tooth height factor", "1", "float", "How far the teeth reach in from the pitch circle, in modules. Standard 1."),
+    ("ded", "Space depth factor", "1.25", "float", "How far the tooth spaces reach out from the pitch circle, in modules. Standard 1.25."),
+    ("backlash", "Backlash (mm)", "0", "length", "Clearance at the pitch circle, as for the gear it meshes with."),
+    ("phase", "Turn the teeth by (deg)", "0", "angle", "Rotates the tooth pattern about the axis (used to line a planetary ring up with its planets)."),
+]
+
 PART_TYPES = {
     "Spur gear": {"group": "Gears", "params": GEAR_PARAMS, "advanced": ADVANCED},
     "Helical gear": {"group": "Gears", "params": GEAR_PARAMS + HELIX_PARAMS, "advanced": ADVANCED},
     "Herringbone gear": {"group": "Gears", "params": GEAR_PARAMS + HELIX_PARAMS + GROOVE, "advanced": ADVANCED},
+    "Ring gear": {"group": "Gears", "params": RING_PARAMS + [("helix", "Helix angle (deg)", "0", "angle", HELIX_PARAMS[0][4])] + HELIX_PARAMS[1:],
+                  "advanced": RING_ADVANCED},
 }
 PLACEMENT = [("plane", "Axis along", "Top"), ("ox", "Offset X (mm)", "0"), ("oy", "Offset Y (mm)", "0"), ("oz", "Offset along axis (mm)", "0")]
 
@@ -62,6 +79,13 @@ def gear_inputs(kind, v):
     """Turn the 'Size given as' choice into the module the geometry needs; returns the dict gears.* wants."""
     z = int(v["teeth"])
     beta = math.radians(v["helix"]) if kind != "Spur gear" and "helix" in v else 0.0
+    if kind == "Ring gear":
+        size, mode = v["size"], v["mode"]
+        if size <= 0:
+            raise ValueError("the size must be positive")
+        m = size if mode == "module" else 25.4 / size if mode == "dp" else size * math.cos(beta) / z
+        return {"module": m, "teeth": z, "pressure": v["pressure"], "width": v["width"], "rim": v["rim"], "add": v["add"], "ded": v["ded"],
+                "backlash": v["backlash"], "helix": v["helix"], "hand": v["hand"], "phase": v["phase"]}
     add, x = v["add"], v["shift"]
     size, mode = v["size"], v["mode"]
     if size <= 0:
@@ -91,6 +115,17 @@ def build(kind, v):
 
 def readouts(kind, v):
     """[(label, text)] shown live next to the parameters."""
+    if kind == "Ring gear":
+        p = gear_inputs(kind, v)
+        D = gears.ring_dims(p)
+        rows = [("Module (normal)", f"{D['mn']:.4g} mm"), ("Pitch diameter", f"{D['d']:.4f} mm"),
+                ("Tooth tip (inside) diameter", f"{2 * (D['rp'] - D['mn'] * p['add']):.4f} mm"),
+                ("Space bottom diameter", f"{2 * (D['rp'] + D['mn'] * p['ded']):.4f} mm"),
+                ("Outside diameter", f"{2 * D['ra'] + 2 * p['rim']:.4f} mm"), ("Base diameter", f"{D['db']:.4f} mm"),
+                ("Circular pitch", f"{D['pitch']:.4f} mm")]
+        if D["beta"]:
+            rows.insert(1, ("Transverse module", f"{D['mt']:.4g} mm"))
+        return rows
     if kind in gears.GEAR_TYPES:
         D = gears.dims(gear_inputs(kind, v))
         rows = [("Module (normal)", f"{D['mn']:.4g} mm"), ("Diametral pitch", f"{25.4 / D['mn']:.4g} /in"),
@@ -106,6 +141,9 @@ def readouts(kind, v):
 
 def warnings(kind, v):
     out = []
+    if kind == "Ring gear":
+        gears.ring_dims(gear_inputs(kind, v))
+        return out
     if kind in gears.GEAR_TYPES:
         D = gears.dims(gear_inputs(kind, v))
         if D["undercut"] and v["shift"] <= 0:

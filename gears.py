@@ -11,7 +11,7 @@ import math
 
 from build123d import Axis, Circle, Edge, Face, Location, Plane, Polyline, Shell, Solid, Spline, Vector, Wire, extrude
 
-GEAR_TYPES = ("Spur gear", "Helical gear", "Herringbone gear")
+GEAR_TYPES = ("Spur gear", "Helical gear", "Herringbone gear", "Ring gear")
 
 
 def inv(a):
@@ -50,7 +50,8 @@ def dims(p):
 def half_angle(D, r):
     """Half the angular thickness of a tooth at radius r (radians), measured from the tooth's centre line."""
     phi = math.acos(min(1.0, D["rb"] / r))
-    ht = math.pi / (2 * D["z"]) + 2 * D["x"] * math.tan(D["at"]) / D["z"] + inv(D["at"]) - inv(phi)
+    xt = D["x"] * math.cos(D["beta"])                 # the shift is x*mn sideways in the normal section = x*cos(beta) transverse modules
+    ht = math.pi / (2 * D["z"]) + 2 * xt * math.tan(D["at"]) / D["z"] + inv(D["at"]) - inv(phi)
     return ht - D["bl"] / (4 * D["rp"])           # backlash: take half of it off each flank, measured on the pitch circle
 
 
@@ -81,8 +82,8 @@ def tooth_edges(D, n=24):
     return edges, foot_r, foot_l
 
 
-def profile_face(D):
-    """The flat outline of the whole gear (z teeth) as a Face in the XY plane."""
+def profile_wire(D, phase=0.0):
+    """The closed outline of the whole gear (z teeth) as a Wire in the XY plane; phase (degrees) turns it about the axis."""
     from build123d import ThreePointArc
     z, rf = D["z"], D["rf"]
     base, r_pt, l_pt = tooth_edges(D)
@@ -97,7 +98,13 @@ def profile_face(D):
         rr = math.hypot(*l_pt)
         mid = (a0 + a1) / 2
         edges.append(ThreePointArc(Vector(*polar(rr, a0), 0), Vector(*polar(rr, mid), 0), Vector(*polar(rr, a1), 0)))
-    return Face(Wire(edges))
+    w = Wire(edges)
+    return w.moved(Location((0, 0, 0), (0, 0, 1), phase)) if phase else w
+
+
+def profile_face(D, phase=0.0):
+    """The flat outline of the whole gear (z teeth) as a Face in the XY plane."""
+    return Face(profile_wire(D, phase))
 
 
 def spur_gear(p):
@@ -167,6 +174,33 @@ def herringbone_gear(p):
     return finish(body, D, p, b)
 
 
+def ring_dims(p):
+    """An internal (ring) gear: its tooth SPACES have exactly the shape of the teeth of an external gear of the same size, so the
+    cavity is described by dims() of that gear with the addendum and dedendum swapped (the ring's tip is the cavity's root).
+    p: module, teeth, pressure, helix, add (ring tooth height inside the pitch circle, 1), ded (depth of the spaces, 1.25), backlash."""
+    q = {"module": p["module"], "teeth": p["teeth"], "pressure": p.get("pressure", 20), "helix": p.get("helix", 0), "shift": 0,
+         "add": float(p.get("ded", 1.25)), "ded": float(p.get("add", 1.0)), "backlash": -float(p.get("backlash", 0) or 0)}
+    return dims(q)
+
+
+def ring_gear(p):
+    """Internal gear: a cylinder (rim) with the tooth spaces cut from it.  Axis Z, from z = 0 to the face width.
+    p: as ring_dims plus width, rim (radial thickness outside the deepest space), hand, phase (degrees)."""
+    D = ring_dims(p)
+    b, rim = float(p["width"]), float(p.get("rim", 0) or 0)
+    if b <= 0:
+        raise ValueError("the face width must be positive")
+    if rim <= 0:
+        raise ValueError("the rim thickness must be positive")
+    phase = float(p.get("phase", 0) or 0)
+    outer = Wire.make_circle(D["ra"] + rim)
+    face = Face(outer, [profile_wire(D, phase)])
+    if D["beta"] == 0:
+        return extrude(face, b)
+    ang = twist_deg(D, b) * (1 if p.get("hand", "right") == "right" else -1)
+    return Solid.extrude_linear_with_rotation(face, (0, 0, 0), (0, 0, b), ang)
+
+
 def make(kind, p):
     """The solid for a gear type name (one of GEAR_TYPES) and a dict of numbers."""
     if kind == "Spur gear":
@@ -175,4 +209,6 @@ def make(kind, p):
         return helical_gear(p)
     if kind == "Herringbone gear":
         return herringbone_gear(p)
+    if kind == "Ring gear":
+        return ring_gear(p)
     raise ValueError(f"unknown gear type {kind}")
