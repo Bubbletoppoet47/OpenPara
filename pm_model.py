@@ -70,7 +70,7 @@ class Document:
         title = {"sketch": "Sketch", "extrude": "Boss-Extrude", "cut": "Cut-Extrude", "fillet": "Fillet", "chamfer": "Chamfer",
                  "revolve": "Boss-Revolve", "revolve_cut": "Cut-Revolve", "sweep": "Boss-Sweep", "sweep_cut": "Cut-Sweep",
                  "loft": "Boss-Loft", "loft_cut": "Cut-Loft", "pattern": "Pattern", "mirror": "Mirror",
-                 "refplane": "Plane", "refaxis": "Axis", "partgen": "Part"}[k]
+                 "refplane": "Plane", "refaxis": "Axis", "partgen": "Part", "imported": "Imported"}[k]
         if k == "partgen":
             title = (feat.get("gen") or "Part").replace(" ", "-")
         if k == "pattern":
@@ -168,6 +168,8 @@ class Document:
             return self.run_revolve(f, solid)
         if k == "partgen":
             return self.run_partgen(f, solid)
+        if k == "imported":
+            return self.run_imported(f, solid)
         if k in ("sweep", "sweep_cut"):
             return self.run_sweep(f, solid)
         if k in ("loft", "loft_cut"):
@@ -712,6 +714,25 @@ class Document:
             t_.SetValues(*M[:3].flatten().tolist())
             out.append(prof.moved(Location(t_)))
         return out
+
+    def run_imported(self, f, solid):
+        """A body brought in from a STEP file: the shape is kept inside the feature (compressed BREP text), so the part does not depend on the file."""
+        import exchange
+        memo = self.__dict__.setdefault("_imported_memo", {})
+        text = f.get("brep") or ""
+        if not text:
+            raise ModelError("this imported body holds no shape")
+        key = hash(text)
+        tool = memo.get(key)
+        if tool is None:
+            try:
+                tool = exchange.unpack(text)
+            except Exception as ex:
+                raise ModelError(f"the stored shape could not be read: {ex}")
+            memo[key] = tool
+        if not tool.is_valid:
+            raise ModelError("the imported shape is not a valid solid")
+        return tool if solid is None else self.clean(solid + tool)
 
     def run_partgen(self, f, solid):
         """A part made by the Part Generator (a gear, ...): ONE feature whose parameters are kept in the feature, so the
