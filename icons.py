@@ -300,6 +300,33 @@ def draw(name, g):
         g.drawLine(QPointF(20, 4), QPointF(20, 36))
         if "cut" in n:
             dot(g, 30, 20, RED, 3)
+    elif n.startswith("swept"):
+        # a profile at the start of a curved path, and the body that follows the path
+        g.setBrush(QBrush(FILL))
+        p = QPainterPath()
+        p.moveTo(8, 30)
+        p.cubicTo(8, 14, 20, 30, 32, 10)
+        p.lineTo(35, 14)
+        p.cubicTo(24, 36, 14, 18, 14, 30)
+        p.closeSubpath()
+        g.setPen(pen(INK, 1.8))
+        g.drawPath(p)
+        g.setBrush(QBrush(QColor("#ffffff")))
+        g.setPen(pen(ACC, 2.2))
+        g.drawEllipse(QPointF(11, 30), 4.2, 2.6)
+        if "cut" in n:
+            dot(g, 31, 28, RED, 3)
+    elif n.startswith("lofted"):
+        # two different sections joined by a blended body
+        g.setBrush(QBrush(FILL))
+        g.setPen(pen(INK, 1.8))
+        g.drawPolygon(poly([(6, 32), (34, 32), (28, 8), (12, 8)]))
+        g.setBrush(QBrush(QColor("#ffffff")))
+        g.setPen(pen(ACC, 2.2))
+        g.drawRect(QRectF(13, 6, 14, 5))
+        g.drawRect(QRectF(5, 28, 30, 6))
+        if "cut" in n:
+            dot(g, 20, 20, RED, 3)
     elif n == "fillet":
         g.setBrush(QBrush(FILL))
         p = QPainterPath()
@@ -409,7 +436,7 @@ def draw(name, g):
         g.drawEllipse(QPointF(15.6, 22.4), 2.1, 1.5)
         g.setBrush(QBrush(ACC2))
         g.drawEllipse(QPointF(28, 19), 1.5, 1.5)
-    elif n in ("hole wizard", "wrap", "swept boss/base", "lofted boss/base", "boundary boss/base", "swept cut", "lofted cut",
+    elif n in ("hole wizard", "wrap", "boundary boss/base",
                "boundary cut", "rib", "draft", "intersect"):
         g.setPen(pen(QColor("#9aa3b5"), 2))
         g.setBrush(QBrush(QColor("#eef1f7")))

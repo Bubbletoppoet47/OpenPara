@@ -15,7 +15,7 @@ import traceback
 import numpy as np
 from PyQt6.QtCore import QSettings, QSize, Qt
 from PyQt6.QtGui import QAction, QBrush, QColor, QKeySequence
-from PyQt6.QtWidgets import (QAbstractItemView, QWidgetAction, QApplication, QFrame, QTabWidget, QToolButton, QCheckBox, QComboBox, QDockWidget, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
+from PyQt6.QtWidgets import (QAbstractItemView, QWidgetAction, QApplication, QFrame, QTabWidget, QToolButton, QCheckBox, QComboBox, QDockWidget, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget,
                              QInputDialog, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QToolBar,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -47,7 +47,7 @@ SKETCH_COL, SKETCH_SEL = (0.95, 0.55, 0.05), (0.1, 0.45, 1.0)
 FACE_SEL, EDGE_SEL = (0.3, 0.65, 1.0), (1.0, 0.45, 0.0)
 PLANE_COL = {"Front": (0.35, 0.60, 0.95), "Top": (0.45, 0.80, 0.45), "Right": (0.90, 0.55, 0.40)}
 ICON = {"sketch": "✎", "extrude": "▣", "cut": "▢", "fillet": "◜", "chamfer": "◿",
-        "revolve": "◔", "revolve_cut": "◒", "pattern": "☷", "mirror": "⧓", "refplane": "▱", "refaxis": "⁞"}
+        "revolve": "◔", "revolve_cut": "◒", "sweep": "⥁", "sweep_cut": "⥀", "loft": "⏢", "loft_cut": "⏥", "pattern": "☷", "mirror": "⧓", "refplane": "▱", "refaxis": "⁞"}
 
 
 class MainWindow(QMainWindow):
@@ -111,9 +111,13 @@ class MainWindow(QMainWindow):
         self.ribbon.addTab(self.ribbon_page([
             ("extrude", "▣", "Extruded\nBoss/Base", "Add material from a sketch", lambda: self.command("extrude")),
             ("revolve", "◔", "Revolved\nBoss/Base", "Spin a sketch around an axis to add material", lambda: self.command("revolve")),
+            ("sweep", "⥁", "Swept\nBoss/Base", "Slide a profile sketch along a path sketch to add material", lambda: self.command("sweep")),
+            ("loft", "⏢", "Lofted\nBoss/Base", "Blend two or more section sketches into a solid", lambda: self.command("loft")),
             "|",
             ("cut", "▢", "Extruded\nCut", "Remove material with a sketch", lambda: self.command("cut")),
             (None, "◎", "Hole\nWizard", "", None), ("revolve_cut", "◒", "Revolved\nCut", "Spin a sketch around an axis to remove material", lambda: self.command("revolve_cut")),
+            ("sweep_cut", "⥀", "Swept\nCut", "Slide a profile sketch along a path sketch to remove material", lambda: self.command("sweep_cut")),
+            ("loft_cut", "⏥", "Lofted\nCut", "Blend section sketches into a shape and remove it", lambda: self.command("loft_cut")),
             "|",
             ("fillet", "◜", "Fillet", "Round edges: press, then click edges", lambda: self.command("fillet")),
             ("chamfer", "◿", "Chamfer", "Bevel edges: press, then click edges", lambda: self.command("chamfer")),
@@ -628,11 +632,42 @@ class MainWindow(QMainWindow):
             self.update_all()
             self.left.setCurrentIndex(1)
             self.say("Spins about a centerline of the sketch if there is one, otherwise about the sketch's vertical axis.")
+        elif key in ("sweep", "sweep_cut"):
+            sks = [g for g in d.features if g["kind"] == "sketch"]
+            if len(sks) < 2:
+                self.say("A sweep needs two sketches: the profile (the shape) and the path (a line / arc chain it follows).")
+                return
+            cur = d.feature(self.sel) if self.sel else None
+            prof = cur if (cur is not None and cur["kind"] == "sketch") else sks[-2]
+            path = next((g for g in reversed(sks) if g["id"] != prof["id"]), None)
+            self.snapshot()
+            f = d.add(pm.new_feature(key, sketch=prof["id"], path=path["id"], merge=True))
+            self.sel = f["id"]
+            self.created_new = f["id"]
+            self.update_all()
+            self.left.setCurrentIndex(1)
+            self.say("Profile = the closed shape, Path = the sketch with the line / arc chain. Change either in the panel.")
+        elif key in ("loft", "loft_cut"):
+            sks = [g for g in d.features if g["kind"] == "sketch"]
+            if len(sks) < 2:
+                self.say("A loft needs at least two section sketches (one closed shape each, on different planes).")
+                return
+            cur = d.feature(self.sel) if self.sel else None
+            secs = [g["id"] for g in sks[-2:]]
+            if cur is not None and cur["kind"] == "sketch" and cur["id"] not in secs:
+                secs = [cur["id"], secs[-1]]
+            self.snapshot()
+            f = d.add(pm.new_feature(key, sections=secs, merge=True))
+            self.sel = f["id"]
+            self.created_new = f["id"]
+            self.update_all()
+            self.left.setCurrentIndex(1)
+            self.say("The loft blends the sections in the order of the list. Add more sections or reorder them in the panel.")
         elif key in ("pattern_linear", "pattern_circular", "mirror"):
             if d.solid is None:
                 self.say("Make a solid first.")
                 return
-            srcs = [g["id"] for g in d.features if g["kind"] in ("extrude", "cut", "revolve", "revolve_cut")]
+            srcs = [g["id"] for g in d.features if g["kind"] in pm.SOLID_FEATURES]
             pick = [self.sel] if self.sel in srcs else srcs[-1:]
             self.snapshot()
             if key == "mirror":
@@ -761,7 +796,7 @@ class MainWindow(QMainWindow):
                 rit.setToolTip(0, sim_links.abs_of(self, e) + "\nDouble-click to open")
                 if sim_links.missing(self, e):
                     rit.setForeground(0, QBrush(QColor(200, 0, 0)))
-        used = {f["sketch"] for f in d.features if f.get("sketch")}
+        used = {sid for f in d.features for sid in d.feature_sketches(f)}
         item_of = {}
 
         def add_feature(parent, f, i):
@@ -793,8 +828,8 @@ class MainWindow(QMainWindow):
             if f["kind"] == "sketch" and f["id"] in used:
                 continue                              # shown under the feature that uses it
             it = add_feature(root, f, i)
-            if f.get("sketch"):
-                sk = d.feature(f["sketch"])
+            for sid in d.feature_sketches(f):
+                sk = d.feature(sid)
                 if sk is not None:
                     add_feature(it, sk, d.features.index(sk))
                     it.setExpanded(True)
@@ -911,7 +946,7 @@ class MainWindow(QMainWindow):
         self.update_all()
 
     def delete_feature(self, fid):
-        users = [g["name"] for g in self.doc.features if g.get("sketch") == fid]
+        users = [g["name"] for g in self.doc.features if fid in self.doc.feature_sketches(g)]
         if users and QMessageBox.question(self, "Delete", f"{', '.join(users)} use this sketch and will fail. Delete anyway?") != QMessageBox.StandardButton.Yes:
             return
         self.snapshot()
@@ -1104,6 +1139,96 @@ class MainWindow(QMainWindow):
             f.setdefault("merge", True)
             self.check(form, "Merge result", f, "merge")
 
+    def sketch_pick(self, form, label, f, key, exclude=()):
+        """A drop-down of the sketches that can be picked for f[key]."""
+        d = self.doc
+        sks = [g for g in d.features if g["kind"] == "sketch" and g["id"] not in exclude]
+        cb = QComboBox()
+        cb.addItem("(none)", None)
+        for g in sks:
+            cb.addItem(g["name"], g["id"])
+        ids = [None] + [g["id"] for g in sks]
+        cb.setCurrentIndex(ids.index(f.get(key)) if f.get(key) in ids else 0)
+
+        def ch(_i):
+            self.snapshot()
+            f[key] = cb.currentData()
+            if key == "sketch":
+                f["pts"] = []
+            self.update_all()
+        cb.currentIndexChanged.connect(ch)
+        form.addRow(label, cb)
+        return cb
+
+    def sweep_panel(self, form, f):
+        self.sketch_pick(form, "Profile", f, "sketch")
+        self.sketch_pick(form, "Path", f, "path")
+        self.check(form, "Reverse path direction", f, "reverse")
+        self.combo(form, "Corners", f, "corners", [("sharp", "Sharp (mitred)"), ("round", "Rounded")], "sharp")
+        self.combo(form, "Profile turns", f, "orient", [("follow", "Follows the path"), ("frenet", "Frenet frame (bends with the curve)")], "follow")
+        self.check(form, "Twist along the path", f, "twist_on")
+        if f.get("twist_on"):
+            f.setdefault("twist", "90")
+            self.expr_edit(form, "Total twist (deg)", f, "twist")
+            note = QLabel("Positive twist is right-handed along the path. Needs a smooth path (no sharp corners).")
+            note.setWordWrap(True)
+            form.addRow(note)
+        if f["kind"] == "sweep":
+            f.setdefault("merge", True)
+            self.check(form, "Merge result", f, "merge")
+        else:
+            self.check(form, "Flip side (keep inside)", f, "flip_side")
+
+    def loft_panel(self, form, f):
+        d = self.doc
+        form.addRow(QLabel("Sections, in order (each: one closed shape):"))
+        lw = QListWidget()
+        lw.setFixedHeight(110)
+        secs = f.setdefault("sections", [])
+        for sid in secs:
+            g = d.feature(sid)
+            lw.addItem(g["name"] if g is not None else "(missing sketch)")
+        form.addRow(lw)
+
+        def edit(fn):
+            self.snapshot()
+            fn()
+            self.update_all()
+
+        def mv(delta):
+            r = lw.currentRow()
+            if r < 0 or not 0 <= r + delta < len(secs):
+                return
+            edit(lambda: secs.insert(r + delta, secs.pop(r)))
+
+        def rm():
+            r = lw.currentRow()
+            if r >= 0:
+                edit(lambda: secs.pop(r))
+        row = QHBoxLayout()
+        for text, fn in (("Up", lambda: mv(-1)), ("Down", lambda: mv(1)), ("Remove", rm)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        form.addRow(row)
+        free = [g for g in d.features if g["kind"] == "sketch" and g["id"] not in secs]
+        if free:
+            cb = QComboBox()
+            for g in free:
+                cb.addItem(g["name"], g["id"])
+            add = QPushButton("Add section")
+            add.clicked.connect(lambda: edit(lambda: secs.append(cb.currentData())))
+            row2 = QHBoxLayout()
+            row2.addWidget(cb, 1)
+            row2.addWidget(add)
+            form.addRow(row2)
+        self.check(form, "Ruled (straight between sections)", f, "ruled")
+        if f["kind"] == "loft":
+            f.setdefault("merge", True)
+            self.check(form, "Merge result", f, "merge")
+        else:
+            self.check(form, "Flip side (keep inside)", f, "flip_side")
+
     def repeat_panel(self, form, f):
         """Properties of Linear / Circular Pattern and Mirror."""
         d = self.doc
@@ -1112,7 +1237,7 @@ class MainWindow(QMainWindow):
         if f.get("source", "features") == "features":
             form.addRow(QLabel("Features (tick to repeat):"))
             for g in d.features:
-                if g["kind"] not in ("extrude", "cut", "revolve", "revolve_cut"):
+                if g["kind"] not in pm.SOLID_FEATURES:
                     continue
                 if d.features.index(g) >= d.features.index(f):
                     break
@@ -1230,6 +1355,10 @@ class MainWindow(QMainWindow):
             self.extrude_panel(form, f)
         elif k in ("revolve", "revolve_cut"):
             self.revolve_panel(form, f)
+        elif k in ("sweep", "sweep_cut"):
+            self.sweep_panel(form, f)
+        elif k in ("loft", "loft_cut"):
+            self.loft_panel(form, f)
         elif k in ("pattern", "mirror"):
             self.repeat_panel(form, f)
         elif part_refgeo.is_ref(f):
@@ -1573,7 +1702,7 @@ class MainWindow(QMainWindow):
         """The sketch's own checkbox in the tree (a sketch no feature uses is on by default, one a feature uses is off)."""
         if f.get("show") is not None:
             return bool(f["show"])
-        return not any(g.get("sketch") == f["id"] for g in self.doc.features)
+        return not any(f["id"] in self.doc.feature_sketches(g) for g in self.doc.features)
 
     def sketch_shown(self, f):
         """Is the sketch drawn?  Show > Sketches off hides all of them; with it on, each sketch's checkbox in the tree decides.

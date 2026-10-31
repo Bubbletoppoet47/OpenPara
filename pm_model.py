@@ -17,7 +17,8 @@ import json
 import math
 
 import numpy as np
-from build123d import Align, Axis, Box, Compound, Edge, Face, Location, Plane, Vector, Wire, extrude, revolve
+from build123d import Align, Axis, Box, Compound, Edge, Face, Location, Matrix, Plane, PositionMode, Transition, Vector, Wire, extrude, loft, revolve, sweep
+from OCP.gp import gp_Trsf
 
 import refgeo
 import settings
@@ -28,6 +29,9 @@ BASE_PLANES = {"Front": Plane.XZ, "Top": Plane.XY, "Right": Plane.YZ}     # norm
 FUNCS = {k: getattr(math, k) for k in ("sin", "cos", "tan", "atan", "sqrt", "pi", "radians", "degrees", "floor", "ceil")}
 FUNCS.update({"abs": abs, "min": min, "max": max, "round": round})
 
+
+# features that add or remove a shape and so can be repeated by a pattern / mirror
+SOLID_FEATURES = ("extrude", "cut", "revolve", "revolve_cut", "sweep", "sweep_cut", "loft", "loft_cut")
 
 class ModelError(Exception):
     pass
@@ -64,7 +68,8 @@ class Document:
         k = feat["kind"]
         self.counter[k] = self.counter.get(k, 0) + 1
         title = {"sketch": "Sketch", "extrude": "Boss-Extrude", "cut": "Cut-Extrude", "fillet": "Fillet", "chamfer": "Chamfer",
-                 "revolve": "Boss-Revolve", "revolve_cut": "Cut-Revolve", "pattern": "Pattern", "mirror": "Mirror",
+                 "revolve": "Boss-Revolve", "revolve_cut": "Cut-Revolve", "sweep": "Boss-Sweep", "sweep_cut": "Cut-Sweep",
+                 "loft": "Boss-Loft", "loft_cut": "Cut-Loft", "pattern": "Pattern", "mirror": "Mirror",
                  "refplane": "Plane", "refaxis": "Axis"}[k]
         if k == "pattern":
             title = "LPattern" if feat.get("ptype") == "linear" else "CirPattern"
@@ -159,6 +164,10 @@ class Document:
             return self.run_extrude(f, solid)
         if k in ("revolve", "revolve_cut"):
             return self.run_revolve(f, solid)
+        if k in ("sweep", "sweep_cut"):
+            return self.run_sweep(f, solid)
+        if k in ("loft", "loft_cut"):
+            return self.run_loft(f, solid)
         if k == "pattern":
             return self.run_pattern(f, solid)
         if k == "mirror":
@@ -279,7 +288,7 @@ class Document:
         self.rename_refs(old, new, skip=fid)                  # later features / sketches / globals that used the name follow
 
     # ------------------------------------------------------------------ renames that follow everywhere
-    FORMULA_KEYS = ("depth", "depth2", "draft", "thickness", "angle", "size", "count", "spacing", "count2", "spacing2", "d", "ang", "offset")
+    FORMULA_KEYS = ("depth", "depth2", "draft", "thickness", "angle", "size", "count", "spacing", "count2", "spacing2", "d", "ang", "offset", "twist")
 
     def rename_refs(self, old, new, skip=None):
         """Every formula that uses the name `old` (whole word) now uses `new`: globals, feature values, sketch dimensions / symbols, and the
@@ -638,6 +647,194 @@ class Document:
             raise ModelError("the cut does not touch the part")
         return self.clean(out)
 
+    # ------------------------------------------------------------------ sweep and loft
+    def add_or_cut(self, f, solid, tool, cut):
+        """Join `tool` to the part (boss) or remove it from the part (cut); the same rules as extrudes and revolves."""
+        if not cut:
+            return self.clean(tool if solid is None else (solid + tool if f.get("merge", True)
+                                                          else Compound(solid.solids() + tool.solids())))
+        out = solid & tool if f.get("flip_side") else solid - tool
+        before = sum(x.volume for x in solid.solids())
+        after = sum(x.volume for x in out.solids()) if out.solids() else 0.0
+        if abs(before - after) < 1e-9 * max(1.0, before) and not f.get("flip_side"):
+            raise ModelError("the cut does not touch the part")
+        return self.clean(out)
+
+    @staticmethod
+    def path_smooth(path, tol_deg=1.0):
+        """True when the tangent of the path is continuous (no sharp corner)."""
+        edges = path.edges()
+        for a, b in zip(edges, edges[1:]):
+            ta, tb = a.tangent_at(1.0), b.tangent_at(0.0)
+            va, vb = np.array([ta.X, ta.Y, ta.Z]), np.array([tb.X, tb.Y, tb.Z])
+            if float(va @ vb) / (np.linalg.norm(va) * np.linalg.norm(vb)) < math.cos(math.radians(tol_deg)):
+                return False
+        return True
+
+    @staticmethod
+    def twisted_sections(prof, path, twist_deg, n):
+        """Copies of the profile along the path, each turned a little more about the path (right-handed about the direction of travel).
+        The profile keeps its place relative to the path start; between the sections it is carried along with a rotation-minimising frame."""
+        L = path.length
+        pts, tans = [], []
+        for i in range(n + 1):
+            s = L * i / n
+            p, t_ = path.position_at(s, position_mode=PositionMode.LENGTH), path.tangent_at(s, position_mode=PositionMode.LENGTH)
+            pts.append(np.array([p.X, p.Y, p.Z]))
+            v = np.array([t_.X, t_.Y, t_.Z])
+            tans.append(v / np.linalg.norm(v))
+
+        def rot(axis, ang):
+            a = axis / max(np.linalg.norm(axis), 1e-30)
+            K = np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
+            return np.eye(3) + math.sin(ang) * K + (1 - math.cos(ang)) * (K @ K)
+
+        def between(u, v):
+            c = np.cross(u, v)
+            s = np.linalg.norm(c)
+            d = float(u @ v)
+            if s < 1e-12:
+                return np.eye(3) if d > 0 else rot(np.cross(u, [1, 0, 0]) if abs(u[0]) < 0.9 else np.cross(u, [0, 1, 0]), math.pi)
+            return rot(c, math.atan2(s, d))
+        out, R = [], np.eye(3)
+        for i in range(n + 1):
+            if i:
+                R = between(tans[i - 1], tans[i]) @ R
+            Rt = rot(tans[i], math.radians(twist_deg) * i / n) @ R
+            M = np.eye(4)
+            M[:3, :3] = Rt
+            M[:3, 3] = pts[i] - Rt @ pts[0]
+            t_ = gp_Trsf()
+            t_.SetValues(*M[:3].flatten().tolist())
+            out.append(prof.moved(Location(t_)))
+        return out
+
+    def run_sweep(self, f, solid, tool_only=False):
+        cut = f["kind"] == "sweep_cut"
+        sk_, ps = self.feature(f.get("sketch")), self.feature(f.get("path"))
+        if sk_ is None or sk_["id"] not in self.planes:
+            raise ModelError("its profile sketch is missing or suppressed")
+        if ps is None or ps["id"] not in self.planes:
+            raise ModelError("pick the sketch that holds the path")
+        if ps["id"] == sk_["id"]:
+            raise ModelError("the profile and the path must be in two different sketches")
+        if cut and solid is None:
+            raise ModelError("nothing to cut yet")
+        faces = self.profile(sk_, f.get("pts") or None)
+        path = self.path_wire(ps, bool(f.get("reverse")))
+        twist = self.num(f.get("twist", "0")) if f.get("twist_on") else 0.0
+        trans = Transition.ROUND if f.get("corners") == "round" else Transition.RIGHT
+        if twist and not self.path_smooth(path):
+            raise ModelError("a twisted sweep needs a smooth path (no sharp corners); round the corners of the path sketch")
+        tool = None
+        for prof in faces:
+            try:
+                if twist:
+                    n = int(min(60, max(8, math.ceil(abs(twist) / 10.0), math.ceil(path.length / max(prof.bounding_box().diagonal, 1e-6) * 2))))
+                    t_ = sweep(self.twisted_sections(prof, path, twist, n), path, multisection=True, transition=trans)
+                else:
+                    t_ = sweep(prof, path, transition=trans, is_frenet=f.get("orient") == "frenet")
+            except ModelError:
+                raise
+            except Exception as ex:
+                raise ModelError(f"cannot sweep this profile along this path ({ex or type(ex).__name__})")
+            if not t_.solids() or t_.volume < 1e-9:
+                raise ModelError("the sweep has no volume - check that the profile is not flat against the path direction")
+            tool = t_ if tool is None else tool + t_
+        if tool_only:
+            return tool
+        return self.add_or_cut(f, solid, tool, cut)
+
+    def loft_loops(self, f):
+        """[(sketch, loop, polygon)] of the sections of a loft: each sketch must hold exactly one closed region without holes."""
+        ids = f.get("sections") or []
+        if len(ids) < 2:
+            raise ModelError("pick at least two section sketches")
+        out = []
+        for sid in ids:
+            s_ = self.feature(sid)
+            if s_ is None or s_["id"] not in self.planes or s_["id"] not in self.models:
+                raise ModelError("a section sketch is missing or suppressed")
+            regs = sk.regions(self.models[sid])
+            if not regs:
+                raise ModelError(f"{s_['name']} has no closed profile")
+            if len(regs) > 1:
+                raise ModelError(f"{s_['name']} has {len(regs)} closed regions - a loft section is one closed profile (make the other lines construction geometry)")
+            if regs[0]["holes"]:
+                raise ModelError(f"{s_['name']} has a hole inside the profile - a loft section is one closed outline")
+            out.append((s_, regs[0]["outer"], self.loop_poly(self.models[sid], regs[0]["outer"])))
+        return out
+
+    def run_loft(self, f, solid, tool_only=False):
+        cut = f["kind"] == "loft_cut"
+        if cut and solid is None:
+            raise ModelError("nothing to cut yet")
+        secs = self.loft_loops(f)
+        cents, normals, areas = [], [], []
+        for s_, loop, poly in secs:
+            plane = self.planes[s_["id"]]
+            o, xd, yd = self.sketch_frame(plane)
+            c = poly.mean(axis=0)
+            cents.append(o + c[0] * xd + c[1] * yd)
+            normals.append(np.array(tuple(plane.z_dir)))
+            areas.append(_area(poly))
+        n = len(secs)
+        for i in range(n):
+            if np.linalg.norm(cents[min(i + 1, n - 1)] - cents[max(i - 1, 0)]) < 1e-9 and n == 2:
+                raise ModelError("the section sketches are at the same place")
+        # every outline must turn the same way as seen along the loft: reverse the ones that do not
+        hand = []
+        for i, (s_, loop, poly) in enumerate(secs):
+            d = cents[min(i + 1, n - 1)] - cents[max(i - 1, 0)]
+            q = float(np.sign(np.dot(normals[i], d) * np.sign(areas[i] if areas[i] else 1.0)))
+            if q == 0:
+                raise ModelError(f"{s_['name']} lies along the direction of the loft - its sketch plane must cross the loft, not contain it")
+            hand.append(q)
+        loops = []
+        for (s_, loop, poly), q in zip(secs, hand):
+            rev = q != hand[0]
+            loops.append((s_, loop, rev))
+        # start each outline at the corner nearest to the start of the one before it, so the loft does not twist
+        wires, start = [], None
+        for s_, loop, rev in loops:
+            m, plane = self.models[s_["id"]], self.planes[s_["id"]]
+            o, xd, yd = self.sketch_frame(plane)
+            if len(loop) > 1:
+                pieces = [(k_, i_, not fw) for k_, i_, fw in reversed(loop)] if rev else list(loop)
+                pts3 = []
+                for kind, i, fwd in pieces:
+                    e = self.piece_edge(m, plane, kind, i, fwd)
+                    p = e.start_point()
+                    pts3.append(np.array([p.X, p.Y, p.Z]))
+                if start is not None:
+                    k0 = int(np.argmin([np.linalg.norm(p - start) for p in pts3]))
+                    pieces = pieces[k0:] + pieces[:k0]
+                    pts3 = pts3[k0:] + pts3[:k0]
+                wire = Wire([self.piece_edge(m, plane, kind, i, fwd) for kind, i, fwd in pieces])
+                start = pts3[0]
+            else:
+                wire = self.loop_wire(m, plane, loop, rev)
+                p = wire.start_point()
+                start = np.array([p.X, p.Y, p.Z]) if start is None else start
+            wires.append(wire)
+        try:
+            tool = loft([Face(w) for w in wires], ruled=bool(f.get("ruled")))
+        except Exception as ex:
+            raise ModelError(f"cannot loft these sections ({ex or type(ex).__name__})")
+        if not tool.solids() or tool.volume < 1e-9:
+            raise ModelError("the loft has no volume")
+        if tool_only:
+            return tool
+        return self.add_or_cut(f, solid, tool, cut)
+
+    def feature_sketches(self, f):
+        """The ids of every sketch a feature uses (profile, path, loft sections)."""
+        ids = [f["sketch"]] if f.get("sketch") else []
+        if f.get("path"):
+            ids.append(f["path"])
+        ids += list(f.get("sections") or [])
+        return ids
+
     # ------------------------------------------------------------------ patterns and mirror of features
     def feature_tool(self, g, solid_before):
         """(tool shape, 'add' | 'cut') of an extrude / cut / revolve feature, for patterning it."""
@@ -650,7 +847,15 @@ class Document:
             return self.run_revolve(g, solid_before, tool_only=True), "add"
         if k == "revolve_cut":
             return self.run_revolve(g, solid_before, tool_only=True), "cut"
-        raise ModelError(f"{g['name']} cannot be patterned (only extrudes, cuts and revolves)")
+        if k == "sweep":
+            return self.run_sweep(g, solid_before, tool_only=True), "add"
+        if k == "sweep_cut":
+            return self.run_sweep(g, solid_before, tool_only=True), "cut"
+        if k == "loft":
+            return self.run_loft(g, solid_before, tool_only=True), "add"
+        if k == "loft_cut":
+            return self.run_loft(g, solid_before, tool_only=True), "cut"
+        raise ModelError(f"{g['name']} cannot be patterned (only extrudes, cuts, revolves, sweeps and lofts)")
 
     def source_tools(self, f, solid):
         """[(tool, mode)] of the features listed in f['features'] (each rebuilt from the part before it)."""
@@ -772,29 +977,7 @@ class Document:
         plane = self.planes[sketch["id"]]
         o = np.array(tuple(plane.origin))
         xd, yd = np.array(tuple(plane.x_dir)), np.array(tuple(plane.y_dir))
-        w3 = lambda p: Vector(*(o + p[0] * xd + p[1] * yd))
-        P = m.pts
-
-        def wire(loop):
-            if len(loop) == 1 and loop[0][0] == "ci":
-                c = m.pts[m.cis[loop[0][1]]["c"]]
-                r = m.cis[loop[0][1]]["r"]
-                pl = Plane(origin=w3(c), x_dir=plane.x_dir, z_dir=plane.z_dir)
-                return Wire([Edge.make_circle(r, plane=pl)])
-            edges = []
-            for kind, i, fwd in loop:
-                if kind == "ln":
-                    a, b = m.lns[i]
-                    a, b = (a, b) if fwd else (b, a)
-                    edges.append(Edge.make_line(w3(P[a]), w3(P[b])))
-                else:
-                    c, r, t0, sw = sk.arc_span(m, i)
-                    ar = m.ars[i]
-                    mid = (c[0] + r * math.cos(t0 + sw / 2), c[1] + r * math.sin(t0 + sw / 2))
-                    s, e = P[ar["s"]], P[ar["e"]]
-                    s, e = (s, e) if fwd else (e, s)
-                    edges.append(Edge.make_three_point_arc(w3(s), w3(mid), w3(e)))
-            return Wire(edges)
+        wire = lambda loop: self.loop_wire(m, plane, loop)
         faces = []
         polys = self.region_polys(sketch) if pts else None
         for n, reg in enumerate(sk.regions(m)):
@@ -809,6 +992,101 @@ class Document:
         if not faces:
             raise ModelError(f"{sketch['name']} has no closed profile")
         return faces
+
+    # ------------------------------------------------------------------ wires of sketch loops and chains (profiles, sweep paths, loft sections)
+    @staticmethod
+    def sketch_frame(plane):
+        o = np.array(tuple(plane.origin))
+        return o, np.array(tuple(plane.x_dir)), np.array(tuple(plane.y_dir))
+
+    @staticmethod
+    def piece_edge(m, plane, kind, i, fwd=True):
+        """One line or arc of a sketch as a 3D edge (reversed when fwd is False)."""
+        o, xd, yd = Document.sketch_frame(plane)
+        w3 = lambda p: Vector(*(o + p[0] * xd + p[1] * yd))
+        P = m.pts
+        if kind == "ln":
+            a, b = m.lns[i]
+            a, b = (a, b) if fwd else (b, a)
+            return Edge.make_line(w3(P[a]), w3(P[b]))
+        c, r, t0, sw = sk.arc_span(m, i)
+        ar = m.ars[i]
+        mid = (c[0] + r * math.cos(t0 + sw / 2), c[1] + r * math.sin(t0 + sw / 2))
+        s, e = P[ar["s"]], P[ar["e"]]
+        s, e = (s, e) if fwd else (e, s)
+        return Edge.make_three_point_arc(w3(s), w3(mid), w3(e))
+
+    @staticmethod
+    def loop_wire(m, plane, loop, reverse=False):
+        """The wire of a closed loop of a sketch (a list of pieces, or one circle); reverse = the other way round."""
+        o, xd, yd = Document.sketch_frame(plane)
+        if len(loop) == 1 and loop[0][0] == "ci":
+            c = m.pts[m.cis[loop[0][1]]["c"]]
+            r = m.cis[loop[0][1]]["r"]
+            pl = Plane(origin=Vector(*(o + c[0] * xd + c[1] * yd)), x_dir=plane.x_dir, z_dir=(-plane.z_dir if reverse else plane.z_dir))
+            return Wire([Edge.make_circle(r, plane=pl)])
+        pieces = [(k_, i_, not fw) for k_, i_, fw in reversed(loop)] if reverse else loop
+        return Wire([Document.piece_edge(m, plane, kind, i, fwd) for kind, i, fwd in pieces])
+
+    @staticmethod
+    def sketch_unions(m):
+        """Union-find over the points of a sketch, joining points that a 'coincident' relation ties together."""
+        parent = {p: p for p in m.pts}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        for c in m.cons:
+            if c["type"] == "coincident" and all(k == "pt" for k, _ in c["refs"]):
+                a, b = find(c["refs"][0][1]), find(c["refs"][1][1])
+                if a != b:
+                    parent[a] = b
+        return find
+
+    def path_wire(self, sketch, reverse=False):
+        """The sweep path of a sketch: its lines and arcs (construction geometry left out) as ONE connected chain, open or closed;
+        or a single circle.  reverse = start at the other end."""
+        m = self.models.get(sketch["id"])
+        if m is None or sketch["id"] not in self.planes:
+            raise ModelError("the path sketch is not built")
+        plane = self.planes[sketch["id"]]
+        find = self.sketch_unions(m)
+        segs = [(("ln", i), find(a), find(b)) for i, (a, b) in m.lns.items() if ("ln", i) not in m.constr]
+        segs += [(("ar", i), find(a["s"]), find(a["e"])) for i, a in m.ars.items() if ("ar", i) not in m.constr]
+        circles = [i for i in m.cis if ("ci", i) not in m.constr]
+        if not segs and len(circles) == 1:
+            return self.loop_wire(m, plane, [("ci", circles[0])], reverse)
+        if circles:
+            raise ModelError(f"{sketch['name']}: a path is one chain of lines and arcs, or a single circle (make the others construction geometry)")
+        if not segs:
+            raise ModelError(f"{sketch['name']} has no path (draw lines or arcs)")
+        adj = {}
+        for s in segs:
+            adj.setdefault(s[1], []).append(s)
+            adj.setdefault(s[2], []).append(s)
+        if any(len(v) > 2 for v in adj.values()):
+            raise ModelError(f"{sketch['name']}: the path branches - a sweep path is one chain with no forks")
+        ends = [n for n, v in adj.items() if len(v) == 1]
+        if len(ends) not in (0, 2):
+            raise ModelError(f"{sketch['name']}: the path is not one connected chain")
+        node = ends[0] if ends else segs[0][1]
+        chain, cur, used = [], None, set()
+        while True:
+            nxt = [s for s in adj.get(node, []) if s[0] not in used]
+            if not nxt:
+                break
+            cur = nxt[0]
+            fwd = cur[1] == node
+            chain.append((cur[0][0], cur[0][1], fwd))
+            used.add(cur[0])
+            node = cur[2] if fwd else cur[1]
+        if len(chain) != len(segs):
+            raise ModelError(f"{sketch['name']}: the path is not one connected chain")
+        if reverse:
+            chain = [(k_, i_, not fw) for k_, i_, fw in reversed(chain)]
+        return Wire([self.piece_edge(m, plane, k_, i_, fw) for k_, i_, fw in chain])
 
     # ------------------------------------------------------------------ reference planes and axes
     def spec_entity(self, spec, solid):
@@ -1114,6 +1392,9 @@ class Document:
                 out.append(("thickness", "Wall", "length"))
         elif k in ("revolve", "revolve_cut"):
             out.append(("angle", "Angle", "angle"))
+        elif k in ("sweep", "sweep_cut"):
+            if "twist" in f:
+                out.append(("twist", "Twist", "angle"))
         elif k in ("fillet", "chamfer"):
             out.append(("size", "Radius" if k == "fillet" else "Distance", "length"))
         elif k == "pattern":
