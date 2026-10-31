@@ -24,7 +24,7 @@ def readouts(dlg):
 # ---- the window on its own
 dlg = partgen_dialog.PartGenDialog(d, None, w)
 names = [dlg.types.item(i).data(0x100) for i in range(dlg.types.count()) if dlg.types.item(i).data(0x100)]
-ok(names == ["Spur gear", "Helical gear", "Herringbone gear"], f"catalogue: {names}")
+ok(names == ["Spur gear", "Helical gear", "Herringbone gear", "Ring gear"], f"catalogue: {names}")
 dlg.set_kind("Spur gear")
 dlg.refresh()
 ok(dlg.solid is not None and abs(dlg.solid.volume - gears.spur_gear({"module": 2, "teeth": 20, "pressure": 20, "width": 10, "bore": 8}).volume) < 1e-6, "default spur gear built")

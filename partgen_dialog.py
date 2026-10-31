@@ -3,7 +3,7 @@ Opened again on that feature, it edits the same parameters (they are stored in t
 import partgen
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                             QListWidget, QListWidgetItem, QScrollArea, QVBoxLayout, QWidget)
+                             QListWidget, QListWidgetItem, QScrollArea, QTabWidget, QVBoxLayout, QWidget)
 
 try:
     import numpy as np
@@ -33,7 +33,14 @@ class PartGenDialog(QDialog):
         self.timer.setInterval(350)
         self.timer.timeout.connect(self.refresh)
 
-        root = QHBoxLayout(self)
+        self.systems_done = False
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        self.tabs = QTabWidget()
+        outer.addWidget(self.tabs)
+        page1 = QWidget()
+        root = QHBoxLayout(page1)
+        self.tabs.addTab(page1, "Single part")
         # --- left: the catalogue
         left = QVBoxLayout()
         left.addWidget(QLabel("Part type"))
@@ -87,6 +94,12 @@ class PartGenDialog(QDialog):
         right.addWidget(self.buttons)
         root.addLayout(right, 1)
 
+        if feature is None:                               # gear systems make new parts, so they are not offered when editing one
+            import gearsys_page
+            self.systems = gearsys_page.GearSystemsPage(self)
+            self.tabs.addTab(self.systems, "Gear systems")
+        else:
+            self.tabs.tabBar().hide()
         first = (feature or {}).get("gen") or "Spur gear"
         if feature:
             self.raw[first] = dict(feature.get("params") or {})
@@ -197,6 +210,7 @@ class PartGenDialog(QDialog):
                 if verts:
                     pl.add_mesh(pv.PolyData(np.vstack(verts), np.concatenate(cells)), color=(0.62, 0.70, 0.82), smooth_shading=False,
                                 ambient=0.28, diffuse=0.78, specular=0.30, specular_power=22, reset_camera=False)
+                self.draw_edges(pl)
             pl.add_axes()
             if cam is not None:
                 pl.camera_position = cam
@@ -206,6 +220,22 @@ class PartGenDialog(QDialog):
                 self.cam_set = True
         except Exception:
             pass
+
+    def draw_edges(self, pl):
+        """Real edges of the solid as dark lines over the shaded mesh."""
+        pts, lines, off = [], [], 0
+        for poly in self.doc.edge_lines(self.solid):
+            n = len(poly)
+            if n < 2:
+                continue
+            pts.append(poly)
+            lines.append(np.hstack([[n], np.arange(off, off + n)]))
+            off += n
+        if pts:
+            pd = pv.PolyData(np.vstack(pts))
+            pd.lines = np.concatenate(lines).astype(np.int64)
+            pl.add_mesh(pd, color=(0.08, 0.10, 0.14), line_width=1.5, pickable=False, reset_camera=False,
+                        render_lines_as_tubes=False)
 
     # ------------------------------------------------------------------ result
     def result_data(self):

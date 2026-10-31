@@ -88,7 +88,7 @@ class MainWindow(QMainWindow):
         self.saved_json = self.doc.to_json()
 
     def title(self):
-        return os.path.basename(self.path) if self.path else "Part1"
+        return os.path.basename(self.path) if self.path else getattr(self, "tab_name", None) or "Part1"
 
     def is_dirty(self):
         return self.doc.to_json() != getattr(self, "saved_json", None)
