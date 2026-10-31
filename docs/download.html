@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Download - OpenPara</title><meta name="description" content="Download the OpenPara Windows installer, or run it from source.">
+<link rel="icon" type="image/svg+xml" href="assets/openpara-logo-small.svg">
+<meta property="og:title" content="Download - OpenPara"><meta property="og:description" content="Download the OpenPara Windows installer, or run it from source."><meta property="og:image" content="img/planetary.jpg">
+<link rel="stylesheet" href="style.css"></head><body>
+<header class="nav"><div class="wrap"><a class="brand" href="index.html"><img src="assets/openpara-logo-small.svg" alt="">OpenPara</a><nav><a href="index.html">Home</a><a href="download.html" class=on>Download</a><a href="features.html">Features</a><a href="guides.html">Guides</a><a href="about.html">About</a><a href="https://github.com/Bubbletoppoet47/OpenPara">GitHub</a></nav></div></header>
+<section><div class="wrap"><h1 style="font-size:38px;margin:0 0 6px">Download OpenPara</h1><p class="lead">Free. No account needed.</p>
+<div class="card" style="margin-bottom:26px"><h3>Windows installer</h3><p style="margin-bottom:14px">Installs for your user only (no administrator rights), with its own Python and every package it needs. Adds a Start-menu entry.</p>
+<a class="btn p" id="dl-exe" href="https://github.com/Bubbletoppoet47/OpenPara/releases/latest" style="margin-bottom:6px">Download the installer</a>
+<div class="small" style="color:var(--mut)" id="dl-info">Latest version: see the releases page.</div></div>
+<h2 style="font-size:24px">Install</h2><ol class="steps"><li>Download <code>OpenPara-Setup-&lt;version&gt;.exe</code> and run it.</li><li>Start <b>OpenPara</b> from the Start menu.</li><li>Later, <b>Help &gt; Check for updates</b> installs new versions for you. Your settings and material library are kept.</li></ol>
+<h2 style="font-size:24px;margin-top:30px">Linux and macOS, or from source</h2><p>OpenPara is Python. Install the packages and run it:</p>
+<pre><code>git clone https://github.com/Bubbletoppoet47/OpenPara.git
+cd OpenPara
+pip install -r requirements.txt
+python gpd_app.py</code></pre>
+<div class="note">The Windows installer is the tested way to run it. Running from source on Linux or macOS should work but has had less testing.</div>
+<h2 style="font-size:24px;margin-top:30px">Older versions</h2><p><a href="https://github.com/Bubbletoppoet47/OpenPara/releases">All releases</a>, each with its notes.</p></div></section>
+<footer><div class="wrap"><span>OpenPara is free software, released under the <a href="about.html#licence">GNU GPL v3</a>.</span><span class="r"><a href="https://github.com/Bubbletoppoet47/OpenPara">Source</a> &middot; <a href="https://github.com/Bubbletoppoet47/OpenPara/releases">Releases</a> &middot; <a href="https://github.com/Bubbletoppoet47/OpenPara/issues">Issues</a></span></div></footer>
+<script src="site.js"></script></body></html>

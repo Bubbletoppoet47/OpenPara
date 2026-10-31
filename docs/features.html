@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Features - OpenPara</title><meta name="description" content="Parametric parts, assemblies, a gear generator, simulation and a renderer in one free program.">
+<link rel="icon" type="image/svg+xml" href="assets/openpara-logo-small.svg">
+<meta property="og:title" content="Features - OpenPara"><meta property="og:description" content="Parametric parts, assemblies, a gear generator, simulation and a renderer in one free program."><meta property="og:image" content="img/planetary.jpg">
+<link rel="stylesheet" href="style.css"></head><body>
+<header class="nav"><div class="wrap"><a class="brand" href="index.html"><img src="assets/openpara-logo-small.svg" alt="">OpenPara</a><nav><a href="index.html">Home</a><a href="download.html">Download</a><a href="features.html" class=on>Features</a><a href="guides.html">Guides</a><a href="about.html">About</a><a href="https://github.com/Bubbletoppoet47/OpenPara">GitHub</a></nav></div></header>
+<section><div class="wrap"><h1 style="font-size:38px;margin:0 0 6px">Features</h1><p class="lead">What is in OpenPara today.</p>
+
+<h2 style="font-size:26px">Parts</h2><ul><li>2D sketches with a constraint solver and dimensions</li><li>Extrude, cut, revolve, sweep (including twisted sweeps) and loft, each as a boss or a cut</li><li>Fillet, chamfer, patterns and mirrors, reference planes and axes</li><li>Named variables (Globals) and formulas, and configurations of one part</li><li>One program-wide unit system: mm, cm, m, in, ft, N, kN, kip and more</li></ul>
+<h2 style="font-size:26px;margin-top:30px">Part Generator</h2>
+<p>Pick a part, type a few numbers, watch it in 3D with its real edges drawn, and press OK to add it as one editable feature.</p>
+<ul><li>Spur, helical, herringbone and internal ring gears with true involute teeth and exact tooth counts</li><li>Size by module, diametral pitch, pitch diameter or outside diameter; optional profile shift, backlash and bore</li>
+<li><b>Gear systems:</b> a train of up to three gears sized from centre distances, ratios or tooth counts, with the profile shift needed to hit a centre distance exactly; or a planetary set (sun, planets, ring) with valid planet counts and the ratios for each way of holding it</li>
+<li>Each gear of a system opens as its own part. OpenPara does not build the assembly for you; it tells you the centre distances and turn angles to use.</li></ul>
+<h2 style="font-size:26px;margin-top:30px">Assemblies</h2><ul><li>Mates, sub-assemblies, patterns, and variables of their own</li><li>Positions, mate values and pattern spacing can be formulas</li></ul>
+<h2 style="font-size:26px;margin-top:30px">Simulation</h2><ul><li>1D beam and frame analysis</li><li>2D finite-element analysis and 2D flow, with results and slicing</li></ul>
+<h2 style="font-size:26px;margin-top:30px">Renderer</h2><ul><li>Sun and sky from a date, time and place; spot light and floor; several cameras</li><li>Still pictures and MP4 videos, using Mitsuba 3</li></ul>
+<h2 id="honest" style="font-size:26px;margin-top:30px">What is checked, and what is not</h2>
+<p>We would rather tell you than have you find out.</p>
+<ul><li>The gear geometry is checked against textbook values and against the real solids: meshing gears do not overlap, and a deliberately wrong spacing does. That is a geometry check, not a strength or life calculation.</li>
+<li>The simulations are tools for learning and first estimates. Check anything that matters against a trusted method.</li>
+<li>OpenPara is young software under active development. Expect rough edges, and please report them.</li></ul>
+<h2 style="font-size:26px;margin-top:30px">Built on</h2><p><a href="https://github.com/gumyr/build123d">build123d</a> (OpenCascade), PyQt6, pyvista / VTK, gmsh and Mitsuba 3.</p>
+<div class="two" style="margin-top:26px"><div class="ph">Screenshot: sketch with constraints</div><div class="ph">Screenshot: assembly</div></div></div></section>
+<footer><div class="wrap"><span>OpenPara is free software, released under the <a href="about.html#licence">GNU GPL v3</a>.</span><span class="r"><a href="https://github.com/Bubbletoppoet47/OpenPara">Source</a> &middot; <a href="https://github.com/Bubbletoppoet47/OpenPara/releases">Releases</a> &middot; <a href="https://github.com/Bubbletoppoet47/OpenPara/issues">Issues</a></span></div></footer>
+<script src="site.js"></script></body></html>
