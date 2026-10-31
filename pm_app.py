@@ -47,7 +47,7 @@ SKETCH_COL, SKETCH_SEL = (0.95, 0.55, 0.05), (0.1, 0.45, 1.0)
 FACE_SEL, EDGE_SEL = (0.3, 0.65, 1.0), (1.0, 0.45, 0.0)
 PLANE_COL = {"Front": (0.35, 0.60, 0.95), "Top": (0.45, 0.80, 0.45), "Right": (0.90, 0.55, 0.40)}
 ICON = {"sketch": "✎", "extrude": "▣", "cut": "▢", "fillet": "◜", "chamfer": "◿",
-        "revolve": "◔", "revolve_cut": "◒", "sweep": "⥁", "sweep_cut": "⥀", "loft": "⏢", "loft_cut": "⏥", "pattern": "☷", "mirror": "⧓", "refplane": "▱", "refaxis": "⁞"}
+        "revolve": "◔", "revolve_cut": "◒", "partgen": "⚙", "sweep": "⥁", "sweep_cut": "⥀", "loft": "⏢", "loft_cut": "⏥", "pattern": "☷", "mirror": "⧓", "refplane": "▱", "refaxis": "⁞"}
 
 
 class MainWindow(QMainWindow):
@@ -127,6 +127,8 @@ class MainWindow(QMainWindow):
             "|",
             ("menu_cmd", "▱", "Reference\nGeometry", "Planes and axes to sketch on, mirror about or mate to", [
                 ("Plane", lambda: self.command("refplane")), ("Axis", lambda: self.command("refaxis"))]),
+            "|",
+            ("partgen", "⚙", "Part\nGenerator", "Make gears (spur, helical, herringbone) and other parts from a few parameters", lambda: self.command("partgen")),
         ]), "Part Features")
         T = lambda name: (lambda: self.set_tool(name))
         self.menu_btns = {}
@@ -583,6 +585,9 @@ class MainWindow(QMainWindow):
         if key in ("refplane", "refaxis"):
             self.rg_start(key)
             return
+        if key == "partgen":
+            self.partgen_dialog(None)
+            return
         if key == "sketch":
             plane = None
             cur = d.feature(self.sel) if self.sel else None
@@ -694,6 +699,23 @@ class MainWindow(QMainWindow):
             self.say(("Edges from your selection are used. " if f["edges"] else "")
                      + "Click edges to add or remove them (Shift is not needed). Pick another item in the tree when done.")
 
+    def partgen_dialog(self, f):
+        """Open the Part Generator window to make a new part (f is None) or to change the parameters of the part feature f."""
+        import partgen_dialog
+        dlg = partgen_dialog.PartGenDialog(self.doc, f, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        kind, params, place = dlg.result_data()
+        self.snapshot()
+        if f is None:
+            f = self.doc.add(pm.new_feature("partgen", gen=kind, params=params, place=place))
+            self.created_new = f["id"]
+        else:
+            f["params"], f["place"] = params, place
+        self.sel = f["id"]
+        self.update_all()
+        self.left.setCurrentIndex(1)
+
     def make_sketch(self, plane):
         self.snapshot()
         f = self.doc.add(pm.new_feature("sketch", plane=plane))
@@ -750,6 +772,8 @@ class MainWindow(QMainWindow):
         elif part_refgeo.is_ref(f):
             self.left.setCurrentIndex(1)
             self.rg_begin(f)
+        elif f is not None and f["kind"] == "partgen":
+            self.partgen_dialog(f)
         else:
             self.left.setCurrentIndex(1)
 
@@ -1139,6 +1163,21 @@ class MainWindow(QMainWindow):
             f.setdefault("merge", True)
             self.check(form, "Merge result", f, "merge")
 
+    def partgen_panel(self, form, f):
+        """A generated part: a short summary and the button that reopens the Part Generator window on it."""
+        import partgen
+        form.addRow("Type", QLabel(f.get("gen", "?")))
+        try:
+            v = partgen.numbers(f["gen"], f.get("params") or {}, self.doc.num)
+            for lab, txt in partgen.readouts(f["gen"], v)[:6]:
+                form.addRow(lab, QLabel(txt))
+        except Exception:
+            pass
+        b = QPushButton("Edit in Part Generator...")
+        b.setToolTip("Change the parameters of this part (double-clicking it in the tree does the same)")
+        b.clicked.connect(lambda: self.partgen_dialog(f))
+        form.addRow(b)
+
     def sketch_pick(self, form, label, f, key, exclude=()):
         """A drop-down of the sketches that can be picked for f[key]."""
         d = self.doc
@@ -1355,6 +1394,8 @@ class MainWindow(QMainWindow):
             self.extrude_panel(form, f)
         elif k in ("revolve", "revolve_cut"):
             self.revolve_panel(form, f)
+        elif k == "partgen":
+            self.partgen_panel(form, f)
         elif k in ("sweep", "sweep_cut"):
             self.sweep_panel(form, f)
         elif k in ("loft", "loft_cut"):

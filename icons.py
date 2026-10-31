@@ -300,6 +300,20 @@ def draw(name, g):
         g.drawLine(QPointF(20, 4), QPointF(20, 36))
         if "cut" in n:
             dot(g, 30, 20, RED, 3)
+    elif n == "part generator":
+        # a gear: toothed wheel with a hub hole
+        import math as _m
+        pts = []
+        for k in range(24):
+            r = 15 if (k // 2) % 2 == 0 else 11
+            a = _m.radians(k * 15)
+            pts.append((20 + r * _m.cos(a), 20 + r * _m.sin(a)))
+        g.setBrush(QBrush(FILL))
+        g.setPen(pen(INK, 1.8))
+        g.drawPolygon(poly(pts))
+        g.setBrush(QBrush(QColor("#ffffff")))
+        g.setPen(pen(ACC, 2.0))
+        g.drawEllipse(QPointF(20, 20), 4.5, 4.5)
     elif n.startswith("swept"):
         # a profile at the start of a curved path, and the body that follows the path
         g.setBrush(QBrush(FILL))

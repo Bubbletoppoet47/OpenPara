@@ -131,8 +131,8 @@ for dz in (2, 5, 9.9):
 ok(overlap(sl0(hb, 0.01), sl0(hb, 10)) < 0.9 and overlap(sl0(hb, 0.01), sl0(hb, 19.99)) > 0.995, "ends line up, the middle is turned")
 hg = gears.herringbone_gear({**H, "groove": 4})
 ok(hg.is_valid and len(hg.solids()) == 1, "herringbone with a 4 mm groove is one valid solid")
-core = abs(hg.volume - (spur_face.area * 16 + math.pi * DH["rf"] ** 2 * 4))
-ok(core < 1e-3 * hg.volume, "groove volume = root-circle disc 4 mm thick")
+want = spur_face.area * 20 - (spur_face.area - math.pi * (DH["rf"] - 0.002) ** 2) * 4
+ok(abs(hg.volume - want) < 1e-3 * hg.volume, "groove removes everything outside the root circle over 4 mm")
 
 # meshing helical pair (opposite hands) never overlaps; same hand collides
 z1, z2 = 20, 30

@@ -4,7 +4,7 @@
 
 An open-source parametric CAD modeller written in Python (working title: *Gen Parametric Designer*).
 
-- Parametric parts: sketches with a constraint solver, extrude / cut / revolve / sweep / loft (boss and cut; sweeps can twist), fillet / chamfer, configurations
+- Parametric parts: sketches with a constraint solver, extrude / cut / revolve / sweep / loft (boss and cut; sweeps can twist), fillet / chamfer, configurations, a Part Generator (spur, helical and herringbone gears with true involute teeth)
 - Assemblies with mates, sub-assemblies and their own Globals (positions, mate values and pattern spacing take formulas)
 - One program-wide unit system (File > Units: mm, cm, m, in, ft, N, kN, kip, ... and a separate speed unit)
 - Built-in simulations: 1D beam / frame FEA, 2D FEA, 2D CFD (results and slicing)

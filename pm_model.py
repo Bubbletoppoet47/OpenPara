@@ -70,7 +70,9 @@ class Document:
         title = {"sketch": "Sketch", "extrude": "Boss-Extrude", "cut": "Cut-Extrude", "fillet": "Fillet", "chamfer": "Chamfer",
                  "revolve": "Boss-Revolve", "revolve_cut": "Cut-Revolve", "sweep": "Boss-Sweep", "sweep_cut": "Cut-Sweep",
                  "loft": "Boss-Loft", "loft_cut": "Cut-Loft", "pattern": "Pattern", "mirror": "Mirror",
-                 "refplane": "Plane", "refaxis": "Axis"}[k]
+                 "refplane": "Plane", "refaxis": "Axis", "partgen": "Part"}[k]
+        if k == "partgen":
+            title = (feat.get("gen") or "Part").replace(" ", "-")
         if k == "pattern":
             title = "LPattern" if feat.get("ptype") == "linear" else "CirPattern"
         feat["name"] = feat["name"] or f"{title}{self.counter[k]}"
@@ -164,6 +166,8 @@ class Document:
             return self.run_extrude(f, solid)
         if k in ("revolve", "revolve_cut"):
             return self.run_revolve(f, solid)
+        if k == "partgen":
+            return self.run_partgen(f, solid)
         if k in ("sweep", "sweep_cut"):
             return self.run_sweep(f, solid)
         if k in ("loft", "loft_cut"):
@@ -708,6 +712,26 @@ class Document:
             t_.SetValues(*M[:3].flatten().tolist())
             out.append(prof.moved(Location(t_)))
         return out
+
+    def run_partgen(self, f, solid):
+        """A part made by the Part Generator (a gear, ...): ONE feature whose parameters are kept in the feature, so the
+        generator window can be reopened to change them.  The new solid is added to the part."""
+        import partgen
+        kind = f.get("gen")
+        if kind not in partgen.PART_TYPES:
+            raise ModelError(f"unknown generated part type {kind!r}")
+        try:
+            v = partgen.numbers(kind, f.get("params") or {}, self.num)
+            tool = partgen.build(kind, v)
+            pl = f.get("place") or {}
+            tool = partgen.placed(tool, pl.get("plane", "Top"), self.num(pl.get("ox", "0")), self.num(pl.get("oy", "0")), self.num(pl.get("oz", "0")))
+        except ModelError:
+            raise
+        except (ValueError, ZeroDivisionError) as ex:
+            raise ModelError(str(ex))
+        if not tool.is_valid:
+            raise ModelError("the generated part is not a valid solid for these inputs")
+        return self.clean(tool if solid is None else solid + tool)
 
     def run_sweep(self, f, solid, tool_only=False):
         cut = f["kind"] == "sweep_cut"

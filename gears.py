@@ -9,7 +9,7 @@ The half-thickness (as an angle) of a tooth at radius r is  pi/(2z) + 2 x tan(a)
 """
 import math
 
-from build123d import Axis, Circle, Edge, Face, Location, Plane, Polyline, Solid, Spline, Vector, Wire, extrude
+from build123d import Axis, Circle, Edge, Face, Location, Plane, Polyline, Shell, Solid, Spline, Vector, Wire, extrude
 
 GEAR_TYPES = ("Spur gear", "Helical gear", "Herringbone gear")
 
@@ -143,25 +143,27 @@ def helical_gear(p):
 
 
 def herringbone_gear(p):
-    """Two opposite-hand helical halves meeting in the middle, with an optional groove (relief) of width p['groove'] between them."""
+    """Two opposite-hand helical halves meeting in the middle (a V), with an optional groove of width p['groove'] cut round the
+    middle down to the root circle.  The halves are mirror images, sewn along the middle: much faster and cleaner than a boolean union."""
     D = dims(p)
     b, g = float(p["width"]), float(p.get("groove", 0) or 0)
     if D["beta"] == 0:
         raise ValueError("a herringbone gear needs a helix angle")
-    h = (b - g) / 2
-    if h <= 0:
-        raise ValueError("the groove is as wide as the gear")
-    sgn = 1 if p.get("hand", "right") == "right" else -1
-    ang = twist_deg(D, h) * sgn
-    face = profile_face(D)
-    lower = Solid.extrude_linear_with_rotation(face, (0, 0, 0), (0, 0, h), ang)
-    top_face = face.moved(Location((0, 0, h + g), (0, 0, 1), ang))
-    upper = Solid.extrude_linear_with_rotation(top_face, (0, 0, h + g), (0, 0, h), -ang)
+    if b <= 0 or g < 0 or g >= b:
+        raise ValueError("the groove must be narrower than the gear")
+    h = b / 2
+    ang = twist_deg(D, h) * (1 if p.get("hand", "right") == "right" else -1)
+    lower = Solid.extrude_linear_with_rotation(profile_face(D), (0, 0, 0), (0, 0, h), ang)
+    upper = lower.mirror(Plane.XY.offset(h))
+
+    def not_middle(f):
+        bb = f.bounding_box()
+        return not (f.geom_type.name == "PLANE" and abs(bb.min.Z - h) < 1e-6 and abs(bb.max.Z - h) < 1e-6)
+    body = Solid(Shell([f for f in lower.faces() + upper.faces() if not_middle(f)]))
     if g > 0:
-        core = extrude(Circle(D["rf"]).face().moved(Location((0, 0, h))), g)
-        body = lower + core + upper
-    else:
-        body = lower + upper
+        ring = extrude(Circle(D["ra"] + 2).face(), g).moved(Location((0, 0, h - g / 2))) \
+            - extrude(Circle(D["rf"] - 0.002).face(), g).moved(Location((0, 0, h - g / 2)))      # floor 2 micrometres under the root: a tangent cut would fail
+        body = body - ring
     return finish(body, D, p, b)
 
 
