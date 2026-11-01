@@ -649,7 +649,7 @@ class Model:
                 txt = c["expr"]
             txt += f" = {c['value']:.4g}" + (" deg" if c["type"] == "dim_ang" else "")
         else:
-            txt = LABEL[c["type"]]
+            txt = "Pierce" if c.get("pierce") else LABEL[c["type"]]
         return txt + "  (" + ", ".join(names) + ")"
 
     # ----- changing the unit system -------------------------------------------------------------

@@ -160,15 +160,11 @@ class MainWindow(QMainWindow):
             (None, "✥", "Move\nEntities", "Select entities first, then enter how far", lambda: self.ed.command_move()),
             (None, "┄", "Construction", "Make the selected lines / arcs / circles construction geometry (or normal again)", lambda: self.ed.command_construction()),
             (None, "⤓", "Convert\nEntities", "Copy the edges of the part that lie in this plane into the sketch", lambda: self.ed.command_convert()),
-            ("menu_cmd", "⌖", "Other\nSketch", "Use geometry of another sketch (shown, earlier in the tree): then add relations to it", [
-                ("Pierce point (where a path passes through this plane)", lambda: self.ed.command_extref("pierce") and self.sync_tool()),
-                ("Project point of another sketch", lambda: self.ed.command_extref("pt") and self.sync_tool()),
-                ("Project line of another sketch", lambda: self.ed.command_extref("ln") and self.sync_tool())]),
             "|",
             ("menu_rel", "⟂", "Add\nRelation", "Select entities then pick a relation - or pick the relation then click entities", [
                 ("Horizontal", "horizontal"), ("Vertical", "vertical"), ("Parallel", "parallel"), ("Perpendicular", "perpendicular"),
                 ("Collinear", "collinear"), ("Coincident", "coincident"), ("Concentric", "concentric"), ("Tangent", "tangent"),
-                ("Equal", "equal"), ("Fix", "fixed"), ("Midpoint", "midpoint")]),
+                ("Equal", "equal"), ("Fix", "fixed"), ("Midpoint", "midpoint"), ("Pierce (other sketch)", "pierce")]),
             ("menu_rel", "↔", "Dimension", "Click the entities, then type a value, a symbol or an equation (e.g. Width/2)", [
                 ("Horizontal", "dim_h"), ("Vertical", "dim_v"), ("Length / distance", "dim_len"), ("Radius", "dim_rad"),
                 ("Diameter", "dim_dia"), ("Angle", "dim_ang")]),

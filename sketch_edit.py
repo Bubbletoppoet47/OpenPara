@@ -254,12 +254,6 @@ def wrap_pi(a):
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
-EXT_PROMPT = {"pt": "Click a point of another (shown) sketch: it appears here, projected onto this plane, and follows that sketch. Esc cancels.",
-              "ln": "Click a line of another (shown) sketch: it appears here, projected onto this plane, and follows that sketch. Esc cancels.",
-              "pierce": "Click the line, arc or circle of another (shown) sketch that should pass through this plane (a sweep path): "
-                        "a fixed point appears where it pierces the plane. Esc cancels."}
-
-
 class SketchEditor:
     def __init__(self, app):
         self.app = app
@@ -279,6 +273,7 @@ class SketchEditor:
         self.hl = set()                   # entities lit up because a row of the dimension / relation table is selected
         self.angle_prev = None            # (s1, s2, constraint refs) of the sector shown while the angle dialog is open
         self.tag_len = {}                 # dimension id -> characters of its label
+        self.choose = None                # several crossings of a pierce: {"rec": point id, "hits": [world points]} (click one)
         self.host = None                  # tangent arc: the line / arc it continues
         self.poly_n = 6
         self.fillet_r = 5.0
@@ -322,6 +317,11 @@ class SketchEditor:
         self.normal_to()
 
     def end(self):
+        try:
+            self.prune_ext()
+        except Exception:
+            pass
+        self.choose = None
         self.sk_id, self.pending, self.cursor, self.sel, self.picks = None, [], None, [], []
         self.box = None
         self.hide_band()
@@ -563,7 +563,7 @@ class SketchEditor:
             return True
         if t == "select":
             tag = self.pick_tag(px, py)
-            key = ("con", tag) if tag is not None else self.pick(px, py)
+            key = ("con", tag) if tag is not None else self.pick_any(px, py)
             if tag is not None:
                 self.select_click(px, py, shift, key)
                 c = self.m.con_by_id(tag)
@@ -585,8 +585,6 @@ class SketchEditor:
             self.press_first = not self.pending
             self.click(hit[0], hit[1])
             return True
-        if t == "extref":
-            return self.pick_ext(px, py)
         if t == "trim":
             key = self.pick(px, py, kinds=("ln", "ar", "ci"))
             uv = self.to_plane(px, py)
@@ -612,8 +610,8 @@ class SketchEditor:
             self.reset_tool("select")
             self.app.sync_tool()
             return True
-        if t in CONSTRAINTS or t in DIMS:
-            key = self.pick(px, py, kinds=("pt", "ln", "ci", "ar"))
+        if t in CONSTRAINTS or t in DIMS or t == "pierce":
+            key = self.pick_any(px, py, kinds=("pt", "ln", "ci", "ar"))
             if key is None:
                 return True
             self.picks.append(key)
@@ -626,7 +624,7 @@ class SketchEditor:
         """A click with the Select tool: pick the entity under it (or, on empty space, clear the selection and pick the part)."""
         if key is None:
             tag = self.pick_tag(px, py)
-            key = ("con", tag) if tag is not None else self.pick(px, py)
+            key = ("con", tag) if tag is not None else self.pick_any(px, py)
         if key is None:
             if not shift:
                 self.sel = []
@@ -914,8 +912,9 @@ class SketchEditor:
             self.app.say("Click the next point (double-click or Esc ends the chain)." if self.pending else "Click the start point.")
         elif t == "arc_tangent":
             self.app.say(DRAW[t][2][min(len(self.pending), 1)])
-        elif t == "extref":
-            self.app.say(EXT_PROMPT[getattr(self, "ext_kind", "pierce")])
+        elif t == "pierce":
+            self.app.say("Pierce: click a point of this sketch, then a line, arc, circle or point of another SHOWN sketch (it is held where it passes "
+                         "through this plane).")
 
     def commit(self, fn, refresh=True):
         """Run `fn(model)` as one undoable edit, re-solve, store the sketch and rebuild."""
@@ -1029,6 +1028,17 @@ class SketchEditor:
 
     # ------------------------------------------------------------------ relations and dimensions
     def try_apply(self):
+        if self.tool == "pierce":
+            if len(self.picks) < 2:
+                return
+            msg = self.pierce_apply()
+            self.picks = []
+            if isinstance(msg, str):
+                self.app.say(msg)
+            else:
+                self.app.say("Pierce relation added: the point follows where the other sketch's geometry passes through this plane.")
+            self.prune_ext()
+            return
         res = make_constraint(self.tool, self.picks)
         if res == "more":
             self.app.say("Pick the next entity.")
@@ -1039,6 +1049,7 @@ class SketchEditor:
             return
         self.apply(self.tool, res)
         self.picks = []
+        self.prune_ext()
 
     def apply(self, tool, refs):
         m = self.m
@@ -1154,6 +1165,7 @@ class SketchEditor:
         """Esc: drop the shape / relation being made; else go back to the select tool; else leave the sketch."""
         if self.pending or self.picks or self.axis_wait:
             self.pending, self.picks, self.host, self.axis_wait = [], [], None, False
+            self.prune_ext()
             self.redraw()
         elif self.tool != "select":
             self.app.set_tool("select")
@@ -1164,6 +1176,14 @@ class SketchEditor:
         """Add Relation / Dimension from the ribbon: entities that are already selected are used at once."""
         self.reset_tool(name)
         self.picks = [k for k in self.sel if k[0] in ("pt", "ln", "ci", "ar")]
+        if name == "pierce":
+            if len(self.picks) >= 2:
+                self.picks = self.picks[:2]
+                self.try_apply()
+                return
+            self.picks = []
+            self.say_prompt()
+            return
         if self.picks:
             res = make_constraint(name, self.picks)
             if res is None:
@@ -1238,6 +1258,7 @@ class SketchEditor:
         self.commit(lambda m: m.delete(items))
         self.sel = []
         self.hl = set()
+        self.prune_ext()
         if gone:
             self.app.doc.prune_cfg()
             self.app.update_all(keep_props=False)
@@ -1387,49 +1408,52 @@ class SketchEditor:
             out.append((f, doc.models[f["id"]], sketch_ext.frame(doc.planes[f["id"]])))
         return out
 
-    def command_extref(self, kind):
-        """Reference geometry of another sketch: kind 'pt' (point), 'ln' (line) projected onto this plane, or 'pierce' (where a curve passes through it)."""
-        earlier = self.earlier_sketches(with_later=True)
-        if not earlier:
-            self.app.say("There is no other sketch this one can refer to (one drawn on a face, or used by a feature that is built first, cannot be moved behind it).")
-            return False
-        if not any(self.app.sketch_shown(f) for f, _m, _fr in earlier):
-            self.app.say("Show the other sketch first (tick its box in the feature tree), then click its geometry. You can hide it again afterwards.")
-            return False
-        self.reset_tool("extref")
-        self.ext_kind = kind
-        self.say_prompt()
-        return True
-
-    def pick_ext(self, px, py):
-        kind = getattr(self, "ext_kind", "pierce")
-        tol = 1.5 * settings.get("snap_px") * self.pl.devicePixelRatioF()
-        best = None                                           # (distance px, feature, entity key, world point)
+    def other_hit(self, px, py, kinds=None):
+        """The geometry of another SHOWN sketch under the pixel (the sketch can be built before this one, or moved behind it):
+        (distance px, feature, entity key, world point on it) or None.  Points first, then the closest line / arc / circle."""
+        tol = settings.get("pick_px") * self.pl.devicePixelRatioF()
+        best_pt = best = None
         for f, sm, sfr in self.earlier_sketches(with_later=True):
             if not self.app.sketch_shown(f):
                 continue
-            if kind == "pt":
+            if kinds is None or "pt" in kinds:
                 ids = list(sm.pts)
                 if ids:
                     W = np.array([sketch_ext.lift(sfr, sm.pts[i]) for i in ids])
                     d = np.linalg.norm(self.to_screen(W) - np.array([px, py]), axis=1)
                     j = int(np.argmin(d))
-                    if best is None or d[j] < best[0]:
-                        best = (float(d[j]), f, ("pt", ids[j]), W[j])
-                continue
-            keys = [("ln", i) for i in sm.lns] + ([] if kind == "ln" else [("ar", i) for i in sm.ars] + [("ci", i) for i in sm.cis])
-            for key in keys:
-                uv = sk.polyline(sm, key, 48)
-                W = np.array([sketch_ext.lift(sfr, q) for q in uv])
+                    if d[j] <= tol and (best_pt is None or d[j] < best_pt[0]):
+                        best_pt = (float(d[j]), f, ("pt", ids[j]), W[j])
+            for key in [("ln", i) for i in sm.lns] + [("ar", i) for i in sm.ars] + [("ci", i) for i in sm.cis]:
+                if kinds is not None and key[0] not in kinds:
+                    continue
+                W = np.array([sketch_ext.lift(sfr, q) for q in sk.polyline(sm, key, 48)])
                 dist, i, t = self.seg_dist(self.to_screen(W), px, py)
-                if best is None or dist < best[0]:
+                if dist <= tol and (best is None or dist < best[0]):
                     best = (dist, f, key, W[i] + (W[i + 1] - W[i]) * t)
-        if best is None or best[0] > tol:
-            self.app.say("Nothing of a shown, earlier sketch is under the click. " + EXT_PROMPT[kind])
-            return True
-        _d, f, key, near = best
+        return best_pt or best
+
+    def pick_any(self, px, py, kinds=None):
+        """Like pick(), and when nothing of this sketch is there, geometry of another shown sketch: it is brought into this sketch as a reference
+        (a projected point / line, or - for an arc or circle - the point where it passes through this plane) and its key is returned."""
+        if self.choose is not None and self.choose_click(px, py):
+            return None
+        self.prune_ext()                                           # references brought in earlier and never used
+        own = self.pick(px, py, kinds)
+        if own is not None or self.m is None:
+            return own
+        hit = self.other_hit(px, py, kinds)
+        if hit is None:
+            return None
+        _d, f, key, near = hit
+        kind = {"pt": "pt", "ln": "ln", "ar": "pierce", "ci": "pierce"}[key[0]]
+        return self.bring_in(kind, f, key, near)
+
+    def bring_in(self, kind, f, key, near):
+        """Add a reference to entity `key` of sketch feature `f` to this sketch (moving this sketch behind it in the tree when it is later).
+        Returns the key of the new point / line in this sketch, or None (the reason is said)."""
         doc = self.app.doc
-        moved, note = None, ""
+        moved = None
         if doc.index_of(f["id"]) > doc.index_of(self.sk_id):         # a sketch is built from what comes before it: move this one behind it
             self.app.snapshot()
             moved = doc.index_of(self.sk_id)
@@ -1439,19 +1463,107 @@ class SketchEditor:
         if moved is not None:
             if res is None:
                 self.app.undo_pop()                                    # one Undo takes back the move and the reference together
-                note = f" '{doc.feature(self.sk_id)['name']}' was moved behind '{f['name']}' in the feature tree so it can follow it."
+                self.app.say(f"'{doc.feature(self.sk_id)['name']}' was moved behind '{f['name']}' in the feature tree so it can follow it.")
             else:                                                     # it did not work out: put the sketch back
                 f_ = doc.features.pop(doc.index_of(self.sk_id))
                 doc.features.insert(moved, f_)
                 doc.rebuild()
                 self.app.undo_pop()
                 self.app.update_all(keep_props=False)
-        if res is None:
-            self.reset_tool("select")
-            self.app.sync_tool()
-            self.app.say({"pt": "Point added", "ln": "Line added", "pierce": "Pierce point added"}[kind] +
-                         f" (follows '{f['name']}'). Now select it and a point of this sketch and add a Coincident relation." + note)
+        if res is not None:
+            return None
+        rec = self.m.ext[-1]
+        if kind == "pierce":
+            try:
+                hits = sketch_ext.crossings(doc, self.sk_id, rec)
+            except sketch_ext.Lost:
+                hits = []
+            if len(hits) > 1:                                         # several crossings: the nearest is taken, the others can be clicked
+                self.choose = {"rec": rec["pt"], "hits": [np.array(h) for h in hits]}
+                self.app.say("The curve crosses this plane in several places: the nearest to your click is used. Click another highlighted crossing to use that one.")
+            self.redraw()
+        return ("pt", rec["pt"]) if kind in ("pt", "pierce") else ("ln", rec["ln"])
+
+    def choose_click(self, px, py):
+        """With several crossings shown: a click on one of them takes it. True when the click was used."""
+        ch = self.choose
+        pl = self.plane()
+        if ch is None or pl is None:
+            return False
+        tol = 1.5 * settings.get("pick_px") * self.pl.devicePixelRatioF()
+        scr = self.to_screen(np.array(ch["hits"]))
+        d = np.linalg.norm(scr - np.array([px, py]), axis=1)
+        j = int(np.argmin(d))
+        self.choose = None
+        if d[j] > tol:
+            self.redraw()
+            return False
+        rec = next((r for r in self.m.ext if r.get("pt") == ch["rec"]), None)
+        if rec is None:
+            self.redraw()
+            return True
+        hit = ch["hits"][j]
+
+        def build(m):
+            r = next((x for x in m.ext if x.get("pt") == ch["rec"]), None)
+            r["last"] = [float(v) for v in hit]
+        self.commit(build)
+        self.app.say("Crossing chosen. It stays on that crossing when the path changes.")
         return True
+
+    def prune_ext(self):
+        """Remove references nothing uses (the ones brought in for a relation that was not made)."""
+        m = self.m
+        if m is None or not m.ext:
+            return
+        keep = set(self.sel) | set(self.picks)
+        if sketch_ext.prune(m, keep):
+            self.app.doc.reports[self.sk_id] = sk.solve_model(m)
+            self.app.doc.store_sketch(self.sk_id)
+            self.app.update_all(keep_props=False)
+
+    def pierce_apply(self):
+        """The Pierce relation: a point of this sketch is held where a curve of another sketch passes through this plane (or on another
+        sketch's point). A line against a line has too few degrees of freedom to be defined that way, so it is refused."""
+        m = self.m
+        a, b = self.picks[:2]
+        ra, rb = sketch_ext.rec_of(m, a), sketch_ext.rec_of(m, b)
+        if (ra is None) == (rb is None):
+            return "Pick one thing of this sketch and one of another sketch (click the other sketch's line, arc, circle or point)."
+        own, other, rec = (a, b, rb) if ra is None else (b, a, ra)
+        if own[0] != "pt":
+            return ("A line against a line cannot be fixed by a pierce relation: it does not have enough degrees of freedom. Pick a point of "
+                    "this sketch (or put a point on the line first).")
+        if other[0] == "ln":                                      # the projected line becomes the point where the line passes through the plane
+            ent, label, near = tuple(rec["ent"]), rec.get("label"), rec.get("last")
+            sketch_id = rec["sketch"]
+            doc = self.app.doc
+
+            def build(mm):
+                r = sketch_ext.rec_of(mm, other)
+                if r is None:
+                    return "That reference is gone."
+                sketch_ext.remove_record(mm, r)
+                err = sketch_ext.add_reference(doc, self.sk_id, mm, "pierce", sketch_id, ent, near, label=label)
+                if err:
+                    return err
+                c = mm.add_con("coincident", [own, ("pt", mm.ext[-1]["pt"])])
+                c["pierce"] = True
+                self.last_con = c["id"]
+            res = self.commit(build, refresh=False)
+            if res is None:
+                self.app.update_all(keep_props=False)
+            return res
+        c_ref = ("pt", rec["pt"] if "pt" in rec else rec["pts"][0])
+
+        def build2(mm):
+            c = mm.add_con("coincident", [own, other])
+            c["pierce"] = True
+            self.last_con = c["id"]
+        res = self.commit(build2, refresh=False)
+        if res is None:
+            self.app.update_all(keep_props=False)
+        return res
 
     def command_convert(self):
         """Convert Entities: copy picked edges (or the outline of a picked face) of the part into the sketch, projected onto its plane.
@@ -1705,6 +1817,8 @@ class SketchEditor:
         for pts, col, size in ((free, COL_FREE, 7.0), (fixed, COL_FIXED, 7.0), (extp, COL_EXT, 9.0), (sel, COL_SEL, 10.0)):
             if pts:
                 self.actor(pv.PolyData(self.to_world(np.array(pts))), col, size, points=True)
+        if self.choose is not None and len(self.choose["hits"]) > 1:   # the crossings of a curve with this plane: click one
+            self.actor(pv.PolyData(np.array(self.choose["hits"], float)), (1.0, 0.80, 0.10), 14.0, points=True)
         self.tags = []
         for c in m.cons:
             if c["type"] in DIMS and c.get("grp") is None and self.app.vis["dims"]:
