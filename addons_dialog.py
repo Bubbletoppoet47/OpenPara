@@ -1,7 +1,39 @@
 """addons_dialog.py - File > Add-ons...: install, update and uninstall the optional parts of OpenPara."""
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QMessageBox, QProgressDialog, QPushButton, QVBoxLayout, QWidget
 
 import addons
+
+
+def install_with_progress(parent, aid):
+    """Install / update an add-on with a progress window that can be cancelled. True when it is installed afterwards."""
+    name = addons.info(aid)["name"]
+    dlg = QProgressDialog(f"Installing '{name}' ...", "Cancel", 0, 0, parent)
+    dlg.setWindowTitle("Add-ons")
+    dlg.setMinimumDuration(0)
+    dlg.setMinimumWidth(420)
+    dlg.setAutoClose(False)
+    dlg.setAutoReset(False)
+    dlg.show()
+
+    def progress(text, frac):
+        dlg.setLabelText(f"Installing '{name}'\n{text}")
+        if frac is None:
+            dlg.setRange(0, 0)
+        else:
+            dlg.setRange(0, 1000)
+            dlg.setValue(int(frac * 1000))
+        QApplication.processEvents()
+        return not dlg.wasCanceled()
+    try:
+        addons.install(aid, progress=progress)
+        return True
+    except addons.Cancelled:
+        return False
+    except Exception as ex:
+        QMessageBox.warning(parent, "Add-ons", f"Could not install '{name}':\n\n{ex}")
+        return False
+    finally:
+        dlg.close()
 
 
 class AddonsDialog(QDialog):
@@ -12,7 +44,8 @@ class AddonsDialog(QDialog):
         self.resize(560, 100)
         self.box = QVBoxLayout(self)
         intro = QLabel("The core of OpenPara (parts, sketches, assemblies, STEP / STL exchange) is always there. These parts are optional: "
-                       "install what you use, remove what you do not. Your own files are never deleted.")
+                       "install what you use (they are downloaded from GitHub, so this needs an internet connection), remove what you do not. "
+                       "Your own files are never deleted.")
         intro.setWordWrap(True)
         self.box.addWidget(intro)
         self.rows = QVBoxLayout()
@@ -27,7 +60,8 @@ class AddonsDialog(QDialog):
             it = self.rows.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
-        for aid, m in addons.shipped().items():
+        for aid in addons.known():
+            m = addons.info(aid)
             st = addons.status(aid)
             row = QWidget()
             h = QHBoxLayout(row)
@@ -46,15 +80,12 @@ class AddonsDialog(QDialog):
             self.rows.addWidget(row)
 
     def do_install(self, aid):
-        try:
-            addons.install(aid)
-        except Exception as ex:
-            QMessageBox.warning(self, "Add-ons", f"Could not install: {ex}")
+        install_with_progress(self, aid)
         self.shell.addons_changed()
         self.fill()
 
     def do_uninstall(self, aid):
-        name = addons.shipped().get(aid, {"name": aid})["name"]
+        name = addons.info(aid)["name"]
         tabs = self.shell.addon_tabs(aid)
         extra = f"\n\nThe {len(tabs)} open tab(s) that belong to it will be closed (you are asked about unsaved changes)." if tabs else ""
         if QMessageBox.question(self, "Uninstall", f"Uninstall '{name}'?{extra}\n\nYour saved files stay as they are; you can install it again any time.") != QMessageBox.StandardButton.Yes:

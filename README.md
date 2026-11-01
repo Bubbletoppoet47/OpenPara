@@ -10,7 +10,7 @@ An open-source parametric CAD modeller written in Python (working title: *Gen Pa
 - Built-in simulations: 1D beam / frame FEA, 2D FEA, 2D CFD (results and slicing)
 - Photorealistic renderer ("Renderer" tab): sun and sky from date / time / place, spot light, floor, several cameras, still pictures and MP4 videos (Mitsuba 3)
 
-Simulation and the renderer are **add-ons** (File > Add-ons...): install or uninstall each one at any time; the core (parts, sketches, assemblies, STEP / STL) is always there. Uninstalling removes only the add-on's program files, never your .gps / .gpr files or your material library, and an update does not bring back an add-on you removed. In this release the add-ons ship inside the program, so installing one needs no download (the packages they use still come with the installer).
+Simulation and the renderer are **add-ons** (File > Add-ons..., or the question that appears when you use one): they are downloaded from the GitHub release of your version, together with the packages only they need (gmsh; Mitsuba and the video encoder), so the installer stays smaller and you only carry what you use. Uninstalling removes the add-on and its packages, never your .gps / .gpr files or your material library. Installing needs an internet connection; once installed an add-on works offline. After a program update, File > Add-ons shows "update available" for installed add-ons (the old ones keep working until you update them). The core (parts, sketches, assemblies, STEP / STL, units, settings) is always there.
 
 Built on [build123d](https://github.com/gumyr/build123d) (OpenCascade), PyQt6, pyvista / VTK, gmsh and Mitsuba 3.
 

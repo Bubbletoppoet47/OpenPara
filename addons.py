@@ -1,26 +1,54 @@
 """
-addons.py - optional parts of OpenPara that can be installed and removed without touching the core (modelling, sketching, assemblies,
-STEP / STL exchange, units, settings and the updater are always there).
+addons.py - optional parts of OpenPara that are installed (downloaded) and removed on request; the core (modelling, sketching, assemblies,
+STEP / STL exchange, units, settings, the updater) is always there.
 
-An add-on is a folder with  addon.json  and its Python modules:
-    <program>/addons_src/<id>/        the copy that ships with every release (never imported directly)
-    <user folder>/addons/<id>/        the installed copy; this folder is on sys.path while the add-on is installed
-    <user folder>/addons.json         {"removed": [ids]}   add-ons the user took out (an update must not bring them back)
+An add-on is a folder with  addon.json  and its Python modules, and may list pip packages that only it needs ("requires").
+    <user folder>/addons/<id>/          the installed add-on; this folder and its  site/  sub-folder are on sys.path while it is installed
+    <user folder>/addons/<id>/site/     the packages it needs that the base does not have (pip --target, so uninstalling removes them too)
+    <user folder>/addons.json           {"removed": [ids]}   (only used for add-ons that ship inside the program, see below)
 
-Start-up (startup()) puts a shipped add-on in place when it is missing (unless the user removed it) or older than the shipped one, and
-adds every installed folder to sys.path.  install() / uninstall() do the same on request.  Your own files (.gps, .gpr, the material
-library) are never touched: they live elsewhere and open again as soon as the add-on is installed again.
+Where an add-on comes from:
+  * download: the GitHub release of this version has  addons-index.json  and one  addon-<id>.zip  per add-on (built by tools/build_addons.py).
+    OPARA_ADDON_BASE overrides the release address (tests, mirrors; a file:// address works).
+  * the program folder: a  addons_src/<id>/  folder next to this file (a source checkout) is used first and, at start, installed or upgraded
+    by startup(), so a developer's copy keeps working without a network.
+Your own files (.gps, .gpr, the material library) are never touched by installing or uninstalling.
 """
+import hashlib
 import importlib
+import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
+import urllib.request
+import zipfile
 
 import paths
 
 SRC_DIR = os.path.join(paths.CODE_DIR, "addons_src")
 MANIFEST = "addon.json"
+REPO = "Bubbletoppoet47/OpenPara"
+
+# what the dialog and the "install it?" questions show before anything is downloaded (tests keep it equal to addons_src/*/addon.json)
+CATALOG = {
+    "simulation": {"name": "Simulation",
+                   "description": "1D FEA (frames and trusses), 2D FEA (plane stress / strain) and 2D CFD of a sketch or a slice of a part or "
+                                  "assembly, with the material library and the result viewer. Saved simulations (.gps) need it."},
+    "render": {"name": "Renderer",
+               "description": "Render Studio: photorealistic pictures and videos of a part or assembly with sun, lights, floor and cameras. "
+                              "Saved renders (.gpr) need it."},
+}
+
+
+class AddonError(Exception):
+    pass
+
+
+class Cancelled(AddonError):
+    pass
 
 
 def addons_dir():
@@ -65,6 +93,7 @@ def _manifest(folder):
         if m.get("id") and m.get("name"):
             m.setdefault("version", "0")
             m.setdefault("description", "")
+            m.setdefault("requires", [])
             return m
     except (OSError, ValueError, AttributeError):
         pass
@@ -72,7 +101,7 @@ def _manifest(folder):
 
 
 def shipped():
-    """{id: manifest} of the add-ons that came with this copy of the program."""
+    """{id: manifest} of the add-ons that sit in the program folder (a source checkout); empty for the installed program."""
     out = {}
     if os.path.isdir(SRC_DIR):
         for n in sorted(os.listdir(SRC_DIR)):
@@ -80,6 +109,30 @@ def shipped():
             if m and m["id"] == n:
                 out[n] = m
     return out
+
+
+def known():
+    """All add-on ids that can be installed: the catalog plus anything in the program folder."""
+    ids = list(CATALOG)
+    for a in shipped():
+        if a not in ids:
+            ids.append(a)
+    return ids
+
+
+def info(aid):
+    """{'name','description'} for the dialogs."""
+    m = shipped().get(aid) or CATALOG.get(aid) or {"name": aid, "description": ""}
+    return {"name": m["name"], "description": m["description"]}
+
+
+def target_version():
+    """The add-on version that fits this copy of the program."""
+    s = shipped()
+    if s:
+        return max((m["version"] for m in s.values()), key=_vkey)
+    import version
+    return version.__version__
 
 
 def installed_path(aid):
@@ -100,60 +153,37 @@ def is_active(aid):
 
 
 def status(aid):
-    """'installed', 'update' (a newer one ships with this program) or 'not installed'."""
+    """'installed', 'update' (the add-on is older than this program) or 'not installed'."""
     m = installed_manifest(aid)
     if m is None:
         return "not installed"
-    s = shipped().get(aid)
-    if s and _vkey(s["version"]) > _vkey(m["version"]):
+    if _vkey(target_version()) > _vkey(m["version"]):
         return "update"
     return "installed"
 
 
 def module_names(aid):
-    d = installed_path(aid) if is_installed(aid) else os.path.join(SRC_DIR, aid)
+    """Top-level module names of the add-on's own code (not its packages)."""
     names = set()
-    if os.path.isdir(d):
-        for f in os.listdir(d):
-            if f.endswith(".py"):
-                names.add(f[:-3])
-            elif os.path.isdir(os.path.join(d, f)) and os.path.exists(os.path.join(d, f, "__init__.py")):
-                names.add(f)
+    for d in (installed_path(aid), os.path.join(SRC_DIR, aid)):
+        if os.path.isdir(d):
+            for f in os.listdir(d):
+                if f.endswith(".py"):
+                    names.add(f[:-3])
     return names
 
 
 def owner_of_module(name):
-    """The id of the installed add-on that provides module `name` (a module's __module__), or None."""
+    """The id of the add-on that provides module `name` (a class's __module__), or None."""
     top = name.split(".")[0]
-    for aid in shipped():
+    for aid in known():
         if top in module_names(aid):
             return aid
     return None
 
 
-def _clean_trash():
-    d = addons_dir()
-    for n in os.listdir(d):
-        if n.startswith(".trash-"):
-            shutil.rmtree(os.path.join(d, n), ignore_errors=True)
-
-
-def _copy_in(aid):
-    """Copy the shipped add-on to the user folder, all or nothing."""
-    src = os.path.join(SRC_DIR, aid)
-    if not os.path.isdir(src):
-        raise FileNotFoundError(f"The add-on '{aid}' is not part of this copy of OpenPara.")
-    dest = installed_path(aid)
-    tmp = dest + ".new"
-    shutil.rmtree(tmp, ignore_errors=True)
-    shutil.copytree(src, tmp, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    if os.path.isdir(dest):
-        _remove_dir(dest)
-    os.replace(tmp, dest)
-
-
 def _remove_dir(path):
-    """Delete a folder; when a file is in use (Windows) move the folder aside and let the next start delete it."""
+    """Delete a folder; when a file is in use (Windows) move the folder aside, or at least leave it without a manifest: start-up finishes."""
     shutil.rmtree(path, ignore_errors=True)
     if not os.path.exists(path):
         return True
@@ -166,62 +196,241 @@ def _remove_dir(path):
     try:
         os.replace(path, trash)
         shutil.rmtree(trash, ignore_errors=True)
-        return True
+        return not os.path.exists(path)
     except OSError:
         return False
 
 
+def _clean_leftovers():
+    """Folders of removed add-ons that could not be deleted while the program ran, and unfinished installs."""
+    d = addons_dir()
+    for n in os.listdir(d):
+        p = os.path.join(d, n)
+        if not os.path.isdir(p):
+            continue
+        if n.startswith(".trash-") or n.endswith(".new") or n.startswith(".dl-") or _manifest(p) is None:
+            shutil.rmtree(p, ignore_errors=True)
+    for n in os.listdir(d):
+        if n.startswith(".dl-") and os.path.isfile(os.path.join(d, n)):
+            try:
+                os.remove(os.path.join(d, n))
+            except OSError:
+                pass
+
+
 def activate():
-    for aid in list(shipped()):
+    for aid in known():
         p = installed_path(aid)
-        if is_installed(aid) and p not in sys.path:
-            sys.path.insert(0, p)
+        if is_installed(aid):
+            for q in (os.path.join(p, "site"), p):
+                if os.path.isdir(q) and q not in sys.path:
+                    sys.path.insert(0, q)
     importlib.invalidate_caches()
 
 
 def startup():
-    """Called once when the program starts: tidy, put shipped add-ons in place or upgrade them, activate."""
+    """Called once when the program starts: tidy, put add-ons that ship in the program folder in place (or upgrade them), activate."""
     try:
-        _clean_trash()
+        _clean_leftovers()
         removed = set(_read_state()["removed"])
         for aid in shipped():
             if aid in removed:
                 continue
             if status(aid) in ("not installed", "update"):
                 try:
-                    _copy_in(aid)
+                    install(aid, activate_now=False)
                 except Exception as ex:
                     sys.stderr.write(f"add-on {aid}: could not install: {ex}\n")
     finally:
         activate()
 
 
-def install(aid):
-    """Install (or update) a shipped add-on and make it importable at once."""
-    if aid not in shipped():
+# ---------------------------------------------------------------- getting an add-on
+
+def release_base():
+    b = os.environ.get("OPARA_ADDON_BASE")
+    if b:
+        return b if b.endswith("/") else b + "/"
+    import version
+    return f"https://github.com/{REPO}/releases/download/v{version.__version__}/"
+
+
+def _open(url, timeout=30):
+    req = urllib.request.Request(url, headers={"User-Agent": "OpenPara"})
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def _say(progress, text, frac=None):
+    if progress is not None and progress(text, frac) is False:
+        raise Cancelled("cancelled")
+
+
+def _download(url, dest, progress, label):
+    try:
+        with _open(url) as r, open(dest, "wb") as f:
+            total = int(r.headers.get("Content-Length") or 0)
+            got = 0
+            while True:
+                chunk = r.read(256 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+                got += len(chunk)
+                _say(progress, f"{label} {got / 1e6:.1f} MB" + (f" of {total / 1e6:.1f} MB" if total else ""), (got / total) if total else None)
+    except Cancelled:
+        raise
+    except Exception as ex:
+        raise AddonError(f"Could not download {label.lower()} ({url}): {ex}. Add-ons are downloaded from GitHub, so this needs an internet connection.")
+
+
+def _safe_extract(zpath, dest):
+    root = os.path.realpath(dest)
+    with zipfile.ZipFile(zpath) as z:
+        for n in z.namelist():
+            t = os.path.realpath(os.path.join(dest, n))
+            if t != root and not t.startswith(root + os.sep):
+                raise AddonError("The add-on file contains an unsafe path.")
+        z.extractall(dest)
+
+
+def _missing_packages(manifest):
+    out = []
+    for r in manifest.get("requires", []):
+        mod = r.get("import") or r["pip"].split("=")[0].replace("-", "_")
+        if os.environ.get("OPARA_ADDON_FORCE_PIP") or importlib.util.find_spec(mod) is None:
+            out.append(r["pip"])
+    return out
+
+
+def _pip_install(pins, target, progress):
+    """pip install --target <target> --no-deps <pins>  with the program's own python; polls so the window stays alive and can cancel."""
+    os.makedirs(target, exist_ok=True)
+    cmd = [paths.python_exe(), "-m", "pip", "install", "--target", target, "--no-deps", "--only-binary=:all:", "--no-warn-script-location",
+           "--disable-pip-version-check", "--no-input"] + list(pins)
+    kw = {}
+    if sys.platform == "win32":
+        kw["creationflags"] = 0x08000000                                  # CREATE_NO_WINDOW
+    log = tempfile.TemporaryFile()
+    p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, **kw)
+    try:
+        while p.poll() is None:
+            _say(progress, "Downloading and installing " + ", ".join(x.split("==")[0] for x in pins) + " ...")
+            try:
+                p.wait(0.3)
+            except subprocess.TimeoutExpired:
+                pass
+    except BaseException:
+        p.kill()
+        raise
+    if p.returncode != 0:
+        log.seek(0)
+        tail = log.read().decode("utf-8", "replace")[-1500:]
+        raise AddonError("Installing the packages failed (needs an internet connection):\n" + tail)
+
+
+def _fetch_folder(aid, work, progress):
+    """Put the add-on's files (addon.json + modules) into `work`; from the program folder when it has them, else from the release."""
+    src = os.path.join(SRC_DIR, aid)
+    if os.path.isdir(src) and _manifest(src):
+        shutil.copytree(src, work, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        return
+    base = release_base()
+    _say(progress, "Looking for the add-on ...")
+    idx_path = work + ".index.json"
+    _download(base + "addons-index.json", idx_path, progress, "The add-on list")
+    with open(idx_path, encoding="utf-8") as f:
+        idx = json.load(f)
+    os.remove(idx_path)
+    ent = (idx.get("addons") or {}).get(aid)
+    if not ent:
+        raise AddonError(f"The add-on '{aid}' is not part of this release.")
+    zpath = work + ".zip"
+    _download(base + ent["file"], zpath, progress, f"{info(aid)['name']} add-on")
+    h = hashlib.sha256()
+    with open(zpath, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    if ent.get("sha256") and h.hexdigest() != ent["sha256"]:
+        os.remove(zpath)
+        raise AddonError("The downloaded add-on is damaged (checksum differs). Try again.")
+    os.makedirs(work)
+    _safe_extract(zpath, work)
+    os.remove(zpath)
+
+
+def install(aid, progress=None, activate_now=True):
+    """Install or update an add-on. progress(text, fraction_or_None) may return False to cancel (Cancelled is raised, nothing is changed)."""
+    if aid not in known():
         raise KeyError(f"unknown add-on '{aid}'")
-    _copy_in(aid)
+    ad = addons_dir()
+    work = os.path.join(ad, f".dl-{aid}")
+    shutil.rmtree(work, ignore_errors=True)
+    for extra in (work + ".index.json", work + ".zip"):
+        try:
+            os.remove(extra)
+        except OSError:
+            pass
+    try:
+        _fetch_folder(aid, work, progress)
+        m = _manifest(work)
+        if not m or m["id"] != aid:
+            raise AddonError(f"The downloaded file is not the add-on '{aid}'.")
+        pins = _missing_packages(m)
+        if pins:
+            _pip_install(pins, os.path.join(work, "site"), progress)
+        dest = installed_path(aid)
+        new = dest + ".new"
+        shutil.rmtree(new, ignore_errors=True)
+        os.replace(work, new)
+        if os.path.isdir(dest):
+            _unload(aid)
+            if not _remove_dir(dest):
+                raise AddonError("The old copy of the add-on is in use. Restart OpenPara and try again.")
+        os.replace(new, dest)
+    except BaseException:
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(installed_path(aid) + ".new", ignore_errors=True)
+        for extra in (work + ".index.json", work + ".zip"):
+            try:
+                os.remove(extra)
+            except OSError:
+                pass
+        raise
     s = _read_state()
     s["removed"] = [r for r in s["removed"] if r != aid]
     _write_state(s)
-    for m in module_names(aid):                      # a stale failed import must not stick
-        sys.modules.pop(m, None)
-    activate()
+    for n in module_names(aid):                      # a stale failed import must not stick
+        sys.modules.pop(n, None)
+    if activate_now:
+        activate()
+
+
+def _unload(aid):
+    p = os.path.realpath(installed_path(aid))
+    for q in (os.path.join(installed_path(aid), "site"), installed_path(aid)):
+        while q in sys.path:
+            sys.path.remove(q)
+    for n, mod in list(sys.modules.items()):
+        f = getattr(mod, "__file__", None)
+        if f and os.path.realpath(f).startswith(p + os.sep):
+            sys.modules.pop(n, None)
+    importlib.invalidate_caches()
 
 
 def uninstall(aid):
-    """Remove an installed add-on: its modules are dropped from memory, its folder is deleted. Returns True when the folder is gone."""
+    """Remove an installed add-on with its packages: modules dropped from memory, folder deleted. True when the folder is gone; otherwise the
+    add-on is already marked as removed and the rest is deleted at the next start."""
     p = installed_path(aid)
-    names = module_names(aid)
-    while p in sys.path:
-        sys.path.remove(p)
-    for n in list(sys.modules):
-        if n.split(".")[0] in names:
-            sys.modules.pop(n, None)
+    _unload(aid)
+    mf = os.path.join(p, MANIFEST)
+    if os.path.exists(mf):
+        try:
+            os.remove(mf)                                                  # from now on it counts as not installed, whatever else happens
+        except OSError:
+            pass
     ok = _remove_dir(p) if os.path.exists(p) else True
     s = _read_state()
     if aid not in s["removed"]:
         s["removed"].append(aid)
     _write_state(s)
-    importlib.invalidate_caches()
     return ok
