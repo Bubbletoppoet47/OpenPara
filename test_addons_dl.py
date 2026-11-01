@@ -131,6 +131,7 @@ if os.environ.get("ADDON_REAL_PIP", "1") == "1":
     site = os.path.join(UD, "addons", "simulation", "site")
     assert os.path.isfile(os.path.join(site, "gmsh.py")) or os.path.isdir(os.path.join(site, "gmsh")), os.listdir(site)
     import gmsh
+    gmsh.initialize(); gmsh.model.add('t'); gmsh.finalize()
     assert os.path.realpath(gmsh.__file__).startswith(os.path.realpath(site)), gmsh.__file__
     assert addons.uninstall("simulation") is True
     assert not os.path.exists(os.path.join(UD, "addons", "simulation")) and "gmsh" not in sys.modules

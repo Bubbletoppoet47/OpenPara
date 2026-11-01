@@ -302,30 +302,65 @@ def _missing_packages(manifest):
     return out
 
 
+def _unpack_wheel(wheel, site):
+    """Unpack a wheel into `site` the way an install would, without pip's --target (which loses a wheel's data/lib files on Windows, e.g.
+    gmsh's DLL). purelib / platlib and data files all go below `site`; scripts, headers and docs are left out."""
+    root = os.path.realpath(site)
+    with zipfile.ZipFile(wheel) as z:
+        for info_ in z.infolist():
+            n = info_.filename
+            if n.endswith("/"):
+                continue
+            parts = n.split("/")
+            if parts[0].endswith(".data"):
+                if len(parts) < 3 or parts[1] not in ("purelib", "platlib", "data"):
+                    continue
+                if parts[1] == "data" and parts[2] in ("include", "share"):
+                    continue
+                parts = parts[2:]
+            if n.endswith(".dll.lib"):                                      # Windows import library: only needed to link against it
+                continue
+            dest = os.path.realpath(os.path.join(site, *parts))
+            if not dest.startswith(root + os.sep):
+                raise AddonError("A package file contains an unsafe path.")
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with z.open(info_) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+
+
 def _pip_install(pins, target, progress):
-    """pip install --target <target> --no-deps <pins>  with the program's own python; polls so the window stays alive and can cancel."""
+    """Download the wheels of `pins` (pip download, no dependencies - the add-on lists all it needs) and unpack them into `target`.
+    The program's own python runs pip; it is polled so the window stays alive and can cancel."""
     os.makedirs(target, exist_ok=True)
-    cmd = [paths.python_exe(), "-m", "pip", "install", "--target", target, "--no-deps", "--only-binary=:all:", "--no-warn-script-location",
-           "--disable-pip-version-check", "--no-input"] + list(pins)
-    kw = {}
-    if sys.platform == "win32":
-        kw["creationflags"] = 0x08000000                                  # CREATE_NO_WINDOW
-    log = tempfile.TemporaryFile()
-    p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, **kw)
+    wheels = tempfile.mkdtemp(prefix="opara_whl_")
     try:
-        while p.poll() is None:
-            _say(progress, "Downloading and installing " + ", ".join(x.split("==")[0] for x in pins) + " ...")
-            try:
-                p.wait(0.3)
-            except subprocess.TimeoutExpired:
-                pass
-    except BaseException:
-        p.kill()
-        raise
-    if p.returncode != 0:
-        log.seek(0)
-        tail = log.read().decode("utf-8", "replace")[-1500:]
-        raise AddonError("Installing the packages failed (needs an internet connection):\n" + tail)
+        cmd = [paths.python_exe(), "-m", "pip", "download", "--dest", wheels, "--no-deps", "--only-binary=:all:",
+               "--disable-pip-version-check", "--no-input"] + list(pins)
+        kw = {}
+        if sys.platform == "win32":
+            kw["creationflags"] = 0x08000000                              # CREATE_NO_WINDOW
+        log = tempfile.TemporaryFile()
+        p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, **kw)
+        try:
+            while p.poll() is None:
+                _say(progress, "Downloading " + ", ".join(x.split("==")[0] for x in pins) + " ...")
+                try:
+                    p.wait(0.3)
+                except subprocess.TimeoutExpired:
+                    pass
+        except BaseException:
+            p.kill()
+            raise
+        if p.returncode != 0:
+            log.seek(0)
+            tail = log.read().decode("utf-8", "replace")[-1500:]
+            raise AddonError("Downloading the packages failed (needs an internet connection):\n" + tail)
+        for w in sorted(os.listdir(wheels)):
+            if w.endswith(".whl"):
+                _say(progress, f"Unpacking {w.split('-')[0]} ...")
+                _unpack_wheel(os.path.join(wheels, w), target)
+    finally:
+        shutil.rmtree(wheels, ignore_errors=True)
 
 
 def _fetch_folder(aid, work, progress):
