@@ -57,7 +57,6 @@ jobs:
           Get-ChildItem -File | Where-Object { $_.Extension -in ".py", ".json", ".ico", ".txt", ".md" -or $_.Name -eq "LICENSE" } |
             Where-Object { $_.Name -notlike "test_*" -and $_.Name -ne "requirements-lock.txt" -and $_.Name -ne "get-pip.py" } | Copy-Item -Destination $app
           Copy-Item docs -Destination "$app\docs" -Recurse
-          Copy-Item addons_src -Destination "$app\addons_src" -Recurse
           '{"runtime": ' + $env:RUNTIME + ', "version": "' + $env:VERSION + '"}' | Set-Content "$app\runtime.json"
 
       - name: Smoke test (imports and the updater test, no window)
@@ -73,14 +72,32 @@ jobs:
             $t = $t -replace "%", "%25" -replace "`r", "" -replace "`n", "%0A"
             Write-Host "::error title=$title::$t"
           }
-          $out = & $py -c "import gpd_app, addons; addons.install('simulation'); addons.install('render'); import render_studio, sim_tab, updater; print('app imports ok')" 2>&1
+          # 1. the base alone: the program imports without the add-on packages
+          Push-Location build\OpenPara\app
+          $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_base"
+          $out = & $py -c "import gpd_app, addons, updater, importlib.util as u; assert u.find_spec('gmsh') is None and u.find_spec('mitsuba') is None, 'add-on packages are in the base'; print('app imports ok')" 2>&1
+          Pop-Location
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "app imports ok")) { Report "import of the app failed (exit $LASTEXITCODE)" $out; exit 1 }
-          $out = & $py -c "import build123d, pyvista, pyvistaqt, mitsuba, gmsh, scipy, imageio_ffmpeg; print('packages ok')" 2>&1
+          $out = & $py -c "import build123d, pyvista, pyvistaqt, scipy, numpy; print('packages ok')" 2>&1
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "packages ok")) { Report "import of a package failed (exit $LASTEXITCODE)" $out; exit 1 }
+          # 2. the add-ons: build the release files and install both from them (real pip install of gmsh / mitsuba with this python)
+          New-Item -ItemType Directory -Force dist | Out-Null
+          python tools\build_addons.py dist
+          if ($LASTEXITCODE -ne 0) { throw "add-on build failed" }
+          $dist = (Resolve-Path dist).Path
+          Push-Location build\OpenPara\app
+          $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_addons"
+          $env:OPARA_ADDON_BASE = "file:///" + ($dist -replace "\\", "/") + "/"
+          $out = & $py -c "import addons; addons.install('simulation'); addons.install('render'); import gpd_app, sim_tab, render_studio, gmsh, mitsuba, imageio_ffmpeg; assert addons.status('render')=='installed'; print('add-ons ok')" 2>&1
+          Pop-Location
+          Remove-Item Env:OPARA_ADDON_BASE
+          Write-Host $out
+          Write-Host "exit code: $LASTEXITCODE"
+          if (-not (($out | Out-String) -match "add-ons ok")) { Report "add-on install failed (exit $LASTEXITCODE)" $out; exit 1 }
           Copy-Item test_updater.py build\OpenPara\app\
           $out = & $py build\OpenPara\app\test_updater.py 2>&1
           $code = $LASTEXITCODE

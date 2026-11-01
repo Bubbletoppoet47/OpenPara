@@ -2,8 +2,5 @@ build123d
 pyvista
 pyvistaqt
 PyQt6
-gmsh
 scipy
 numpy
-mitsuba
-imageio-ffmpeg

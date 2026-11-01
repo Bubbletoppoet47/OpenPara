@@ -1,2 +1,20 @@
-{"id": "render", "name": "Renderer", "version": "0.6.0",
- "description": "Render Studio: photorealistic pictures and videos of a part or assembly with sun, lights, floor and cameras. Saved renders (.gpr) need it."}
+{
+ "id": "render",
+ "name": "Renderer",
+ "version": "0.7.0",
+ "description": "Render Studio: photorealistic pictures and videos of a part or assembly with sun, lights, floor and cameras. Saved renders (.gpr) need it.",
+ "requires": [
+  {
+   "pip": "mitsuba==3.9.1",
+   "import": "mitsuba"
+  },
+  {
+   "pip": "drjit==1.5.0",
+   "import": "drjit"
+  },
+  {
+   "pip": "imageio-ffmpeg==0.7.0",
+   "import": "imageio_ffmpeg"
+  }
+ ]
+}

@@ -203,19 +203,18 @@ class AppShell(QMainWindow):
         return w
 
     def need_addon(self, aid, what):
-        """True when the add-on is installed; otherwise offer to install it (it ships with the program, so this needs no download)."""
+        """True when the add-on is installed; otherwise offer to install it (downloaded from GitHub)."""
         if addons.is_active(aid):
             return True
-        m = addons.shipped().get(aid)
-        if m is None:
-            QMessageBox.information(self, "Add-on", f"{what} needs the add-on '{aid}', which is not part of this copy of OpenPara.")
+        info = addons.info(aid)
+        if aid not in addons.known():
+            QMessageBox.information(self, "Add-on", f"{what} needs the add-on '{aid}', which this copy of OpenPara does not know.")
             return False
-        if QMessageBox.question(self, "Add-on needed", f"{what} needs the add-on '{m['name']}'.\n\nInstall it now?") != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "Add-on needed", f"{what} needs the add-on '{info['name']}'.\n\nDownload and install it now? "
+                                "(It is fetched from GitHub, so this needs an internet connection.)") != QMessageBox.StandardButton.Yes:
             return False
-        try:
-            addons.install(aid)
-        except Exception as ex:
-            QMessageBox.warning(self, "Add-on", f"Could not install '{m['name']}': {ex}")
+        import addons_dialog
+        if not addons_dialog.install_with_progress(self, aid):
             return False
         self.addons_changed()
         return True
