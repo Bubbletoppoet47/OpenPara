@@ -1,3 +1,4 @@
+import addons; addons.startup()   # the simulation / render modules live in add-ons
 import faulthandler; faulthandler.dump_traceback_later(280, exit=True)
 import os, sys, tempfile, json
 os.environ["QT_QPA_PLATFORM"] = "offscreen"

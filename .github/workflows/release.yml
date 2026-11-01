@@ -57,6 +57,7 @@ jobs:
           Get-ChildItem -File | Where-Object { $_.Extension -in ".py", ".json", ".ico", ".txt", ".md" -or $_.Name -eq "LICENSE" } |
             Where-Object { $_.Name -notlike "test_*" -and $_.Name -ne "requirements-lock.txt" -and $_.Name -ne "get-pip.py" } | Copy-Item -Destination $app
           Copy-Item docs -Destination "$app\docs" -Recurse
+          Copy-Item addons_src -Destination "$app\addons_src" -Recurse
           '{"runtime": ' + $env:RUNTIME + ', "version": "' + $env:VERSION + '"}' | Set-Content "$app\runtime.json"
 
       - name: Smoke test (imports and the updater test, no window)
@@ -72,7 +73,7 @@ jobs:
             $t = $t -replace "%", "%25" -replace "`r", "" -replace "`n", "%0A"
             Write-Host "::error title=$title::$t"
           }
-          $out = & $py -c "import gpd_app, render_studio, updater; print('app imports ok')" 2>&1
+          $out = & $py -c "import gpd_app, addons; addons.install('simulation'); addons.install('render'); import render_studio, sim_tab, updater; print('app imports ok')" 2>&1
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "app imports ok")) { Report "import of the app failed (exit $LASTEXITCODE)" $out; exit 1 }

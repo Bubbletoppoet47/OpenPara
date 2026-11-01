@@ -10,6 +10,9 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget
 
+import addons
+addons.startup()          # puts the shipped add-ons in place (or upgrades them) and makes the installed ones importable
+
 import pm_app
 import settings
 import unitctl
@@ -75,6 +78,7 @@ class AppShell(QMainWindow):
         add(fm, "Import STEP...", self.import_step)
         add(fm, "Export (STEP, STL)...", self.export_file)
         fm.addSeparator()
+        add(fm, "Add-ons...", self.addons_dialog)
         add(fm, "Units...", self.units_dialog)
         add(fm, "Settings...", self.settings_dialog)
         fm.addSeparator()
@@ -198,8 +202,47 @@ class AppShell(QMainWindow):
         self.show_stack()
         return w
 
+    def need_addon(self, aid, what):
+        """True when the add-on is installed; otherwise offer to install it (it ships with the program, so this needs no download)."""
+        if addons.is_active(aid):
+            return True
+        m = addons.shipped().get(aid)
+        if m is None:
+            QMessageBox.information(self, "Add-on", f"{what} needs the add-on '{aid}', which is not part of this copy of OpenPara.")
+            return False
+        if QMessageBox.question(self, "Add-on needed", f"{what} needs the add-on '{m['name']}'.\n\nInstall it now?") != QMessageBox.StandardButton.Yes:
+            return False
+        try:
+            addons.install(aid)
+        except Exception as ex:
+            QMessageBox.warning(self, "Add-on", f"Could not install '{m['name']}': {ex}")
+            return False
+        self.addons_changed()
+        return True
+
+    def addon_tabs(self, aid):
+        """Indexes of the open tabs whose class comes from the add-on."""
+        return [i for i in range(self.tabs.count()) if addons.owner_of_module(type(self.tabs.widget(i)).__module__) == aid]
+
+    def close_addon_tabs(self, aid):
+        """Close the tabs of an add-on (asks about unsaved changes); False when the user cancelled."""
+        for i in reversed(self.addon_tabs(aid)):
+            if not self.close_tab(i):
+                return False
+        return True
+
+    def addons_changed(self):
+        """Menus and buttons that depend on an add-on follow it (nothing to do now: they ask when used)."""
+        pass
+
+    def addons_dialog(self):
+        import addons_dialog
+        addons_dialog.AddonsDialog(self).exec()
+
     def add_sim(self, kind):
         """A 1D FEA / 2D FEA / 2D CFD container for the part or assembly that is on screen."""
+        if not self.need_addon("simulation", "A simulation"):
+            return None
         import sim_tab
         src = self.cur()
         if isinstance(src, sim_tab.SimWindow):                # from a simulation: another one for the same part / assembly
@@ -216,6 +259,8 @@ class AppShell(QMainWindow):
 
     def add_render(self):
         """A Render Studio tab for the part or assembly that is on screen (or the source of the render tab that is on screen)."""
+        if not self.need_addon("render", "A render"):
+            return None
         import render_studio
         src = self.cur()
         if isinstance(src, render_studio.RenderStudio):
@@ -276,6 +321,8 @@ class AppShell(QMainWindow):
             self.tabs.setCurrentIndex(i)
             return self.tabs.widget(i)
         if path.lower().endswith(".gps"):
+            if not self.need_addon("simulation", "This simulation file (.gps)"):
+                return None
             import sim_tab
             try:
                 w = sim_tab.SimWindow.open_file(self, path)
@@ -283,6 +330,8 @@ class AppShell(QMainWindow):
                 QMessageBox.warning(self, "Open", f"Could not open {os.path.basename(path)}: {ex}")
                 return None
         elif path.lower().endswith(".gpr"):
+            if not self.need_addon("render", "This render file (.gpr)"):
+                return None
             import render_studio
             try:
                 w = render_studio.RenderStudio.open_file(self, path)

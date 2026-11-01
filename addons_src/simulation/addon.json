@@ -1,0 +1,2 @@
+{"id": "simulation", "name": "Simulation", "version": "0.6.0",
+ "description": "1D FEA (frames and trusses), 2D FEA (plane stress / strain) and 2D CFD of a sketch or a slice of a part or assembly, with the material library and the result viewer. Saved simulations (.gps) need it."}
