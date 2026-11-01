@@ -1,7 +1,7 @@
 {
  "id": "render",
  "name": "Renderer",
- "version": "0.7.0",
+ "version": "0.8.0",
  "description": "Render Studio: photorealistic pictures and videos of a part or assembly with sun, lights, floor and cameras. Saved renders (.gpr) need it.",
  "requires": [
   {

@@ -130,6 +130,7 @@ class Model:
         self.ars = {}      # id -> {"c": pid, "s": pid, "e": pid}
         self.lock_pts = {}   # point id -> [x, y]  frozen position (locked geometry)
         self.lock_cis = {}   # circle id -> radius frozen
+        self.ext = []        # references to geometry of earlier sketches (see sketch_ext.py): [{"kind","sketch","ent","pt"|"pts","ln"}]
         self.p3 = {}         # 3D placed parts seen in this assembly sketch: id -> {"sig", "keys": {"pt12": "v3"}, "ents": {"pt": [], "ln": []}}
         self.ctx3d = None    # assembly sketch: {"view": plane name, "k": mm per unit, "poses": {part id: pose}} (not saved)
         self.insts = {}      # placed parts: id -> {"src", "view", "flip", "B", "A", "A_loc", "loc", "rad", "keys", "ents"}  (see INSTANCES)
@@ -590,7 +591,7 @@ class Model:
                            "configs": self.configs, "active": self.active,
                            "constr": sorted(self.constr),
                            "lock_pts": self.lock_pts, "lock_cis": self.lock_cis, "unit": self.unit_system, "insts": self.insts,
-                           "p3": self.p3})
+                           "p3": self.p3, "ext": self.ext})
 
     def from_json(self, text):
         d = json.loads(text)
@@ -611,6 +612,7 @@ class Model:
         self.unit_system = d.get("unit") if units.valid(d.get("unit")) else units.DEFAULT
         self.insts = {k: fix_inst(v) for k, v in (d.get("insts") or {}).items()}
         self.p3 = {k: fix_p3(v) for k, v in (d.get("p3") or {}).items()}
+        self.ext = [dict(e) for e in (d.get("ext") or [])]
         self.report = Report()
         self.ensure_origin()
 
