@@ -318,6 +318,7 @@ class MainWindow(QMainWindow):
             self.hook = viewpick.ClickHook(self.plotter, self.on_click)
             self.ed = sketch_edit.SketchEditor(self)
             self.sk_hook = sketch_edit.SketchHook(self.plotter, self.ed)
+            self.sync_sketch_buttons()
             self.nav = nav.NavHook(self.plotter, self)         # installed last: it sees the mouse events first
             self.flip_act.blockSignals(True)
             self.flip_act.setChecked(self.nav.wheel_sign == 1)
@@ -454,6 +455,7 @@ class MainWindow(QMainWindow):
         self.show_props()
         self.set_tool("select")
         self.mode_label.setText("Editing Sketch")
+        self.sync_sketch_buttons()
         self.say("Sketch open: pick a tool in the ribbon. Alt+drag orbits, middle drag pans, wheel zooms. Esc ends a tool, Exit Sketch leaves.")
 
     def set_tool(self, name):
@@ -500,6 +502,14 @@ class MainWindow(QMainWindow):
         if self.undo:
             self.undo.pop()
 
+    def sync_sketch_buttons(self):
+        """In a sketch only Exit Sketch is offered; outside one only Sketch."""
+        inside = self.ed is not None and self.ed.active
+        if self.act.get("sketch") is not None:
+            self.act["sketch"].setVisible(not inside)
+        if self.act.get("exit") is not None:
+            self.act["exit"].setVisible(inside)
+
     def leave_sketch(self):
         self.created_new = None
         if self.ed is not None and self.ed.active:
@@ -507,6 +517,7 @@ class MainWindow(QMainWindow):
         self.mode_label.setText("Editing Part")
         self.left.setCurrentIndex(0)
         self.ribbon.setCurrentIndex(0)
+        self.sync_sketch_buttons()
         self.draw()
 
     def say(self, text):
