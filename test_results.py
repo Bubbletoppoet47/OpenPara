@@ -1,3 +1,4 @@
+import addons; addons.startup()   # the simulation / render modules live in add-ons
 import os; os.environ["QT_QPA_PLATFORM"]="offscreen"
 import numpy as np, tempfile
 from PyQt6.QtWidgets import QApplication
