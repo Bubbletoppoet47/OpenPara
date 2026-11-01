@@ -22,6 +22,7 @@ from OCP.gp import gp_Trsf
 
 import refgeo
 import settings
+import sketch_ext
 import sk_tools as sk
 import sketcher_core as sc
 
@@ -90,6 +91,39 @@ class Document:
         self.features = [f for f in self.features if f["id"] != fid]
         if self.rollback is not None:
             self.rollback = min(self.rollback, len(self.features) - 1)
+
+    def index_of(self, fid):
+        return next((i for i, f in enumerate(self.features) if f["id"] == fid), None)
+
+    def move_blocker(self, fid, after_fid):
+        """Why sketch `fid` cannot be moved to just after feature `after_fid` in the tree (a text), or None when it can."""
+        i, j = self.index_of(fid), self.index_of(after_fid)
+        if i is None or j is None:
+            return "feature not found"
+        f = self.features[i]
+        if j < i:
+            return None
+        if f["kind"] != "sketch":
+            return "only sketches can be moved"
+        pl = f.get("plane") or {}
+        if "face" in pl:
+            return "it is drawn on a face of the part, which would not exist yet"
+        if "ref" in pl and (self.index_of(pl["ref"]) is None or self.index_of(pl["ref"]) > j):
+            return "its reference plane comes later"
+        key = json.dumps(fid)
+        for g in self.features[i + 1:j + 1]:
+            if key in json.dumps(g):
+                return f"'{g['name']}' uses it"
+        return None
+
+    def move_after(self, fid, after_fid):
+        """Move feature `fid` to just after `after_fid` (a sketch that has to be built first). Check move_blocker first."""
+        i = self.index_of(fid)
+        f = self.features.pop(i)
+        j = self.index_of(after_fid)
+        self.features.insert(j + 1, f)
+        if self.rollback is not None:
+            self.rollback = min(max(self.rollback, j + 1), len(self.features) - 1)
 
     # ------------------------------------------------------------------ expressions
     def evaluate_params(self):
@@ -230,8 +264,12 @@ class Document:
         for k, v in self.dimvals.items():                      # named dimensions of the sketches before this one
             if k not in m.params:
                 m.params[k] = {"vals": [float(v)] * len(m.configs), "input": False, "expr": repr(float(v)), "doc": True}
+        problems, moved = sketch_ext.apply(self, f["id"], m)    # points that follow geometry of earlier sketches
         self.reports[f["id"]] = sk.solve_model(m)
+        self.reports[f["id"]].messages.extend(problems)
         self.models[f["id"]] = m
+        if moved:                                               # keep where they are now (a missing source then leaves them where they were)
+            self.store_sketch(f["id"])
         for c in m.cons:                                      # and this one's, for the features and sketches after it
             if c["type"] in sc.DIMENSIONS and c.get("user_name") and c.get("name"):
                 self.dimvals[c["name"]] = float(c["value"])
