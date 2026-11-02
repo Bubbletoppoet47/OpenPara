@@ -276,6 +276,10 @@ class MainWindow(QMainWindow):
             wa.setDefaultWidget(cbx)
             sm.addAction(wa)
             self.show_checks[key] = cbx
+        sm.addSeparator()
+        wl = QWidgetAction(sm)
+        wl.setDefaultWidget(nav.lock_checkbox(self))
+        sm.addAction(wl)
         sb.setMenu(sm)
         bl.addWidget(sb)
         bl.addStretch(1)
@@ -322,6 +326,7 @@ class MainWindow(QMainWindow):
             self.sk_hook = sketch_edit.SketchHook(self.plotter, self.ed)
             self.sync_sketch_buttons()
             self.nav = nav.NavHook(self.plotter, self)         # installed last: it sees the mouse events first
+            nav.sync_lock_checkbox(self)
             self.flip_act.blockSignals(True)
             self.flip_act.setChecked(self.nav.wheel_sign == 1)
             self.flip_act.blockSignals(False)

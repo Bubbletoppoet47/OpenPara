@@ -52,6 +52,11 @@ def make_show_bar(win):
         wa.setDefaultWidget(cbx)
         sm.addAction(wa)
         win.show_checks[key] = cbx
+    sm.addSeparator()
+    wl = QWidgetAction(sm)
+    import nav
+    wl.setDefaultWidget(nav.lock_checkbox(win))
+    sm.addAction(wl)
     sb.setMenu(sm)
     bl.addWidget(sb)
     bl.addStretch(1)

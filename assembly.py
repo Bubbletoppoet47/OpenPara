@@ -255,6 +255,7 @@ class AssemblyWindow(QMainWindow):
             self.hook = viewpick.ClickHook(self.plotter, self.on_click, on_move=self.on_hover)
             self.drag_hook = DragHook(self.plotter, self)
             self.nav = nav.NavHook(self.plotter, self)         # installed last: it sees the mouse events first
+            nav.sync_lock_checkbox(self)
             self.flip_act.blockSignals(True)
             self.flip_act.setChecked(self.nav.wheel_sign == 1)
             self.flip_act.blockSignals(False)

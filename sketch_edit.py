@@ -1255,7 +1255,7 @@ class SketchEditor:
         if not self.confirm_delete(items):
             return
         gone = [i for k, i in items if k == "con"]
-        self.commit(lambda m: m.delete(items))
+        self.commit(lambda m: m.delete(items, orphans=True))
         self.sel = []
         self.hl = set()
         self.prune_ext()

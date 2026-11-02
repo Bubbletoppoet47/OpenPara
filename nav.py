@@ -363,6 +363,7 @@ class NavHook(QObject):
         except Exception:
             self.wheel_sign = 1
         # the wheel as asked: rolling toward you zooms in  ->  sign for angleDelta().y() < 0 is zoom in
+        self.lock = QSettings("GenParametricDesigner", "Modeller").value("lock_view", "0") in ("1", 1, True, "true")   # Show > Lock view
         self.cube = None
         try:
             from PyQt6.QtWidgets import QWidget as _W
@@ -377,6 +378,11 @@ class NavHook(QObject):
             self.cube = ViewCube(app)
         except Exception:
             self.cube = None
+
+    def set_lock(self, on):
+        """Lock view: a plain middle-button drag pans (instead of rotating), so sketching does not need Ctrl held down."""
+        self.lock = bool(on)
+        QSettings("GenParametricDesigner", "Modeller").setValue("lock_view", "1" if on else "0")
 
     def flip_zoom(self, flipped):
         self.wheel_sign = -1 if flipped else 1
@@ -463,7 +469,8 @@ class NavHook(QObject):
                         return True
                 if ev.button() == Qt.MouseButton.MiddleButton:
                     mods = ev.modifiers()
-                    self.mode = "pan" if mods & Qt.KeyboardModifier.ControlModifier else "zoom" if mods & Qt.KeyboardModifier.ShiftModifier else "rotate"
+                    self.mode = ("zoom" if mods & Qt.KeyboardModifier.ShiftModifier else
+                                 "pan" if (mods & Qt.KeyboardModifier.ControlModifier) or self.lock else "rotate")
                     self.last = (px, py)
                     return True
                 if ev.button() == Qt.MouseButton.RightButton:
@@ -505,3 +512,22 @@ class NavHook(QObject):
             except Exception:
                 pass
         return False
+
+
+def lock_checkbox(win):
+    """The 'Lock view' tick box of the Show menu of a window that has a NavHook in win.nav (made after the view)."""
+    from PyQt6.QtWidgets import QCheckBox
+    cbx = QCheckBox("Lock view (middle drag pans)")
+    cbx.setToolTip("Tick while sketching: a plain middle-button drag moves the view sideways instead of rotating it (no Ctrl needed)")
+    cbx.setStyleSheet("QCheckBox{padding:4px 14px 4px 10px;} QCheckBox:hover{background:#dbe8fa;}")
+    cbx.toggled.connect(lambda on: win.nav.set_lock(on) if getattr(win, "nav", None) is not None else None)
+    win.lock_cb = cbx
+    return cbx
+
+
+def sync_lock_checkbox(win):
+    cb = getattr(win, "lock_cb", None)
+    if cb is not None and getattr(win, "nav", None) is not None:
+        cb.blockSignals(True)
+        cb.setChecked(win.nav.lock)
+        cb.blockSignals(False)

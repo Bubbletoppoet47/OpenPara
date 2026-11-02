@@ -321,7 +321,7 @@ class Model:
         return None, None
 
     # ----- delete -----------------------------------------------------------------------------
-    def delete(self, items, force3d=False):
+    def delete(self, items, force3d=False, orphans=False):
         """Delete entities (and everything that depends on them) or constraints/dimensions.  The projected points and lines of 3D placed
         parts are not deleted one by one (they follow the part) unless force3d."""
         dead = set(items) - {("pt", 0), ("con", 0)}
@@ -350,6 +350,32 @@ class Model:
                 if ("pt", a["c"]) in dead or ("pt", a["s"]) in dead or ("pt", a["e"]) in dead:
                     changed |= ("ar", aid) not in dead
                     dead.add(("ar", aid))
+        if orphans:                                           # the endpoints / centres that nothing else uses go with the line, arc or circle
+            used = set()
+            for lid, (p, q) in self.lns.items():
+                if ("ln", lid) not in dead:
+                    used |= {p, q}
+            for cid, c in self.cis.items():
+                if ("ci", cid) not in dead:
+                    used.add(c["c"])
+            for aid, ar in self.ars.items():
+                if ("ar", aid) not in dead:
+                    used |= {ar["c"], ar["s"], ar["e"]}
+            keep = {0}
+            for r in self.ext:                                # points that follow geometry of earlier sketches
+                keep |= {r.get("pt")} | set(r.get("pts") or [])
+            for k, i in list(dead):
+                if k == "ln":
+                    cand = set(self.lns[i])
+                elif k == "ci":
+                    cand = {self.cis[i]["c"]}
+                elif k == "ar":
+                    cand = {self.ars[i]["c"], self.ars[i]["s"], self.ars[i]["e"]}
+                else:
+                    continue
+                for p in cand:
+                    if p in self.pts and p not in used and p not in keep and ("pt", p) not in dead and not (self.p3 and self.p3_owner("pt", p)):
+                        dead.add(("pt", p))
         for k, i in dead:
             if k == "ln":
                 self.lns.pop(i, None)
