@@ -278,9 +278,9 @@ def head_items(style, tip, inward, size):
     return [("line", np.array([back1, tip, back2]))]
 
 
-def primitives(sh, ext, selected=False):
+def primitives(sh, ext, selected=False, driven=False):
     """What to draw for a dimension's shapes: [("line", points, width, rgb) | ("fill", points, None, rgb)] following File > Settings."""
-    col = settings.rgb("dim_sel_color" if selected else "dim_color")
+    col = settings.rgb("dim_sel_color" if selected else "dim_driven_color" if driven else "dim_color")
     unit = 0.007 * ext
     items = []
     for sg, kind in zip(sh["segs"], sh.get("kinds", ["dim"] * len(sh["segs"]))):

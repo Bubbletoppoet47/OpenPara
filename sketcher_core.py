@@ -840,6 +840,22 @@ class Model:
             vals[k] = float("nan")
         return vals
 
+    def param_values_with(self, over):
+        """param_values() with some plain symbols replaced (the measured ones, while the solver tries a geometry)."""
+        vals = self.base_values()
+        vals.update(over)
+        pending = {k: p["expr"] for k, p in self.params.items() if p.get("expr")}
+        for _ in range(len(pending) + 1):
+            for k, e in list(pending.items()):
+                try:
+                    vals[k] = safe_eval(e, vals)
+                    del pending[k]
+                except (KeyError, ValueError, ZeroDivisionError, SyntaxError):
+                    pass
+        for k in pending:
+            vals[k] = float("nan")
+        return vals
+
     def rename_symbol(self, old, new):
         """Rename a symbol everywhere: its declaration, every dimension / formula that uses it, the Report flag.
         Raises ValueError (and changes nothing) when the new name cannot be used."""
@@ -1306,19 +1322,68 @@ class Model:
             e = c.get("expr")
             if not e:
                 c["driven"] = False
+                c["coupled"] = False
                 continue
             try:
                 syms = expr_symbols(e)
-                c["driven"] = any(self.is_output(x) for x in syms)
+                p = self.params.get(e) if str(e).isidentifier() else None
+                # driven: the dimension measures the geometry (its own symbol is an output).  coupled: its equation uses measured values, so
+                # it still constrains the geometry, towards a target that follows them (a proportion: B = 2 * A) - solved in the same system.
+                c["driven"] = bool(p is not None and not p.get("expr") and not p.get("input", True))
+                c["coupled"] = (not c["driven"]) and any(self.is_output(x) for x in syms)
                 v = safe_eval(e, vals)
                 if not (isinstance(v, float) and math.isnan(v)):
                     c["value"] = v
             except (KeyError, ValueError, ZeroDivisionError, SyntaxError):
                 c["driven"] = False
+                c["coupled"] = False
         for cid, v in self.value_override.items():
             c = self.con_by_id(cid)
             if c is not None and not c.get("driven"):
                 c["value"] = v
+
+    def set_driven(self, cid, on):
+        """Make a dimension driven (it measures the geometry; its variable becomes an output) or driving (an input that constrains it).
+        The variable and every equation that uses it keep working; a dimension's own equation is kept aside and comes back when it drives again."""
+        c = self.con_by_id(cid)
+        if c is None or c["type"] not in DIMENSIONS:
+            raise ValueError("not a dimension")
+        e = c.get("expr")
+        sym = e if (e and str(e).isidentifier() and e in self.params and not self.params[e].get("doc")) else None
+        if on:
+            if c.get("driven"):
+                return
+            if sym is None:
+                if e:
+                    c["expr_saved"] = e
+                name = c.get("name") or "D"
+                if not str(name).isidentifier() or name in self.params or name in _FUNCS or name in _CONSTS:
+                    k, name0 = 1, (name if str(name).isidentifier() else "D")
+                    while f"{name0}_{k}" in self.params:
+                        k += 1
+                    name = f"{name0}_{k}"
+                self.add_param(name, c["value"], is_input=False)
+                self.params[name]["made"] = True
+                c["expr"], c["name"] = name, name
+            else:
+                p = self.params[sym]
+                if p.get("expr"):
+                    p["expr_saved"] = p.pop("expr")
+                p["input"] = False
+        else:
+            if not c.get("driven") or sym is None:
+                return
+            p = self.params[sym]
+            if c.get("expr_saved"):
+                c["expr"] = c.pop("expr_saved")
+                if p.get("made") and not any(k is not c and k.get("expr") == sym for k in self.cons):
+                    del self.params[sym]
+            elif p.get("expr_saved"):
+                p["expr"] = p.pop("expr_saved")
+                p["input"] = True
+            else:
+                p["input"] = True
+        self.update_values()
 
     def refresh_driven(self):
         """After a solve: driven dimensions show what the geometry measures; output symbols take those values."""
@@ -1332,6 +1397,15 @@ class Model:
                 if e in self.params and not self.params[e].get("expr"):
                     self.params[e]["vals"][self.active] = v
                 c["value"] = v
+        over = {c["expr"]: c["value"] for c in self.cons if c["type"] in DIMENSIONS and c.get("driven")}
+        for c in self.cons:
+            if c["type"] in DIMENSIONS and c.get("coupled"):
+                try:
+                    v = safe_eval(c["expr"], self.param_values_with(over))
+                    if not (isinstance(v, float) and math.isnan(v)):
+                        c["value"] = v
+                except (KeyError, ValueError, ZeroDivisionError, SyntaxError):
+                    pass
 
     def analyze_inputs(self, max_sets=12):
         return analyze_inputs(self, max_sets)
@@ -1343,7 +1417,34 @@ class Model:
         self.update_values()
         rep = Solver(self).run(pin)
         self.refresh_driven()
+        self.flag_circular(rep)
         return rep
+
+    def flag_circular(self, rep):
+        """A coupled dimension that measures nothing but what it also controls (B = 2 * A with A measured on B's own line) is a loop."""
+        coupled = [c for c in self.cons if c["type"] in DIMENSIONS and c.get("coupled")]
+        if not coupled:
+            return
+
+        def deep(names, seen):
+            for n in names:
+                if n in seen:
+                    continue
+                seen.add(n)
+                p = self.params.get(n)
+                if p and p.get("expr"):
+                    deep(expr_symbols(p["expr"]), seen)
+            return seen
+        for c in coupled:
+            used = deep(expr_symbols(c["expr"]), set())
+            mine = {tuple(r) for r in c["refs"]}
+            for d in self.cons:
+                if d["type"] in DIMENSIONS and d.get("driven") and d.get("expr") in used and mine & {tuple(r) for r in d["refs"]}:
+                    if c["id"] not in rep.conflicts:
+                        rep.conflicts.append(c["id"])
+                    rep.ok = False
+                    rep.messages.append(f"{c.get('name', 'A dimension')} depends on {d.get('name', d['expr'])}, which measures the same geometry it controls "
+                                        "(a loop). Measure something else, or make one of them driving.")
 
     # ----- construction / overhead symbols ----------------------------------------------------
     def construction_only(self):
@@ -1618,7 +1719,7 @@ class Solver:
         if t == "proj_pt":
             return self.proj(c, x)
         # dimensions
-        v = c["value"]
+        v = self.dim_target(c, x) if c.get("coupled") else c["value"]
         if t == "dim_h":
             a, b = self.two_pts(x, refs)
             return [(b[0] - a[0]) * c.get("sign", 1) - v]
@@ -1778,6 +1879,31 @@ class Solver:
             if k == "ar" and loc["pts"] & {self.m.ars[i]["c"], self.m.ars[i]["s"], self.m.ars[i]["e"]}:
                 return True
         return False
+
+    def measured(self, d, x):
+        """What the (driven) dimension d measures in the geometry x."""
+        t, refs = d["type"], d["refs"]
+        if t == "dim_ang":
+            (a1, b1), (a2, b2) = self.ln(x, refs[0][1]), self.ln(x, refs[1][1])
+            d1 = (b1[0] - a1[0], b1[1] - a1[1])
+            d2 = (b2[0] - a2[0], b2[1] - a2[1])
+            deg = d.get("eps", 1) * math.degrees(math.atan2(d1[0] * d2[1] - d1[1] * d2[0], d1[0] * d2[0] + d1[1] * d2[1]))
+            return deg + 180.0 * round((d["value"] - deg) / 180.0)          # the representative of the angle (mod 180) nearest its last value
+        z = dict(d)
+        z["value"] = 0.0
+        z.pop("coupled", None)
+        return abs(self.res(z, x)[0]) if t in ("dim_len", "dim_rad", "dim_dia") else self.res(z, x)[0]
+
+    def dim_target(self, c, x):
+        """The number a coupled dimension has to reach: its equation, with the measured symbols taken from the geometry x."""
+        if not hasattr(self, "_drv"):
+            self._drv = [(d["expr"], d) for d in self.m.cons if d["type"] in DIMENSIONS and d.get("driven")]
+        over = {sym: self.measured(d, x) for sym, d in self._drv}
+        try:
+            v = safe_eval(c["expr"], self.m.param_values_with(over))
+        except (KeyError, ValueError, ZeroDivisionError, SyntaxError):
+            return c["value"]
+        return c["value"] if (isinstance(v, float) and math.isnan(v)) else v
 
     def eq_res(self, c, x):
         if c["type"] == "_arc":

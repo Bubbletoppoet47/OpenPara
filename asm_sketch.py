@@ -107,6 +107,8 @@ def variables(doc):
             if p.get("doc"):
                 continue
             driven = m.is_output(name) or bool(p.get("expr"))
+            if driven and any(c.get("coupled") and c.get("expr") == name for c in m.cons):
+                driven = False                                      # a dimension that follows measured values still constrains the sketch
             out.append({"name": name, "kind": _kind_of(m, name, sc), "role": "driven" if driven else "driving"})
         for j, c in enumerate(configs):
             m.active = j
@@ -116,7 +118,7 @@ def variables(doc):
         m.active = keep
         for c in m.cons:                                            # named dimensions that are not driven by a symbol
             if c["type"] in sc.DIMENSIONS and c.get("user_name") and c.get("name") and not doc.dim_symbol(m, c):
-                out.append({"name": c["name"], "kind": "angle" if c["type"] == "dim_ang" else "length", "role": "driven" if c.get("expr") else "driving"})
+                out.append({"name": c["name"], "kind": "angle" if c["type"] == "dim_ang" else "length", "role": "driven" if (c.get("expr") and not c.get("coupled")) else "driving"})
                 for cn in configs:
                     values[cn][c["name"]] = float(c["value"])
         for o in out:

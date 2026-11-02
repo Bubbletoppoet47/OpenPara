@@ -1236,10 +1236,21 @@ class SketchEditor:
                 out.append(("Change which angle...", lambda: [self.change_angle(c["id"]) for c in cons if c and c["type"] == "dim_ang"][:1]))
             if any(c and (c.get("off") or c.get("aoff")) for c in cons):
                 out.append(("Reset label position", self.reset_labels))
+            if getattr(self.app, "asm_sketch", False) and len(cons) == 1 and cons[0]:
+                out.append(("Make driving" if cons[0].get("driven") else "Make driven", lambda cid=cons[0]["id"]: self.toggle_driven(cid)))
         if not out:
             out = [("Select", lambda: self.app.set_tool("select"))]
         out += [("Normal To", self.normal_to), ("Exit Sketch", self.app.leave_sketch)]
         return out
+
+    def toggle_driven(self, cid):
+        """Assembly sketch: a driving dimension becomes a measurement of the geometry (driven), or the other way round."""
+        c = self.m.con_by_id(cid)
+        if c is None:
+            return
+        on = not c.get("driven")
+        self.commit(lambda m: m.set_driven(cid, on))
+        self.app.say(("Driven: the dimension now measures the geometry." if on else "Driving: the dimension now constrains the geometry."))
 
     def reset_labels(self):
         ids = [k[1] for k in self.sel if k[0] == "con"]
@@ -1869,14 +1880,17 @@ class SketchEditor:
         try:
             self.tags.append((a[0], a[1], c["id"]))
             sel_c = ("con", c["id"]) in self.sel
-            for kind, pts, wd, rgb in sk_dimlines.primitives(sh, sk_dimlines.extent(m), sel_c):
+            drv = bool(c.get("driven"))
+            for kind, pts, wd, rgb in sk_dimlines.primitives(sh, sk_dimlines.extent(m), sel_c, drv):
                 if kind == "line":
                     self.polyline(pts, rgb, wd)
                 else:
                     self.fill(pts, rgb)
             txt = f"{c.get('name', '')} = {disp(c['value'], c):.4g}"
+            if drv:
+                txt = f"({txt})"                                           # a measured (driven) dimension
             self.tag_len[c["id"]] = len(txt)
-            self.text(a, txt, settings.rgb("dim_sel_color" if sel_c else "dim_color"), int(round(settings.get("text_pt"))))
+            self.text(a, txt, settings.rgb("dim_sel_color" if sel_c else "dim_driven_color" if drv else "dim_color"), int(round(settings.get("text_pt"))))
         finally:
             self._sink = None
 

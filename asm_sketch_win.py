@@ -14,6 +14,7 @@ import unitctl
 
 
 class AsmSketchWindow(pm_app.MainWindow):
+    asm_sketch = True                  # the sketcher offers Make driven / Make driving on a dimension here only
     KIND = "asmsketch"
 
     def __init__(self, path=None, shell=None):
