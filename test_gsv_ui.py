@@ -50,21 +50,21 @@ assert pm.Document.from_json(open(pc).read()).gsv is not None            # a clo
 # the read-only table in the part and assembly
 wa.gsv_panel.refresh(); gt = wa.gsv_panel.table
 names = [gt.item(r, 0).text() for r in range(gt.rowCount())]; print(names)
-assert names == ["AS-Small-W", "AS-Big-W"] and gt.item(0, 3).text() == "driving" and not (gt.item(0, 0).flags() & Qt.ItemFlag.ItemIsEditable)
+assert names == ["AS_Small_W", "AS_Big_W"] and gt.item(0, 3).text() == "driving" and not (gt.item(0, 0).flags() & Qt.ItemFlag.ItemIsEditable)
 wasm.gsv_panel.refresh(); assert wasm.gsv_panel.table.rowCount() == 2
 # bind Width to W: each sketch-driven configuration follows its own number
 wa.doc.gsv_bind("g:Width", "W"); wa.doc.cfg_apply("Big"); wa.update_all()
 assert close(float(wa.doc.values["Width"]), 90) and close(wa.doc.solid.volume, 20 * 20 * 90), wa.doc.values
 assert wa.doc.cfg["cells"]["Default"]["g:Width"] == "10"
 # the cell in the configuration table is shown highlighted and keeps its text
-wa.cfg_panel.refresh(); ct = wa.cfg_panel.table; rb = wa.doc.cfg["names"].index("Big"); assert "{AS-@-W}" in ct.item(rb, 1).text(), ct.item(rb, 1).text()
+wa.cfg_panel.refresh(); ct = wa.cfg_panel.table; rb = wa.doc.cfg["names"].index("Big"); assert "{AS_@_W}" in ct.item(rb, 1).text(), ct.item(rb, 1).text()
 # a sketch change reaches the open parts and assembly live
 m = sw.doc.models[f["id"]]; m.params["W"]["vals"][1] = 120.0; sk.solve_model(m); sw.doc.store_sketch(f["id"]); sw.update_all(); QTest.qWait(700)
 assert close(float(wa.doc.values["Width"]), 120) and close(wa.doc.solid.volume, 20 * 20 * 120), wa.doc.values
 assert close(wasm.asm.gsv["vals"]["Big"]["W"], 120)
 # a NEW sketch configuration creates configurations in the parts and the assembly
 m = sw.doc.models[f["id"]]; m.set_configs(m.configs + ["Huge"], m.configs[m.active]); m.params["W"]["vals"][-1] = 300.0; sk.solve_model(m); sw.doc.store_sketch(f["id"]); sw.update_all(); QTest.qWait(700)
-assert "Huge" in wa.doc.cfg["names"] and "Huge" in wasm.asm.cfg["names"] and wa.doc.cfg["cells"]["Huge"]["g:Width"] == "{AS-@-W}", wa.doc.cfg["names"]
+assert "Huge" in wa.doc.cfg["names"] and "Huge" in wasm.asm.cfg["names"] and wa.doc.cfg["cells"]["Huge"]["g:Width"] == "{AS_@_W}", wa.doc.cfg["names"]
 wa.doc.cfg_apply("Huge"); wa.update_all(); assert close(wa.doc.solid.volume, 20 * 20 * 300)
 # the part is linked to ONE sketch: a second sketch is refused
 sw3 = sh.new_asm_sketch(); QTest.qWait(30); s3 = os.path.join(tmp, "other.gpk"); sw3.path = s3; sw3.save(); sw3.assembly = pasm

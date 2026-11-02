@@ -98,7 +98,7 @@ class AsmSketchWindow(pm_app.MainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.addWidget(QLabel("Variables: the symbols and named dimensions of this sketch, one number per configuration.\n"
-                             "Tick Export for the ones the linked files should receive (as AS-<configuration>-<name>)."))
+                             "Tick Export for the ones the linked files should receive (as AS_<configuration>_<name>)."))
         self.var_table = QTableWidget(0, 4)
         self.var_table.itemChanged.connect(self.export_changed)
         lay.addWidget(self.var_table, 1)

@@ -231,8 +231,10 @@ def pull(obj, live=None):
     src = obj.gsv_src_path()
     doc = live(src) if live else None
     if doc is None:
-        if not src or not os.path.isfile(src):
-            return False, [f"assembly sketch not found: {src}"]
+        if not src or not os.path.isfile(src):                       # the sketch is gone: the configurations stay, "on notice"
+            was = bool(obj.gsv.get("orphan"))
+            obj.gsv["orphan"] = True
+            return not was, [f"on notice: assembly sketch not found: {src}"]
         try:
             doc = load(src)[0]
         except Exception as ex:                                      # noqa: BLE001

@@ -266,7 +266,7 @@ class Document:
         m.from_json(f["model"])
         for k, e in self.params.items():
             m.params[k] = {"vals": [0.0] * len(m.configs), "input": False, "expr": str(e), "doc": True}
-        for k, v in gsv.namespace(self.gsv).items():           # AS-<configuration>-<name>, written {AS-...} in a formula
+        for k, v in gsv.namespace(self.gsv).items():           # AS_<configuration>_<name>, written {AS_...} in a formula
             m.params[k] = {"vals": [float(v)] * len(m.configs), "input": False, "expr": repr(float(v)), "doc": True}
         for k, v in self.dimvals.items():                      # named dimensions of the sketches before this one
             if k not in m.params:
@@ -1387,8 +1387,8 @@ class Document:
 
     # ------------------------------------------------------------------ Global Sketch Variables (an assembly sketch drives this file, one way)
     # The sketch hands over the variables it exports, one number per sketch configuration (gsv.py).  They arrive as read-only globals
-    # called AS-<configuration>-<name>, and for every sketch configuration this file gets a configuration of the same name (made when
-    # missing, as a copy of the first one).  Cells written {AS-@-W} follow the configuration they sit in.  Nothing flows back.
+    # called AS_<configuration>_<name>, and for every sketch configuration this file gets a configuration of the same name (made when
+    # missing, as a copy of the first one).  Cells written {AS_@_W} follow the configuration they sit in.  Nothing flows back.
     def gsv_src_path(self):
         import os
         if not self.gsv or not self.gsv.get("src"):
@@ -1410,19 +1410,27 @@ class Document:
             if c not in mirrored:
                 mirrored.append(c)
         gone = [c for c in mirrored if c not in configs]
-        if gone:
-            msgs.append("no longer in the sketch: " + ", ".join(gone))
+        dropped = []
+        for c in gone:                                       # the sketch deleted the configuration: the linked file's copy goes with it
+            try:
+                self.cfg_delete(c)
+                mirrored.remove(c)
+                dropped.append(c)
+            except ModelError:
+                msgs.append(f"'{c}' is no longer in the sketch but is this file's only configuration: kept")
+        if dropped:
+            msgs.append("configurations removed because the sketch no longer has them: " + ", ".join(dropped))
         return msgs
 
     def gsv_bind(self, key, var):
-        """Make the column `key` follow sketch variable `var`: in every configuration the sketch drives, its cell becomes {AS-@-var}."""
+        """Make the column `key` follow sketch variable `var`: in every configuration the sketch drives, its cell becomes {AS_@_var}."""
         if not self.gsv:
             raise ModelError("this file is not linked to an assembly sketch")
         if key not in self.cfg["cols"]:
             self.cfg_add_col(key)
         for c in self.gsv.get("mirrored") or []:
             if c in self.cfg["names"] and c in (self.gsv.get("configs") or []):
-                self.cfg_set_cell(c, key, "{" + gsv.PREFIX + "@-" + var + "}")
+                self.cfg_set_cell(c, key, "{" + gsv.PREFIX + "@_" + var + "}")
 
     def gsv_clear(self):
         self.gsv = None

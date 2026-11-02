@@ -792,7 +792,7 @@ def _cfg_write(self, key, val):
         elif _num(val) is not None:
             m["value"] = float(val)
             self.exprs.pop(f"val:{rest}", None)
-        elif gsv.has_token(val):                                     # a formula with a sketch variable: {AS-Large-W}
+        elif gsv.has_token(val):                                     # a formula with a sketch variable: {AS_Large_W}
             self.exprs[f"val:{rest}"] = str(val)
             try:
                 m["value"] = self.eval_expr(val)
@@ -958,20 +958,28 @@ def _gsv_set(self, src, configs, vars_, vals):
         if c not in mirrored:
             mirrored.append(c)
     gone = [c for c in mirrored if c not in configs]
-    if gone:
-        msgs.append("no longer in the sketch: " + ", ".join(gone))
+    dropped = []
+    for c in gone:                                       # the sketch deleted the configuration: the linked file's copy goes with it
+        try:
+            self.cfg_delete(c)
+            mirrored.remove(c)
+            dropped.append(c)
+        except MateError:
+            msgs.append(f"'{c}' is no longer in the sketch but is this file's only configuration: kept")
+    if dropped:
+        msgs.append("configurations removed because the sketch no longer has them: " + ", ".join(dropped))
     return msgs
 
 
 def _gsv_bind(self, key, var):
-    """Make the column `key` follow sketch variable `var` (its cell in every configuration the sketch drives becomes {AS-@-var})."""
+    """Make the column `key` follow sketch variable `var` (its cell in every configuration the sketch drives becomes {AS_@_var})."""
     if not self.gsv:
         raise MateError("this file is not linked to an assembly sketch")
     if key not in self.cfg["cols"]:
         self.cfg_add_col(key)
     for c in self.gsv.get("mirrored") or []:
         if c in self.cfg["names"] and c in (self.gsv.get("configs") or []):
-            self.cfg_set_cell(c, key, "{" + gsv.PREFIX + "@-" + var + "}")
+            self.cfg_set_cell(c, key, "{" + gsv.PREFIX + "@_" + var + "}")
 
 
 def _gsv_clear(self):

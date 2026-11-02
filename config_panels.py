@@ -131,7 +131,7 @@ class ConfigPanel(QWidget):
             t.setCellWidget(r, col, cb)
         else:
             item = QTableWidgetItem(self.cell_text(key, val))
-            if gsv.has_binding(val):                             # {AS-@-W}: follows the assembly sketch configuration of this row
+            if gsv.has_binding(val):                             # {AS_@_W}: follows the assembly sketch configuration of this row
                 item.setBackground(QBrush(QColor("#ece3f7")))
                 item.setToolTip("Follows the assembly sketch: in this configuration it is " + gsv.resolve_at(val, name))
             t.setItem(r, col, item)
@@ -433,7 +433,7 @@ def unused(*_a):
 # ---------------------------------------------------------------------------------------------- Global Sketch Variables
 class GsvPanel(QWidget):
     """The read-only table "Global Sketch Variables" of a part or an assembly: the numbers its assembly sketch exports, one row per variable per sketch
-    configuration, named AS-<configuration>-<name>.  `owner` is the part / assembly window (cfg_model(), snapshot(), say(), config_changed())."""
+    configuration, named AS_<configuration>_<name>.  `owner` is the part / assembly window (cfg_model(), snapshot(), say(), config_changed())."""
 
     def __init__(self, owner):
         super().__init__()
@@ -457,11 +457,11 @@ class GsvPanel(QWidget):
         lay.addWidget(self.table)
         row = QHBoxLayout()
         b = QPushButton("Copy name")
-        b.setToolTip("Copy the name as a formula writes it, e.g. {AS-Large-W}")
+        b.setToolTip("Copy the name as a formula writes it, e.g. {AS_Large_W}")
         b.clicked.connect(self.copy_name)
         row.addWidget(b)
         b = QPushButton("Bind a column...")
-        b.setToolTip("Make a column of the Configurations table follow this variable: in every configuration the sketch drives, its cell becomes {AS-@-W}")
+        b.setToolTip("Make a column of the Configurations table follow this variable: in every configuration the sketch drives, its cell becomes {AS_@_W}")
         b.clicked.connect(self.bind_column)
         row.addWidget(b)
         lay.addLayout(row)
@@ -479,9 +479,9 @@ class GsvPanel(QWidget):
             self.head.setText("Not linked to an assembly sketch.  In the assembly sketch (.gpk), add this file in its Linked files panel.")
             return
         src = self.m.gsv_src_path()
-        gone = "" if src and os.path.isfile(src) else "   (sketch file not found: the numbers shown are the last ones received)"
+        gone = "" if src and os.path.isfile(src) and not g.get("orphan") else "   ON NOTICE: sketch file not found, the numbers shown are the last ones received and nothing updates them"
         self.head.setText(f"From {os.path.basename(src or g.get('src', ''))}{gone}.  Read-only: change them in the sketch.  In a formula write the name in braces, "
-                          "{AS-Large-W}; in a configuration cell {AS-@-W} follows the configuration of its row.")
+                          "{AS_Large_W}; in a configuration cell {AS_@_W} follows the configuration of its row.")
         rows = gsv.rows(g)
         t.setRowCount(len(rows))
         for r, (name, val, kind, role) in enumerate(rows):
@@ -527,6 +527,20 @@ class GsvPanel(QWidget):
         if not ok:
             return
         key = cands[labels.index(pick)][0]
+        if key.startswith("g:") and not key[2:].startswith(gsv.PREFIX) and hasattr(m, "rename_global"):
+            new, ok = QInputDialog.getText(self, "Name of the linked variable", "A variable that follows the assembly sketch is named AS_{configuration}_{name}.\n"
+                                           "Confirm the name or change it:", text=gsv.PREFIX + m.cfg["active"] + "_" + key[2:])
+            if not ok:
+                return
+            new = new.strip()
+            if new != key[2:]:
+                self.owner.snapshot()
+                try:
+                    m.rename_global(key[2:], new)
+                except Exception as ex:                          # noqa: BLE001
+                    self.owner.say(str(ex))
+                    return
+                key = "g:" + new
         self.owner.snapshot()
         try:
             m.gsv_bind(key, k[1])

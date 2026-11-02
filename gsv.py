@@ -1,9 +1,9 @@
 """gsv.py - Global Sketch Variables: the numbers an assembly sketch (.gpk) hands to the parts and assemblies linked to it.
 
-A sketch variable `W` exported by the sketch configuration `Large` arrives in a part / assembly as the read-only global **AS-Large-W**
+A sketch variable `W` exported by the sketch configuration `Large` arrives in a part / assembly as the read-only global **AS_Large_W**
 (one per exported variable per sketch configuration).  The hyphens make it unusable as a plain name in a formula, so a formula writes it in
-braces:   {AS-Large-W} * 2 + 3.   Inside a configuration cell the configuration part can be the word @, which stands for the configuration
-that owns the cell:   {AS-@-W}   - it is AS-Small-W in the configuration Small, AS-Large-W in Large, and a configuration that the sketch
+braces:   {AS_Large_W} * 2 + 3.   Inside a configuration cell the configuration part can be the word @, which stands for the configuration
+that owns the cell:   {AS_@_W}   - it is AS_Small_W in the configuration Small, AS_Large_W in Large, and a configuration that the sketch
 adds later follows the sketch without anybody editing the cell.
 
 What a file keeps (Document.gsv / Assembly.gsv):
@@ -14,7 +14,8 @@ No Qt in here.
 """
 import re
 
-PREFIX = "AS-"
+PREFIX = "AS_"
+BIND = PREFIX + "@_"                                   # {AS_@_W}: the configuration of the cell's own row
 KINDS = ("length", "angle", "number")
 ROLES = ("driving", "driven")
 
@@ -22,7 +23,7 @@ _TOKEN = re.compile(r"\{([^{}]*)\}")
 
 
 def full_name(config, var):
-    return f"{PREFIX}{config}-{var}"
+    return f"{PREFIX}{config}_{var}"
 
 
 def mangle_name(name):
@@ -31,7 +32,7 @@ def mangle_name(name):
 
 
 def mangle(text):
-    """Formula text -> text a plain evaluator can read: every {AS-...} becomes an identifier.  Other text is untouched."""
+    """Formula text -> text a plain evaluator can read: every {AS_...} becomes an identifier.  Other text is untouched."""
     text = str(text)
     if "{" not in text:
         return text
@@ -39,7 +40,7 @@ def mangle(text):
 
 
 def mask(text):
-    """Same text with each {AS-...} replaced by underscores of the same length (a name for the parser, same column offsets)."""
+    """Same text with each {AS_...} replaced by underscores of the same length (a name for the parser, same column offsets)."""
     return _TOKEN.sub(lambda m: "_" * len(m.group(0)) if m.group(1).strip().startswith(PREFIX) else m.group(0), str(text))
 
 
@@ -48,15 +49,15 @@ def has_token(text):
 
 
 def has_binding(text):
-    """Does the cell follow the configuration it sits in ({AS-@-W})?"""
-    return isinstance(text, str) and ("{" + PREFIX + "@-") in text
+    """Does the cell follow the configuration it sits in ({AS_@_W})?"""
+    return isinstance(text, str) and ("{" + BIND) in text
 
 
 def resolve_at(text, config):
-    """{AS-@-W} -> {AS-<config>-W}."""
+    """{AS_@_W} -> {AS_<config>_W}."""
     if not has_binding(text):
         return text
-    return str(text).replace("{" + PREFIX + "@-", "{" + PREFIX + config + "-")
+    return str(text).replace("{" + BIND, "{" + PREFIX + config + "_")
 
 
 def keep_binding(cell, value, config):
