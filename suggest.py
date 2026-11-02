@@ -87,6 +87,9 @@ class Suggest(QObject):
     # the word at the cursor
     def word(self):
         t = self.edit.text()[:self.edit.cursorPosition()]
+        i = t.rfind("{")
+        if i >= 0 and "}" not in t[i:]:                   # inside {...}: a linked name may hold spaces (a configuration called "Config 1")
+            return t[i + 1:], i + 1
         m = _WORD.search(t)
         return (m.group(0), m.start()) if m else ("", len(t))
 
@@ -116,8 +119,8 @@ class Suggest(QObject):
 
     def chosen(self, idx):
         name = idx.data(NAME_ROLE) if hasattr(idx, "data") else str(idx)
-        if isinstance(name, str) and " " in name:
-            name = name.split()[0]
+        if not isinstance(name, str) or not name:                    # no stored name: the first word of what is shown
+            name = str(idx.data() if hasattr(idx, "data") else idx).split()[0]
         _, start = self.word()
         t = self.edit.text()
         cur = self.edit.cursorPosition()

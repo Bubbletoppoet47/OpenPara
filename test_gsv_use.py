@@ -37,3 +37,19 @@ assert close(m.param_values()["L"], 20.0), m.param_values()
 assert close(d.solid.volume, 20 * 20 * 10), d.solid.volume
 d.params["Gap"] = "{AS_Big_W} - {AS_Small_W}"; d.rebuild(); assert close(d.values["Gap"], 80)
 print("linked variables usable OK")
+
+# ---- a configuration with a space in its name ("Config 1"): the whole name is typed, offered and inserted
+d2 = pm.Document()
+d2.gsv_set("s.gpk", ["Config 1"], [{"name": "I1", "kind": "length", "role": "driving"}], {"Config 1": {"I1": 3000.0}})
+e = QLineEdit(); sg = suggest.attach(e, lambda: suggest.names_of(d2))
+e.setText("AS"); e.setCursorPosition(2); sg.update(True)
+assert sg.comp.completionCount() == 1
+sg.chosen(sg.comp.completionModel().index(0, 0)); assert e.text() == "{AS_Config 1_I1}", e.text()
+e.setText("{AS_Config 1"); e.setCursorPosition(len(e.text())); sg.update(True)
+assert sg.comp.completionCount() == 1, sg.comp.completionCount()
+sg.chosen(sg.comp.completionModel().index(0, 0)); assert e.text() == "{AS_Config 1_I1}", e.text()
+s2 = d2.add(pm.new_feature("sketch", plane={"base": "Top"})); d2.rebuild(); m2 = d2.models[s2["id"]]
+sk.add_rect_corner(m2, (0, 0), (20, 20)); sk.solve_model(m2); d2.store_sketch(s2["id"])
+f2 = d2.add(pm.new_feature("extrude", sketch=s2["id"], depth="{AS_Config 1_I1}/100")); d2.rebuild()
+assert d2.status[f2["id"]] == "ok" and close(d2.solid.volume, 20 * 20 * 30), (d2.status, d2.solid.volume)
+print("names with spaces OK")
