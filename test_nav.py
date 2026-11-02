@@ -52,3 +52,18 @@ ed.reset_tool("dim_h"); ed.picks = [("pt", 0)]
 corner = [i for i, p in ed.m.pts.items() if i and abs(p[0] - 30) < 1e-6 and abs(p[1] - 20) < 1e-6][0]
 ed.picks.append(("pt", corner)); ed.try_apply(); print("dims", [(c["type"], c["value"]) for c in ed.m.cons if c["type"].startswith("dim")], "dof", ed.rep.dof)
 w.leave_sketch(); print("OK")
+
+# --- the cube is built once: turning the model and hovering create nothing new, hovering recolours only the entered / left piece
+n0 = cube.ren.GetViewProps().GetNumberOfItems()
+for i in range(30):
+    nv.rotate(7, 3)
+assert cube.ren.GetViewProps().GetNumberOfItems() == n0, "turning the model rebuilt the cube"
+cube.set_hover(("face", "Top")); assert np.allclose(cube.face_actors["Top"].GetProperty().GetColor(), nav.HOVER)
+cube.set_hover(("edge", 3)); assert np.allclose(cube.face_actors["Top"].GetProperty().GetColor(), nav.BASE["Top"]) and np.allclose(cube.edge_actors[3].GetProperty().GetColor(), nav.HOVER)
+cube.set_hover(("corner", 5)); assert cube.corner_actor.GetVisibility() and np.allclose(cube.edge_actors[3].GetProperty().GetColor(), cube.DEFAULT_EDGE)
+cube.set_hover(("arrow", "left")); assert not cube.corner_actor.GetVisibility() and np.allclose(cube.button_actors["left"].GetProperty().GetColor(), nav.HOVER)
+cube.set_hover(None); assert np.allclose(cube.button_actors["left"].GetProperty().GetColor(), cube.BUTTON)
+assert cube.ren.GetViewProps().GetNumberOfItems() == n0
+# the cube's camera follows the angle of the model's camera
+r1, u1, t1 = nav.view_dirs(nv.pl.camera); r2, u2, t2 = nav.view_dirs(cube.cam); assert np.allclose(t1, t2, atol=1e-6) and np.allclose(u1, u2, atol=1e-6)
+print("OK cube static")
