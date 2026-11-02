@@ -935,31 +935,57 @@ def _gsv_src_path(self):
     return os.path.normpath(p if os.path.isabs(p) or not self.base_dir else os.path.join(self.base_dir, p))
 
 
-def _gsv_set(self, src, configs, vars_, vals):
-    """Same as Document.gsv_set: take the sketch's exported numbers and mirror its configurations.  A new configuration also picks the
-    configuration of the same name in each component's part when that part has one.  -> messages"""
-    mirrored = list((self.gsv or {}).get("mirrored") or [])
+def _gsv_set(self, src, configs, vars_, vals, ids=None):
+    """Same as Document.gsv_set: take the sketch's exported numbers and mirror its configurations (the sketch is the master over their names).
+    A new configuration also picks the configuration of the same name in each component's part when that part has one.  -> messages"""
+    old = self.gsv or {}
+    mirrored = list(old.get("mirrored") or [])
     self.gsv = {"src": src, "configs": list(configs), "vars": [dict(v) for v in vars_],
                 "vals": {c: {k: float(x) for k, x in vals.get(c, {}).items()} for c in configs}, "mirrored": mirrored}
     msgs = []
+
+    def add_one(c):
+        first = next((n for n in mirrored if n in self.cfg["names"]), self.cfg["names"][0])
+        self.cfg_add(c, copy_of=first)
+        row = self.cfg["cells"][c]
+        for key in self.cfg["cols"]:
+            if key.startswith("c:"):
+                comp = self.comp(key[2:])
+                have = self.part_cfgs_fn(comp) if (comp is not None and self.part_cfgs_fn) else []
+                if c in (have or []):
+                    row[key] = c
+                elif comp is not None:
+                    msgs.append(f"{comp['name']} has no configuration '{c}': it keeps '{row.get(key)}' in '{c}'")
+
+    if ids:
+        renames, adds, deletes, newmap = gsv.plan(mirrored, old.get("ids"), configs, ids)
+        for o, n in renames:
+            try:
+                self.cfg_rename(o, n)
+                self.gsv_retarget(o, n)
+                msgs.append(f"configuration '{o}' renamed to '{n}'")
+            except MateError as ex:
+                msgs.append(f"could not rename '{o}' to '{n}': {ex}")
+        for n in adds:
+            if n not in self.cfg["names"]:
+                add_one(n)
+        for c in deletes:
+            try:
+                self.cfg_delete(c)
+                msgs.append(f"configuration '{c}' removed because the sketch no longer has it")
+            except MateError:
+                msgs.append(f"'{c}' is no longer in the sketch but is this file's only configuration: kept")
+        mirrored[:] = [c for c in configs if c in self.cfg["names"]]
+        self.gsv["ids"] = {n: i for n, i in newmap.items() if n in self.cfg["names"]}
+        return msgs
     for c in configs:
         if c not in self.cfg["names"]:
-            first = next((n for n in mirrored if n in self.cfg["names"]), self.cfg["names"][0])
-            self.cfg_add(c, copy_of=first)
-            row = self.cfg["cells"][c]
-            for key in self.cfg["cols"]:
-                if key.startswith("c:"):
-                    comp = self.comp(key[2:])
-                    have = self.part_cfgs_fn(comp) if (comp is not None and self.part_cfgs_fn) else []
-                    if c in (have or []):
-                        row[key] = c
-                    elif comp is not None:
-                        msgs.append(f"{comp['name']} has no configuration '{c}': it keeps '{row.get(key)}' in '{c}'")
+            add_one(c)
         if c not in mirrored:
             mirrored.append(c)
     gone = [c for c in mirrored if c not in configs]
     dropped = []
-    for c in gone:                                       # the sketch deleted the configuration: the linked file's copy goes with it
+    for c in gone:
         try:
             self.cfg_delete(c)
             mirrored.remove(c)
@@ -969,6 +995,13 @@ def _gsv_set(self, src, configs, vars_, vals):
     if dropped:
         msgs.append("configurations removed because the sketch no longer has them: " + ", ".join(dropped))
     return msgs
+
+
+def _gsv_retarget(self, old, new):
+    """A configuration was renamed: formulas that wrote {AS_<old>_x} now write {AS_<new>_x}."""
+    self.params = gsv.retarget(self.params, old, new)
+    self.exprs = gsv.retarget(self.exprs, old, new)
+    self.cfg["cells"] = gsv.retarget(self.cfg["cells"], old, new)
 
 
 def _gsv_bind(self, key, var):
@@ -990,7 +1023,7 @@ def _gsv_refresh(self):
     self.cfg_apply(self.cfg["active"])
 
 
-for _f in (_gsv_src_path, _gsv_set, _gsv_bind, _gsv_clear, _gsv_refresh):
+for _f in (_gsv_src_path, _gsv_set, _gsv_retarget, _gsv_bind, _gsv_clear, _gsv_refresh):
     setattr(Assembly, _f.__name__[1:], _f)
 
 for _f in (_cfg_read, _cfg_write, _cfg_label, _cfg_candidates, _cfg_capture, _cfg_snapshot, _cfg_apply, _cfg_add, _cfg_delete,

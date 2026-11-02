@@ -1396,13 +1396,37 @@ class Document:
         p = self.gsv["src"]
         return os.path.normpath(p if os.path.isabs(p) or not self.base_dir else os.path.join(self.base_dir, p))
 
-    def gsv_set(self, src, configs, vars_, vals):
+    def gsv_set(self, src, configs, vars_, vals, ids=None):
         """Take the exported numbers of the sketch (`src` as it is to be written in this file) and mirror its configurations.
-        vars_ = [{"name","kind","role"}], vals = {configuration: {variable: number}}.  -> messages."""
-        mirrored = list((self.gsv or {}).get("mirrored") or [])
+        vars_ = [{"name","kind","role"}], vals = {configuration: {variable: number}}, ids = the permanent id of each configuration (the sketch is the
+        master over the names: a renamed configuration is renamed here, a deleted one is deleted here).  -> messages."""
+        old = self.gsv or {}
+        mirrored = list(old.get("mirrored") or [])
         self.gsv = {"src": src, "configs": list(configs), "vars": [dict(v) for v in vars_],
                     "vals": {c: {k: float(x) for k, x in vals.get(c, {}).items()} for c in configs}, "mirrored": mirrored}
         msgs = []
+        if ids:
+            renames, adds, deletes, newmap = gsv.plan(mirrored, old.get("ids"), configs, ids)
+            for o, n in renames:
+                try:
+                    self.cfg_rename(o, n)
+                    self.gsv_retarget(o, n)
+                    msgs.append(f"configuration '{o}' renamed to '{n}'")
+                except ModelError as ex:
+                    msgs.append(f"could not rename '{o}' to '{n}': {ex}")
+            for n in adds:
+                if n not in self.cfg["names"]:
+                    first = next((x for x in mirrored if x in self.cfg["names"]), self.cfg["names"][0])
+                    self.cfg_add(n, copy_of=first)
+            for c in deletes:
+                try:
+                    self.cfg_delete(c)
+                    msgs.append(f"configuration '{c}' removed because the sketch no longer has it")
+                except ModelError:
+                    msgs.append(f"'{c}' is no longer in the sketch but is this file's only configuration: kept")
+            mirrored[:] = [c for c in configs if c in self.cfg["names"]]
+            self.gsv["ids"] = {n: i for n, i in newmap.items() if n in self.cfg["names"]}
+            return msgs
         for c in configs:
             if c not in self.cfg["names"]:
                 first = next((n for n in mirrored if n in self.cfg["names"]), self.cfg["names"][0])      # copy a mirrored configuration: its bound cells follow
@@ -1421,6 +1445,12 @@ class Document:
         if dropped:
             msgs.append("configurations removed because the sketch no longer has them: " + ", ".join(dropped))
         return msgs
+
+    def gsv_retarget(self, old, new):
+        """A configuration was renamed: formulas that wrote {AS_<old>_x} now write {AS_<new>_x}."""
+        self.params = gsv.retarget(self.params, old, new)
+        self.cfg["cells"] = gsv.retarget(self.cfg["cells"], old, new)
+        self.features = gsv.retarget(self.features, old, new)
 
     def gsv_bind(self, key, var):
         """Make the column `key` follow sketch variable `var`: in every configuration the sketch drives, its cell becomes {AS_@_var}."""
@@ -1648,8 +1678,18 @@ class Document:
                 row[key] = v
         c.setdefault("offs", {})[c["active"]] = self.label_offsets()
 
+    def cfg_ids(self):
+        """{configuration name: permanent id}.  The id never changes when the configuration is renamed; a file that follows this one finds it by it."""
+        ids = self.cfg.setdefault("ids", {})
+        for n in self.cfg["names"]:
+            ids.setdefault(n, "n:" + n)                      # a configuration from before ids existed: its name (stable until it is renamed)
+        for n in [k for k in ids if k not in self.cfg["names"]]:
+            ids.pop(n)
+        return ids
+
     def cfg_snapshot(self):
         self.cfg_capture()
+        self.cfg_ids()
         return self.cfg
 
     def cfg_apply(self, name):
@@ -1673,6 +1713,8 @@ class Document:
         self.cfg_capture()
         src = copy_of or self.cfg["active"]
         self.cfg["names"].append(name)
+        import uuid
+        self.cfg.setdefault("ids", {})[name] = uuid.uuid4().hex[:10]
         self.cfg["cells"][name] = dict(self.cfg["cells"].get(src, {}))
         offs = self.cfg.setdefault("offs", {})
         offs[name] = copy.deepcopy(offs.get(src, {}))
@@ -1692,6 +1734,8 @@ class Document:
             raise ModelError("that configuration name is empty or already used")
         i = self.cfg["names"].index(name)
         self.cfg["names"][i] = new
+        if name in self.cfg.get("ids", {}):
+            self.cfg["ids"][new] = self.cfg["ids"].pop(name)
         self.cfg["cells"][new] = self.cfg["cells"].pop(name, {})
         if "offs" in self.cfg:
             self.cfg["offs"][new] = self.cfg["offs"].pop(name, {})

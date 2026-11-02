@@ -110,3 +110,68 @@ def rows(g):
 def reserved(name):
     """A global / dimension / configuration-column name may not start with the sketch prefix."""
     return str(name).startswith(PREFIX)
+
+
+def plan(mirrored, idmap, configs, ids):
+    """How a linked file follows the sketch's configurations when the sketch is the master over their names.
+    mirrored: names in the file that came from the sketch;  idmap: {name in the file: sketch id of that configuration};
+    configs / ids: the sketch's configuration names and their permanent ids, in order.
+    -> (renames [(old, new)], adds [name], deletes [name], idmap {name: id} after the change).
+    The same id under a new name is a rename; an id that is gone is a delete; a new id is an add.  A mirrored configuration that has no id yet (made
+    by an older version) is matched by name first, then by order."""
+    idmap = dict(idmap or {})
+    byid = {i: n for n, i in idmap.items()}
+    used, renames, newmap, pend = set(), [], {}, []
+    for name, i in zip(configs, ids):
+        if i in byid and byid[i] in mirrored:
+            old = byid[i]
+            used.add(old)
+            newmap[name] = i
+            if old != name:
+                renames.append((old, name))
+        else:
+            pend.append((name, i))
+    left = [c for c in mirrored if c not in used]
+    unid = [c for c in left if c not in idmap]
+    rest = []
+    for name, i in pend:
+        if name in left:
+            left.remove(name)
+            if name in unid:
+                unid.remove(name)
+            newmap[name] = i
+        else:
+            rest.append((name, i))
+    for name, i in list(rest):
+        if unid:
+            old = unid.pop(0)
+            left.remove(old)
+            newmap[name] = i
+            renames.append((old, name))
+            rest.remove((name, i))
+    for name, i in rest:
+        newmap[name] = i
+    return renames, [n for n, _ in rest], left, newmap
+
+
+def retarget(x, old, new):
+    """Every {AS_<old>_ in the text, lists and dicts of `x` becomes {AS_<new>_.  A text that is itself JSON (a sketch's stored model) is changed inside."""
+    import json
+    a, b = "{" + PREFIX + old + "_", "{" + PREFIX + new + "_"
+
+    def fix(v):
+        if isinstance(v, str):
+            if PREFIX not in v:
+                return v
+            if v[:1] in "{[":
+                try:
+                    return json.dumps(fix(json.loads(v)))
+                except ValueError:
+                    pass
+            return v.replace(a, b)
+        if isinstance(v, list):
+            return [fix(i) for i in v]
+        if isinstance(v, dict):
+            return {k: fix(i) for k, i in v.items()}
+        return v
+    return fix(x)

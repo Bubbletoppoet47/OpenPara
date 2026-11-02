@@ -102,3 +102,25 @@ d.base_dir = "/nonexistent"
 ch, m2 = asm_sketch.pull(d)
 assert d.gsv.get("orphan") and "on notice" in m2[0] and "Small" in d.cfg["names"], m2
 print("config delete + on notice OK")
+
+# ---- the sketch is the master over configuration names: rename follows, delete deletes, add adds (the Configurations table, with permanent ids)
+sdx = ak.new_document(); fx = ak.sketch_feature(sdx); sdx.rebuild(); mx = sdx.models[fx["id"]]
+sk.add_rect_corner(mx, (0, 0), (100, 50)); sk.solve_model(mx)
+bx = next(i for i in sorted(mx.lns) if all(abs(mx.pts[p][1]) < 1e-9 for p in mx.lns[i]))
+mx.add_param("W", 100.0); mx.add_con("dim_len", [("ln", bx)], value=100.0, name="W", expr="W"); sk.solve_model(mx); sdx.store_sketch(fx["id"])
+ak.set_export(sdx, "W", True)
+sdx.cfg_rename("Default", 'Long"1'); sdx.cfg_add_col("g:__none__") if False else None
+partx = pm.Document(); partx.params = {"A": "{AS_Long\"1_W}/2"}
+assert ak.pull.__doc__ and ak.table_names(sdx) == ['Long"1']
+msgs = partx.gsv_set("s.gpk", *ak.payload(sdx), ids=ak.config_ids(sdx))
+assert 'Long"1' in partx.cfg["names"] and gsv.flat(partx.gsv)['AS_Long"1_W'] == 100.0, (partx.cfg["names"], gsv.flat(partx.gsv))
+sdx.cfg_rename('Long"1', "Tall")
+msgs = partx.gsv_set("s.gpk", *ak.payload(sdx), ids=ak.config_ids(sdx))
+assert "Tall" in partx.cfg["names"] and 'Long"1' not in partx.cfg["names"] and any("renamed" in m for m in msgs), (partx.cfg["names"], msgs)
+assert partx.params["A"] == "{AS_Tall_W}/2", partx.params                                  # formulas follow the rename
+sdx.cfg_add("Wide")
+partx.gsv_set("s.gpk", *ak.payload(sdx), ids=ak.config_ids(sdx)); assert "Wide" in partx.cfg["names"]
+sdx.cfg_delete("Tall")
+msgs = partx.gsv_set("s.gpk", *ak.payload(sdx), ids=ak.config_ids(sdx)); assert "Tall" not in partx.cfg["names"] and "Wide" in partx.cfg["names"], msgs
+j = pm.Document.from_json(sdx.to_json()); assert j.cfg_ids() == sdx.cfg_ids()                  # ids survive saving
+print("sketch is master over names OK")

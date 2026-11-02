@@ -84,9 +84,29 @@ def _kind_of(m, name, sc):
     return "angle" if "angle" in kinds and "length" not in kinds else ("length" if kinds else "number")
 
 
+def table_names(doc):
+    """The configuration names of the Configurations table when the sketch uses it (it has columns, or a row other than the first default one);
+    None when only the sketch's own configuration list is in use (older files)."""
+    c = doc.cfg
+    if c.get("cols") or list(c.get("names") or []) != ["Default"]:
+        return list(c["names"])
+    return None
+
+
+def config_ids(doc):
+    """The permanent id of each exported configuration, in the order of `variables(doc)[0]` (None when the sketch's own list is used)."""
+    names = table_names(doc)
+    if names is None:
+        return None
+    ids = doc.cfg_ids()
+    return [ids[n] for n in names]
+
+
 def variables(doc):
     """-> (configs, vars, values): configuration names, [{"name", "kind", "role", "export"}], {configuration: {variable: number}}.
-    kind: length (mm) | angle (degrees) | number.  role: driving (a symbol you set, or a named dimension) | driven (measured from the geometry or computed)."""
+    kind: length (mm) | angle (degrees) | number.  role: driving (a symbol you set, or a named dimension) | driven (measured from the geometry or computed).
+    The configurations are the rows of the sketch's Configurations table (each row is applied to read its numbers); a sketch that does not use the
+    table gives the configurations of the sketch itself."""
     f = sketch_feature(doc)
     if f is None:
         return [], [], {}
@@ -95,14 +115,15 @@ def variables(doc):
     if m is None:
         return [], [], {}
     sc = pm.sc
+    names = table_names(doc)
+    orig = doc.cfg["active"]
     keep = m.active
     try:
         try:
             m.solve_all_configs()                                   # driven symbols get their number in every configuration
         except Exception:                                           # noqa: BLE001
             pass
-        configs = list(m.configs)
-        out, values = [], {c: {} for c in configs}
+        out = []
         for name, p in m.params.items():
             if p.get("doc"):
                 continue
@@ -110,22 +131,46 @@ def variables(doc):
             if driven and any(c.get("coupled") and c.get("expr") == name for c in m.cons):
                 driven = False                                      # a dimension that follows measured values still constrains the sketch
             out.append({"name": name, "kind": _kind_of(m, name, sc), "role": "driven" if driven else "driving"})
-        for j, c in enumerate(configs):
-            m.active = j
-            for k, v in m.param_values().items():
-                if any(o["name"] == k for o in out):
-                    values[c][k] = float(v)
-        m.active = keep
         for c in m.cons:                                            # named dimensions that are not driven by a symbol
             if c["type"] in sc.DIMENSIONS and c.get("user_name") and c.get("name") and not doc.dim_symbol(m, c):
                 out.append({"name": c["name"], "kind": "angle" if c["type"] == "dim_ang" else "length", "role": "driven" if (c.get("expr") and not c.get("coupled")) else "driving"})
-                for cn in configs:
-                    values[cn][c["name"]] = float(c["value"])
+        have = {o["name"] for o in out}
+
+        def read(mm):
+            row = {k: float(v) for k, v in mm.param_values().items() if k in have}
+            for c in mm.cons:
+                if c["type"] in sc.DIMENSIONS and c.get("user_name") and c.get("name") and c["name"] in have and c["name"] not in row:
+                    row[c["name"]] = float(c["value"])
+            return row
+
+        if names is None:
+            configs = list(m.configs)
+            values = {c: {} for c in configs}
+            for j, c in enumerate(configs):
+                m.active = j
+                values[c] = read(m)
+        else:
+            configs = names
+            values = {}
+            for n in names:
+                doc.cfg_apply(n)
+                doc.rebuild()
+                mm = doc.models.get(f["id"])
+                try:
+                    mm.solve_all_configs()
+                except Exception:                                   # noqa: BLE001
+                    pass
+                values[n] = read(mm)
         for o in out:
             o["export"] = o["name"] in doc.export
         return configs, out, values
     finally:
-        m.active = keep
+        if names is not None and doc.cfg["active"] != orig:
+            doc.cfg_apply(orig)
+            doc.rebuild()
+        mm = doc.models.get(f["id"])
+        if mm is not None:
+            mm.active = keep
 
 
 def payload(doc):
@@ -166,10 +211,10 @@ def save_target(path, obj):
         f.write(obj.to_json())
 
 
-def apply(obj, sketch_path, pl):
+def apply(obj, sketch_path, pl, ids=None):
     """Give a part / assembly object (base_dir set) the sketch's payload `pl` = payload(doc), written as a path relative to the object's file.  -> messages."""
     src = rel(os.path.normpath(os.path.abspath(sketch_path)), obj.base_dir) if obj.base_dir else os.path.abspath(sketch_path)
-    return obj.gsv_set(src, *pl)
+    return obj.gsv_set(src, *pl, ids=ids)
 
 
 def link(path, sketch_path, sketch_doc, open_obj=None):
@@ -178,13 +223,13 @@ def link(path, sketch_path, sketch_doc, open_obj=None):
     pl = payload(sketch_doc)
     try:
         if open_obj is not None:
-            msgs = apply(open_obj, sketch_path, pl)
+            msgs = apply(open_obj, sketch_path, pl, config_ids(sketch_doc))
             open_obj.gsv_refresh()
             return "open", msgs
         if not os.path.isfile(path):
             return "missing", []
         obj = load_target(path)
-        msgs = apply(obj, sketch_path, pl)
+        msgs = apply(obj, sketch_path, pl, config_ids(sketch_doc))
         obj.gsv_refresh()
         save_target(path, obj)
         return "written", msgs
@@ -240,5 +285,5 @@ def pull(obj, live=None):
         except Exception as ex:                                      # noqa: BLE001
             return False, [f"{os.path.basename(src)}: {ex}"]
     before = json.dumps([obj.gsv, obj.cfg["names"]], sort_keys=True)
-    msgs = obj.gsv_set(obj.gsv["src"], *payload(doc))
+    msgs = obj.gsv_set(obj.gsv["src"], *payload(doc), ids=config_ids(doc))
     return before != json.dumps([obj.gsv, obj.cfg["names"]], sort_keys=True), msgs
