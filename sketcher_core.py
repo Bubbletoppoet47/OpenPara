@@ -198,14 +198,16 @@ class Model:
         return c
 
     def next_dim_name(self, typ, extra=()):
-        """The default name of a new dimension: the prefix of its type with the LOWEST number that is not used yet (not by a symbol, a
-        dimension, or a name in `extra`, e.g. the symbols of the sketches linked to this one)."""
+        """The default name of a new dimension: the prefix of its type with the number after the HIGHEST one in use (a symbol, a dimension,
+        or a name in `extra`, e.g. the symbols of the sketches linked to this one)."""
         pre = DIM_PREFIX[typ]
         taken = set(self.params) | set(extra) | {c.get("name") for c in self.cons if c["type"] in DIMENSIONS}
-        n = 1
-        while f"{pre}{n}" in taken:
-            n += 1
-        return f"{pre}{n}"
+        # one more than the highest number in use (L1, L2, L4 -> L5, not L3); when the highest is deleted its number is free again
+        top = 0
+        for t in taken:
+            if isinstance(t, str) and t.startswith(pre) and t[len(pre):].isdigit():
+                top = max(top, int(t[len(pre):]))
+        return f"{pre}{top + 1}"
 
     def con_by_id(self, cid):
         return next((c for c in self.cons if c["id"] == cid), None)
@@ -1244,6 +1246,7 @@ class Model:
             eqs = [e for e in S.equations([c for c in self.cons if not c.get("driven")])
                    if e[1]["type"] not in ("_pin", "_lock", "_lockr")]
             _, J = S.jacobian(eqs, S.x, central=True)
+            J = row_scale(J)
             _, _, Vt = np.linalg.svd(J if J.shape[0] else np.zeros((1, S.n)))
             N = Vt[S.n - rep.dof:]                                    # rep.dof free motions
             pre = {}
@@ -1603,6 +1606,18 @@ class Report:
         if self.dof == 0:
             return "Fully defined"
         return f"Under defined ({self.dof} DOF)"
+
+
+def row_scale(J):
+    """Every equation row scaled to length 1, for counting degrees of freedom.  Rows have very different sizes (a length changes 1 per mm, an
+    angle only 1/length per mm), so on a big sketch an angle looked 'too weak to matter' next to the rest and was reported redundant while the
+    sketch was still shown as free.  Rows that are zero for real (below 1e-7) stay as they are."""
+    J = np.asarray(J, float)
+    if not J.shape[0]:
+        return J
+    nr = np.linalg.norm(J, axis=1)
+    sc_ = np.where(nr > 1e-7, nr, 1.0)
+    return J / sc_[:, None]
 
 
 class Solver:
@@ -2072,6 +2087,7 @@ class Solver:
         # degrees of freedom from the Jacobian of the satisfied equations (without the drag pull)
         eqs_nopin = [e for e in eqs if e[1]["type"] not in ("_pin", "_lock", "_lockr")]
         _, J = self.jacobian(eqs_nopin, x, central=True)
+        J = row_scale(J)
         if J.shape[0]:
             sv = np.linalg.svd(J, compute_uv=False)
             rank = int(np.sum(sv > 1e-6 * max(sv[0], 1.0)))
@@ -2175,6 +2191,8 @@ def analyze_inputs(m, max_sets=12):
                 Jp[ri, j] = -dv * (c.get("eps", 1) * math.pi / 180 if c["type"] == "dim_ang" else
                                    c.get("sign", 1) if c["type"] == "dim_off" else 1.0)
     J = np.hstack([Jx, Jp]) if len(owners) else np.zeros((1, nx + nP))
+    J = row_scale(J)
+    Jx = row_scale(Jx)
     n = nx + nP
     sv = np.linalg.svd(J, compute_uv=False)
     rank = int(np.sum(sv > 1e-7 * max(sv[0], 1.0))) if len(sv) else 0

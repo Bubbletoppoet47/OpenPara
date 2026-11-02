@@ -146,17 +146,36 @@ def ask_angle(parent, acute, obtuse, default, preview=None):
     return "acute" if ra.isChecked() else "obtuse"
 
 
-def ask_dim(parent, title, text, symbols, names=None):
-    """A number, a symbol name or an expression (e.g. Width/2) -> text or None.  `names` (a function) feeds the suggestion list."""
+def ask_dim(parent, title, text, symbols, names=None, driven=None, default_name=""):
+    """A number, a symbol name or an expression (e.g. Width/2) -> text or None.  `names` (a function) feeds the suggestion list.
+    driven: a dict {"driven": False} adds the check box 'Driven (measure only)' (assembly sketch); it is filled with the answer.  When it is
+    ticked the box holds the dimension's name instead of a value (default_name), because a driven dimension only measures."""
     d = QDialog(parent)
     d.setWindowTitle(title)
     lay = QVBoxLayout(d)
-    lay.addWidget(QLabel("Value, symbol or equation  (a new name makes a symbol; globals such as Width can be used):\n"
-                         + ("Existing: " + ", ".join(symbols) if symbols else "")))
+    head = QLabel("Value, symbol or equation  (a new name makes a symbol; globals such as Width can be used):\n"
+                  + ("Existing: " + ", ".join(symbols) if symbols else ""))
+    lay.addWidget(head)
     e = QLineEdit(text)
     if names is not None:
         suggest.attach(e, names)
     lay.addWidget(e)
+    if driven is not None:
+        cb = QCheckBox("Driven (measure only: it does not constrain the sketch)")
+        cb.setToolTip("A driven dimension shows what the geometry measures. It never adds a constraint, so it cannot make the sketch redundant or conflicting.")
+        lay.addWidget(cb)
+        keep = {"value": text}
+
+        def flip(on):
+            if on:
+                keep["value"] = e.text()
+                head.setText("Name of the driven dimension (its value is measured from the geometry):")
+                e.setText(default_name)
+            else:
+                head.setText("Value, symbol or equation  (a new name makes a symbol; globals such as Width can be used):")
+                e.setText(keep["value"])
+            e.selectAll()
+        cb.toggled.connect(flip)
     bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
     bb.accepted.connect(d.accept)
     bb.rejected.connect(d.reject)
@@ -164,6 +183,8 @@ def ask_dim(parent, title, text, symbols, names=None):
     e.selectAll()
     if d.exec() != QDialog.DialogCode.Accepted:
         return None
+    if driven is not None:
+        driven["driven"] = cb.isChecked()
     return e.text().strip()
 
 
@@ -1072,27 +1093,39 @@ class SketchEditor:
             else:
                 cur = m.measure(tool, refs)
             nxt = m.next_dim_name(tool, list(self.app.doc.params))
+            choice = {"driven": False} if getattr(self.app, "asm_sketch", False) else None
             txt = ask_dim(self.app, "Dimension " + nxt + ("" if tool == "dim_ang" else f"  ({unitctl.length_unit()})"),
-                          f"{disp(cur, tool):.8g}", list(m.params), names=self.suggest_names)
+                          f"{disp(cur, tool):.8g}", list(m.params), names=self.suggest_names, driven=choice, default_name=nxt)
             if txt is None:
                 return
-            try:
-                expr, val = self.dim_from_text(m, txt, cur, tool)
-            except ValueError as ex:
-                self.app.say(str(ex))
-                return
-            kw["value"] = val
-            kw["name"] = expr if expr and expr.isidentifier() else nxt
-            if expr:
-                kw["expr"] = expr
+            if choice is not None and choice["driven"]:
+                # a driven dimension only measures: the box held its name; the value is what the geometry has now
+                used = set(m.params) | set(self.app.doc.params) | {c.get("name") for c in m.cons}
+                kw["value"] = cur
+                kw["name"] = txt if (txt.isidentifier() and txt not in used) else nxt
+                kw["_driven"] = True
+            else:
+                try:
+                    expr, val = self.dim_from_text(m, txt, cur, tool)
+                except ValueError as ex:
+                    self.app.say(str(ex))
+                    return
+                kw["value"] = val
+                kw["name"] = expr if expr and expr.isidentifier() else nxt
+                if expr:
+                    kw["expr"] = expr
             if tool in ("dim_h", "dim_v"):
                 pa, pb = m._two_points(refs)
                 k = 0 if tool == "dim_h" else 1
                 kw["sign"] = 1 if pb[k] - pa[k] >= 0 else -1
 
+        make_driven = kw.pop("_driven", False)
+
         def build(mm):
             c = mm.add_con(tool, refs, **kw)
             self.last_con = c["id"]
+            if make_driven:
+                mm.set_driven(c["id"], True)
 
         self.commit(build, refresh=False)
         rep = self.rep

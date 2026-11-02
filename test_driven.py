@@ -87,3 +87,38 @@ pl = sk.add_line(pe.m, (0, 0), (30, 0)); pc = sk.con(pe.m, "dim_len", [("ln", pl
 pe.sel = [("con", pc["id"])]
 assert not [n for n, _ in pe.context_actions(-10000, -10000) if n.startswith("Make driv")] and sw.asm_sketch
 print("OK driven window")
+
+# default dimension names count up from the highest number in use (L1, L2, L4 -> L5); deleting the highest frees its number
+mn = sk.new_model()
+for nm in ("L1", "L2", "L4"):
+    mn.add_param(nm, 1.0)
+assert mn.next_dim_name("dim_len") == "L5", mn.next_dim_name("dim_len")
+del mn.params["L4"]; assert mn.next_dim_name("dim_len") == "L3"
+assert mn.next_dim_name("dim_h") == "H1" and mn.next_dim_name("dim_len", extra=["L9"]) == "L10"
+print("OK names")
+
+# the new-dimension dialog in an assembly sketch has the Driven box; ticked, the box holds the name and the dimension is created driven
+import sketch_edit as se
+seen = {}
+def fake_ask(parent, title, text, symbols, names=None, driven=None, default_name=""):
+    seen["has_box"] = driven is not None; seen["default"] = default_name
+    if driven is not None:
+        driven["driven"] = True
+    return "Span"
+orig_ask = se.ask_dim; se.ask_dim = fake_ask
+ed.sel = []; ed.tool = "dim_len"
+lid2 = sk.add_line(ed.m, (0, 50), (80, 50)); sw.doc.reports[f["id"]] = sk.solve_model(ed.m)
+n_before = len([c for c in ed.m.cons if c["type"] in sc.DIMENSIONS])
+ed.apply("dim_len", [("ln", lid2)])
+new = [c for c in ed.m.cons if c["type"] == "dim_len" and c.get("name") == "Span"]
+assert seen["has_box"] and new and new[0]["driven"] and "Span" in ed.m.params and not ed.m.params["Span"]["input"], (seen, new)
+assert abs(new[0]["value"] - 80.0) < 1e-6
+# the plain sketch dialog has no box
+seen.clear(); pe.tool = "dim_len"; se.ask_dim = fake_ask
+try:
+    pe.apply("dim_len", [("ln", pl)])
+except Exception:
+    pass
+assert seen.get("has_box") is False, seen
+se.ask_dim = orig_ask
+print("OK dialog")
