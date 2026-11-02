@@ -77,6 +77,8 @@ def export_items(win):
                 items.append((c["name"], ex.place(s, win.asm.T4(c))))
         base = os.path.splitext(win.title())[0]
         return items, True, base
+    if hasattr(win, "ensure_built"):
+        win.ensure_built()                       # edits made inside a sketch are built into the part first
     if hasattr(win, "doc") and hasattr(win.doc, "solid"):
         return [(os.path.splitext(win.title())[0], win.doc.solid)], False, os.path.splitext(win.title())[0]
     return None, False, ""

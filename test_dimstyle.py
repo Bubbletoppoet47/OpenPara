@@ -65,14 +65,14 @@ c = [x for x in ed.m.cons if x["type"] == "dim_h"][0]
 sh = dl.shapes(ed, c); ext = dl.extent(ed.m)
 base = dl.primitives(sh, ext)
 assert any(it[0] == "line" for it in base) and not any(it[0] == "fill" for it in base)
-n_solid = len(ed.actors)
+n_solid = (len(ed.actors) + len(ed.geo_actors) + sum(len(v) for v in ed.dim_actors.values()))
 settings.set_many({"dim_line_style": "dashed", "ext_line_style": "dotted", "arrow_style": "filled", "dim_line_px": 3.0, "ext_line_px": 0.5})
 prim = dl.primitives(sh, ext)
 dim_w = {round(it[2], 3) for it, kind in zip([x for x in prim if x[0] == "line"], [None] * len(prim))} if False else None
 assert any(it[0] == "fill" for it in prim), "filled arrowheads"
 widths = sorted({it[2] for it in prim if it[0] == "line"}); assert widths == [0.5, 3.0], widths
 assert len(prim) > len(base) + 10, "dashes make many pieces"
-ed.redraw(); n_dashed = len(ed.actors); print("actors solid", n_solid, "dashed", n_dashed); assert n_dashed > n_solid + 10
+ed.redraw(); n_dashed = (len(ed.actors) + len(ed.geo_actors) + sum(len(v) for v in ed.dim_actors.values())); print("actors solid", n_solid, "dashed", n_dashed); assert n_dashed > n_solid + 10
 sel = dl.primitives(sh, ext, True); assert all(abs(it[3][0] - 1.0) < 1e-9 for it in sel[:1]) and sel[0][3] == settings.rgb("dim_sel_color")
 settings.set_many({"arrow_style": "none", "text_pt": 24}); assert not [it for it in dl.primitives(sh, ext) if it[0] == "fill"]; ed.redraw()
 assert dl.primitives(sh, ext) and ed.tags

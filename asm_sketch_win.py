@@ -209,8 +209,8 @@ class AsmSketchWindow(pm_app.MainWindow):
         ak.set_export(self.doc, name, on)
         self.update_all(keep_props=True)
 
-    def update_all(self, fit=False, keep_props=False):
-        super().update_all(fit, keep_props)
+    def update_all(self, fit=False, keep_props=False, light=False):
+        super().update_all(fit, keep_props, light)
         if self.var_table is not None:
             self.refresh_vars()
             if self.push_timer is not None and (self.parts or self.assembly):

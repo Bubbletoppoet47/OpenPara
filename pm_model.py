@@ -282,6 +282,18 @@ class Document:
                 self.dimvals[c["name"]] = float(c["value"])
         return m
 
+    def rebuild_sketch(self, sid):
+        """Rebuild only one sketch (its model and solve), leaving the other features as the last full rebuild made them.  Used while that
+        sketch is being edited; the full rebuild follows when it is left."""
+        f = self.feature(sid)
+        if f is None or f["kind"] != "sketch":
+            return None
+        try:
+            self.evaluate_params()
+        except ModelError:
+            pass
+        return self.load_sketch(f)
+
     # ------------------------------------------------------------------ named dimensions
     def dim_name_taken(self, name, ignore=None):
         """Why `name` cannot be a dimension name (a text), or None.  Names are unique over the globals and the named dimensions."""

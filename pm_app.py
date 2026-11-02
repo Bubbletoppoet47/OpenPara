@@ -517,6 +517,13 @@ class MainWindow(QMainWindow):
         if self.act.get("exit") is not None:
             self.act["exit"].setVisible(inside)
 
+    stale = False
+
+    def ensure_built(self):
+        """Bring the feature tree and the 3D part up to date after edits made inside a sketch (one rebuild, when it is needed)."""
+        if self.stale:
+            self.update_all(keep_props=True)
+
     def leave_sketch(self):
         self.created_new = None
         if self.ed is not None and self.ed.active:
@@ -525,7 +532,10 @@ class MainWindow(QMainWindow):
         self.left.setCurrentIndex(0)
         self.ribbon.setCurrentIndex(0)
         self.sync_sketch_buttons()
-        self.draw()
+        if self.stale:
+            self.update_all(keep_props=True)            # the one rebuild of everything the sketch edits changed
+        else:
+            self.draw()
 
     def say(self, text):
         self.statusBar().showMessage(text)
@@ -583,6 +593,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Open", str(ex))
 
     def save(self, as_new=False):
+        self.ensure_built()
         import sim_links
         old_base = sim_links.base_dir(self)
         if as_new or not self.path:
@@ -1781,7 +1792,18 @@ class MainWindow(QMainWindow):
             self.update_all(keep_props=True)
 
     # ------------------------------------------------------------------ rebuild + draw
-    def update_all(self, fit=False, keep_props=False):
+    def update_all(self, fit=False, keep_props=False, light=False):
+        """Rebuild and redraw.  light=True (an edit inside a sketch): only the sketch is rebuilt and drawn - the feature tree and the 3D part
+        are rebuilt once, when the sketch is left (or before anything needs the part: Save, Export, mass properties ...)."""
+        if light and self.ed is not None and self.ed.active and self.ed.sk_id and self.doc.feature(self.ed.sk_id) is not None:
+            self.doc.rebuild_sketch(self.ed.sk_id)
+            self.stale = True
+            self.refresh_globals()
+            if not keep_props:
+                self.show_props()
+            self.ed.redraw()
+            return
+        self.stale = False
         self.doc.rebuild()
         if self.ed is not None and self.ed.active and (self.doc.feature(self.ed.sk_id) is None or self.ed.sk_id not in self.doc.planes):
             self.ed.end()
@@ -1985,6 +2007,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ clicks in the view
     # ------------------------------------------------------------------ evaluate: mass properties and measure
     def mass_open(self):
+        self.ensure_built()
         if self.doc.solid is None:
             self.say("Make a solid first.")
             return

@@ -25,8 +25,8 @@ assert r3.dof == 0 and not r3.free_dirs, (r3.dof, r3.free_dirs)
 assert 0 not in r2.free_dirs
 # drawing: toggle on adds arrows for the points only; lines keep the colours they always had
 ed.rep if False else None
-w.doc.reports[w.sel] = rep; w.free_motion = False; ed.redraw(); n_off = len(ed.actors)
-w.free_motion = True; ed.redraw(); n_on = len(ed.actors)
+w.doc.reports[w.sel] = rep; w.free_motion = False; ed.redraw(); n_off = (len(ed.actors) + len(ed.geo_actors) + sum(len(v) for v in ed.dim_actors.values()))
+w.free_motion = True; ed.redraw(); n_on = (len(ed.actors) + len(ed.geo_actors) + sum(len(v) for v in ed.dim_actors.values()))
 assert n_on > n_off
 # the check box sits right under the blue DOF text of the sketch table
 w.free_motion = False; w.update_all()

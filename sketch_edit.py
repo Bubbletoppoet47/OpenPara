@@ -282,7 +282,10 @@ class SketchEditor:
         self.arc_acc, self.arc_last = 0.0, None
         self.tags = []                    # (u, v, con id) positions of the dimension labels
         self.ren = None
-        self.actors = []
+        self.actors = []                  # the dynamic layer: cursor, rubber band, selection box (changes with every mouse move)
+        self.geo_actors = []              # the geometry layer: axes, lines, points (changes when the sketch or the selection changes)
+        self.dim_actors = {}              # dimension id -> its actors (so dragging one label rebuilds only that dimension)
+        self._sink = None
         self.size_fn = self.default_size  # (W, H) of the view in device pixels (tests replace it)
 
     @property
@@ -740,12 +743,12 @@ class SketchEditor:
             if self.arc_last is not None:
                 self.arc_acc += wrap_pi(a - self.arc_last)
             self.arc_last = a
-        self.redraw()
+        self.redraw_dyn()
 
     # ------------------------------------------------------------------ selection box
     def show_band(self):
         """The selection box is drawn inside the 3D view (blue = window, left to right; green = crossing, right to left)."""
-        self.redraw()
+        self.redraw_dyn()
 
     def hide_band(self):
         pass
@@ -862,7 +865,7 @@ class SketchEditor:
                     self.pending = [] if closed else [("pt", h["e"])]
                     if closed:
                         self.chain_start = None
-                    self.app.update_all(keep_props=False)
+                    self.app.update_all(keep_props=False, light=True)
         elif t == "arc_tangent":
             if not p:
                 if not sk.is_ref(spec):
@@ -934,7 +937,7 @@ class SketchEditor:
         self.app.doc.reports[self.sk_id] = sk.solve_model(m)
         self.app.doc.store_sketch(self.sk_id)
         if refresh:
-            self.app.update_all(keep_props=False)
+            self.app.update_all(keep_props=False, light=True)
         return res
 
     def drag_label(self, px, py):
@@ -960,10 +963,10 @@ class SketchEditor:
             return
         pos = (d["pos0"][0] + uv[0] - d["start"][0], d["pos0"][1] + uv[1] - d["start"][1])
         if c["type"] == "dim_ang" and sk_dimlines.set_angle_label(self, c, pos):
-            self.redraw()                  # an angle's label slides along its arc, between its two lines
+            self.redraw_label(c["id"])     # an angle's label slides along its arc, between its two lines
             return
         c["off"] = [round(pos[0] - base[0], 4), round(pos[1] - base[1], 4)]
-        self.redraw()
+        self.redraw_label(c["id"])
 
     def choose_angle(self, refs):
         """(s1, s2, eps, value) for a new angle dimension.  When the two lines cross, a dialog asks which angle is meant (acute / obtuse), with
@@ -1025,7 +1028,7 @@ class SketchEditor:
         m = self.m
         self.app.doc.reports[self.sk_id] = sk.solve_model(m)
         self.app.doc.store_sketch(self.sk_id)
-        self.app.update_all(keep_props=False)
+        self.app.update_all(keep_props=False, light=True)
 
     # ------------------------------------------------------------------ relations and dimensions
     def try_apply(self):
@@ -1098,7 +1101,7 @@ class SketchEditor:
         elif rep is not None and self.last_con in rep.redundant:
             self.app.say("Note: that is redundant (already implied by other relations).")
         self.app.doc.store_sketch(self.sk_id)
-        self.app.update_all(keep_props=False)
+        self.app.update_all(keep_props=False, light=True)
 
     last_con = None
 
@@ -1159,7 +1162,7 @@ class SketchEditor:
             else:
                 c.pop("expr", None)
         r = self.commit(build, refresh=False)
-        self.app.update_all(keep_props=True)
+        self.app.update_all(keep_props=True, light=True)
         return r
 
     def cancel(self):
@@ -1262,7 +1265,7 @@ class SketchEditor:
         self.prune_ext()
         if gone:
             self.app.doc.prune_cfg()
-            self.app.update_all(keep_props=False)
+            self.app.update_all(keep_props=False, light=True)
 
     def confirm_delete(self, items):
         """Deleting a dimension whose name a formula elsewhere uses would break that formula: say so first."""
@@ -1470,7 +1473,7 @@ class SketchEditor:
                 doc.features.insert(moved, f_)
                 doc.rebuild()
                 self.app.undo_pop()
-                self.app.update_all(keep_props=False)
+                self.app.update_all(keep_props=False, light=True)
         if res is not None:
             return None
         rec = self.m.ext[-1]
@@ -1521,7 +1524,7 @@ class SketchEditor:
         if sketch_ext.prune(m, keep):
             self.app.doc.reports[self.sk_id] = sk.solve_model(m)
             self.app.doc.store_sketch(self.sk_id)
-            self.app.update_all(keep_props=False)
+            self.app.update_all(keep_props=False, light=True)
 
     def pierce_apply(self):
         """The Pierce relation: a point of this sketch is held where a curve of another sketch passes through this plane (or on another
@@ -1553,7 +1556,7 @@ class SketchEditor:
                 self.last_con = c["id"]
             res = self.commit(build, refresh=False)
             if res is None:
-                self.app.update_all(keep_props=False)
+                self.app.update_all(keep_props=False, light=True)
             return res
         c_ref = ("pt", rec["pt"] if "pt" in rec else rec["pts"][0])
 
@@ -1563,7 +1566,7 @@ class SketchEditor:
             self.last_con = c["id"]
         res = self.commit(build2, refresh=False)
         if res is None:
-            self.app.update_all(keep_props=False)
+            self.app.update_all(keep_props=False, light=True)
         return res
 
     def command_convert(self):
@@ -1670,11 +1673,18 @@ class SketchEditor:
         self.ren.SetActiveCamera(self.pl.camera)
         return self.ren
 
-    def clear_actors(self):
+    def drop(self, lst):
         if self.ren is not None:
-            for a in self.actors:
+            for a in lst:
                 self.ren.RemoveActor(a)
-        self.actors = []
+        lst.clear()
+
+    def clear_actors(self):
+        self.drop(self.actors)
+        self.drop(self.geo_actors)
+        for lst in self.dim_actors.values():
+            self.drop(lst)
+        self.dim_actors = {}
 
     def actor(self, mesh, color, width=2.0, points=False):
         m = vtkPolyDataMapper()
@@ -1690,7 +1700,7 @@ class SketchEditor:
         else:
             pr.SetLineWidth(width)
         self.layer().AddActor(a)
-        self.actors.append(a)
+        (self._sink if self._sink is not None else self.actors).append(a)
 
     def polyline(self, uv, color, width=2.0):
         if len(uv) >= 2:
@@ -1715,7 +1725,7 @@ class SketchEditor:
         tp.SetBold(True)
         a.SetDisplayOffset(6, 6)
         self.layer().AddActor(a)
-        self.actors.append(a)
+        (self._sink if self._sink is not None else self.actors).append(a)
 
     def entity_color(self, key):
         m, rep = self.m, self.rep
@@ -1798,12 +1808,87 @@ class SketchEditor:
                     self.fill([tip, tip - s_ * d * 0.35 * L + n * 0.18 * L, tip - s_ * d * 0.35 * L - n * 0.18 * L], COL_MOTION)
 
     def redraw(self):
+        """Everything: geometry layer, dimension layer and dynamic layer."""
         if not self.active or pv is None:
             return
         self.clear_actors()
         m = self.m
         if m is None or self.plane() is None:
             return
+        self.build_geo()
+        self.build_dims()
+        self.build_dyn()
+        self.pl.render()
+
+    def redraw_dyn(self):
+        """Only the dynamic layer (cursor, rubber band, selection box): what a plain mouse move changes."""
+        if not self.active or pv is None:
+            return
+        self.drop(self.actors)
+        if self.m is None or self.plane() is None:
+            return
+        self.build_dyn()
+        self.pl.render()
+
+    def redraw_label(self, cid):
+        """Only one dimension (its lines, arrowheads and label): what dragging that label changes.  Nothing else is touched."""
+        if not self.active or pv is None:
+            return
+        c = self.m.con_by_id(cid) if self.m is not None else None
+        if c is None or cid not in self.dim_actors:
+            self.redraw()
+            return
+        self.drop(self.dim_actors[cid])
+        self.tags = [t for t in self.tags if t[2] != cid]
+        self.build_dim(c)
+        self.pl.render()
+
+    def build_dyn(self):
+        self._sink = self.actors
+        try:
+            self.draw_preview()
+        finally:
+            self._sink = None
+
+    def build_dims(self):
+        self.tags = []
+        self.dim_actors = {}
+        for c in self.m.cons:
+            self.build_dim(c)
+
+    def build_dim(self, c):
+        m = self.m
+        if not (c["type"] in DIMS and c.get("grp") is None and self.app.vis["dims"]):
+            return
+        sh = sk_dimlines.shapes(self, c)
+        a = None if sh is None else sh["label"]
+        if a is None:
+            return
+        lst = self.dim_actors[c["id"]] = []
+        self._sink = lst
+        try:
+            self.tags.append((a[0], a[1], c["id"]))
+            sel_c = ("con", c["id"]) in self.sel
+            for kind, pts, wd, rgb in sk_dimlines.primitives(sh, sk_dimlines.extent(m), sel_c):
+                if kind == "line":
+                    self.polyline(pts, rgb, wd)
+                else:
+                    self.fill(pts, rgb)
+            txt = f"{c.get('name', '')} = {disp(c['value'], c):.4g}"
+            self.tag_len[c["id"]] = len(txt)
+            self.text(a, txt, settings.rgb("dim_sel_color" if sel_c else "dim_color"), int(round(settings.get("text_pt"))))
+        finally:
+            self._sink = None
+
+    def build_geo(self):
+        m = self.m
+        self._sink = self.geo_actors
+        try:
+            self._build_geo(m)
+        finally:
+            self._sink = None
+
+    def _build_geo(self, m):
         self._lit = set(self.hl)                 # what a selected dimension (or a selected table row) measures lights up
         for k_, i_ in self.sel:
             if k_ == "con":
@@ -1841,24 +1926,6 @@ class SketchEditor:
             self.draw_free_motion(rep, extk)
         if self.choose is not None and len(self.choose["hits"]) > 1:   # the crossings of a curve with this plane: click one
             self.actor(pv.PolyData(np.array(self.choose["hits"], float)), (1.0, 0.80, 0.10), 14.0, points=True)
-        self.tags = []
-        for c in m.cons:
-            if c["type"] in DIMS and c.get("grp") is None and self.app.vis["dims"]:
-                sh = sk_dimlines.shapes(self, c)
-                a = None if sh is None else sh["label"]
-                if a is not None:
-                    self.tags.append((a[0], a[1], c["id"]))
-                    sel_c = ("con", c["id"]) in self.sel
-                    for kind, pts, wd, rgb in sk_dimlines.primitives(sh, sk_dimlines.extent(m), sel_c):
-                        if kind == "line":
-                            self.polyline(pts, rgb, wd)
-                        else:
-                            self.fill(pts, rgb)
-                    txt = f"{c.get('name', '')} = {disp(c['value'], c):.4g}"
-                    self.tag_len[c["id"]] = len(txt)
-                    self.text(a, txt, settings.rgb("dim_sel_color" if sel_c else "dim_color"), int(round(settings.get("text_pt"))))
-        self.draw_preview()
-        self.pl.render()
 
     def draw_angle_prev(self):
         (a, b), refs = self.angle_prev
