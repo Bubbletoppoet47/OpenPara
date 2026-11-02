@@ -1,0 +1,6 @@
+Lora (Lora-Variable.ttf, Lora-Italic-Variable.ttf)
+Copyright 2011 The Lora Project Authors (https://github.com/cyrealtype/Lora-Cyrillic)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+The full license text and FAQ are at https://openfontlicense.org
+(In short: the fonts may be used, studied, modified and redistributed, including bundled with software, but not sold on their own.)
