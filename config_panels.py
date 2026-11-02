@@ -4,6 +4,7 @@ from PyQt6.QtGui import QBrush, QColor, QFont
 from PyQt6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMenu, QMessageBox,
                              QPushButton, QSlider, QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
+import gsv
 import unitctl
 
 
@@ -43,17 +44,6 @@ class ConfigPanel(QWidget):
         b.clicked.connect(self.remove_column)
         row.addWidget(b)
         lay.addLayout(row)
-        if noun == "part":
-            lrow = QHBoxLayout()
-            b = QPushButton("Link to Assembly Sketch...")
-            b.setToolTip("Take columns of this table from the variables of an assembly sketch (one way: the sketch drives the part)")
-            b.clicked.connect(lambda: self.owner.link_dialog())
-            lrow.addWidget(b)
-            b = QPushButton("Unlink Column")
-            b.setToolTip("Stop driving the selected column from an assembly sketch")
-            b.clicked.connect(self.unlink_column)
-            lrow.addWidget(b)
-            lay.addLayout(lrow)
         frow = QHBoxLayout()                 # which kind of column Add Column offers
         frow.addWidget(QLabel("Add Column shows:"))
         self.col_group = QComboBox()
@@ -108,8 +98,7 @@ class ConfigPanel(QWidget):
         t.clear()
         t.setRowCount(len(c["names"]))
         t.setColumnCount(1 + len(cols))
-        linked = {ln["target"]: ln["var"] for ln in getattr(m, "links", [])}
-        t.setHorizontalHeaderLabels(["Configuration"] + [m.cfg_label(k) + (f"  ⇐ {linked[k]}" if k in linked else "") for k in cols])
+        t.setHorizontalHeaderLabels(["Configuration"] + [m.cfg_label(k) for k in cols])
         for r, n in enumerate(c["names"]):
             it = QTableWidgetItem(n)
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -142,27 +131,10 @@ class ConfigPanel(QWidget):
             t.setCellWidget(r, col, cb)
         else:
             item = QTableWidgetItem(self.cell_text(key, val))
-            ln = self.m.link_driven(name, key) if hasattr(self.m, "link_driven") else None
-            if ln is not None:                                   # a number the assembly sketch sets: change it there
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            if gsv.has_binding(val):                             # {AS-@-W}: follows the assembly sketch configuration of this row
                 item.setBackground(QBrush(QColor("#ece3f7")))
-                item.setToolTip(f"Driven by the assembly sketch variable {ln['var']} ({ln['src']}). Change it in the sketch, or unlink the column.")
+                item.setToolTip("Follows the assembly sketch: in this configuration it is " + gsv.resolve_at(val, name))
             t.setItem(r, col, item)
-
-    def unlink_column(self):
-        m = self.m
-        col = self.table.currentColumn()
-        if col < 1 or col > len(m.cfg["cols"]):
-            self.owner.say("Click a cell of the column first.")
-            return
-        key = m.cfg["cols"][col - 1]
-        if m.link_of(key) is None:
-            self.owner.say("That column is not linked to an assembly sketch.")
-            return
-        self.owner.snapshot()
-        m.link_remove(key)
-        self.owner.say("Column unlinked: its numbers stay, and you can edit them again.")
-        self.refresh()
 
     def is_length(self, key):
         """Does this column hold a length (mm in the file, shown in the program's unit)?  A count, an angle or a flag does not."""
@@ -456,3 +428,111 @@ class DisplayPanel(QWidget):
 
 def unused(*_a):
     return QFont
+
+
+# ---------------------------------------------------------------------------------------------- Global Sketch Variables
+class GsvPanel(QWidget):
+    """The read-only table "Global Sketch Variables" of a part or an assembly: the numbers its assembly sketch exports, one row per variable per sketch
+    configuration, named AS-<configuration>-<name>.  `owner` is the part / assembly window (cfg_model(), snapshot(), say(), config_changed())."""
+
+    def __init__(self, owner):
+        super().__init__()
+        self.owner = owner
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 6, 0, 0)
+        t = QLabel("Global Sketch Variables")
+        t.setStyleSheet("font-weight:bold;")
+        lay.addWidget(t)
+        self.head = QLabel()
+        self.head.setWordWrap(True)
+        lay.addWidget(self.head)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Name", "Value", "Kind", "Role"])
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setMinimumHeight(110)
+        lay.addWidget(self.table)
+        row = QHBoxLayout()
+        b = QPushButton("Copy name")
+        b.setToolTip("Copy the name as a formula writes it, e.g. {AS-Large-W}")
+        b.clicked.connect(self.copy_name)
+        row.addWidget(b)
+        b = QPushButton("Bind a column...")
+        b.setToolTip("Make a column of the Configurations table follow this variable: in every configuration the sketch drives, its cell becomes {AS-@-W}")
+        b.clicked.connect(self.bind_column)
+        row.addWidget(b)
+        lay.addLayout(row)
+
+    @property
+    def m(self):
+        return self.owner.cfg_model()
+
+    def refresh(self):
+        import os
+        g = getattr(self.m, "gsv", None)
+        t = self.table
+        t.setRowCount(0)
+        if not g:
+            self.head.setText("Not linked to an assembly sketch.  In the assembly sketch (.gpk), add this file in its Linked files panel.")
+            return
+        src = self.m.gsv_src_path()
+        gone = "" if src and os.path.isfile(src) else "   (sketch file not found: the numbers shown are the last ones received)"
+        self.head.setText(f"From {os.path.basename(src or g.get('src', ''))}{gone}.  Read-only: change them in the sketch.  In a formula write the name in braces, "
+                          "{AS-Large-W}; in a configuration cell {AS-@-W} follows the configuration of its row.")
+        rows = gsv.rows(g)
+        t.setRowCount(len(rows))
+        for r, (name, val, kind, role) in enumerate(rows):
+            if kind == "length":
+                shown, ktxt = f"{unitctl.to_disp(val):.6g}", f"length ({unitctl.length_unit()})"
+            elif kind == "angle":
+                shown, ktxt = f"{val:.6g}", "angle (deg)"
+            else:
+                shown, ktxt = f"{val:.6g}", "number"
+            for c, txt in enumerate((name, shown, ktxt, role)):
+                it = QTableWidgetItem(txt)
+                it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)      # read-only
+                it.setBackground(QBrush(QColor("#f1ecf8")))
+                t.setItem(r, c, it)
+        # the (configuration, variable) of each row, in table order
+        self.keys = [(cfg, v["name"]) for v in g.get("vars") or [] for cfg in g.get("configs") or []
+                     if g.get("vals", {}).get(cfg, {}).get(v["name"]) is not None]
+
+    def current(self):
+        r = self.table.currentRow()
+        if r < 0 or r >= len(getattr(self, "keys", [])):
+            self.owner.say("Click a row of the Global Sketch Variables table first.")
+            return None
+        return self.keys[r]
+
+    def copy_name(self):
+        k = self.current()
+        if k:
+            QApplication.clipboard().setText("{" + gsv.full_name(*k) + "}")
+            self.owner.say("Copied {" + gsv.full_name(*k) + "}: paste it into a formula or a cell.")
+
+    def bind_column(self):
+        k = self.current()
+        if not k:
+            return
+        m = self.m
+        cands = [(key, label) for key, label, _v in self.owner.cfg_candidates() if key.partition(":")[0] not in ("s", "x", "m", "c")]
+        if not cands:
+            self.owner.say("There is nothing numeric to bind yet.")
+            return
+        labels = [lab for _k, lab in cands]
+        pick, ok = QInputDialog.getItem(self, "Bind a column", f"Make this column follow {k[1]} of the sketch:", labels, 0, False)
+        if not ok:
+            return
+        key = cands[labels.index(pick)][0]
+        self.owner.snapshot()
+        try:
+            m.gsv_bind(key, k[1])
+            m.cfg_apply(m.cfg["active"])
+        except Exception as ex:                              # noqa: BLE001
+            self.owner.say(str(ex))
+            return
+        self.owner.say(f"{pick} now follows {k[1]} of the assembly sketch in each configuration it drives.")
+        self.owner.config_changed()

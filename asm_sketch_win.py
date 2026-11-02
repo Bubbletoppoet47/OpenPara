@@ -1,13 +1,16 @@
-"""asm_sketch_win.py - the Assembly Sketch window (a sketch of its own file, .gpk, whose variables drive parts) and the part-side "Link to Assembly
-Sketch" dialog.  The sketch window is the part window with its sketcher (tools, relations, dimensions, symbols, configurations) plus a Variables tab."""
+"""asm_sketch_win.py - the Assembly Sketch window: a sketch of its own file (.gpk) whose exported variables drive the assembly and the parts linked to it.
+The window is the part window with its sketcher (tools, relations, dimensions, symbols, configurations) plus a Variables tab: the Export box of each
+variable, and the Linked files panel (one assembly - required - and any number of parts, open or not, saved by their location relative to the sketch)."""
 import os
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                             QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtWidgets import (QAbstractItemView, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QListWidget, QMessageBox, QPushButton,
+                             QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 import asm_sketch as ak
 import pm_app
+import unitctl
 
 
 class AsmSketchWindow(pm_app.MainWindow):
@@ -15,9 +18,11 @@ class AsmSketchWindow(pm_app.MainWindow):
 
     def __init__(self, path=None, shell=None):
         self.shell = shell
+        self.assembly = None                 # absolute path of the assembly it belongs to
         self.parts = []                      # absolute paths of the parts it drives
         self.push_timer = None
         self.var_table = None
+        self.vbusy = False
         super().__init__(None)
         self.setWindowTitle("Assembly Sketch")
         self.build_vars_panel()
@@ -53,30 +58,36 @@ class AsmSketchWindow(pm_app.MainWindow):
             self.open_file(p)
             self.update_all(fit=True)
 
+    def base(self):
+        return os.path.dirname(os.path.abspath(self.path)) if self.path else None
+
     def open_file(self, p):
         try:
-            doc, parts = ak.load(p)
+            doc, asm, parts = ak.load(p)
         except Exception as ex:              # noqa: BLE001
             QMessageBox.warning(self, "Open", str(ex))
             return
+        base = os.path.dirname(os.path.abspath(p))
         self.doc, self.path = doc, p
-        self.parts = [ak.absolute(x, os.path.dirname(os.path.abspath(p))) for x in parts]
+        self.assembly = ak.absolute(asm, base) if asm else None
+        self.parts = [ak.absolute(x, base) for x in parts]
         self.sel = self.sel_face = self.sel_plane = None
         self.undo, self.redo = [], []
         self.saved_json = doc.to_json()
         self.setWindowTitle(f"Assembly Sketch - {os.path.basename(p)}")
 
     def save(self, as_new=False):
+        old = self.base()
         if as_new or not self.path:
             p, _ = QFileDialog.getSaveFileName(self, "Save assembly sketch", self.path or "sketch.gpk", "Assembly sketch (*.gpk)")
             if not p:
                 return False
             self.path = p if p.endswith(ak.EXT) else p + ak.EXT
-        base = os.path.dirname(os.path.abspath(self.path))
-        ak.save(self.path, self.doc, [ak.rel(x, base) for x in self.parts])
+        base = self.base()
+        ak.save(self.path, self.doc, ak.rel(self.assembly, base) if self.assembly else None, [ak.rel(x, base) for x in self.parts])
         self.saved_json = self.doc.to_json()
         self.setWindowTitle(f"Assembly Sketch - {os.path.basename(self.path)}")
-        self.say(f"Saved {self.path}")
+        self.say(f"Saved {self.path}" + ("  (the linked files keep the old location of this sketch until you press Update linked files)" if old and old != base and (self.parts or self.assembly) else ""))
         self.refresh_vars()
         return True
 
@@ -86,29 +97,58 @@ class AsmSketchWindow(pm_app.MainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.addWidget(QLabel("Variables: the symbols and named dimensions of this sketch, one number per configuration.\n"
-                             "Parts take them one way (Configurations tab of a part > Link to Assembly Sketch...)."))
-        self.var_table = QTableWidget(0, 2)
-        self.var_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                             "Tick Export for the ones the linked files should receive (as AS-<configuration>-<name>)."))
+        self.var_table = QTableWidget(0, 4)
+        self.var_table.itemChanged.connect(self.export_changed)
         lay.addWidget(self.var_table, 1)
-        lay.addWidget(QLabel("Parts this sketch drives:"))
+        box = QGroupBox("Linked files")
+        bl = QVBoxLayout(box)
+        r = QHBoxLayout()
+        r.addWidget(QLabel("Assembly (required):"))
+        self.asm_label = QLabel("(none)")
+        self.asm_label.setWordWrap(True)
+        r.addWidget(self.asm_label, 1)
+        b = QPushButton("Set...")
+        b.clicked.connect(self.pick_assembly)
+        r.addWidget(b)
+        b = QPushButton("Open")
+        b.clicked.connect(lambda: self.open_in_shell(self.assembly))
+        r.addWidget(b)
+        bl.addLayout(r)
+        bl.addWidget(QLabel("Parts (at least one, no limit; each part follows one sketch):"))
         self.part_list = QListWidget()
-        self.part_list.setMaximumHeight(110)
-        lay.addWidget(self.part_list)
-        row = QHBoxLayout()
-        b = QPushButton("Update parts now")
-        b.setToolTip("Write the numbers into the parts that are not open too (open parts follow live; others read them when they are opened)")
+        self.part_list.setMaximumHeight(120)
+        self.part_list.itemDoubleClicked.connect(lambda it: self.open_in_shell(self.parts[self.part_list.row(it)]))
+        bl.addWidget(self.part_list)
+        r = QHBoxLayout()
+        b = QPushButton("Add parts...")
+        b.clicked.connect(self.pick_parts)
+        r.addWidget(b)
+        b = QPushButton("Add open parts")
+        b.setToolTip("Link every part that is open in a tab")
+        b.clicked.connect(self.add_open_parts)
+        r.addWidget(b)
+        b = QPushButton("Remove")
+        b.setToolTip("Stop driving the selected part (its configurations stay; the numbers go)")
+        b.clicked.connect(self.remove_part)
+        r.addWidget(b)
+        bl.addLayout(r)
+        b = QPushButton("Update linked files now")
+        b.setToolTip("Open files follow live; this also writes the numbers into the files that are not open (they pull them when opened anyway)")
         b.clicked.connect(lambda: self.push_now(write_closed=True))
-        row.addWidget(b)
-        b = QPushButton("Forget part")
-        b.setToolTip("Stop updating the selected part from here (its links stay in the part until you unlink the columns)")
-        b.clicked.connect(self.forget_part)
-        row.addWidget(b)
-        lay.addLayout(row)
+        bl.addWidget(b)
+        lay.addWidget(box)
         self.vars_status = QLabel("")
         self.vars_status.setWordWrap(True)
         lay.addWidget(self.vars_status)
         self.left.addTab(w, "Variables")
         self.left.setCurrentIndex(self.left.count() - 1)
+
+    @staticmethod
+    def _shown(kind, x):
+        if kind == "length":
+            return f"{unitctl.to_disp(x):.6g}"
+        return f"{x:.6g}"
 
     def refresh_vars(self):
         if self.var_table is None:
@@ -119,212 +159,225 @@ class AsmSketchWindow(pm_app.MainWindow):
             self.vars_status.setText(f"Could not read the variables: {ex}")
             return
         t = self.var_table
+        self.vbusy = True
         t.setRowCount(len(vars_))
-        t.setColumnCount(2 + len(configs))
-        t.setHorizontalHeaderLabels(["Variable", "Kind"] + configs)
+        t.setColumnCount(4 + len(configs))
+        t.setHorizontalHeaderLabels(["Export", "Variable", "Kind", "Role"] + configs)
         for r, v in enumerate(vars_):
-            t.setItem(r, 0, QTableWidgetItem(v["name"]))
-            t.setItem(r, 1, QTableWidgetItem(v["kind"]))
+            cb = QTableWidgetItem("")
+            cb.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            cb.setCheckState(Qt.CheckState.Checked if v["export"] else Qt.CheckState.Unchecked)
+            cb.setData(Qt.ItemDataRole.UserRole, v["name"])
+            t.setItem(r, 0, cb)
+            kind = f"length ({unitctl.length_unit()})" if v["kind"] == "length" else ("angle (deg)" if v["kind"] == "angle" else "number")
+            for c, txt in ((1, v["name"]), (2, kind), (3, v["role"])):
+                it = QTableWidgetItem(txt)
+                it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                t.setItem(r, c, it)
             for j, c in enumerate(configs):
                 x = values.get(c, {}).get(v["name"])
-                t.setItem(r, 2 + j, QTableWidgetItem("" if x is None else f"{x:.6g}"))
+                it = QTableWidgetItem("" if x is None else self._shown(v["kind"], x))
+                it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                if v["role"] == "driven":
+                    it.setBackground(QBrush(QColor("#eef2f7")))
+                t.setItem(r, 4 + j, it)
         t.resizeColumnsToContents()
+        self.vbusy = False
+        self.asm_label.setText(self.assembly or "(none: set the assembly this sketch belongs to)")
         self.part_list.clear()
         for p in self.parts:
             self.part_list.addItem(p + ("" if os.path.isfile(p) else "   (not found)"))
-        self.vars_status.setText("" if vars_ else "No variables yet: make a symbol (Sketch > Parameters) or give a dimension a name; "
-                                                  "an output symbol takes the number the geometry measures.")
+        msg = []
+        if not vars_:
+            msg.append("No variables yet: make a symbol (Sketch > Parameters) or give a dimension a name; a driven symbol takes the number the geometry measures.")
+        elif not any(v["export"] for v in vars_):
+            msg.append("Nothing is exported yet: tick Export on the variables the assembly and parts should receive.")
+        if not self.assembly:
+            msg.append("This sketch needs an assembly: press Set... next to Assembly.")
+        elif not self.parts:
+            msg.append("Add at least one part.")
+        self.vars_status.setText("  ".join(msg))
+
+    def export_changed(self, item):
+        if self.vbusy or item.column() != 0:
+            return
+        name = item.data(Qt.ItemDataRole.UserRole)
+        on = item.checkState() == Qt.CheckState.Checked
+        if (name in self.doc.export) == on:
+            return
+        self.snapshot()
+        ak.set_export(self.doc, name, on)
+        self.update_all(keep_props=True)
 
     def update_all(self, fit=False, keep_props=False):
         super().update_all(fit, keep_props)
         if self.var_table is not None:
             self.refresh_vars()
-            if self.push_timer is not None and self.parts:
+            if self.push_timer is not None and (self.parts or self.assembly):
                 self.push_timer.start(350)
 
-    # ------------------------------------------------------------------ driving the parts
+    # ------------------------------------------------------------------ the shell (the program window with the tabs)
+    def host(self):
+        return self.shell or self.window()
+
+    def open_obj(self, path):
+        """The live Document / Assembly of a file that is open in a tab, else None."""
+        sh = self.host()
+        tabs = getattr(sh, "tabs", None)
+        if tabs is None or not hasattr(sh, "find_tab"):
+            return None
+        i = sh.find_tab(path)
+        w = tabs.widget(i) if i is not None else None
+        if w is None or getattr(w, "KIND", "") == "asmsketch":
+            return None
+        return getattr(w, "asm", None) or (getattr(w, "doc", None) if hasattr(w, "update_all") else None)
+
+    def refresh_window(self, path):
+        sh = self.host()
+        i = sh.find_tab(path) if hasattr(sh, "find_tab") else None
+        w = sh.tabs.widget(i) if i is not None else None
+        if w is None or not hasattr(w, "update_all"):
+            return
+        try:
+            w.update_all(keep_props=True)
+        except TypeError:
+            w.update_all()
+
+    def open_in_shell(self, path):
+        if path and hasattr(self.host(), "open_path"):
+            self.host().open_path(path)
+
+    # ------------------------------------------------------------------ linking
+    def need_saved(self):
+        if self.path:
+            return True
+        QMessageBox.information(self, "Linked files", "Save the sketch first: the linked files find it by its location.")
+        return False
+
+    def sketch_of(self, path):
+        """Absolute path of the sketch a file follows now (None when it follows none)."""
+        o = self.open_obj(path)
+        if o is None and os.path.isfile(path):
+            try:
+                o = ak.load_target(path)
+            except Exception:                # noqa: BLE001
+                return None
+        if o is None or not getattr(o, "gsv", None):
+            return None
+        if o.base_dir is None:
+            o.base_dir = os.path.dirname(os.path.abspath(path))
+        return o.gsv_src_path()
+
+    def assembly_parts(self):
+        """Absolute paths of the parts the linked assembly is made of ([] when unknown)."""
+        if not self.assembly:
+            return []
+        try:
+            a = self.open_obj(self.assembly) or ak.load_target(self.assembly)
+        except Exception:                    # noqa: BLE001
+            return []
+        base = os.path.dirname(self.assembly)
+        return [os.path.normcase(os.path.normpath(ak.absolute(c["path"], base))) for c in a.components if c.get("path")]
+
+    def link_one(self, path):
+        """Write the link into the file (live when open) and give it the numbers.  Returns True when linked."""
+        mine = os.path.normcase(os.path.normpath(self.path))
+        other = self.sketch_of(path)
+        if other and os.path.normcase(os.path.normpath(other)) != mine and os.path.isfile(other):
+            QMessageBox.warning(self, "Linked files", f"{os.path.basename(path)} already follows another assembly sketch ({os.path.basename(other)}).\n"
+                                                      "A file follows one sketch: remove it from that sketch first.")
+            return False
+        st, msgs = ak.link(path, self.path, self.doc, self.open_obj(path))
+        if st.startswith("error") or st == "missing":
+            QMessageBox.warning(self, "Linked files", f"{os.path.basename(path)}: {st}")
+            return False
+        if st == "open":
+            self.refresh_window(path)
+        self.vars_status.setText(f"Linked {os.path.basename(path)} ({'open: updated live' if st == 'open' else 'written into the file'})." + ("  " + "; ".join(msgs) if msgs else ""))
+        return True
+
+    def pick_assembly(self):
+        if not self.need_saved():
+            return
+        p, _ = QFileDialog.getOpenFileName(self, "Assembly this sketch belongs to", self.base(), "Assembly (*.gpa)")
+        if not p:
+            return
+        p = os.path.normpath(os.path.abspath(p))
+        if self.assembly and self.assembly != p:
+            ak.unlink(self.assembly, self.open_obj(self.assembly))
+            self.refresh_window(self.assembly)
+        if self.link_one(p):
+            self.assembly = p
+            self.refresh_vars()
+            self.warn_outsiders()
+
     def add_part(self, path):
         path = os.path.normpath(os.path.abspath(path))
-        if path not in self.parts:
-            self.parts.append(path)
+        if path in self.parts:
+            return True
+        if not path.lower().endswith(".gpd"):
+            QMessageBox.warning(self, "Linked files", "Only part files (.gpd) go in the parts list: the assembly has its own line.")
+            return False
+        if not self.need_saved():
+            return False
+        if not self.assembly:
+            QMessageBox.information(self, "Linked files", "Set the assembly first: every assembly sketch belongs to one assembly.")
+            return False
+        if not self.link_one(path):
+            return False
+        self.parts.append(path)
+        self.refresh_vars()
+        if self.assembly_parts() and os.path.normcase(path) not in self.assembly_parts():
+            self.vars_status.setText(self.vars_status.text() + f"  Note: {os.path.basename(path)} is not a component of {os.path.basename(self.assembly)} (it is linked anyway).")
+        return True
+
+    def warn_outsiders(self):
+        inside = self.assembly_parts()
+        if not inside:
+            return
+        out = [os.path.basename(p) for p in self.parts if os.path.normcase(p) not in inside]
+        if out:
+            self.vars_status.setText(self.vars_status.text() + "  Not components of the assembly: " + ", ".join(out))
+
+    def pick_parts(self):
+        if not self.need_saved():
+            return
+        files, _ = QFileDialog.getOpenFileNames(self, "Parts this sketch drives", self.base(), "Part (*.gpd)")
+        for p in files:
+            self.add_part(p)
+
+    def add_open_parts(self):
+        sh = self.host()
+        tabs = getattr(sh, "tabs", None)
+        n = 0
+        for i in range(tabs.count() if tabs is not None else 0):
+            w = tabs.widget(i)
+            p = getattr(w, "path", None)
+            if p and p.lower().endswith(".gpd") and getattr(w, "KIND", "") != "asmsketch":
+                n += bool(self.add_part(p))
+        if not n:
+            self.say("No saved part is open in a tab.")
+
+    def remove_part(self):
+        i = self.part_list.currentRow()
+        if not (0 <= i < len(self.parts)):
+            return
+        p = self.parts.pop(i)
+        ak.unlink(p, self.open_obj(p))
+        self.refresh_window(p)
         self.refresh_vars()
 
-    def forget_part(self):
-        i = self.part_list.currentRow()
-        if 0 <= i < len(self.parts):
-            self.parts.pop(i)
-            self.refresh_vars()
-
-    def part_doc(self, path):
-        sh = self.shell or self.window()
-        return sh.part_doc(path) if hasattr(sh, "part_doc") else None
-
     def push_now(self, write_closed=False):
-        if not self.path or not self.parts:
+        files = ([self.assembly] if self.assembly else []) + self.parts
+        if not self.path or not files:
             if write_closed:
-                self.vars_status.setText("Save the sketch first: parts find it by its file." if not self.path else "No parts linked yet.")
+                self.vars_status.setText("Save the sketch first: the linked files find it by its location." if not self.path else "No linked files yet.")
             return
-        res = ak.push(self.path, self.doc, self.parts, self.part_doc, write_closed=write_closed)
-        sh = self.shell or self.window()
-        for p, state in res:
-            if state == "open" and hasattr(sh, "find_tab"):
-                i = sh.find_tab(p)
-                w = sh.tabs.widget(i) if i is not None else None
-                if w is not None and hasattr(w, "update_all"):
-                    w.update_all(keep_props=True)
+        res = ak.push(self.path, self.doc, files, self.open_obj, write_closed=write_closed)
+        for p, state, _m in res:
+            if state == "open":
+                self.refresh_window(p)
         if write_closed:
-            n = {s: sum(1 for _p, x in res if x == s) for s in ("open", "written", "skipped", "missing")}
-            bad = [f"{os.path.basename(p)}: {s}" for p, s in res if s.startswith("error")]
-            self.vars_status.setText(f"{n['open']} open part(s) updated, {n['written']} file(s) written, {n['missing']} not found." + ("  " + "; ".join(bad) if bad else ""))
-
-
-# ----------------------------------------------------------------------------------------------------------------- part side
-def link_dialog(win):
-    """Configurations tab of a part > Link to Assembly Sketch...: choose a sketch, then which variable drives which item of the part."""
-    if not win.path:
-        QMessageBox.information(win, "Link to assembly sketch", "Save the part first: the sketch finds the part by its file.")
-        return
-    dlg = _LinkDialog(win)
-    if dlg.exec():
-        dlg.apply()
-
-
-class _LinkDialog(QDialog):
-    def __init__(self, win):
-        super().__init__(win)
-        self.win = win
-        self.setWindowTitle("Link to Assembly Sketch")
-        self.resize(680, 520)
-        self.src = None
-        self.sketch_doc = None
-        lay = QVBoxLayout(self)
-        top = QHBoxLayout()
-        top.addWidget(QLabel("Assembly sketch:"))
-        self.combo = QComboBox()
-        self.combo.setMinimumWidth(300)
-        top.addWidget(self.combo, 1)
-        b = QPushButton("Browse...")
-        b.clicked.connect(self.browse)
-        top.addWidget(b)
-        lay.addLayout(top)
-        self.open_tabs = self.find_open()
-        for p, _d in self.open_tabs:
-            self.combo.addItem(p + "   (open)", p)
-        links = {ln["src"] for ln in win.doc.links}
-        for s in sorted(links):
-            ab = win.doc.link_src_path(next(ln for ln in win.doc.links if ln["src"] == s))
-            if all(ab != p for p, _d in self.open_tabs):
-                self.combo.addItem(ab, ab)
-        self.combo.currentIndexChanged.connect(self.load_vars)
-        self.filter = QLineEdit()
-        self.filter.setPlaceholderText("filter the items of this part...")
-        self.filter.textChanged.connect(self.apply_filter)
-        lay.addWidget(self.filter)
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["Item of this part (a column of its Configurations table)", "Takes its number from the variable"])
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(0, 340)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        lay.addWidget(self.table, 1)
-        self.note = QLabel("")
-        self.note.setWordWrap(True)
-        lay.addWidget(self.note)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        bb.accepted.connect(self.accept)
-        bb.rejected.connect(self.reject)
-        lay.addWidget(bb)
-        self.cands = win.cfg_candidates()
-        self.combos = {}
-        self.load_vars()
-
-    def find_open(self):
-        sh = self.win.window()
-        out = []
-        tabs = getattr(sh, "tabs", None)
-        if tabs is not None:
-            for i in range(tabs.count()):
-                w = tabs.widget(i)
-                if getattr(w, "KIND", "") == "asmsketch" and getattr(w, "path", None):
-                    out.append((os.path.normpath(os.path.abspath(w.path)), w))
-        return out
-
-    def browse(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Assembly sketch", "", "Assembly sketch (*.gpk)")
-        if p:
-            p = os.path.normpath(os.path.abspath(p))
-            i = self.combo.findData(p)
-            if i < 0:
-                self.combo.addItem(p, p)
-                i = self.combo.count() - 1
-            self.combo.setCurrentIndex(i)
-
-    def load_vars(self):
-        self.src = self.combo.currentData()
-        self.table.setRowCount(0)
-        self.combos = {}
-        if not self.src:
-            self.note.setText("Open an assembly sketch (File > New Assembly Sketch, then save it) or browse to a .gpk file.")
-            return
-        live = next((w.doc for p, w in self.open_tabs if p == self.src), None)
-        try:
-            doc = live or ak.load(self.src)[0]
-            self.vars = [v["name"] for v in ak.variables(doc)[1]]
-        except Exception as ex:              # noqa: BLE001
-            self.note.setText(f"Could not read that sketch: {ex}")
-            return
-        doc_links = {ln["target"]: ln for ln in self.win.doc.links if self.win.doc.link_src_path(ln) == self.src}
-        self.table.setRowCount(len(self.cands))
-        for r, (key, label, _val) in enumerate(self.cands):
-            self.table.setItem(r, 0, QTableWidgetItem(label))
-            cb = QComboBox()
-            cb.addItem("(not linked)")
-            cb.addItems(self.vars)
-            if key in doc_links and doc_links[key]["var"] in self.vars:
-                cb.setCurrentText(doc_links[key]["var"])
-            self.table.setCellWidget(r, 1, cb)
-            self.combos[key] = cb
-        self.note.setText("Linked items get one number per sketch configuration (a part configuration of the same name is made when missing). "
-                          "Everything you leave unlinked stays yours.")
-        self.apply_filter()
-
-    def apply_filter(self):
-        t = self.filter.text().strip().lower()
-        for r in range(self.table.rowCount()):
-            it = self.table.item(r, 0)
-            cb = self.table.cellWidget(r, 1)
-            linked = cb is not None and cb.currentIndex() > 0
-            self.table.setRowHidden(r, bool(t) and t not in it.text().lower() and not linked)
-
-    def apply(self):
-        win = self.win
-        if not self.src or not self.combos:
-            return
-        win.snapshot()
-        base = os.path.dirname(os.path.abspath(win.path))
-        src_rel = ak.rel(self.src, base)
-        mine = {ln["target"] for ln in win.doc.links if win.doc.link_src_path(ln) == self.src}
-        n = 0
-        for key, cb in self.combos.items():
-            if cb.currentIndex() > 0:
-                win.doc.link_add(src_rel, cb.currentText(), key)
-                n += 1
-            elif key in mine:
-                win.doc.link_remove(key)
-        win.doc.base_dir = base
-        # register this part with the sketch (open tab, or the file) so the sketch can find it
-        live = next((w for p, w in self.open_tabs if p == self.src), None)
-        if live is not None:
-            live.add_part(win.path)
-        else:
-            try:
-                sdoc, parts = ak.load(self.src)
-                absp = [ak.absolute(x, os.path.dirname(self.src)) for x in parts]
-                me = os.path.normpath(os.path.abspath(win.path))
-                if me not in [os.path.normpath(x) for x in absp]:
-                    ak.save(self.src, sdoc, [ak.rel(x, os.path.dirname(self.src)) for x in absp + [me]])
-            except Exception as ex:          # noqa: BLE001
-                win.say(f"Linked, but could not register the part in the sketch file: {ex}")
-        changed, msgs = ak.refresh_part(win.doc, win.live_sketch_doc)
-        win.doc.cfg_apply(win.doc.cfg["active"])
-        win.update_all(keep_props=True)
-        win.say(f"{n} column(s) linked to {os.path.basename(self.src)}. Save the part to keep the links." + ("  " + "; ".join(msgs) if msgs else ""))
+            n = {s: sum(1 for _p, x, _m in res if x == s) for s in ("open", "written", "skipped", "missing")}
+            bad = [f"{os.path.basename(p)}: {s}" for p, s, _m in res if s.startswith("error")]
+            self.vars_status.setText(f"{n['open']} open file(s) updated, {n['written']} file(s) written, {n['missing']} not found." + ("  " + "; ".join(bad) if bad else ""))

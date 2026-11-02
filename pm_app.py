@@ -231,6 +231,8 @@ class MainWindow(QMainWindow):
         b.clicked.connect(self.global_del)
         row.addWidget(b)
         gl.addLayout(row)
+        self.gsv_panel = config_panels.GsvPanel(self)         # read-only: the numbers of the linked assembly sketch
+        gl.addWidget(self.gsv_panel)
         self.eq_dialog = QDialog(self)                      # the Equations folder of the tree opens this
         self.eq_dialog.setWindowTitle("Equations")
         self.eq_dialog.setWindowFlag(Qt.WindowType.Tool, True)
@@ -571,7 +573,7 @@ class MainWindow(QMainWindow):
             self.sel = self.sel_face = self.sel_plane = None
             self.undo, self.redo = [], []
             self.setWindowTitle(f"Parametric Modeller - {os.path.basename(p)}")
-            self.pull_links()
+            self.pull_gsv()
         except Exception as ex:
             QMessageBox.warning(self, "Open", str(ex))
 
@@ -1579,13 +1581,13 @@ class MainWindow(QMainWindow):
         self.doc.store_sketch(sid)
         self.update_all()
 
-    # ----- assembly sketches: variables that drive this part's configuration table (one way)
-    def pull_links(self):
-        """After opening: bring the linked columns up to date from their assembly sketches (the sketch file, or the open tab when it is edited)."""
-        if not self.doc.links:
+    # ----- assembly sketch: Global Sketch Variables that drive this part (one way)
+    def pull_gsv(self):
+        """After opening: bring the Global Sketch Variables up to date from the assembly sketch (its file, or the open tab when it is being edited)."""
+        if not self.doc.gsv:
             return
         import asm_sketch
-        changed, msgs = asm_sketch.refresh_part(self.doc, self.live_sketch_doc)
+        changed, msgs = asm_sketch.pull(self.doc, self.live_sketch_doc)
         if changed:
             self.doc.cfg_apply(self.doc.cfg["active"])
         self.link_messages = msgs
@@ -1593,20 +1595,14 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self.say(("Updated from the assembly sketch. " if changed else "") + "; ".join(msgs)))
 
     def relink_paths(self):
-        """Saving: the sketch paths in the links are relative to the part file when they can be."""
+        """Saving: the sketch path of the link is relative to the part file."""
         import asm_sketch
         base = os.path.dirname(os.path.abspath(self.path))
-        for ln in self.doc.links:
-            old_key = ln["src"]
-            ab = self.doc.link_src_path(ln)
-            ln["src"] = asm_sketch.rel(ab, base)
-            if old_key != ln["src"] and old_key in self.doc.link_cfgs:
-                self.doc.link_cfgs[ln["src"]] = self.doc.link_cfgs.pop(old_key)
+        if self.doc.gsv:
+            ab = self.doc.gsv_src_path()
+            if ab:
+                self.doc.gsv["src"] = asm_sketch.rel(ab, base)
         self.doc.base_dir = base
-
-    def link_dialog(self):
-        import asm_sketch_win
-        asm_sketch_win.link_dialog(self)
 
     def live_sketch_doc(self, path):
         """The Document of an assembly sketch that is open in a tab of the program window (with edits that are not saved yet), else None."""
@@ -1779,6 +1775,7 @@ class MainWindow(QMainWindow):
         errs = [f"{f['name']}: {s[7:]}" for f in self.doc.features for s in [self.doc.status.get(f["id"], "")] if s.startswith("error")]
         self.refresh_tree()
         self.refresh_globals()
+        self.gsv_panel.refresh()
         self.cfg_panel.refresh()
         self.disp_panel.refresh()
         if not keep_props:

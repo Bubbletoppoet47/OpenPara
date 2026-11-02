@@ -367,6 +367,11 @@ class AssemblyWindow(QMainWindow):
         if hit is None or hit[0] != mt:
             try:
                 d = pm.Document.from_json(open(p, encoding="utf-8").read())
+                d.base_dir = os.path.dirname(os.path.abspath(p))
+                if d.gsv:                                       # a part that was not re-saved still follows its assembly sketch
+                    import asm_sketch
+                    if asm_sketch.pull(d)[0]:
+                        d.cfg_apply(d.cfg["active"])
                 d.rebuild()
             except Exception:
                 return None
@@ -447,9 +452,11 @@ class AssemblyWindow(QMainWindow):
     def open_file(self, p):
         try:
             self.asm = am.Assembly.from_json(open(p, encoding="utf-8").read())
+            self.asm.base_dir = os.path.dirname(os.path.abspath(p))
             self.wire(self.asm)
             self.doc_memo.clear()
             self.path = p
+            self.pull_gsv()
             self.undo, self.redo = [], []
             self.sel_comp = None
             self.solve_all()
@@ -467,6 +474,12 @@ class AssemblyWindow(QMainWindow):
             self.path = p if p.endswith(".gpa") else p + ".gpa"
         sim_links.rebase(self, old_base)
         base = os.path.dirname(self.path)
+        if self.asm.gsv:                                 # the assembly sketch's path is relative to this file, wherever it is saved
+            ab = self.asm.gsv_src_path()
+            if ab:
+                import asm_sketch
+                self.asm.gsv["src"] = asm_sketch.rel(ab, os.path.abspath(base))
+        self.asm.base_dir = os.path.abspath(base)
         for c in self.asm.components:                    # paths inside the file are relative to the assembly when they can be
             try:
                 ap = self.abs(c["path"]) if not os.path.isabs(c["path"]) else c["path"]
@@ -497,6 +510,7 @@ class AssemblyWindow(QMainWindow):
         self.cfg_panel.refresh()
         self.disp_panel.refresh()
         self.refresh_globals()
+        self.gsv_panel.refresh()
 
     def entry_mesh(self, c):
         d = self.part_doc(c if not c.get("derived") else (self.asm.comp(c["derived"]["src"]) or c))
@@ -1073,8 +1087,30 @@ class AssemblyWindow(QMainWindow):
         b.clicked.connect(self.global_del)
         row.addWidget(b)
         lay.addLayout(row)
+        self.gsv_panel = config_panels.GsvPanel(self)         # read-only: the numbers of the linked assembly sketch
+        lay.addWidget(self.gsv_panel)
         self.left.addTab(box, icons.icon("tab equations", 26), "")
         self.left.setTabToolTip(self.left.count() - 1, "Globals (equations)")
+
+    def pull_gsv(self):
+        """After opening: bring the Global Sketch Variables up to date from the assembly sketch, and the parts it draws are pulled when they load."""
+        if not self.asm.gsv:
+            return
+        import asm_sketch
+        changed, msgs = asm_sketch.pull(self.asm, self.live_sketch_doc)
+        if changed:
+            self.asm.cfg_apply(self.asm.cfg["active"])
+        if msgs or changed:
+            QTimer.singleShot(0, lambda: self.say(("Updated from the assembly sketch. " if changed else "") + "; ".join(msgs)))
+
+    def live_sketch_doc(self, path):
+        shell = self.window()
+        tabs = getattr(shell, "tabs", None)
+        if tabs is None or not hasattr(shell, "find_tab"):
+            return None
+        i = shell.find_tab(path)
+        w = tabs.widget(i) if i is not None else None
+        return getattr(w, "doc", None) if getattr(w, "KIND", "") == "asmsketch" else None
 
     def refresh_globals(self):
         self.gbusy = True

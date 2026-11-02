@@ -20,6 +20,7 @@ import numpy as np
 from build123d import Align, Axis, Box, Compound, Edge, Face, Location, Matrix, Plane, PositionMode, Transition, Vector, Wire, extrude, loft, revolve, sweep
 from OCP.gp import gp_Trsf
 
+import gsv
 import refgeo
 import settings
 import sketch_ext
@@ -49,9 +50,9 @@ class Document:
         self.param_kinds = {}                # {global name: 'number' | 'angle'}; anything else is a length (units follow File > Units)
         self.sims = []                       # linked simulation files (sim_links.py)
         self.renders = []                    # linked render projects (.gpr)
-        self.links = []                      # values taken one-way from assembly sketches: [{"src": .gpk path, "var": variable, "target": configuration column key}]
-        self.link_cfgs = {}                  # sketch path as written in the link -> names of the configurations it made / drives
-        self.base_dir = None                 # folder of the part's file (links with a relative path are found from here; not saved)
+        self.gsv = None                      # Global Sketch Variables from the linked assembly sketch (see gsv.py): {"src","configs","vars","vals","mirrored"}
+        self.export = []                     # (assembly sketch files only) names of the variables the sketch hands to the files linked to it
+        self.base_dir = None                 # folder of the file (the sketch path in gsv is found from here; not saved)
         self.material = {"name": "Steel (generic)", "density": 7850.0, "E_MPa": 200000.0, "nu": 0.30, "Sy_MPa": 250.0, "Su_MPa": 400.0}   # density kg/m3, see mat_lib.py
         self.display = {"color": None, "opacity": 1.0}                      # how the part is drawn (Display tab)
         self.cfg = {"active": "Default", "names": ["Default"], "cols": [], "cells": {"Default": {}}}
@@ -131,11 +132,12 @@ class Document:
     # ------------------------------------------------------------------ expressions
     def evaluate_params(self):
         """Resolve the globals (they may use each other, in any order)."""
+        ns = gsv.namespace(self.gsv)
         vals, pending = {}, dict(self.params)
         for _ in range(len(pending) + 1):
             for k, e in list(pending.items()):
                 try:
-                    vals[k] = float(eval(str(e), {"__builtins__": {}}, {**FUNCS, **vals}))
+                    vals[k] = float(eval(gsv.mangle(e), {"__builtins__": {}}, {**FUNCS, **ns, **vals}))
                     del pending[k]
                 except NameError:
                     pass
@@ -147,7 +149,7 @@ class Document:
 
     def num(self, expr):
         try:
-            return float(eval(str(expr), {"__builtins__": {}}, {**FUNCS, **self.dimvals, **self.values}))
+            return float(eval(gsv.mangle(expr), {"__builtins__": {}}, {**FUNCS, **gsv.namespace(self.gsv), **self.dimvals, **self.values}))
         except Exception as ex:
             raise ModelError(f"'{expr}': {ex}")
 
@@ -264,6 +266,8 @@ class Document:
         m.from_json(f["model"])
         for k, e in self.params.items():
             m.params[k] = {"vals": [0.0] * len(m.configs), "input": False, "expr": str(e), "doc": True}
+        for k, v in gsv.namespace(self.gsv).items():           # AS-<configuration>-<name>, written {AS-...} in a formula
+            m.params[k] = {"vals": [float(v)] * len(m.configs), "input": False, "expr": repr(float(v)), "doc": True}
         for k, v in self.dimvals.items():                      # named dimensions of the sketches before this one
             if k not in m.params:
                 m.params[k] = {"vals": [float(v)] * len(m.configs), "input": False, "expr": repr(float(v)), "doc": True}
@@ -439,9 +443,6 @@ class Document:
         for row in cfg.get("cells", {}).values():
             if f"g:{old}" in row:
                 row[f"g:{new}"] = row.pop(f"g:{old}")
-        for ln in self.links:
-            if ln.get("target") == f"g:{old}":
-                ln["target"] = f"g:{new}"
         self.rename_refs(old, new)
 
     def rename_feature(self, fid, new):
@@ -1351,7 +1352,7 @@ class Document:
     # ------------------------------------------------------------------ files
     def to_json(self):
         return json.dumps({"version": 1, "params": self.params, "kinds": self.param_kinds, "features": self.features, "rollback": self.rollback,
-                           "counter": self.counter, "material": self.material, "sims": self.sims, "renders": self.renders, "links": self.links, "link_cfgs": self.link_cfgs,
+                           "counter": self.counter, "material": self.material, "sims": self.sims, "renders": self.renders, "gsv": self.gsv, "export": self.export,
                            "display": self.display, "cfg": self.cfg_snapshot()}, indent=1)
 
     @classmethod
@@ -1363,8 +1364,8 @@ class Document:
         doc.material = d.get("material") or doc.material
         doc.sims = d.get("sims") or []
         doc.renders = d.get("renders") or []
-        doc.links = d.get("links") or []
-        doc.link_cfgs = d.get("link_cfgs") or {}
+        doc.gsv = d.get("gsv") or None
+        doc.export = list(d.get("export") or [])
         doc.display = d.get("display") or doc.display
         doc.cfg = d.get("cfg") or doc.cfg
         return doc
@@ -1372,67 +1373,51 @@ class Document:
     def copy(self):
         return Document.from_json(self.to_json())
 
-    # ------------------------------------------------------------------ links to assembly sketches (one way: a sketch drives the part, never the reverse)
-    # A link says: "the configuration column <target> takes its value from variable <var> of the assembly sketch <src>".  For every
-    # configuration of the sketch the part gets a configuration of the same name (made when missing) whose linked cells hold that
-    # configuration's numbers.  Everything that is not linked stays yours.
-    def link_src_path(self, ln):
+    # ------------------------------------------------------------------ Global Sketch Variables (an assembly sketch drives this file, one way)
+    # The sketch hands over the variables it exports, one number per sketch configuration (gsv.py).  They arrive as read-only globals
+    # called AS-<configuration>-<name>, and for every sketch configuration this file gets a configuration of the same name (made when
+    # missing, as a copy of the first one).  Cells written {AS-@-W} follow the configuration they sit in.  Nothing flows back.
+    def gsv_src_path(self):
         import os
-        p = ln["src"]
+        if not self.gsv or not self.gsv.get("src"):
+            return None
+        p = self.gsv["src"]
         return os.path.normpath(p if os.path.isabs(p) or not self.base_dir else os.path.join(self.base_dir, p))
 
-    def link_add(self, src, var, target):
-        """Take column `target` from variable `var` of sketch `src` (replaces an older link on the same column).  Raises ModelError."""
-        if target not in {k for k, _l, _v in self.cfg_candidates()}:
-            raise ModelError("that item cannot be driven by a sketch variable")
-        self.links = [ln for ln in self.links if ln["target"] != target]
-        self.links.append({"src": src, "var": var, "target": target})
-
-    def link_remove(self, target):
-        self.links = [ln for ln in self.links if ln["target"] != target]
-
-    def link_driven(self, cname, target):
-        """The link that sets this cell (a configuration the sketch made / drives, in a linked column), or None."""
-        ln = self.link_of(target)
-        return ln if ln is not None and cname in self.link_cfgs.get(ln["src"], []) else None
-
-    def link_of(self, target):
-        return next((ln for ln in self.links if ln["target"] == target), None)
-
-    def link_apply(self, src_path, values):
-        """Write the sketch's numbers into the table: values = {configuration name: {variable: number}}.  Returns the messages
-        (a variable that no longer exists, a column that cannot be read).  The active configuration's values are written to the part."""
+    def gsv_set(self, src, configs, vars_, vals):
+        """Take the exported numbers of the sketch (`src` as it is to be written in this file) and mirror its configurations.
+        vars_ = [{"name","kind","role"}], vals = {configuration: {variable: number}}.  -> messages."""
+        mirrored = list((self.gsv or {}).get("mirrored") or [])
+        self.gsv = {"src": src, "configs": list(configs), "vars": [dict(v) for v in vars_],
+                    "vals": {c: {k: float(x) for k, x in vals.get(c, {}).items()} for c in configs}, "mirrored": mirrored}
         msgs = []
-        mine = [ln for ln in self.links if self.link_src_path(ln) == src_path]
-        for ln in mine:
-            if ln["target"] not in self.cfg["cols"]:
-                try:
-                    self.cfg_add_col(ln["target"])
-                except ModelError as ex:
-                    msgs.append(f"{ln['target']}: {ex}")
-        if mine:
-            self.link_cfgs[mine[0]["src"]] = list(values)
-        for cname, row in values.items():
-            if cname not in self.cfg["names"]:
-                self.cfg_add(cname)
-            for ln in mine:
-                if ln["target"] not in self.cfg["cols"]:
-                    continue
-                if ln["var"] not in row:
-                    if cname == next(iter(values)):
-                        msgs.append(f"the sketch has no variable '{ln['var']}' any more")
-                    continue
-                self.cfg_set_cell(cname, ln["target"], self.link_value(ln["target"], row[ln["var"]]))
+        for c in configs:
+            if c not in self.cfg["names"]:
+                first = next((n for n in mirrored if n in self.cfg["names"]), self.cfg["names"][0])      # copy a mirrored configuration: its bound cells follow
+                self.cfg_add(c, copy_of=first)
+            if c not in mirrored:
+                mirrored.append(c)
+        gone = [c for c in mirrored if c not in configs]
+        if gone:
+            msgs.append("no longer in the sketch: " + ", ".join(gone))
         return msgs
 
-    @staticmethod
-    def link_value(target, v):
-        kind = target.partition(":")[0]
-        if kind == "d":
-            return float(v)
-        if kind == "s":
-            return bool(v)
-        return repr(round(float(v), 9))
+    def gsv_bind(self, key, var):
+        """Make the column `key` follow sketch variable `var`: in every configuration the sketch drives, its cell becomes {AS-@-var}."""
+        if not self.gsv:
+            raise ModelError("this file is not linked to an assembly sketch")
+        if key not in self.cfg["cols"]:
+            self.cfg_add_col(key)
+        for c in self.gsv.get("mirrored") or []:
+            if c in self.cfg["names"] and c in (self.gsv.get("configs") or []):
+                self.cfg_set_cell(c, key, "{" + gsv.PREFIX + "@-" + var + "}")
+
+    def gsv_clear(self):
+        self.gsv = None
+
+    def gsv_refresh(self):
+        """Resolve the bound cells of the active configuration again (after the numbers changed)."""
+        self.cfg_apply(self.cfg["active"])
 
     # ------------------------------------------------------------------ configurations
     # A configuration is a named set of values for the columns of the configuration table:
@@ -1639,7 +1624,7 @@ class Document:
         row = c["cells"].setdefault(c["active"], {})
         for key in c["cols"]:
             v = self.cfg_read(key)
-            if v is not None:
+            if v is not None and not gsv.keep_binding(row.get(key), v, c["active"]):
                 row[key] = v
         c.setdefault("offs", {})[c["active"]] = self.label_offsets()
 
@@ -1656,7 +1641,7 @@ class Document:
         row = self.cfg["cells"].get(name, {})
         for key in self.cfg["cols"]:
             if key in row:
-                self.cfg_write(key, row[key])
+                self.cfg_write(key, gsv.resolve_at(row[key], name))
         offs = self.cfg.get("offs", {})
         if name in offs:                                     # (a file from before this was kept leaves the labels where they are)
             self.apply_label_offsets(offs[name])
@@ -1713,7 +1698,7 @@ class Document:
     def cfg_set_cell(self, name, key, val):
         self.cfg["cells"].setdefault(name, {})[key] = val
         if name == self.cfg["active"]:
-            self.cfg_write(key, val)
+            self.cfg_write(key, gsv.resolve_at(val, name))
 
     def cfg_label(self, key):
         kind, _, rest = key.partition(":")
