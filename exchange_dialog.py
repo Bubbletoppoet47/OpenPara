@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QD
 
 import exchange as ex
 import settings
+import unitctl
 
 
 class ExportDialog(QDialog):
@@ -20,11 +21,11 @@ class ExportDialog(QDialog):
         self.fuse = QCheckBox("Fuse everything into one solid")
         self.each = QCheckBox("One STL file per component (into a folder)")
         self.tol = QDoubleSpinBox()
-        self.tol.setDecimals(4)
-        self.tol.setRange(0.0005, 5.0)
-        self.tol.setSingleStep(0.005)
-        self.tol.setValue(float(settings.get("surf_gap")) / 2.5 if settings.get("surf_gap") else 0.02)
-        self.tol.setSuffix(" mm")
+        self.tol.setDecimals(5)
+        self.tol.setRange(unitctl.to_disp(0.0005), unitctl.to_disp(5.0))            # shown in the program's unit (File > Units); the exporter gets mm
+        self.tol.setSingleStep(unitctl.to_disp(0.005))
+        self.tol.setValue(unitctl.to_disp(float(settings.get("surf_gap")) / 2.5 if settings.get("surf_gap") else 0.02))
+        self.tol.setSuffix(" " + unitctl.length_unit())
         self.tol.setToolTip("How far the mesh may lie from the true surface. Smaller = finer mesh, bigger file.")
         self.ang = QDoubleSpinBox()
         self.ang.setDecimals(2)
@@ -61,7 +62,7 @@ class ExportDialog(QDialog):
                           else "STL is a mesh in mm; an assembly is written as one combined mesh in its assembled pose.")
 
     def values(self):
-        return {"step": self.fmt.currentIndex() == 0, "fuse": self.fuse.isChecked(), "each": self.each.isChecked(), "tol": self.tol.value(), "ang": self.ang.value()}
+        return {"step": self.fmt.currentIndex() == 0, "fuse": self.fuse.isChecked(), "each": self.each.isChecked(), "tol": unitctl.from_disp(self.tol.value()), "ang": self.ang.value()}
 
 
 def export_items(win):

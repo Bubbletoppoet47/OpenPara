@@ -1185,8 +1185,8 @@ class MainWindow(QMainWindow):
         s = self.doc.after.get(f["id"])
         if s is not None:
             b = s.bounding_box()
-            form.addRow("Size", QLabel(f"{b.size.X:.4g} x {b.size.Y:.4g} x {b.size.Z:.4g} mm"))
-            form.addRow("Volume", QLabel(f"{s.volume:.5g} mm3"))
+            form.addRow("Size", QLabel(f"{unitctl.to_disp(b.size.X):.4g} x {unitctl.to_disp(b.size.Y):.4g} x {unitctl.to_disp(b.size.Z):.4g} {unitctl.length_unit()}"))
+            form.addRow("Volume", QLabel(unitctl.volume_text(s.volume, 5)))
         form.addRow(QLabel("The shape is stored inside this part. Add sketches, cuts, holes and fillets on top of it."))
 
     def partgen_panel(self, form, f):
