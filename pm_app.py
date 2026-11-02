@@ -1449,6 +1449,11 @@ class MainWindow(QMainWindow):
             b.clicked.connect(clr)
             form.addRow(b)
 
+    def set_free_motion(self, on):
+        self.free_motion = bool(on)
+        if self.ed is not None:
+            self.ed.redraw()
+
     def sketch_table(self, sk):
         """Properties of a sketch: how well it is defined, its dimensions (editable) and its relations (deletable)."""
         d = self.doc
@@ -1459,6 +1464,11 @@ class MainWindow(QMainWindow):
                       "Fully defined." if rep.dof == 0 else f"Under defined: {rep.dof} degrees of freedom left.") if rep else "")
         lab.setStyleSheet("font-weight:bold; color:" + ("#c00000" if rep and rep.conflicts else "#1a7f1a" if rep and rep.dof == 0 else "#1f4fb4"))
         self.props_lay.addWidget(lab)
+        fm = QCheckBox("Show free motion")
+        fm.setToolTip("Light up the points that can still move and draw an arrow along each free direction, so you know where to add a constraint")
+        fm.setChecked(bool(getattr(self, "free_motion", False)))
+        fm.toggled.connect(self.set_free_motion)
+        self.props_lay.addWidget(fm)
         if self.ed is not None:
             self.ed.hl = set()
         dims = [c for c in m.cons if c["type"] in sketch_edit.DIMS]

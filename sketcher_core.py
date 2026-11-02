@@ -1491,6 +1491,7 @@ class Report:
         self.redundant = []      # constraint ids that add nothing new
         self.free_pts = set()    # point ids not fully determined
         self.free_circles = set()
+        self.free_dirs = {}      # point id -> unit directions it can still move in: one (either way) or two (it is free in the plane)
         self.dof_constr = 0      # freedom that exists only in construction geometry (not counted in dof)
         self.messages = []
 
@@ -1958,6 +1959,14 @@ class Solver:
             free = np.any(np.abs(nullity) > 1e-5, axis=0) if len(nullity) else np.zeros(self.n, bool)
             rep.free_pts = {pid for pid, i in self.pidx.items() if (free[i] or free[i + 1]) and pid not in cpts}
             rep.free_circles = {cid for cid, i in self.cidx.items() if free[i] and cid not in ccis}
+            for pid in rep.free_pts:                      # the free directions of each loose point: null space rows restricted to its x, y
+                if len(nullity):
+                    i = self.pidx[pid]
+                    _, sv2, vt2 = np.linalg.svd(nullity[:, i:i + 2], full_matrices=False)
+                    if len(sv2) > 1 and sv2[1] >= 0.3 * sv2[0]:
+                        rep.free_dirs[pid] = [(1.0, 0.0), (0.0, 1.0)]
+                    elif sv2[0] > 1e-5:
+                        rep.free_dirs[pid] = [(float(vt2[0][0]), float(vt2[0][1]))]
             if (cpts or ccis) and len(nullity):
                 keep = np.ones(self.n, bool)
                 for pid in cpts:

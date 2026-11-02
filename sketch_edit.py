@@ -40,6 +40,7 @@ except Exception:
 COL_FREE, COL_FIXED, COL_BAD = (0.05, 0.30, 0.85), (0.10, 0.60, 0.20), (0.85, 0.10, 0.10)
 COL_SEL, COL_CONSTR, COL_PREVIEW, COL_TAG = (1.0, 0.45, 0.0), (0.50, 0.55, 0.70), (0.45, 0.55, 0.75), (0.10, 0.10, 0.10)
 COL_ORIGIN = (0.80, 0.15, 0.55)
+COL_MOTION = (1.0, 0.55, 0.0)             # Show free motion: points that can still move, and their arrows
 COL_EXT = (0.55, 0.25, 0.75)              # points / lines that follow geometry of another sketch (sketch_ext.py)
 AX_U, AX_V = (0.85, 0.15, 0.15), (0.15, 0.65, 0.15)
 EDGE_ON_COS = 0.12          # the snap / pick / label distances are File > Settings
@@ -1777,6 +1778,25 @@ class SketchEditor:
         sh = sk_dimlines.shapes(self, c)
         return None if sh is None else sh["label"]
 
+    def draw_free_motion(self, rep, extk):
+        """Show free motion: the points that can still move, lit up, each with an arrow along its free direction (two arrows,
+        horizontal and vertical, when it is free in every direction).  Only points - lines, arcs and circles are never lit."""
+        m = self.m
+        L = 0.05 * self.view_height()
+        ids = [i for i in rep.free_dirs if i in m.pts and i != 0 and ("pt", i) not in extk and not (m.p3 and m.p3_owner("pt", i))]
+        if not ids:
+            return
+        self.actor(pv.PolyData(self.to_world(np.array([m.pts[i] for i in ids]))), COL_MOTION, 13.0, points=True)
+        for i in ids:
+            p = np.array(m.pts[i], float)
+            for d in rep.free_dirs[i]:
+                d = np.array(d, float)
+                n = np.array([-d[1], d[0]])
+                self.polyline(np.array([p - d * L, p + d * L]), COL_MOTION, 2.5)
+                for s_ in (1, -1):
+                    tip = p + s_ * d * L
+                    self.fill([tip, tip - s_ * d * 0.35 * L + n * 0.18 * L, tip - s_ * d * 0.35 * L - n * 0.18 * L], COL_MOTION)
+
     def redraw(self):
         if not self.active or pv is None:
             return
@@ -1817,6 +1837,8 @@ class SketchEditor:
         for pts, col, size in ((free, COL_FREE, 7.0), (fixed, COL_FIXED, 7.0), (extp, COL_EXT, 9.0), (sel, COL_SEL, 10.0)):
             if pts:
                 self.actor(pv.PolyData(self.to_world(np.array(pts))), col, size, points=True)
+        if getattr(self.app, "free_motion", False) and rep is not None and not rep.conflicts:
+            self.draw_free_motion(rep, extk)
         if self.choose is not None and len(self.choose["hits"]) > 1:   # the crossings of a curve with this plane: click one
             self.actor(pv.PolyData(np.array(self.choose["hits"], float)), (1.0, 0.80, 0.10), 14.0, points=True)
         self.tags = []
