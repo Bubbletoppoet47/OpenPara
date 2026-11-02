@@ -43,6 +43,17 @@ class ConfigPanel(QWidget):
         b.clicked.connect(self.remove_column)
         row.addWidget(b)
         lay.addLayout(row)
+        if noun == "part":
+            lrow = QHBoxLayout()
+            b = QPushButton("Link to Assembly Sketch...")
+            b.setToolTip("Take columns of this table from the variables of an assembly sketch (one way: the sketch drives the part)")
+            b.clicked.connect(lambda: self.owner.link_dialog())
+            lrow.addWidget(b)
+            b = QPushButton("Unlink Column")
+            b.setToolTip("Stop driving the selected column from an assembly sketch")
+            b.clicked.connect(self.unlink_column)
+            lrow.addWidget(b)
+            lay.addLayout(lrow)
         frow = QHBoxLayout()                 # which kind of column Add Column offers
         frow.addWidget(QLabel("Add Column shows:"))
         self.col_group = QComboBox()
@@ -97,7 +108,8 @@ class ConfigPanel(QWidget):
         t.clear()
         t.setRowCount(len(c["names"]))
         t.setColumnCount(1 + len(cols))
-        t.setHorizontalHeaderLabels(["Configuration"] + [m.cfg_label(k) for k in cols])
+        linked = {ln["target"]: ln["var"] for ln in getattr(m, "links", [])}
+        t.setHorizontalHeaderLabels(["Configuration"] + [m.cfg_label(k) + (f"  ⇐ {linked[k]}" if k in linked else "") for k in cols])
         for r, n in enumerate(c["names"]):
             it = QTableWidgetItem(n)
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -129,7 +141,28 @@ class ConfigPanel(QWidget):
             cb.currentTextChanged.connect(lambda txt, n=name, k=key: self.set_value(n, k, txt))
             t.setCellWidget(r, col, cb)
         else:
-            t.setItem(r, col, QTableWidgetItem(self.cell_text(key, val)))
+            item = QTableWidgetItem(self.cell_text(key, val))
+            ln = self.m.link_driven(name, key) if hasattr(self.m, "link_driven") else None
+            if ln is not None:                                   # a number the assembly sketch sets: change it there
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                item.setBackground(QBrush(QColor("#ece3f7")))
+                item.setToolTip(f"Driven by the assembly sketch variable {ln['var']} ({ln['src']}). Change it in the sketch, or unlink the column.")
+            t.setItem(r, col, item)
+
+    def unlink_column(self):
+        m = self.m
+        col = self.table.currentColumn()
+        if col < 1 or col > len(m.cfg["cols"]):
+            self.owner.say("Click a cell of the column first.")
+            return
+        key = m.cfg["cols"][col - 1]
+        if m.link_of(key) is None:
+            self.owner.say("That column is not linked to an assembly sketch.")
+            return
+        self.owner.snapshot()
+        m.link_remove(key)
+        self.owner.say("Column unlinked: its numbers stay, and you can edit them again.")
+        self.refresh()
 
     def is_length(self, key):
         """Does this column hold a length (mm in the file, shown in the program's unit)?  A count, an angle or a flag does not."""

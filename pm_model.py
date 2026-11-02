@@ -49,6 +49,9 @@ class Document:
         self.param_kinds = {}                # {global name: 'number' | 'angle'}; anything else is a length (units follow File > Units)
         self.sims = []                       # linked simulation files (sim_links.py)
         self.renders = []                    # linked render projects (.gpr)
+        self.links = []                      # values taken one-way from assembly sketches: [{"src": .gpk path, "var": variable, "target": configuration column key}]
+        self.link_cfgs = {}                  # sketch path as written in the link -> names of the configurations it made / drives
+        self.base_dir = None                 # folder of the part's file (links with a relative path are found from here; not saved)
         self.material = {"name": "Steel (generic)", "density": 7850.0, "E_MPa": 200000.0, "nu": 0.30, "Sy_MPa": 250.0, "Su_MPa": 400.0}   # density kg/m3, see mat_lib.py
         self.display = {"color": None, "opacity": 1.0}                      # how the part is drawn (Display tab)
         self.cfg = {"active": "Default", "names": ["Default"], "cols": [], "cells": {"Default": {}}}
@@ -436,6 +439,9 @@ class Document:
         for row in cfg.get("cells", {}).values():
             if f"g:{old}" in row:
                 row[f"g:{new}"] = row.pop(f"g:{old}")
+        for ln in self.links:
+            if ln.get("target") == f"g:{old}":
+                ln["target"] = f"g:{new}"
         self.rename_refs(old, new)
 
     def rename_feature(self, fid, new):
@@ -1345,7 +1351,7 @@ class Document:
     # ------------------------------------------------------------------ files
     def to_json(self):
         return json.dumps({"version": 1, "params": self.params, "kinds": self.param_kinds, "features": self.features, "rollback": self.rollback,
-                           "counter": self.counter, "material": self.material, "sims": self.sims, "renders": self.renders,
+                           "counter": self.counter, "material": self.material, "sims": self.sims, "renders": self.renders, "links": self.links, "link_cfgs": self.link_cfgs,
                            "display": self.display, "cfg": self.cfg_snapshot()}, indent=1)
 
     @classmethod
@@ -1357,12 +1363,76 @@ class Document:
         doc.material = d.get("material") or doc.material
         doc.sims = d.get("sims") or []
         doc.renders = d.get("renders") or []
+        doc.links = d.get("links") or []
+        doc.link_cfgs = d.get("link_cfgs") or {}
         doc.display = d.get("display") or doc.display
         doc.cfg = d.get("cfg") or doc.cfg
         return doc
 
     def copy(self):
         return Document.from_json(self.to_json())
+
+    # ------------------------------------------------------------------ links to assembly sketches (one way: a sketch drives the part, never the reverse)
+    # A link says: "the configuration column <target> takes its value from variable <var> of the assembly sketch <src>".  For every
+    # configuration of the sketch the part gets a configuration of the same name (made when missing) whose linked cells hold that
+    # configuration's numbers.  Everything that is not linked stays yours.
+    def link_src_path(self, ln):
+        import os
+        p = ln["src"]
+        return os.path.normpath(p if os.path.isabs(p) or not self.base_dir else os.path.join(self.base_dir, p))
+
+    def link_add(self, src, var, target):
+        """Take column `target` from variable `var` of sketch `src` (replaces an older link on the same column).  Raises ModelError."""
+        if target not in {k for k, _l, _v in self.cfg_candidates()}:
+            raise ModelError("that item cannot be driven by a sketch variable")
+        self.links = [ln for ln in self.links if ln["target"] != target]
+        self.links.append({"src": src, "var": var, "target": target})
+
+    def link_remove(self, target):
+        self.links = [ln for ln in self.links if ln["target"] != target]
+
+    def link_driven(self, cname, target):
+        """The link that sets this cell (a configuration the sketch made / drives, in a linked column), or None."""
+        ln = self.link_of(target)
+        return ln if ln is not None and cname in self.link_cfgs.get(ln["src"], []) else None
+
+    def link_of(self, target):
+        return next((ln for ln in self.links if ln["target"] == target), None)
+
+    def link_apply(self, src_path, values):
+        """Write the sketch's numbers into the table: values = {configuration name: {variable: number}}.  Returns the messages
+        (a variable that no longer exists, a column that cannot be read).  The active configuration's values are written to the part."""
+        msgs = []
+        mine = [ln for ln in self.links if self.link_src_path(ln) == src_path]
+        for ln in mine:
+            if ln["target"] not in self.cfg["cols"]:
+                try:
+                    self.cfg_add_col(ln["target"])
+                except ModelError as ex:
+                    msgs.append(f"{ln['target']}: {ex}")
+        if mine:
+            self.link_cfgs[mine[0]["src"]] = list(values)
+        for cname, row in values.items():
+            if cname not in self.cfg["names"]:
+                self.cfg_add(cname)
+            for ln in mine:
+                if ln["target"] not in self.cfg["cols"]:
+                    continue
+                if ln["var"] not in row:
+                    if cname == next(iter(values)):
+                        msgs.append(f"the sketch has no variable '{ln['var']}' any more")
+                    continue
+                self.cfg_set_cell(cname, ln["target"], self.link_value(ln["target"], row[ln["var"]]))
+        return msgs
+
+    @staticmethod
+    def link_value(target, v):
+        kind = target.partition(":")[0]
+        if kind == "d":
+            return float(v)
+        if kind == "s":
+            return bool(v)
+        return repr(round(float(v), 9))
 
     # ------------------------------------------------------------------ configurations
     # A configuration is a named set of values for the columns of the configuration table:

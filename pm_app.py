@@ -13,7 +13,7 @@ import sys
 import traceback
 
 import numpy as np
-from PyQt6.QtCore import QSettings, QSize, Qt
+from PyQt6.QtCore import QSettings, QSize, Qt, QTimer
 from PyQt6.QtGui import QAction, QBrush, QColor, QKeySequence
 from PyQt6.QtWidgets import (QAbstractItemView, QWidgetAction, QApplication, QFrame, QTabWidget, QToolButton, QCheckBox, QComboBox, QDockWidget, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget,
                              QInputDialog, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QToolBar,
@@ -567,9 +567,11 @@ class MainWindow(QMainWindow):
         try:
             self.doc = pm.Document.from_json(open(p, encoding="utf-8").read())
             self.path = p
+            self.doc.base_dir = os.path.dirname(os.path.abspath(p))
             self.sel = self.sel_face = self.sel_plane = None
             self.undo, self.redo = [], []
             self.setWindowTitle(f"Parametric Modeller - {os.path.basename(p)}")
+            self.pull_links()
         except Exception as ex:
             QMessageBox.warning(self, "Open", str(ex))
 
@@ -583,6 +585,7 @@ class MainWindow(QMainWindow):
             self.path = p if p.endswith(".gpd") else p + ".gpd"
         import sim_links
         sim_links.rebase(self, old_base)
+        self.relink_paths()
         open(self.path, "w", encoding="utf-8").write(self.doc.to_json())
         self.saved_json = self.doc.to_json()
         self.setWindowTitle(f"Parametric Modeller - {os.path.basename(self.path)}")
@@ -1575,6 +1578,45 @@ class MainWindow(QMainWindow):
         self.doc.reports[sid] = sk_tools.solve_model(self.doc.models[sid])
         self.doc.store_sketch(sid)
         self.update_all()
+
+    # ----- assembly sketches: variables that drive this part's configuration table (one way)
+    def pull_links(self):
+        """After opening: bring the linked columns up to date from their assembly sketches (the sketch file, or the open tab when it is edited)."""
+        if not self.doc.links:
+            return
+        import asm_sketch
+        changed, msgs = asm_sketch.refresh_part(self.doc, self.live_sketch_doc)
+        if changed:
+            self.doc.cfg_apply(self.doc.cfg["active"])
+        self.link_messages = msgs
+        if msgs or changed:
+            QTimer.singleShot(0, lambda: self.say(("Updated from the assembly sketch. " if changed else "") + "; ".join(msgs)))
+
+    def relink_paths(self):
+        """Saving: the sketch paths in the links are relative to the part file when they can be."""
+        import asm_sketch
+        base = os.path.dirname(os.path.abspath(self.path))
+        for ln in self.doc.links:
+            old_key = ln["src"]
+            ab = self.doc.link_src_path(ln)
+            ln["src"] = asm_sketch.rel(ab, base)
+            if old_key != ln["src"] and old_key in self.doc.link_cfgs:
+                self.doc.link_cfgs[ln["src"]] = self.doc.link_cfgs.pop(old_key)
+        self.doc.base_dir = base
+
+    def link_dialog(self):
+        import asm_sketch_win
+        asm_sketch_win.link_dialog(self)
+
+    def live_sketch_doc(self, path):
+        """The Document of an assembly sketch that is open in a tab of the program window (with edits that are not saved yet), else None."""
+        shell = self.window()
+        tabs = getattr(shell, "tabs", None)
+        if tabs is None or not hasattr(shell, "find_tab"):
+            return None
+        i = shell.find_tab(path)
+        w = tabs.widget(i) if i is not None else None
+        return getattr(w, "doc", None) if getattr(w, "KIND", "") == "asmsketch" else None
 
     # ----- what the Configurations and Display tabs ask of the window
     def cfg_model(self):
