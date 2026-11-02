@@ -37,6 +37,13 @@ def names_of(doc, sketch_model=None):
     """Globals, named dimensions, the open sketch's own symbols and the functions, each with its current value."""
     out = []
     seen = set()
+    try:                                              # the variables an assembly sketch hands over: AS_<configuration>_<name>
+        import gsv
+        for name, val, kind, _role in gsv.rows(getattr(doc, "gsv", None)):
+            out.append((name, value_text(val, kind), "linked"))
+            seen.add(name)
+    except Exception:
+        pass
     try:
         for k in doc.params:
             kind = getattr(doc, "param_kinds", {}).get(k, "length")
@@ -85,7 +92,7 @@ class Suggest(QObject):
 
     def fill(self):
         self.model.clear()
-        order = {"global": 0, "dimension": 1, "sketch": 2, "function": 3}
+        order = {"linked": -1, "global": 0, "dimension": 1, "sketch": 2, "function": 3}
         for name, val, grp in sorted(self.names_fn() or [], key=lambda x: (order.get(x[2], 9), x[0].lower())):
             it = QStandardItem(f"{name}   =   {val}" if grp != "function" else f"{name}     {val}")
             it.setData(name, NAME_ROLE)
@@ -114,7 +121,13 @@ class Suggest(QObject):
         _, start = self.word()
         t = self.edit.text()
         cur = self.edit.cursorPosition()
-        self.edit.setText(t[:start] + name + t[cur:])
+        tail = t[cur:]
+        if isinstance(name, str) and name.startswith("AS_"):          # a linked variable is written in braces: {AS_Large_W}
+            if not t[:start].endswith("{"):
+                name = "{" + name
+            if not tail.startswith("}"):
+                name += "}"
+        self.edit.setText(t[:start] + name + tail)
         self.edit.setCursorPosition(start + len(name))
 
     def eventFilter(self, obj, ev):

@@ -1,7 +1,7 @@
 """The Configurations and Display tabs of the left panel (for parts and for assemblies)."""
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont
-from PyQt6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMenu, QMessageBox,
+from PyQt6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QHBoxLayout, QHeaderView, QInputDialog, QLineEdit, QLabel, QMenu, QMessageBox,
                              QPushButton, QSlider, QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import gsv
@@ -446,6 +446,11 @@ class GsvPanel(QWidget):
         self.head = QLabel()
         self.head.setWordWrap(True)
         lay.addWidget(self.head)
+        self.find = QLineEdit()
+        self.find.setPlaceholderText("Search the variables (e.g. AS_Large)")
+        self.find.setClearButtonEnabled(True)
+        self.find.textChanged.connect(self.apply_filter)
+        lay.addWidget(self.find)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Name", "Value", "Kind", "Role"])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -499,6 +504,14 @@ class GsvPanel(QWidget):
         # the (configuration, variable) of each row, in table order
         self.keys = [(cfg, v["name"]) for v in g.get("vars") or [] for cfg in g.get("configs") or []
                      if g.get("vals", {}).get(cfg, {}).get(v["name"]) is not None]
+        self.apply_filter()
+
+    def apply_filter(self, _t=None):
+        """Hide the rows whose name does not contain the text typed (rows keep their index, so Copy name / Bind still find theirs)."""
+        w = self.find.text().strip().lower()
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            self.table.setRowHidden(r, bool(w) and (it is None or w not in it.text().lower()))
 
     def current(self):
         r = self.table.currentRow()
