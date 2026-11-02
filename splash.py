@@ -30,11 +30,18 @@ def asset(*parts):
 
 
 def version_text():
-    try:
-        import version
-        return str(version.__version__)
+    try:                                   # by file, so no other module called "version" on the path can be picked up
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_op_version", os.path.join(HERE, "version.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return str(mod.__version__)
     except Exception:
-        return ""
+        try:
+            import version
+            return str(version.__version__)
+        except Exception:
+            return ""
 
 
 class Splash(QWidget):
@@ -199,5 +206,7 @@ def show(app=None):
         sp.repaint()
         QApplication.processEvents()
         return sp
-    except Exception:                                                  # a start-up card must never stop the program
+    except Exception:                                                  # a start-up card must never stop the program, but say why it is missing
+        import traceback
+        print("splash: could not show the start-up card:\n" + traceback.format_exc(), file=sys.stderr)
         return None
