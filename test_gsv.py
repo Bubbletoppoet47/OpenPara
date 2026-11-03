@@ -142,3 +142,12 @@ d.base_dir = "/nonexistent"
 ch, m2 = asm_sketch.pull(d)
 assert d.gsv.get("orphan") and "on notice" in m2[0] and "Short pipe · Small" in d.cfg["names"], m2
 print("nested configurations OK")
+
+# ---- an assembly component whose cell names a GROUP of the part follows the assembly's sketch configuration by itself
+import cfg_tree
+pd = linked_part(["Small", "Big"], {"Small": {"W": 1.0}, "Big": {"W": 2.0}})
+assert cfg_tree.choices(pd)[:1] == ["Default"] and "Default · Big" in cfg_tree.choices(pd)
+assert cfg_tree.resolve(pd, "Default", "Big") == "Default · Big" and cfg_tree.resolve(pd, "Default", "Small") == "Default · Small"
+assert cfg_tree.resolve(pd, "Default", "Nope") == "Default · Small"            # no child with that suffix: the first one
+assert cfg_tree.resolve(pd, "Default · Big", "Small") == "Default · Big"       # an explicit child stays
+print("component picks child OK")

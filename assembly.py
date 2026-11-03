@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QFileDi
                              QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QInputDialog, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox)
 
 import asm_model as am
+import cfg_tree
 import asm_refs
 import asm_sub
 import config_panels
@@ -342,7 +343,7 @@ class AssemblyWindow(QMainWindow):
         a.solid_fn = self.solid_of
         a.refgeo_fn = lambda c: (lambda d: d.refgeo if d is not None else {})(self.part_doc(c))
         a.part_cfg_fn = lambda c: (lambda d: d.cfg["active"] if d is not None else None)(self.part_base(c))
-        a.part_cfgs_fn = lambda c: (lambda d: list(d.cfg["names"]) if d is not None else [])(self.part_base(c))
+        a.part_cfgs_fn = lambda c: (lambda d: cfg_tree.choices(d) if d is not None else [])(self.part_base(c))
 
     def part_base(self, c):
         """The part's Document as it is in its own tab / file (whatever configuration is active there)."""
@@ -384,7 +385,8 @@ class AssemblyWindow(QMainWindow):
         """The Document of a component in the configuration the component asks for."""
         if c.get("derived"):
             c = self.asm.comp(c["derived"]["src"]) or c
-        key = (c["path"], c.get("config"))
+        suffix = self.asm.cfg_link_name(self.asm.cfg["active"])
+        key = (c["path"], c.get("config"), suffix)
         if key in self.doc_memo:
             return self.doc_memo[key]
         if c["path"].lower().endswith(".gpa"):
@@ -398,7 +400,7 @@ class AssemblyWindow(QMainWindow):
             return doc
         base = self.part_base(c)
         doc = base
-        cfg = c.get("config")
+        cfg = cfg_tree.resolve(base, c.get("config"), suffix) if base is not None else c.get("config")
         if base is not None and cfg and cfg in base.cfg["names"] and cfg != base.cfg["active"]:
             try:
                 doc = base.copy()

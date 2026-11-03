@@ -4,6 +4,7 @@ from PyQt6.QtGui import QBrush, QColor, QFont
 from PyQt6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QHBoxLayout, QHeaderView, QInputDialog, QLineEdit, QLabel, QMenu, QMessageBox,
                              QPushButton, QSlider, QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
+import cfg_tree
 import gsv
 import unitctl
 
@@ -28,7 +29,7 @@ class ConfigPanel(QWidget):
         self.tree.setMaximumHeight(150)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.tree_menu)
-        self.tree.itemDoubleClicked.connect(lambda it, _c: self.activate(it.data(0, Qt.ItemDataRole.UserRole)))
+        self.tree.itemDoubleClicked.connect(lambda it, _c: self.activate(it.data(0, Qt.ItemDataRole.UserRole)) if isinstance(it.data(0, Qt.ItemDataRole.UserRole), str) else None)
         lay.addWidget(self.tree)
         row = QHBoxLayout()
         b = QPushButton("Add Configuration")
@@ -85,21 +86,42 @@ class ConfigPanel(QWidget):
         self.tree.clear()
         root = QTreeWidgetItem(self.tree, [self.title()])
         root.setExpanded(True)
-        for n in c["names"]:
+        title = self.owner.title().rsplit('.', 1)[0]
+        groups, regular = cfg_tree.listing(m)
+        self.order = []
+
+        def leaf_item(parent, n):
             act = n == c["active"]
-            it = QTreeWidgetItem(root, [("✔  " if act else "      ") + f"{n} [{self.owner.title().rsplit('.', 1)[0]}]"])
+            it = QTreeWidgetItem(parent, [("✔  " if act else "      ") + f"{n} [{title}]"])
             it.setData(0, Qt.ItemDataRole.UserRole, n)
+            it.setToolTip(0, "Follows the assembly sketch configuration '" + cfg_tree.link_name(m, n) + "'")
             if act:
                 f = it.font(0)
                 f.setBold(True)
                 it.setFont(0, f)
+            self.order.append(n)
+
+        for g, variants in groups:                                  # nested configurations first, in the order they were made
+            gi = QTreeWidgetItem(root, ["▾  " + g["name"] + "   (follows the assembly sketch)"])
+            gi.setData(0, Qt.ItemDataRole.UserRole, ("g", g["id"]))
+            gi.setExpanded(True)
+            for v, kids in variants:
+                parent = gi
+                if v.get("name") or len(variants) > 1:
+                    parent = QTreeWidgetItem(gi, ["▾  " + (v.get("name") or "(original)")])
+                    parent.setData(0, Qt.ItemDataRole.UserRole, ("v", g["id"], v["id"]))
+                    parent.setExpanded(True)
+                for n in kids:
+                    leaf_item(parent, n)
+        for n in regular:                                          # then the regular ones, in the order they were made
+            leaf_item(root, n)
         cols = c["cols"]
         t = self.table
         t.clear()
-        t.setRowCount(len(c["names"]))
+        t.setRowCount(len(self.order))
         t.setColumnCount(1 + len(cols))
         t.setHorizontalHeaderLabels(["Configuration"] + [m.cfg_label(k) for k in cols])
-        for r, n in enumerate(c["names"]):
+        for r, n in enumerate(self.order):
             it = QTableWidgetItem(n)
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             it.setCheckState(Qt.CheckState.Checked if n == c["active"] else Qt.CheckState.Unchecked)
@@ -108,6 +130,8 @@ class ConfigPanel(QWidget):
                 f.setBold(True)
                 it.setFont(f)
                 it.setBackground(QBrush(QColor("#e1ecfb")))
+            elif cfg_tree.leaf(m, n):
+                it.setBackground(QBrush(QColor("#f1ecf8")))
             t.setItem(r, 0, it)
             for j, k in enumerate(cols):
                 self.fill_cell(r, 1 + j, n, k, c["cells"].get(n, {}).get(k))
@@ -181,7 +205,7 @@ class ConfigPanel(QWidget):
             return
         m = self.m
         r, col = it.row(), it.column()
-        name = m.cfg["names"][r]
+        name = self.order[r]
         if col == 0:
             if it.text() == name:          # only the check box changed
                 if it.checkState() == Qt.CheckState.Checked and name != m.cfg["active"]:
@@ -191,7 +215,10 @@ class ConfigPanel(QWidget):
                 return
             try:
                 self.owner.snapshot()
-                m.cfg_rename(name, it.text())
+                if cfg_tree.leaf(m, name):
+                    cfg_tree.rename_leaf(m, name, it.text())
+                else:
+                    m.cfg_rename(name, it.text())
             except Exception as ex:
                 self.owner.say(str(ex))
             self.owner.config_changed()
@@ -216,9 +243,40 @@ class ConfigPanel(QWidget):
     def set_value(self, name, key, val):
         if self.busy:
             return
+        if key.startswith("s:") and cfg_tree.leaf(self.m, name) and self.feature_variant(name, key, bool(val)):
+            return
         self.owner.snapshot()
         self.m.cfg_set_cell(name, key, val)
         self.owner.config_changed()
+
+    def feature_variant(self, name, key, val):
+        """Suppressing / unsuppressing a feature of a nested child: an existing variant with that feature state is activated, otherwise a prompt makes a
+        new variant (the original is unchanged).  -> True when it was handled here"""
+        m = self.m
+        act, target = cfg_tree.feature_change(m, name, key, val)
+        if act == "same":
+            return False
+        if act == "switch":
+            self.owner.say(f"A variant with that feature state already exists: {target}")
+            QTimer.singleShot(0, lambda: (self.activate(target), self.refresh()))
+            return True
+        feat = self.m.cfg_label(key).split("@")[0] if hasattr(m, "cfg_label") else key
+        text, ok = QInputDialog.getText(self, "New variant", "This feature state is not in any configuration yet, so a new variant is made\n"
+                                        "(the original stays as it is).  Name of the variant:", text=f"{feat} " + ("suppressed" if val else "unsuppressed"))
+        if not ok or not text.strip():
+            QTimer.singleShot(0, self.refresh)
+            return True
+        try:
+            self.owner.snapshot()
+            new = cfg_tree.make_variant(m, name, key, val, text)
+            m.cfg_apply(new)
+        except Exception as ex:                                    # noqa: BLE001
+            self.owner.undo_pop()
+            QMessageBox.warning(self, "New variant", str(ex))
+            return True
+        self.owner.config_changed()
+        self.owner.say(f"New variant '{text.strip()}': {new} is active.")
+        return True
 
     # ----- commands -----------------------------------------------------------------------
     def activate(self, name):
@@ -248,23 +306,80 @@ class ConfigPanel(QWidget):
 
     def tree_menu(self, pos):
         it = self.tree.itemAt(pos)
-        name = it.data(0, Qt.ItemDataRole.UserRole) if it is not None else None
+        data = it.data(0, Qt.ItemDataRole.UserRole) if it is not None else None
         menu = QMenu(self)
-        if name:
+        if isinstance(data, tuple):                                 # a group or a variant (folders)
+            if data[0] == "g":
+                menu.addAction("Rename group").triggered.connect(lambda: self.rename_folder(data))
+                menu.addAction("Delete group and its nested configurations").triggered.connect(lambda: self.delete_group(data[1]))
+            else:
+                menu.addAction("Rename variant").triggered.connect(lambda: self.rename_folder(data))
+        elif data:
+            name = data
             menu.addAction("Activate").triggered.connect(lambda: self.activate(name))
-            menu.addAction("Copy").triggered.connect(lambda: self.add_config(name))
-            menu.addAction("Rename").triggered.connect(lambda: self.rename(name))
-            menu.addAction("Delete").triggered.connect(lambda: self.delete(name))
+            if cfg_tree.leaf(self.m, name):
+                menu.addAction("Rename (not the suffix)").triggered.connect(lambda: self.rename(name))
+                menu.addAction("Sever the link (make a regular configuration)").triggered.connect(lambda: self.sever(name))
+                d = menu.addAction("Delete (only the assembly sketch removes it)")
+                d.setEnabled(False)
+            else:
+                menu.addAction("Copy").triggered.connect(lambda: self.add_config(name))
+                menu.addAction("Rename").triggered.connect(lambda: self.rename(name))
+                menu.addAction("Delete").triggered.connect(lambda: self.delete(name))
         else:
             menu.addAction("Add Configuration").triggered.connect(self.add_config)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def rename_folder(self, data):
+        m = self.m
+        g = cfg_tree.find_group(m, data[1])
+        v = cfg_tree.find_variant(g, data[2]) if data[0] == "v" else None
+        old = (v.get("name") or "") if v else g["name"]
+        new, ok = QInputDialog.getText(self, "Rename", "New name:", text=old)
+        if not ok:
+            return
+        try:
+            self.owner.snapshot()
+            if v:
+                cfg_tree.rename_variant(m, data[1], data[2], new)
+            else:
+                cfg_tree.rename_group(m, data[1], new)
+        except Exception as ex:                                    # noqa: BLE001
+            self.owner.undo_pop()
+            QMessageBox.warning(self, "Rename", str(ex))
+            return
+        self.owner.config_changed()
+
+    def delete_group(self, gid):
+        try:
+            self.owner.snapshot()
+            cfg_tree.delete_group(self.m, gid)
+        except Exception as ex:                                    # noqa: BLE001
+            self.owner.undo_pop()
+            QMessageBox.warning(self, "Delete", str(ex))
+            return
+        self.owner.config_changed()
+
+    def sever(self, name):
+        try:
+            self.owner.snapshot()
+            new = cfg_tree.sever(self.m, name)
+        except Exception as ex:                                    # noqa: BLE001
+            self.owner.undo_pop()
+            QMessageBox.warning(self, "Sever", str(ex))
+            return
+        self.owner.config_changed()
+        self.owner.say(f"New regular configuration '{new}': the linked values are now plain numbers.  '{name}' stays linked.")
 
     def rename(self, name):
         new, ok = QInputDialog.getText(self, "Rename", "New name:", text=name)
         if ok:
             try:
                 self.owner.snapshot()
-                self.m.cfg_rename(name, new)
+                if cfg_tree.leaf(self.m, name):
+                    cfg_tree.rename_leaf(self.m, name, new)
+                else:
+                    self.m.cfg_rename(name, new)
             except Exception as ex:
                 self.owner.undo_pop()
                 QMessageBox.warning(self, "Rename", str(ex))

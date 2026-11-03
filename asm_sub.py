@@ -181,6 +181,10 @@ def sub_doc(ctx, p, cfg=None):
     a = am.Assembly.from_json(text)
     L.asm = a
     L.wire(a)
+    import cfg_tree
+    if cfg:
+        outer = getattr(ctx, "asm", None)
+        cfg = cfg_tree.resolve(a, cfg, outer.cfg_link_name(outer.cfg["active"]) if outer is not None else None)
     if cfg and cfg in a.cfg["names"] and cfg != a.cfg["active"]:
         a.cfg_apply(cfg)
     try:

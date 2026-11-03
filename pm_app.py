@@ -996,9 +996,36 @@ class MainWindow(QMainWindow):
         self.update_all()
 
     def toggle_suppress(self, fid):
+        import cfg_tree
+        d = self.doc
+        f = d.feature(fid)
+        key, new = "s:" + fid, not f["suppressed"]
+        act = d.cfg["active"]
+        if d.gsv and cfg_tree.leaf(d, act):                       # a nested child: a feature state that no variant has yet makes a new variant
+            d.cfg_capture()
+            if key not in d.cfg["cols"]:
+                d.cfg_add_col(key)
+            what, target = cfg_tree.feature_change(d, act, key, new)
+            if what == "switch":
+                self.snapshot()
+                d.cfg_apply(target)
+                self.update_all()
+                self.say(f"A variant with that feature state already exists: {target}")
+                return
+            if what == "new":
+                text, ok = QInputDialog.getText(self, "New variant", "This feature state is not in any configuration yet, so a new variant is made\n"
+                                                "(the original stays as it is).  Name of the variant:",
+                                                text=f"{f['name']} " + ("suppressed" if new else "unsuppressed"))
+                if not ok or not text.strip():
+                    return
+                self.snapshot()
+                nm = cfg_tree.make_variant(d, act, key, new, text)
+                d.cfg_apply(nm)
+                self.update_all()
+                self.say(f"New variant '{text.strip()}': {nm} is active.")
+                return
         self.snapshot()
-        f = self.doc.feature(fid)
-        f["suppressed"] = not f["suppressed"]
+        f["suppressed"] = new
         self.update_all()
 
     def delete_feature(self, fid):

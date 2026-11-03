@@ -368,6 +368,13 @@ def make_variant(o, name, key, value, variant_name):
     r = leaf(o, name)
     g = find_group(o, r["g"])
     v0 = find_variant(g, r["v"])
+    if key not in o.cfg["cols"]:                                            # the feature's suppress switch becomes a column of the table
+        try:
+            o.cfg_add_col(key)
+        except Exception:                                                   # noqa: BLE001  (a switch of a feature that is not there yet: plain column)
+            o.cfg["cols"].append(key)
+            for n in o.cfg["names"]:
+                o.cfg["cells"].setdefault(n, {}).setdefault(key, False)
     v = {"id": _nid(o, "V"), "name": variant_name.strip()}
     g["variants"].append(v)
     o.cfg_capture()
@@ -379,3 +386,55 @@ def make_variant(o, name, key, value, variant_name):
         if rr["aid"] == r["aid"]:
             mine = new
     return mine
+
+
+def rename_leaf(o, name, text):
+    """The user edited the name of a child: everything before the last "·" (the group, and the variant when there is one) may change, the suffix may not."""
+    r = leaf(o, name)
+    tail = SEP + r["suffix"]
+    if not text.endswith(tail):
+        raise ValueError(f"the end of the name, '{tail.strip()}', is the assembly sketch configuration and cannot be changed here")
+    parts = text[:-len(tail)].split(SEP)
+    g = find_group(o, r["g"])
+    v = find_variant(g, r["v"])
+    if v.get("name") and len(parts) == 2:
+        if parts[0].strip() != g["name"]:
+            rename_group(o, g["id"], parts[0])
+        rename_variant(o, g["id"], v["id"], parts[1])
+    elif not v.get("name") and len(parts) == 1:
+        rename_group(o, g["id"], parts[0])
+    else:
+        raise ValueError("write the name as  group" + (" · variant" if v.get("name") else "") + " · " + r["suffix"])
+
+
+def choices(o):
+    """What a component's configuration cell can offer for this file: a group name (or 'group · variant') follows the assembly sketch by itself, then the
+    child configurations, then the regular ones."""
+    out = []
+    groups, regular = listing(o)
+    for g, variants in groups:
+        out.append(g["name"])
+        out += [g["name"] + SEP + v["name"] for v, _k in variants if v.get("name")]
+    for g, variants in groups:
+        for _v, kids in variants:
+            out += kids
+    return out + regular
+
+
+def resolve(o, value, suffix):
+    """The configuration of file `o` a component gets when its cell says `value` and the assembly follows sketch configuration `suffix`: a name that is a
+    configuration is itself; a group (or group · variant) name picks its child with that suffix (the first child when there is none)."""
+    if not value or value in o.cfg["names"]:
+        return value
+    for g in tree(o)["groups"]:
+        v = None
+        if value == g["name"]:
+            v = g["variants"][0]
+        elif value.startswith(g["name"] + SEP):
+            v = next((x for x in g["variants"] if x.get("name") == value[len(g["name"]) + len(SEP):]), None)
+        if v is None:
+            continue
+        kids = children(o, g, v)
+        pick = next((n for n in kids if tree(o)["leaf"][n]["suffix"] == suffix), None)
+        return pick or (kids[0] if kids else value)
+    return value
