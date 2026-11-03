@@ -20,6 +20,7 @@ FUNCS = [("min", "min(a, b)"), ("max", "max(a, b)"), ("abs", "abs(x)"), ("sqrt",
          ("round", "round(x)"), ("floor", "floor(x)"), ("ceil", "ceil(x)"), ("pi", "3.14159...")]
 _WORD = re.compile(r"[A-Za-z_]\w*$")
 NAME_ROLE = Qt.ItemDataRole.UserRole
+LINKED_OTHER = "linked (other configuration)"
 
 
 def value_text(v, kind="length"):
@@ -39,8 +40,10 @@ def names_of(doc, sketch_model=None):
     seen = set()
     try:                                              # the variables an assembly sketch hands over: AS_<configuration>_<name>
         import gsv
-        for name, val, kind, _role in gsv.rows(getattr(doc, "gsv", None)):
-            out.append((name, value_text(val, kind), "linked"))
+        act = gsv.PREFIX + str(doc.cfg.get("active", "")) + "_"
+        rows = gsv.rows(getattr(doc, "gsv", None))
+        for name, val, kind, _role in sorted(rows, key=lambda r: not r[0].startswith(act)):      # the active configuration's variables first
+            out.append((name, value_text(val, kind), "linked" if name.startswith(act) else LINKED_OTHER))
             seen.add(name)
     except Exception:
         pass
@@ -80,6 +83,7 @@ class Suggest(QObject):
         self.comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.comp.setCompletionRole(NAME_ROLE)
         self.comp.setFilterMode(Qt.MatchFlag.MatchStartsWith)
+        self.comp.setMaxVisibleItems(12)
         self.comp.activated[QModelIndex].connect(self.chosen)
         edit.textEdited.connect(lambda _t: self.update(False))
         edit.installEventFilter(self)
@@ -95,7 +99,7 @@ class Suggest(QObject):
 
     def fill(self):
         self.model.clear()
-        order = {"linked": -1, "global": 0, "dimension": 1, "sketch": 2, "function": 3}
+        order = {"linked": -2, LINKED_OTHER: -1, "global": 0, "dimension": 1, "sketch": 2, "function": 3}
         for name, val, grp in sorted(self.names_fn() or [], key=lambda x: (order.get(x[2], 9), x[0].lower())):
             it = QStandardItem(f"{name}   =   {val}" if grp != "function" else f"{name}     {val}")
             it.setData(name, NAME_ROLE)
@@ -115,7 +119,20 @@ class Suggest(QObject):
             return
         pop = self.comp.popup()
         pop.setCurrentIndex(self.comp.completionModel().index(-1, 0))
-        self.comp.complete()
+        pop.setTextElideMode(Qt.TextElideMode.ElideNone)
+        pop.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.comp.complete(self.popup_rect())
+
+    def popup_rect(self):
+        """The drop-down is as wide as its longest line (the names and their values are read in full), never wider than the screen."""
+        from PyQt6.QtCore import QRect
+        from PyQt6.QtGui import QGuiApplication
+        fm = self.comp.popup().fontMetrics()
+        mdl = self.comp.completionModel()
+        want = max([fm.horizontalAdvance(str(mdl.index(i, 0).data() or "")) for i in range(mdl.rowCount())] + [0]) + 40
+        scr = self.edit.screen() or QGuiApplication.primaryScreen()
+        room = scr.availableGeometry().width() - 40 if scr is not None else want
+        return QRect(0, 0, max(self.edit.width(), min(want, room)), self.edit.height())
 
     def chosen(self, idx):
         name = idx.data(NAME_ROLE) if hasattr(idx, "data") else str(idx)

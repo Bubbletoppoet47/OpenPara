@@ -13,7 +13,7 @@ d.gsv_set("s.gpk", ["Small", "Big"], [{"name": "W", "kind": "length", "role": "d
 
 # ---- the suggestion list: typing AS finds them, first in the list, inserted in braces
 names = suggest.names_of(d)
-linked = [n for n, _v, g in names if g == "linked"]
+linked = [n for n, _v, g in names if g.startswith("linked")]
 assert linked == ["AS_Small_W", "AS_Big_W"] or sorted(linked) == ["AS_Big_W", "AS_Small_W"], linked
 app = QApplication.instance() or QApplication([])
 e = QLineEdit(); sg = suggest.attach(e, lambda: suggest.names_of(d))
@@ -53,3 +53,23 @@ sk.add_rect_corner(m2, (0, 0), (20, 20)); sk.solve_model(m2); d2.store_sketch(s2
 f2 = d2.add(pm.new_feature("extrude", sketch=s2["id"], depth="{AS_Config 1_I1}/100")); d2.rebuild()
 assert d2.status[f2["id"]] == "ok" and close(d2.solid.volume, 20 * 20 * 30), (d2.status, d2.solid.volume)
 print("names with spaces OK")
+
+# ---- the drop-down is wide enough for the longest line
+e = QLineEdit(); e.resize(80, 24); sg = suggest.attach(e, lambda: suggest.names_of(d2))
+e.setText("AS"); e.setCursorPosition(2); sg.update(True)
+assert sg.popup_rect().width() > 120, sg.popup_rect()
+print("popup width OK")
+
+# ---- the list is as wide as its longest line; the active configuration's variables come first
+d3 = pm.Document()
+d3.gsv_set("s.gpk", ['120"', 'A very long configuration name'], [{"name": "Pipe_Length", "kind": "length", "role": "driving"}],
+           {'120"': {"Pipe_Length": 3000.0}, "A very long configuration name": {"Pipe_Length": 4000.0}})
+d3.cfg_apply('120"')
+e = QLineEdit(); e.resize(120, 24); e.show(); sg = suggest.attach(e, lambda: suggest.names_of(d3))
+e.setText("AS"); e.setCursorPosition(2); sg.update(True)
+first = sg.comp.completionModel().index(0, 0).data(suggest.NAME_ROLE); assert first == 'AS_120"_Pipe_Length', first
+r = sg.popup_rect(); assert r.width() > 300, r.width()
+from PyQt6.QtGui import QFontMetrics
+longest = max(QFontMetrics(sg.comp.popup().font()).horizontalAdvance(sg.comp.completionModel().index(i, 0).data()) for i in range(sg.comp.completionCount()))
+assert r.width() >= longest, (r.width(), longest)
+print("suggestion list width fits OK")
