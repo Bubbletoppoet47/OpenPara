@@ -67,25 +67,19 @@ c5 = m5.con_by_id(ce["id"]); assert not c5["driven"] and c5["expr"] == "W*2" and
 (x0, y0), (x1, y1) = m5.line_pts(l2); assert abs(math.hypot(x1 - x0, y1 - y0) - 40.0) < 1e-6
 print("OK driven")
 
-# 5. the window: Make driven / Make driving is offered in an assembly sketch only, and the drawing shows (value) in the driven colour
+# 5. the window: Make driven / Make driving is offered in every sketch, and the drawing shows (value) in the driven colour
 os.environ["OPARA_USER_DIR"] = __import__("tempfile").mkdtemp()
 from PyQt6.QtWidgets import QApplication
 app = QApplication([])
-import gpd_app, pm_app, asm_sketch as ak, settings
-sh = gpd_app.AppShell([]); sw = sh.new_asm_sketch()
-f = ak.sketch_feature(sw.doc); sw.enter_sketch(f["id"]); ed = sw.ed; ed.size_fn = lambda: (1000.0, 700.0); m = ed.m
-lid = sk.add_line(m, (0, 0), (30, 0)); a, b = m.lns[lid]; cd = sk.con(m, "dim_len", [("ln", lid)], value=30.0)
-sw.doc.reports[f["id"]] = sk.solve_model(m); sw.doc.store_sketch(f["id"]); sw.update_all()
-ed.sel = [("con", cd["id"])]
-assert "Make driven" in [n for n, _ in ed.context_actions(-10000, -10000)]
-ed.toggle_driven(cd["id"]); c = ed.m.con_by_id(cd["id"]); assert c["driven"]
-ed.sel = [("con", cd["id"])]; assert "Make driving" in [n for n, _ in ed.context_actions(-10000, -10000)]
-assert ed.dim_actors[cd["id"]], "drawn"
-ed.toggle_driven(cd["id"]); c = ed.m.con_by_id(cd["id"]); assert not c["driven"]
+import pm_app, settings
 plain = pm_app.MainWindow(); plain.sel_plane = "Front"; plain.command("sketch"); pe = plain.ed; pe.size_fn = lambda: (1000.0, 700.0)
 pl = sk.add_line(pe.m, (0, 0), (30, 0)); pc = sk.con(pe.m, "dim_len", [("ln", pl)], value=30.0); plain.doc.reports[plain.sel] = sk.solve_model(pe.m); plain.doc.store_sketch(plain.sel); plain.update_all()
 pe.sel = [("con", pc["id"])]
-assert not [n for n, _ in pe.context_actions(-10000, -10000) if n.startswith("Make driv")] and sw.asm_sketch
+assert "Make driven" in [n for n, _ in pe.context_actions(-10000, -10000)]
+pe.toggle_driven(pc["id"]); c = pe.m.con_by_id(pc["id"]); assert c["driven"]
+pe.sel = [("con", pc["id"])]; assert "Make driving" in [n for n, _ in pe.context_actions(-10000, -10000)]
+assert pe.dim_actors[pc["id"]], "drawn"
+pe.toggle_driven(pc["id"]); c = pe.m.con_by_id(pc["id"]); assert not c["driven"]
 print("OK driven window")
 
 # default dimension names count up from the highest number in use (L1, L2, L4 -> L5); deleting the highest frees its number
@@ -97,7 +91,7 @@ del mn.params["L4"]; assert mn.next_dim_name("dim_len") == "L3"
 assert mn.next_dim_name("dim_h") == "H1" and mn.next_dim_name("dim_len", extra=["L9"]) == "L10"
 print("OK names")
 
-# the new-dimension dialog in an assembly sketch has the Driven box; ticked, the box holds the name and the dimension is created driven
+# the new-dimension dialog has the Driven box; ticked, the box holds the name and the dimension is created driven
 import sketch_edit as se
 seen = {}
 def fake_ask(parent, title, text, symbols, names=None, driven=None, default_name=""):
@@ -106,19 +100,11 @@ def fake_ask(parent, title, text, symbols, names=None, driven=None, default_name
         driven["driven"] = True
     return "Span"
 orig_ask = se.ask_dim; se.ask_dim = fake_ask
-ed.sel = []; ed.tool = "dim_len"
-lid2 = sk.add_line(ed.m, (0, 50), (80, 50)); sw.doc.reports[f["id"]] = sk.solve_model(ed.m)
-n_before = len([c for c in ed.m.cons if c["type"] in sc.DIMENSIONS])
-ed.apply("dim_len", [("ln", lid2)])
-new = [c for c in ed.m.cons if c["type"] == "dim_len" and c.get("name") == "Span"]
-assert seen["has_box"] and new and new[0]["driven"] and "Span" in ed.m.params and not ed.m.params["Span"]["input"], (seen, new)
+pe.sel = []; pe.tool = "dim_len"
+lid2 = sk.add_line(pe.m, (0, 50), (80, 50)); plain.doc.reports[plain.sel] = sk.solve_model(pe.m)
+pe.apply("dim_len", [("ln", lid2)])
+new = [c for c in pe.m.cons if c["type"] == "dim_len" and c.get("name") == "Span"]
+assert seen["has_box"] and new and new[0]["driven"] and "Span" in pe.m.params and not pe.m.params["Span"]["input"], (seen, new)
 assert abs(new[0]["value"] - 80.0) < 1e-6
-# the plain sketch dialog has no box
-seen.clear(); pe.tool = "dim_len"; se.ask_dim = fake_ask
-try:
-    pe.apply("dim_len", [("ln", pl)])
-except Exception:
-    pass
-assert seen.get("has_box") is False, seen
 se.ask_dim = orig_ask
 print("OK dialog")

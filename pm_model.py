@@ -20,7 +20,6 @@ import numpy as np
 from build123d import Align, Axis, Box, Compound, Edge, Face, Location, Matrix, Plane, PositionMode, Transition, Vector, Wire, extrude, loft, revolve, sweep
 from OCP.gp import gp_Trsf
 
-import gsv
 import refgeo
 import settings
 import sketch_ext
@@ -50,9 +49,6 @@ class Document:
         self.param_kinds = {}                # {global name: 'number' | 'angle'}; anything else is a length (units follow File > Units)
         self.sims = []                       # linked simulation files (sim_links.py)
         self.renders = []                    # linked render projects (.gpr)
-        self.gsv = None                      # Global Sketch Variables from the linked assembly sketch (see gsv.py): {"src","configs","vars","vals","mirrored"}
-        self.export = []                     # (assembly sketch files only) names of the variables the sketch hands to the files linked to it
-        self.base_dir = None                 # folder of the file (the sketch path in gsv is found from here; not saved)
         self.material = {"name": "Steel (generic)", "density": 7850.0, "E_MPa": 200000.0, "nu": 0.30, "Sy_MPa": 250.0, "Su_MPa": 400.0}   # density kg/m3, see mat_lib.py
         self.display = {"color": None, "opacity": 1.0}                      # how the part is drawn (Display tab)
         self.cfg = {"active": "Default", "names": ["Default"], "cols": [], "cells": {"Default": {}}}
@@ -132,12 +128,11 @@ class Document:
     # ------------------------------------------------------------------ expressions
     def evaluate_params(self):
         """Resolve the globals (they may use each other, in any order)."""
-        ns = gsv.namespace(self.gsv)
         vals, pending = {}, dict(self.params)
         for _ in range(len(pending) + 1):
             for k, e in list(pending.items()):
                 try:
-                    vals[k] = float(eval(gsv.mangle(e), {"__builtins__": {}}, {**FUNCS, **ns, **vals}))
+                    vals[k] = float(eval(str(e), {"__builtins__": {}}, {**FUNCS, **vals}))
                     del pending[k]
                 except NameError:
                     pass
@@ -149,7 +144,7 @@ class Document:
 
     def num(self, expr):
         try:
-            return float(eval(gsv.mangle(expr), {"__builtins__": {}}, {**FUNCS, **gsv.namespace(self.gsv), **self.dimvals, **self.values}))
+            return float(eval(str(expr), {"__builtins__": {}}, {**FUNCS, **self.dimvals, **self.values}))
         except Exception as ex:
             raise ModelError(f"'{expr}': {ex}")
 
@@ -266,8 +261,6 @@ class Document:
         m.from_json(f["model"])
         for k, e in self.params.items():
             m.params[k] = {"vals": [0.0] * len(m.configs), "input": False, "expr": str(e), "doc": True}
-        for k, v in gsv.namespace(self.gsv).items():           # AS_<configuration>_<name>, written {AS_...} in a formula
-            m.params[k] = {"vals": [float(v)] * len(m.configs), "input": False, "expr": repr(float(v)), "doc": True}
         for k, v in self.dimvals.items():                      # named dimensions of the sketches before this one
             if k not in m.params:
                 m.params[k] = {"vals": [float(v)] * len(m.configs), "input": False, "expr": repr(float(v)), "doc": True}
@@ -1364,81 +1357,25 @@ class Document:
     # ------------------------------------------------------------------ files
     def to_json(self):
         return json.dumps({"version": 1, "params": self.params, "kinds": self.param_kinds, "features": self.features, "rollback": self.rollback,
-                           "counter": self.counter, "material": self.material, "sims": self.sims, "renders": self.renders, "gsv": self.gsv, "export": self.export,
+                           "counter": self.counter, "material": self.material, "sims": self.sims, "renders": self.renders,
                            "display": self.display, "cfg": self.cfg_snapshot()}, indent=1)
 
     @classmethod
     def from_json(cls, text):
-        d = json.loads(text)
+        import legacy
+        d = legacy.flatten(json.loads(text))
         doc = cls()
         doc.params, doc.features, doc.rollback, doc.counter = d["params"], d["features"], d.get("rollback"), d.get("counter", {})
         doc.param_kinds = d.get("kinds") or {}
         doc.material = d.get("material") or doc.material
         doc.sims = d.get("sims") or []
         doc.renders = d.get("renders") or []
-        doc.gsv = d.get("gsv") or None
-        doc.export = list(d.get("export") or [])
         doc.display = d.get("display") or doc.display
         doc.cfg = d.get("cfg") or doc.cfg
         return doc
 
     def copy(self):
         return Document.from_json(self.to_json())
-
-    # ------------------------------------------------------------------ Global Sketch Variables (an assembly sketch drives this file, one way)
-    # The sketch hands over the variables it exports, one number per sketch configuration (gsv.py).  They arrive as read-only globals
-    # called AS_<configuration>_<name>, and for every sketch configuration this file gets a configuration of the same name (made when
-    # missing, as a copy of the first one).  Cells written {AS_@_W} follow the configuration they sit in.  Nothing flows back.
-    def gsv_src_path(self):
-        import os
-        if not self.gsv or not self.gsv.get("src"):
-            return None
-        p = self.gsv["src"]
-        return os.path.normpath(p if os.path.isabs(p) or not self.base_dir else os.path.join(self.base_dir, p))
-
-    def gsv_set(self, src, configs, vars_, vals, ids=None):
-        """Take the exported numbers of the sketch (`src` as it is to be written in this file).  The sketch is the master over the configuration names:
-        the children (cfg_tree.py) of every configuration that uses a sketch variable are added, renamed and deleted to match.  -> messages"""
-        import cfg_tree
-        old = self.gsv or {}
-        legacy = list(old.get("mirrored") or [])
-        cids = list(ids) if ids else ["n:" + c for c in configs]
-        self.gsv = {"src": src, "configs": list(configs), "vars": [dict(v) for v in vars_],
-                    "vals": {c: {k: float(x) for k, x in vals.get(c, {}).items()} for c in configs}, "cids": cids, "mirrored": []}
-        msgs = []
-        if legacy and not cfg_tree.has_tree(self):
-            msgs += cfg_tree.migrate(self, legacy, old.get("ids"))
-        msgs += cfg_tree.sync(self)
-        msgs += cfg_tree.regroup(self)
-        return msgs
-
-    def gsv_retarget(self, old, new):
-        """A configuration was renamed: formulas that wrote {AS_<old>_x} now write {AS_<new>_x}."""
-        self.params = gsv.retarget(self.params, old, new)
-        self.cfg["cells"] = gsv.retarget(self.cfg["cells"], old, new)
-        self.features = gsv.retarget(self.features, old, new)
-
-    def gsv_bind(self, key, var):
-        """Make the column `key` follow sketch variable `var`: the cell of the active configuration (and of every child of its variant) becomes {AS_@_var};
-        a regular configuration becomes a group with one child per sketch configuration."""
-        import cfg_tree
-        if not self.gsv:
-            raise ModelError("this file is not linked to an assembly sketch")
-        if key not in self.cfg["cols"]:
-            self.cfg_add_col(key)
-        cfg_tree.bind_column(self, key, var)
-
-    def cfg_link_name(self, name):
-        """The assembly sketch configuration a configuration follows (its suffix when it is a nested child)."""
-        import cfg_tree
-        return cfg_tree.link_name(self, name)
-
-    def gsv_clear(self):
-        self.gsv = None
-
-    def gsv_refresh(self):
-        """Resolve the bound cells of the active configuration again (after the numbers changed)."""
-        self.cfg_apply(self.cfg["active"])
 
     # ------------------------------------------------------------------ configurations
     # A configuration is a named set of values for the columns of the configuration table:
@@ -1645,22 +1582,12 @@ class Document:
         row = c["cells"].setdefault(c["active"], {})
         for key in c["cols"]:
             v = self.cfg_read(key)
-            if v is not None and not gsv.keep_binding(row.get(key), v, self.cfg_link_name(c["active"])):
+            if v is not None:
                 row[key] = v
         c.setdefault("offs", {})[c["active"]] = self.label_offsets()
 
-    def cfg_ids(self):
-        """{configuration name: permanent id}.  The id never changes when the configuration is renamed; a file that follows this one finds it by it."""
-        ids = self.cfg.setdefault("ids", {})
-        for n in self.cfg["names"]:
-            ids.setdefault(n, "n:" + n)                      # a configuration from before ids existed: its name (stable until it is renamed)
-        for n in [k for k in ids if k not in self.cfg["names"]]:
-            ids.pop(n)
-        return ids
-
     def cfg_snapshot(self):
         self.cfg_capture()
-        self.cfg_ids()
         return self.cfg
 
     def cfg_apply(self, name):
@@ -1672,7 +1599,7 @@ class Document:
         row = self.cfg["cells"].get(name, {})
         for key in self.cfg["cols"]:
             if key in row:
-                self.cfg_write(key, gsv.resolve_at(row[key], self.cfg_link_name(name)))
+                self.cfg_write(key, row[key])
         offs = self.cfg.get("offs", {})
         if name in offs:                                     # (a file from before this was kept leaves the labels where they are)
             self.apply_label_offsets(offs[name])
@@ -1684,8 +1611,6 @@ class Document:
         self.cfg_capture()
         src = copy_of or self.cfg["active"]
         self.cfg["names"].append(name)
-        import uuid
-        self.cfg.setdefault("ids", {})[name] = uuid.uuid4().hex[:10]
         self.cfg["cells"][name] = dict(self.cfg["cells"].get(src, {}))
         offs = self.cfg.setdefault("offs", {})
         offs[name] = copy.deepcopy(offs.get(src, {}))
@@ -1698,7 +1623,6 @@ class Document:
         self.cfg["names"].remove(name)
         self.cfg["cells"].pop(name, None)
         self.cfg.get("offs", {}).pop(name, None)
-        self.cfg.get("tree", {}).get("leaf", {}).pop(name, None)
 
     def cfg_rename(self, name, new):
         new = new.strip()
@@ -1706,8 +1630,6 @@ class Document:
             raise ModelError("that configuration name is empty or already used")
         i = self.cfg["names"].index(name)
         self.cfg["names"][i] = new
-        if name in self.cfg.get("ids", {}):
-            self.cfg["ids"][new] = self.cfg["ids"].pop(name)
         self.cfg["cells"][new] = self.cfg["cells"].pop(name, {})
         if "offs" in self.cfg:
             self.cfg["offs"][new] = self.cfg["offs"].pop(name, {})
@@ -1732,16 +1654,9 @@ class Document:
                 row.pop(key, None)
 
     def cfg_set_cell(self, name, key, val):
-        """A cell is edited.  A sketch variable typed into it applies the variable: a regular configuration becomes a group of nested children, a child
-        passes it on to the children of its variant (cfg_tree.py)."""
-        import cfg_tree
         self.cfg["cells"].setdefault(name, {})[key] = val
-        if isinstance(val, str) and gsv.has_token(val) and self.gsv:
-            cfg_tree.after_cell(self, name, key, val)
-        act = self.cfg["active"]
-        row = self.cfg["cells"].get(act, {})
-        if key in row and (name == act or isinstance(val, str)):
-            self.cfg_write(key, gsv.resolve_at(row[key], self.cfg_link_name(act)))
+        if name == self.cfg["active"]:
+            self.cfg_write(key, val)
 
     def cfg_label(self, key):
         kind, _, rest = key.partition(":")

@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtTest import QTest
 app = QApplication([])
-import unitctl, pm_model as pm, sk_tools as sk, gpd_app, pm_app, asm_model as am, asm_sketch as ak, asm_sketch_win as aw, gsv
+import unitctl, pm_model as pm, sk_tools as sk, gpd_app, pm_app, asm_model as am
 close = lambda a, b, t=1e-6: abs(a - b) <= t * max(1, abs(a), abs(b))
 tmp = tempfile.mkdtemp()
 MM, IN = "Metric (mm, kg, N, s, MPa)", "US (in, lbf, psi)"
@@ -24,35 +24,27 @@ pasm = os.path.join(tmp, "a.gpa"); open(pasm, "w").write(A.to_json())
 
 sh = gpd_app.AppShell([pa, pasm]); QTest.qWait(30)
 wp, wa = sh.tabs.widget(sh.find_tab(pa)), sh.tabs.widget(sh.find_tab(pasm))
-sw = sh.new_asm_sketch(); QTest.qWait(30)
-f = ak.sketch_feature(sw.doc); sm = sw.doc.models[f["id"]]
-sk.add_rect_corner(sm, (0, 0), (50.8, 25.4)); sk.solve_model(sm)
-bottom = next(i for i in sorted(sm.lns) if all(abs(sm.pts[p][1]) < 1e-9 for p in sm.lns[i]))
-sm.add_param("W", 50.8); sm.add_con("dim_len", [("ln", bottom)], value=50.8, name="W", expr="W"); sk.solve_model(sm); sw.doc.store_sketch(f["id"]); sw.update_all()
-ak.set_export(sw.doc, "W", True)
-spath = os.path.join(tmp, "s.gpk"); sw.path = spath; sw.save(); sw.link_one(pasm); sw.assembly = pasm; sw.add_part(pa)
 
 def stored():
-    return {"part": wp.doc.to_json(), "asm": wa.asm.to_json(), "sketch": sw.doc.to_json(), "ak": ak.dumps(sw.doc, sw.assembly, sw.parts)}
+    return {"part": wp.doc.to_json(), "asm": wa.asm.to_json()}
 
 def shown():
-    wp.refresh_globals(); wp.cfg_panel.refresh(); wa.update_all(); sw.refresh_vars(); wp.gsv_panel.refresh()
-    g = wp.gtab; c = wp.cfg_panel.table; ag = wa.gtab; v = sw.var_table; gs = wp.gsv_panel.table
+    wp.refresh_globals(); wp.cfg_panel.refresh(); wa.update_all()
+    g = wp.gtab; c = wp.cfg_panel.table; ag = wa.gtab
     return {"part_width": g.item(0, 1).text(), "part_value": g.item(0, 2).text(), "part_N": g.item(2, 1).text(), "part_Ang": g.item(3, 1).text(),
             "cfg_wide": c.item(wp.doc.cfg["names"].index("Wide"), 1).text(), "cfg_N": c.item(wp.doc.cfg["names"].index("Wide"), 2).text(),
-            "asm_clear": ag.item(0, 1).text(), "hdr": g.horizontalHeaderItem(1).text(), "sketch_W": v.item(0, 4).text(), "sketch_kind": v.item(0, 2).text(),
-            "gsv_W": gs.item(0, 1).text(), "gsv_kind": gs.item(0, 2).text()}
+            "asm_clear": ag.item(0, 1).text(), "hdr": g.horizontalHeaderItem(1).text()}
 
 before_store, before_show = stored(), shown()
 print(before_show)
-assert before_show["part_width"] == "50.8" and before_show["sketch_W"] == "50.8" and before_show["gsv_W"] == "50.8"
+assert before_show["part_width"] == "50.8"
 unitctl.set_units(IN, notify=True, persist=False); QTest.qWait(30)
 after_show = shown()
 print(after_show)
 assert stored() == before_store, "flipping the units changed what is stored"
 assert after_show["part_width"] == "2" and close(float(after_show["part_value"]), 2) and after_show["cfg_wide"] == "4" and after_show["asm_clear"] == "0.5", after_show
 assert after_show["part_N"] == "3" and after_show["part_Ang"] == "30" and after_show["cfg_N"] == "5", after_show        # numbers and angles never convert
-assert "(in)" in after_show["hdr"] and after_show["sketch_W"] == "2" and "in" in after_show["sketch_kind"] and after_show["gsv_W"] == "2" and "in" in after_show["gsv_kind"], after_show
+assert "(in)" in after_show["hdr"], after_show
 # typing in inches stores mm
 wp.gtab.item(0, 1).setText("3"); QTest.qWait(10)
 assert wp.doc.params["Width"] in ("76.2", "76.2000000", "76.19999999999999") or close(float(wp.doc.params["Width"]), 76.2), wp.doc.params

@@ -24,7 +24,6 @@ import json
 import os
 import re
 
-import gsv
 import paths
 import units
 
@@ -247,7 +246,7 @@ def _scale_expr(text, k, to_mm=False):
     if "\n" in t:
         return text
     try:
-        tree = ast.parse(gsv.mask(t), mode="eval")
+        tree = ast.parse(t, mode="eval")
     except SyntaxError:
         return text
     nodes = []

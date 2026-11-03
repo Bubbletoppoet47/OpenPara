@@ -70,7 +70,6 @@ class AppShell(QMainWindow):
         fm = mb.addMenu("&File")
         add(fm, "New Part", lambda: self.new_part(), "Ctrl+N")
         add(fm, "New Assembly", self.new_assembly, "Ctrl+Shift+N")
-        add(fm, "New Assembly Sketch", self.new_asm_sketch)
         fm.addSeparator()
         add(fm, "Open...", self.open_dialog, "Ctrl+O")
         add(fm, "Save", lambda: self.cur_call("save"), "Ctrl+S")
@@ -294,10 +293,6 @@ class AppShell(QMainWindow):
         import assembly
         return self.add_tab(assembly.AssemblyWindow(shell=self))
 
-    def new_asm_sketch(self):
-        import asm_sketch_win
-        return self.add_tab(asm_sketch_win.AsmSketchWindow(shell=self))
-
     def import_step(self):
         import exchange_dialog
         exchange_dialog.run_import(self)
@@ -307,7 +302,7 @@ class AppShell(QMainWindow):
         exchange_dialog.run_export(self, self.tabs.currentWidget())
 
     def open_dialog(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Open", "", "Parts, assemblies, assembly sketches, simulations and renders (*.gpd *.gpa *.gpk *.gps *.gpr);;Part (*.gpd);;Assembly (*.gpa);;Assembly sketch (*.gpk);;Simulation (*.gps);;Render (*.gpr)")
+        files, _ = QFileDialog.getOpenFileNames(self, "Open", "", "Parts, assemblies, simulations and renders (*.gpd *.gpa *.gps *.gpr);;Part (*.gpd);;Assembly (*.gpa);;Simulation (*.gps);;Render (*.gpr)")
         for f in files:
             self.open_path(f)
 
@@ -345,9 +340,6 @@ class AppShell(QMainWindow):
         elif path.lower().endswith(".gpa"):
             import assembly
             w = assembly.AssemblyWindow(path, shell=self)
-        elif path.lower().endswith(".gpk"):
-            import asm_sketch_win
-            w = asm_sketch_win.AsmSketchWindow(path, shell=self)
         else:
             w = pm_app.MainWindow(path)
         return self.add_tab(w)

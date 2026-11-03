@@ -13,7 +13,7 @@ import sys
 import traceback
 
 import numpy as np
-from PyQt6.QtCore import QSettings, QSize, Qt, QTimer
+from PyQt6.QtCore import QSettings, QSize, Qt
 from PyQt6.QtGui import QAction, QBrush, QColor, QKeySequence
 from PyQt6.QtWidgets import (QAbstractItemView, QWidgetAction, QApplication, QFrame, QTabWidget, QToolButton, QCheckBox, QComboBox, QDockWidget, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget,
                              QInputDialog, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QToolBar,
@@ -231,8 +231,6 @@ class MainWindow(QMainWindow):
         b.clicked.connect(self.global_del)
         row.addWidget(b)
         gl.addLayout(row)
-        self.gsv_panel = config_panels.GsvPanel(self)         # read-only: the numbers of the linked assembly sketch
-        gl.addWidget(self.gsv_panel)
         self.eq_dialog = QDialog(self)                      # the Equations folder of the tree opens this
         self.eq_dialog.setWindowTitle("Equations")
         self.eq_dialog.setWindowFlag(Qt.WindowType.Tool, True)
@@ -584,11 +582,9 @@ class MainWindow(QMainWindow):
         try:
             self.doc = pm.Document.from_json(open(p, encoding="utf-8").read())
             self.path = p
-            self.doc.base_dir = os.path.dirname(os.path.abspath(p))
             self.sel = self.sel_face = self.sel_plane = None
             self.undo, self.redo = [], []
             self.setWindowTitle(f"Parametric Modeller - {os.path.basename(p)}")
-            self.pull_gsv()
         except Exception as ex:
             QMessageBox.warning(self, "Open", str(ex))
 
@@ -603,7 +599,6 @@ class MainWindow(QMainWindow):
             self.path = p if p.endswith(".gpd") else p + ".gpd"
         import sim_links
         sim_links.rebase(self, old_base)
-        self.relink_paths()
         open(self.path, "w", encoding="utf-8").write(self.doc.to_json())
         self.saved_json = self.doc.to_json()
         self.setWindowTitle(f"Parametric Modeller - {os.path.basename(self.path)}")
@@ -996,36 +991,9 @@ class MainWindow(QMainWindow):
         self.update_all()
 
     def toggle_suppress(self, fid):
-        import cfg_tree
-        d = self.doc
-        f = d.feature(fid)
-        key, new = "s:" + fid, not f["suppressed"]
-        act = d.cfg["active"]
-        if d.gsv and cfg_tree.leaf(d, act):                       # a nested child: a feature state that no variant has yet makes a new variant
-            d.cfg_capture()
-            if key not in d.cfg["cols"]:
-                d.cfg_add_col(key)
-            what, target = cfg_tree.feature_change(d, act, key, new)
-            if what == "switch":
-                self.snapshot()
-                d.cfg_apply(target)
-                self.update_all()
-                self.say(f"A variant with that feature state already exists: {target}")
-                return
-            if what == "new":
-                text, ok = QInputDialog.getText(self, "New variant", "This feature state is not in any configuration yet, so a new variant is made\n"
-                                                "(the original stays as it is).  Name of the variant:",
-                                                text=f"{f['name']} " + ("suppressed" if new else "unsuppressed"))
-                if not ok or not text.strip():
-                    return
-                self.snapshot()
-                nm = cfg_tree.make_variant(d, act, key, new, text)
-                d.cfg_apply(nm)
-                self.update_all()
-                self.say(f"New variant '{text.strip()}': {nm} is active.")
-                return
         self.snapshot()
-        f["suppressed"] = new
+        f = self.doc.feature(fid)
+        f["suppressed"] = not f["suppressed"]
         self.update_all()
 
     def delete_feature(self, fid):
@@ -1634,40 +1602,6 @@ class MainWindow(QMainWindow):
         self.doc.store_sketch(sid)
         self.update_all()
 
-    # ----- assembly sketch: Global Sketch Variables that drive this part (one way)
-    def pull_gsv(self):
-        """After opening: bring the Global Sketch Variables up to date from the assembly sketch (its file, or the open tab when it is being edited)."""
-        if not self.doc.gsv:
-            return
-        import asm_sketch
-        changed, msgs = asm_sketch.pull(self.doc, self.live_sketch_doc)
-        if changed:
-            self.doc.cfg_apply(self.doc.cfg["active"])
-        self.link_messages = msgs
-        if msgs or changed:
-            QTimer.singleShot(0, lambda: self.say(("Updated from the assembly sketch. " if changed else "") + "; ".join(msgs)))
-
-    def relink_paths(self):
-        """Saving: the sketch path of the link is relative to the part file."""
-        import asm_sketch
-        base = os.path.dirname(os.path.abspath(self.path))
-        if self.doc.gsv:
-            ab = self.doc.gsv_src_path()
-            if ab:
-                self.doc.gsv["src"] = asm_sketch.rel(ab, base)
-        self.doc.base_dir = base
-
-    def live_sketch_doc(self, path):
-        """The Document of an assembly sketch that is open in a tab of the program window (with edits that are not saved yet), else None."""
-        shell = self.window()
-        tabs = getattr(shell, "tabs", None)
-        if tabs is None or not hasattr(shell, "find_tab"):
-            return None
-        i = shell.find_tab(path)
-        w = tabs.widget(i) if i is not None else None
-        return getattr(w, "doc", None) if getattr(w, "KIND", "") == "asmsketch" else None
-
-    # ----- what the Configurations and Display tabs ask of the window
     def cfg_model(self):
         return self.doc
 
@@ -1839,7 +1773,6 @@ class MainWindow(QMainWindow):
         errs = [f"{f['name']}: {s[7:]}" for f in self.doc.features for s in [self.doc.status.get(f["id"], "")] if s.startswith("error")]
         self.refresh_tree()
         self.refresh_globals()
-        self.gsv_panel.refresh()
         self.cfg_panel.refresh()
         self.disp_panel.refresh()
         if not keep_props:

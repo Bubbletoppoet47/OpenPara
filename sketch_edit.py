@@ -1093,7 +1093,7 @@ class SketchEditor:
             else:
                 cur = m.measure(tool, refs)
             nxt = m.next_dim_name(tool, list(self.app.doc.params))
-            choice = {"driven": False} if getattr(self.app, "asm_sketch", False) else None
+            choice = {"driven": False}
             txt = ask_dim(self.app, "Dimension " + nxt + ("" if tool == "dim_ang" else f"  ({unitctl.length_unit()})"),
                           f"{disp(cur, tool):.8g}", list(m.params), names=self.suggest_names, driven=choice, default_name=nxt)
             if txt is None:
@@ -1269,7 +1269,7 @@ class SketchEditor:
                 out.append(("Change which angle...", lambda: [self.change_angle(c["id"]) for c in cons if c and c["type"] == "dim_ang"][:1]))
             if any(c and (c.get("off") or c.get("aoff")) for c in cons):
                 out.append(("Reset label position", self.reset_labels))
-            if getattr(self.app, "asm_sketch", False) and len(cons) == 1 and cons[0]:
+            if len(cons) == 1 and cons[0]:
                 out.append(("Make driving" if cons[0].get("driven") else "Make driven", lambda cid=cons[0]["id"]: self.toggle_driven(cid)))
         if not out:
             out = [("Select", lambda: self.app.set_tool("select"))]
@@ -1277,7 +1277,7 @@ class SketchEditor:
         return out
 
     def toggle_driven(self, cid):
-        """Assembly sketch: a driving dimension becomes a measurement of the geometry (driven), or the other way round."""
+        """A driving dimension becomes a measurement of the geometry (driven), or the other way round."""
         c = self.m.con_by_id(cid)
         if c is None:
             return

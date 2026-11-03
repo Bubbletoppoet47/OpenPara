@@ -15,7 +15,6 @@ import os
 
 import numpy as np
 
-import gsv
 import refgeo
 
 FUNCS = {k: getattr(math, k) for k in ("sin", "cos", "tan", "atan", "sqrt", "pi", "radians", "degrees", "floor", "ceil")}
@@ -315,8 +314,6 @@ class Assembly:
         self.params = {}                   # the assembly's own globals: name -> formula (lengths held in mm)
         self.param_kinds = {}              # name -> "number" / "angle" (a length when absent)
         self.values = {}                   # evaluated globals
-        self.gsv = None                    # Global Sketch Variables from the linked assembly sketch (gsv.py)
-        self.base_dir = None               # folder of the file (the sketch path in gsv is found from here; not saved)
         self.exprs = {}                    # formulas that drive a number: "pos:C1:0" "rv:C1:2" "val:M1" "pat:P1:s1" -> text (mm / deg)
         self.cfg = {"active": "Default", "names": ["Default"], "cols": [], "cells": {"Default": {}}}
         self._cache = {}
@@ -324,12 +321,11 @@ class Assembly:
     # ------------------------------------------------------------------ globals and formulas
     def evaluate_params(self):
         """Resolve the globals (they may use each other, in any order).  Raises MateError."""
-        ns = gsv.namespace(self.gsv)
         vals, pending = {}, dict(self.params)
         for _ in range(len(pending) + 1):
             for k, e in list(pending.items()):
                 try:
-                    vals[k] = float(eval(gsv.mangle(e), {"__builtins__": {}}, {**FUNCS, **ns, **vals}))
+                    vals[k] = float(eval(str(e), {"__builtins__": {}}, {**FUNCS, **vals}))
                     del pending[k]
                 except NameError:
                     pass
@@ -341,7 +337,7 @@ class Assembly:
 
     def eval_expr(self, text):
         try:
-            return float(eval(gsv.mangle(text), {"__builtins__": {}}, {**FUNCS, **gsv.namespace(self.gsv), **self.values}))
+            return float(eval(str(text), {"__builtins__": {}}, {**FUNCS, **self.values}))
         except Exception as ex:
             raise MateError(f"'{text}': {ex}")
 
@@ -452,16 +448,16 @@ class Assembly:
     def to_json(self):
         return json.dumps({"version": 1, "components": [c for c in self.components if not c.get("derived")], "mates": self.mates,
                            "counter": self.counter,
-                           "patterns": self.patterns, "params": self.params, "kinds": self.param_kinds, "exprs": self.exprs, "gsv": self.gsv, "cfg": self.cfg_snapshot(), "refs": self.refs, "world_show": self.world_show, "sims": self.sims, "renders": self.renders}, indent=1)
+                           "patterns": self.patterns, "params": self.params, "kinds": self.param_kinds, "exprs": self.exprs, "cfg": self.cfg_snapshot(), "refs": self.refs, "world_show": self.world_show, "sims": self.sims, "renders": self.renders}, indent=1)
 
     @classmethod
     def from_json(cls, text):
-        d = json.loads(text)
+        import legacy
+        d = legacy.flatten(json.loads(text))
         a = cls()
         a.components, a.mates, a.counter, a.patterns = d["components"], d.get("mates", []), d.get("counter", {}), d.get("patterns", [])
         a.cfg = d.get("cfg") or a.cfg
         a.params, a.param_kinds, a.exprs = d.get("params") or {}, d.get("kinds") or {}, d.get("exprs") or {}
-        a.gsv = d.get("gsv") or None
         a.refs = d.get("refs", [])
         a.sims = d.get("sims") or []
         a.renders = d.get("renders") or []
@@ -761,13 +757,11 @@ def _cfg_read(self, key):
             return None
         if kind == "m":
             return bool(m.get("suppressed"))
-        e = self.exprs.get(f"val:{rest}")
-        return e if gsv.has_token(e) else m.get("value")
+        return m.get("value")
     if kind == "n":
         pid, _, field = rest.partition(":")
         p = next((x for x in self.patterns if x["id"] == pid), None)
-        e = self.exprs.get(f"pat:{pid}:{field}")
-        return None if p is None else (e if gsv.has_token(e) else p.get(field))
+        return None if p is None else p.get(field)
     return None
 
 
@@ -792,25 +786,12 @@ def _cfg_write(self, key, val):
         elif _num(val) is not None:
             m["value"] = float(val)
             self.exprs.pop(f"val:{rest}", None)
-        elif gsv.has_token(val):                                     # a formula with a sketch variable: {AS_Large_W}
-            self.exprs[f"val:{rest}"] = str(val)
-            try:
-                m["value"] = self.eval_expr(val)
-            except MateError:
-                pass
     elif kind == "n":
         pid, _, field = rest.partition(":")
         p = next((x for x in self.patterns if x["id"] == pid), None)
         if p is not None and _num(val) is not None:
             p[field] = int(round(float(val))) if field in ("n", "n1", "n2") else float(val)
             self.exprs.pop(f"pat:{pid}:{field}", None)
-        elif p is not None and gsv.has_token(val):
-            self.exprs[f"pat:{pid}:{field}"] = str(val)
-            try:
-                v = self.eval_expr(val)
-                p[field] = int(round(v)) if field in ("n", "n1", "n2") else v
-            except MateError:
-                pass
 
 
 def _cfg_label(self, key):
@@ -854,7 +835,7 @@ def _cfg_capture(self):
     row = c["cells"].setdefault(c["active"], {})
     for key in c["cols"]:
         v = self.cfg_read(key)
-        if v is not None and not gsv.keep_binding(row.get(key), v, self.cfg_link_name(c["active"])):
+        if v is not None:
             row[key] = v
 
 
@@ -871,7 +852,7 @@ def _cfg_apply(self, name):
     row = self.cfg["cells"].get(name, {})
     for key in self.cfg["cols"]:
         if key in row:
-            self.cfg_write(key, gsv.resolve_at(row[key], self.cfg_link_name(name)))
+            self.cfg_write(key, row[key])
 
 
 def _cfg_add(self, name, copy_of=None):
@@ -890,7 +871,6 @@ def _cfg_delete(self, name):
         self.cfg_apply(next(n for n in self.cfg["names"] if n != name))
     self.cfg["names"].remove(name)
     self.cfg["cells"].pop(name, None)
-    self.cfg.get("tree", {}).get("leaf", {}).pop(name, None)
 
 
 def _cfg_rename(self, name, new):
@@ -923,73 +903,10 @@ def _cfg_del_col(self, key):
 
 
 def _cfg_set_cell(self, name, key, val):
-    import cfg_tree
     self.cfg["cells"].setdefault(name, {})[key] = val
-    if isinstance(val, str) and gsv.has_token(val) and self.gsv:
-        cfg_tree.after_cell(self, name, key, val)
-    act = self.cfg["active"]
-    row = self.cfg["cells"].get(act, {})
-    if key in row and (name == act or isinstance(val, str)):
-        self.cfg_write(key, gsv.resolve_at(row[key], self.cfg_link_name(act)))
+    if name == self.cfg["active"]:
+        self.cfg_write(key, val)
 
-
-def _gsv_src_path(self):
-    import os
-    if not self.gsv or not self.gsv.get("src"):
-        return None
-    p = self.gsv["src"]
-    return os.path.normpath(p if os.path.isabs(p) or not self.base_dir else os.path.join(self.base_dir, p))
-
-
-def _gsv_set(self, src, configs, vars_, vals, ids=None):
-    """Same as Document.gsv_set: take the sketch's exported numbers; the sketch is the master over the names of the nested configurations (cfg_tree.py).
-    -> messages"""
-    import cfg_tree
-    old = self.gsv or {}
-    legacy = list(old.get("mirrored") or [])
-    cids = list(ids) if ids else ["n:" + c for c in configs]
-    self.gsv = {"src": src, "configs": list(configs), "vars": [dict(v) for v in vars_],
-                "vals": {c: {k: float(x) for k, x in vals.get(c, {}).items()} for c in configs}, "cids": cids, "mirrored": []}
-    msgs = []
-    if legacy and not cfg_tree.has_tree(self):
-        msgs += cfg_tree.migrate(self, legacy, old.get("ids"))
-    msgs += cfg_tree.sync(self)
-    msgs += cfg_tree.regroup(self)
-    return msgs
-
-
-def _gsv_retarget(self, old, new):
-    """A configuration was renamed: formulas that wrote {AS_<old>_x} now write {AS_<new>_x}."""
-    self.params = gsv.retarget(self.params, old, new)
-    self.exprs = gsv.retarget(self.exprs, old, new)
-    self.cfg["cells"] = gsv.retarget(self.cfg["cells"], old, new)
-
-
-def _gsv_bind(self, key, var):
-    """Make the column `key` follow sketch variable `var` (see Document.gsv_bind)."""
-    import cfg_tree
-    if not self.gsv:
-        raise MateError("this file is not linked to an assembly sketch")
-    if key not in self.cfg["cols"]:
-        self.cfg_add_col(key)
-    cfg_tree.bind_column(self, key, var)
-
-
-def _cfg_link_name(self, name):
-    import cfg_tree
-    return cfg_tree.link_name(self, name)
-
-
-def _gsv_clear(self):
-    self.gsv = None
-
-
-def _gsv_refresh(self):
-    self.cfg_apply(self.cfg["active"])
-
-
-for _f in (_gsv_src_path, _gsv_set, _gsv_retarget, _cfg_link_name, _gsv_bind, _gsv_clear, _gsv_refresh):
-    setattr(Assembly, _f.__name__[1:], _f)
 
 for _f in (_cfg_read, _cfg_write, _cfg_label, _cfg_candidates, _cfg_capture, _cfg_snapshot, _cfg_apply, _cfg_add, _cfg_delete,
            _cfg_rename, _cfg_add_col, _cfg_del_col, _cfg_set_cell):

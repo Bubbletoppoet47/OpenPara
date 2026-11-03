@@ -1,11 +1,9 @@
 """The Configurations and Display tabs of the left panel (for parts and for assemblies)."""
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont
-from PyQt6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QHBoxLayout, QHeaderView, QInputDialog, QLineEdit, QLabel, QMenu, QMessageBox,
+from PyQt6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMenu, QMessageBox,
                              QPushButton, QSlider, QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-import cfg_tree
-import gsv
 import unitctl
 
 
@@ -29,7 +27,7 @@ class ConfigPanel(QWidget):
         self.tree.setMaximumHeight(150)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.tree_menu)
-        self.tree.itemDoubleClicked.connect(lambda it, _c: self.activate(it.data(0, Qt.ItemDataRole.UserRole)) if isinstance(it.data(0, Qt.ItemDataRole.UserRole), str) else None)
+        self.tree.itemDoubleClicked.connect(lambda it, _c: self.activate(it.data(0, Qt.ItemDataRole.UserRole)))
         lay.addWidget(self.tree)
         row = QHBoxLayout()
         b = QPushButton("Add Configuration")
@@ -86,42 +84,21 @@ class ConfigPanel(QWidget):
         self.tree.clear()
         root = QTreeWidgetItem(self.tree, [self.title()])
         root.setExpanded(True)
-        title = self.owner.title().rsplit('.', 1)[0]
-        groups, regular = cfg_tree.listing(m)
-        self.order = []
-
-        def leaf_item(parent, n):
+        for n in c["names"]:
             act = n == c["active"]
-            it = QTreeWidgetItem(parent, [("✔  " if act else "      ") + f"{n} [{title}]"])
+            it = QTreeWidgetItem(root, [("✔  " if act else "      ") + f"{n} [{self.owner.title().rsplit('.', 1)[0]}]"])
             it.setData(0, Qt.ItemDataRole.UserRole, n)
-            it.setToolTip(0, "Follows the assembly sketch configuration '" + cfg_tree.link_name(m, n) + "'")
             if act:
                 f = it.font(0)
                 f.setBold(True)
                 it.setFont(0, f)
-            self.order.append(n)
-
-        for g, variants in groups:                                  # nested configurations first, in the order they were made
-            gi = QTreeWidgetItem(root, ["▾  " + g["name"] + "   (follows the assembly sketch)"])
-            gi.setData(0, Qt.ItemDataRole.UserRole, ("g", g["id"]))
-            gi.setExpanded(True)
-            for v, kids in variants:
-                parent = gi
-                if v.get("name") or len(variants) > 1:
-                    parent = QTreeWidgetItem(gi, ["▾  " + (v.get("name") or "(original)")])
-                    parent.setData(0, Qt.ItemDataRole.UserRole, ("v", g["id"], v["id"]))
-                    parent.setExpanded(True)
-                for n in kids:
-                    leaf_item(parent, n)
-        for n in regular:                                          # then the regular ones, in the order they were made
-            leaf_item(root, n)
         cols = c["cols"]
         t = self.table
         t.clear()
-        t.setRowCount(len(self.order))
+        t.setRowCount(len(c["names"]))
         t.setColumnCount(1 + len(cols))
         t.setHorizontalHeaderLabels(["Configuration"] + [m.cfg_label(k) for k in cols])
-        for r, n in enumerate(self.order):
+        for r, n in enumerate(c["names"]):
             it = QTableWidgetItem(n)
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             it.setCheckState(Qt.CheckState.Checked if n == c["active"] else Qt.CheckState.Unchecked)
@@ -130,8 +107,6 @@ class ConfigPanel(QWidget):
                 f.setBold(True)
                 it.setFont(f)
                 it.setBackground(QBrush(QColor("#e1ecfb")))
-            elif cfg_tree.leaf(m, n):
-                it.setBackground(QBrush(QColor("#f1ecf8")))
             t.setItem(r, 0, it)
             for j, k in enumerate(cols):
                 self.fill_cell(r, 1 + j, n, k, c["cells"].get(n, {}).get(k))
@@ -154,11 +129,7 @@ class ConfigPanel(QWidget):
             cb.currentTextChanged.connect(lambda txt, n=name, k=key: self.set_value(n, k, txt))
             t.setCellWidget(r, col, cb)
         else:
-            item = QTableWidgetItem(self.cell_text(key, val))
-            if gsv.has_binding(val):                             # {AS_@_W}: follows the assembly sketch configuration of this row
-                item.setBackground(QBrush(QColor("#ece3f7")))
-                item.setToolTip("Follows the assembly sketch: in this configuration it is " + gsv.resolve_at(val, self.m.cfg_link_name(name)))
-            t.setItem(r, col, item)
+            t.setItem(r, col, QTableWidgetItem(self.cell_text(key, val)))
 
     def is_length(self, key):
         """Does this column hold a length (mm in the file, shown in the program's unit)?  A count, an angle or a flag does not."""
@@ -205,7 +176,7 @@ class ConfigPanel(QWidget):
             return
         m = self.m
         r, col = it.row(), it.column()
-        name = self.order[r]
+        name = m.cfg["names"][r]
         if col == 0:
             if it.text() == name:          # only the check box changed
                 if it.checkState() == Qt.CheckState.Checked and name != m.cfg["active"]:
@@ -215,10 +186,7 @@ class ConfigPanel(QWidget):
                 return
             try:
                 self.owner.snapshot()
-                if cfg_tree.leaf(m, name):
-                    cfg_tree.rename_leaf(m, name, it.text())
-                else:
-                    m.cfg_rename(name, it.text())
+                m.cfg_rename(name, it.text())
             except Exception as ex:
                 self.owner.say(str(ex))
             self.owner.config_changed()
@@ -243,40 +211,9 @@ class ConfigPanel(QWidget):
     def set_value(self, name, key, val):
         if self.busy:
             return
-        if key.startswith("s:") and cfg_tree.leaf(self.m, name) and self.feature_variant(name, key, bool(val)):
-            return
         self.owner.snapshot()
         self.m.cfg_set_cell(name, key, val)
         self.owner.config_changed()
-
-    def feature_variant(self, name, key, val):
-        """Suppressing / unsuppressing a feature of a nested child: an existing variant with that feature state is activated, otherwise a prompt makes a
-        new variant (the original is unchanged).  -> True when it was handled here"""
-        m = self.m
-        act, target = cfg_tree.feature_change(m, name, key, val)
-        if act == "same":
-            return False
-        if act == "switch":
-            self.owner.say(f"A variant with that feature state already exists: {target}")
-            QTimer.singleShot(0, lambda: (self.activate(target), self.refresh()))
-            return True
-        feat = self.m.cfg_label(key).split("@")[0] if hasattr(m, "cfg_label") else key
-        text, ok = QInputDialog.getText(self, "New variant", "This feature state is not in any configuration yet, so a new variant is made\n"
-                                        "(the original stays as it is).  Name of the variant:", text=f"{feat} " + ("suppressed" if val else "unsuppressed"))
-        if not ok or not text.strip():
-            QTimer.singleShot(0, self.refresh)
-            return True
-        try:
-            self.owner.snapshot()
-            new = cfg_tree.make_variant(m, name, key, val, text)
-            m.cfg_apply(new)
-        except Exception as ex:                                    # noqa: BLE001
-            self.owner.undo_pop()
-            QMessageBox.warning(self, "New variant", str(ex))
-            return True
-        self.owner.config_changed()
-        self.owner.say(f"New variant '{text.strip()}': {new} is active.")
-        return True
 
     # ----- commands -----------------------------------------------------------------------
     def activate(self, name):
@@ -306,80 +243,23 @@ class ConfigPanel(QWidget):
 
     def tree_menu(self, pos):
         it = self.tree.itemAt(pos)
-        data = it.data(0, Qt.ItemDataRole.UserRole) if it is not None else None
+        name = it.data(0, Qt.ItemDataRole.UserRole) if it is not None else None
         menu = QMenu(self)
-        if isinstance(data, tuple):                                 # a group or a variant (folders)
-            if data[0] == "g":
-                menu.addAction("Rename group").triggered.connect(lambda: self.rename_folder(data))
-                menu.addAction("Delete group and its nested configurations").triggered.connect(lambda: self.delete_group(data[1]))
-            else:
-                menu.addAction("Rename variant").triggered.connect(lambda: self.rename_folder(data))
-        elif data:
-            name = data
+        if name:
             menu.addAction("Activate").triggered.connect(lambda: self.activate(name))
-            if cfg_tree.leaf(self.m, name):
-                menu.addAction("Rename (not the suffix)").triggered.connect(lambda: self.rename(name))
-                menu.addAction("Sever the link (make a regular configuration)").triggered.connect(lambda: self.sever(name))
-                d = menu.addAction("Delete (only the assembly sketch removes it)")
-                d.setEnabled(False)
-            else:
-                menu.addAction("Copy").triggered.connect(lambda: self.add_config(name))
-                menu.addAction("Rename").triggered.connect(lambda: self.rename(name))
-                menu.addAction("Delete").triggered.connect(lambda: self.delete(name))
+            menu.addAction("Copy").triggered.connect(lambda: self.add_config(name))
+            menu.addAction("Rename").triggered.connect(lambda: self.rename(name))
+            menu.addAction("Delete").triggered.connect(lambda: self.delete(name))
         else:
             menu.addAction("Add Configuration").triggered.connect(self.add_config)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
-
-    def rename_folder(self, data):
-        m = self.m
-        g = cfg_tree.find_group(m, data[1])
-        v = cfg_tree.find_variant(g, data[2]) if data[0] == "v" else None
-        old = (v.get("name") or "") if v else g["name"]
-        new, ok = QInputDialog.getText(self, "Rename", "New name:", text=old)
-        if not ok:
-            return
-        try:
-            self.owner.snapshot()
-            if v:
-                cfg_tree.rename_variant(m, data[1], data[2], new)
-            else:
-                cfg_tree.rename_group(m, data[1], new)
-        except Exception as ex:                                    # noqa: BLE001
-            self.owner.undo_pop()
-            QMessageBox.warning(self, "Rename", str(ex))
-            return
-        self.owner.config_changed()
-
-    def delete_group(self, gid):
-        try:
-            self.owner.snapshot()
-            cfg_tree.delete_group(self.m, gid)
-        except Exception as ex:                                    # noqa: BLE001
-            self.owner.undo_pop()
-            QMessageBox.warning(self, "Delete", str(ex))
-            return
-        self.owner.config_changed()
-
-    def sever(self, name):
-        try:
-            self.owner.snapshot()
-            new = cfg_tree.sever(self.m, name)
-        except Exception as ex:                                    # noqa: BLE001
-            self.owner.undo_pop()
-            QMessageBox.warning(self, "Sever", str(ex))
-            return
-        self.owner.config_changed()
-        self.owner.say(f"New regular configuration '{new}': the linked values are now plain numbers.  '{name}' stays linked.")
 
     def rename(self, name):
         new, ok = QInputDialog.getText(self, "Rename", "New name:", text=name)
         if ok:
             try:
                 self.owner.snapshot()
-                if cfg_tree.leaf(self.m, name):
-                    cfg_tree.rename_leaf(self.m, name, new)
-                else:
-                    self.m.cfg_rename(name, new)
+                self.m.cfg_rename(name, new)
             except Exception as ex:
                 self.owner.undo_pop()
                 QMessageBox.warning(self, "Rename", str(ex))
@@ -543,138 +423,3 @@ class DisplayPanel(QWidget):
 
 def unused(*_a):
     return QFont
-
-
-# ---------------------------------------------------------------------------------------------- Global Sketch Variables
-class GsvPanel(QWidget):
-    """The read-only table "Global Sketch Variables" of a part or an assembly: the numbers its assembly sketch exports, one row per variable per sketch
-    configuration, named AS_<configuration>_<name>.  `owner` is the part / assembly window (cfg_model(), snapshot(), say(), config_changed())."""
-
-    def __init__(self, owner):
-        super().__init__()
-        self.owner = owner
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 6, 0, 0)
-        t = QLabel("Global Sketch Variables")
-        t.setStyleSheet("font-weight:bold;")
-        lay.addWidget(t)
-        self.head = QLabel()
-        self.head.setWordWrap(True)
-        lay.addWidget(self.head)
-        self.find = QLineEdit()
-        self.find.setPlaceholderText("Search the variables (e.g. AS_Large)")
-        self.find.setClearButtonEnabled(True)
-        self.find.textChanged.connect(self.apply_filter)
-        lay.addWidget(self.find)
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Name", "Value", "Kind", "Role"])
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setMinimumHeight(110)
-        lay.addWidget(self.table)
-        row = QHBoxLayout()
-        b = QPushButton("Copy name")
-        b.setToolTip("Copy the name as a formula writes it, e.g. {AS_Large_W}")
-        b.clicked.connect(self.copy_name)
-        row.addWidget(b)
-        b = QPushButton("Bind a column...")
-        b.setToolTip("Make a column of the Configurations table follow this variable: in every configuration the sketch drives, its cell becomes {AS_@_W}")
-        b.clicked.connect(self.bind_column)
-        row.addWidget(b)
-        lay.addLayout(row)
-
-    @property
-    def m(self):
-        return self.owner.cfg_model()
-
-    def refresh(self):
-        import os
-        g = getattr(self.m, "gsv", None)
-        t = self.table
-        t.setRowCount(0)
-        if not g:
-            self.head.setText("Not linked to an assembly sketch.  In the assembly sketch (.gpk), add this file in its Linked files panel.")
-            return
-        src = self.m.gsv_src_path()
-        gone = "" if src and os.path.isfile(src) and not g.get("orphan") else "   ON NOTICE: sketch file not found, the numbers shown are the last ones received and nothing updates them"
-        self.head.setText(f"From {os.path.basename(src or g.get('src', ''))}{gone}.  Read-only: change them in the sketch.  In a formula write the name in braces, "
-                          "{AS_Large_W}; in a configuration cell {AS_@_W} follows the configuration of its row.")
-        rows = gsv.rows(g)
-        t.setRowCount(len(rows))
-        for r, (name, val, kind, role) in enumerate(rows):
-            if kind == "length":
-                shown, ktxt = f"{unitctl.to_disp(val):.6g}", f"length ({unitctl.length_unit()})"
-            elif kind == "angle":
-                shown, ktxt = f"{val:.6g}", "angle (deg)"
-            else:
-                shown, ktxt = f"{val:.6g}", "number"
-            for c, txt in enumerate((name, shown, ktxt, role)):
-                it = QTableWidgetItem(txt)
-                it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)      # read-only
-                it.setBackground(QBrush(QColor("#f1ecf8")))
-                t.setItem(r, c, it)
-        # the (configuration, variable) of each row, in table order
-        self.keys = [(cfg, v["name"]) for v in g.get("vars") or [] for cfg in g.get("configs") or []
-                     if g.get("vals", {}).get(cfg, {}).get(v["name"]) is not None]
-        self.apply_filter()
-
-    def apply_filter(self, _t=None):
-        """Hide the rows whose name does not contain the text typed (rows keep their index, so Copy name / Bind still find theirs)."""
-        w = self.find.text().strip().lower()
-        for r in range(self.table.rowCount()):
-            it = self.table.item(r, 0)
-            self.table.setRowHidden(r, bool(w) and (it is None or w not in it.text().lower()))
-
-    def current(self):
-        r = self.table.currentRow()
-        if r < 0 or r >= len(getattr(self, "keys", [])):
-            self.owner.say("Click a row of the Global Sketch Variables table first.")
-            return None
-        return self.keys[r]
-
-    def copy_name(self):
-        k = self.current()
-        if k:
-            QApplication.clipboard().setText("{" + gsv.full_name(*k) + "}")
-            self.owner.say("Copied {" + gsv.full_name(*k) + "}: paste it into a formula or a cell.")
-
-    def bind_column(self):
-        k = self.current()
-        if not k:
-            return
-        m = self.m
-        cands = [(key, label) for key, label, _v in self.owner.cfg_candidates() if key.partition(":")[0] not in ("s", "x", "m", "c")]
-        if not cands:
-            self.owner.say("There is nothing numeric to bind yet.")
-            return
-        labels = [lab for _k, lab in cands]
-        pick, ok = QInputDialog.getItem(self, "Bind a column", f"Make this column follow {k[1]} of the sketch:", labels, 0, False)
-        if not ok:
-            return
-        key = cands[labels.index(pick)][0]
-        if key.startswith("g:") and not key[2:].startswith(gsv.PREFIX) and hasattr(m, "rename_global"):
-            new, ok = QInputDialog.getText(self, "Name of the linked variable", "A variable that follows the assembly sketch is named AS_{configuration}_{name}.\n"
-                                           "Confirm the name or change it:", text=gsv.PREFIX + m.cfg["active"] + "_" + key[2:])
-            if not ok:
-                return
-            new = new.strip()
-            if new != key[2:]:
-                self.owner.snapshot()
-                try:
-                    m.rename_global(key[2:], new)
-                except Exception as ex:                          # noqa: BLE001
-                    self.owner.say(str(ex))
-                    return
-                key = "g:" + new
-        self.owner.snapshot()
-        try:
-            m.gsv_bind(key, k[1])
-            m.cfg_apply(m.cfg["active"])
-        except Exception as ex:                              # noqa: BLE001
-            self.owner.say(str(ex))
-            return
-        self.owner.say(f"{pick} now follows {k[1]} of the assembly sketch in each configuration it drives.")
-        self.owner.config_changed()

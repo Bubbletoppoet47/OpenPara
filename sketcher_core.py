@@ -38,8 +38,7 @@ _BIN = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, as
 
 
 def _parse(text):
-    import gsv
-    return ast.parse(gsv.mangle(text).replace("^", "**").strip(), mode="eval")
+    return ast.parse(text.replace("^", "**").strip(), mode="eval")
 
 
 def expr_symbols(text):

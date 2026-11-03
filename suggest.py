@@ -20,7 +20,6 @@ FUNCS = [("min", "min(a, b)"), ("max", "max(a, b)"), ("abs", "abs(x)"), ("sqrt",
          ("round", "round(x)"), ("floor", "floor(x)"), ("ceil", "ceil(x)"), ("pi", "3.14159...")]
 _WORD = re.compile(r"[A-Za-z_]\w*$")
 NAME_ROLE = Qt.ItemDataRole.UserRole
-LINKED_OTHER = "linked (other configuration)"
 
 
 def value_text(v, kind="length"):
@@ -38,16 +37,6 @@ def names_of(doc, sketch_model=None):
     """Globals, named dimensions, the open sketch's own symbols and the functions, each with its current value."""
     out = []
     seen = set()
-    try:                                              # the variables an assembly sketch hands over: AS_<configuration>_<name>
-        import gsv
-        link = doc.cfg_link_name(doc.cfg.get("active", "")) if hasattr(doc, "cfg_link_name") else str(doc.cfg.get("active", ""))
-        act = gsv.PREFIX + str(link) + "_"
-        rows = gsv.rows(getattr(doc, "gsv", None))
-        for name, val, kind, _role in sorted(rows, key=lambda r: not r[0].startswith(act)):      # the active configuration's variables first
-            out.append((name, value_text(val, kind), "linked" if name.startswith(act) else LINKED_OTHER))
-            seen.add(name)
-    except Exception:
-        pass
     try:
         for k in doc.params:
             kind = getattr(doc, "param_kinds", {}).get(k, "length")
@@ -84,7 +73,6 @@ class Suggest(QObject):
         self.comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.comp.setCompletionRole(NAME_ROLE)
         self.comp.setFilterMode(Qt.MatchFlag.MatchStartsWith)
-        self.comp.setMaxVisibleItems(12)
         self.comp.activated[QModelIndex].connect(self.chosen)
         edit.textEdited.connect(lambda _t: self.update(False))
         edit.installEventFilter(self)
@@ -92,15 +80,12 @@ class Suggest(QObject):
     # the word at the cursor
     def word(self):
         t = self.edit.text()[:self.edit.cursorPosition()]
-        i = t.rfind("{")
-        if i >= 0 and "}" not in t[i:]:                   # inside {...}: a linked name may hold spaces (a configuration called "Config 1")
-            return t[i + 1:], i + 1
         m = _WORD.search(t)
         return (m.group(0), m.start()) if m else ("", len(t))
 
     def fill(self):
         self.model.clear()
-        order = {"linked": -2, LINKED_OTHER: -1, "global": 0, "dimension": 1, "sketch": 2, "function": 3}
+        order = {"global": 0, "dimension": 1, "sketch": 2, "function": 3}
         for name, val, grp in sorted(self.names_fn() or [], key=lambda x: (order.get(x[2], 9), x[0].lower())):
             it = QStandardItem(f"{name}   =   {val}" if grp != "function" else f"{name}     {val}")
             it.setData(name, NAME_ROLE)
@@ -120,35 +105,16 @@ class Suggest(QObject):
             return
         pop = self.comp.popup()
         pop.setCurrentIndex(self.comp.completionModel().index(-1, 0))
-        pop.setTextElideMode(Qt.TextElideMode.ElideNone)
-        pop.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.comp.complete(self.popup_rect())
-
-    def popup_rect(self):
-        """The drop-down is as wide as its longest line (the names and their values are read in full), never wider than the screen."""
-        from PyQt6.QtCore import QRect
-        from PyQt6.QtGui import QGuiApplication
-        fm = self.comp.popup().fontMetrics()
-        mdl = self.comp.completionModel()
-        want = max([fm.horizontalAdvance(str(mdl.index(i, 0).data() or "")) for i in range(mdl.rowCount())] + [0]) + 40
-        scr = self.edit.screen() or QGuiApplication.primaryScreen()
-        room = scr.availableGeometry().width() - 40 if scr is not None else want
-        return QRect(0, 0, max(self.edit.width(), min(want, room)), self.edit.height())
+        self.comp.complete()
 
     def chosen(self, idx):
         name = idx.data(NAME_ROLE) if hasattr(idx, "data") else str(idx)
-        if not isinstance(name, str) or not name:                    # no stored name: the first word of what is shown
-            name = str(idx.data() if hasattr(idx, "data") else idx).split()[0]
+        if isinstance(name, str) and " " in name:
+            name = name.split()[0]
         _, start = self.word()
         t = self.edit.text()
         cur = self.edit.cursorPosition()
-        tail = t[cur:]
-        if isinstance(name, str) and name.startswith("AS_"):          # a linked variable is written in braces: {AS_Large_W}
-            if not t[:start].endswith("{"):
-                name = "{" + name
-            if not tail.startswith("}"):
-                name += "}"
-        self.edit.setText(t[:start] + name + tail)
+        self.edit.setText(t[:start] + name + t[cur:])
         self.edit.setCursorPosition(start + len(name))
 
     def eventFilter(self, obj, ev):
