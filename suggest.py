@@ -40,7 +40,8 @@ def names_of(doc, sketch_model=None):
     seen = set()
     try:                                              # the variables an assembly sketch hands over: AS_<configuration>_<name>
         import gsv
-        act = gsv.PREFIX + str(doc.cfg.get("active", "")) + "_"
+        link = doc.cfg_link_name(doc.cfg.get("active", "")) if hasattr(doc, "cfg_link_name") else str(doc.cfg.get("active", ""))
+        act = gsv.PREFIX + str(link) + "_"
         rows = gsv.rows(getattr(doc, "gsv", None))
         for name, val, kind, _role in sorted(rows, key=lambda r: not r[0].startswith(act)):      # the active configuration's variables first
             out.append((name, value_text(val, kind), "linked" if name.startswith(act) else LINKED_OTHER))

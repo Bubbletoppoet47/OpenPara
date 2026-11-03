@@ -133,7 +133,7 @@ class ConfigPanel(QWidget):
             item = QTableWidgetItem(self.cell_text(key, val))
             if gsv.has_binding(val):                             # {AS_@_W}: follows the assembly sketch configuration of this row
                 item.setBackground(QBrush(QColor("#ece3f7")))
-                item.setToolTip("Follows the assembly sketch: in this configuration it is " + gsv.resolve_at(val, name))
+                item.setToolTip("Follows the assembly sketch: in this configuration it is " + gsv.resolve_at(val, self.m.cfg_link_name(name)))
             t.setItem(r, col, item)
 
     def is_length(self, key):

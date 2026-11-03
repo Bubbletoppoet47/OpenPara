@@ -64,7 +64,7 @@ print("popup width OK")
 d3 = pm.Document()
 d3.gsv_set("s.gpk", ['120"', 'A very long configuration name'], [{"name": "Pipe_Length", "kind": "length", "role": "driving"}],
            {'120"': {"Pipe_Length": 3000.0}, "A very long configuration name": {"Pipe_Length": 4000.0}})
-d3.cfg_apply('120"')
+d3.params = {"P": "1"}; d3.cfg_add_col("g:P"); d3.gsv_bind("g:P", "Pipe_Length"); d3.cfg_apply('Default · 120"')
 e = QLineEdit(); e.resize(120, 24); e.show(); sg = suggest.attach(e, lambda: suggest.names_of(d3))
 e.setText("AS"); e.setCursorPosition(2); sg.update(True)
 first = sg.comp.completionModel().index(0, 0).data(suggest.NAME_ROLE); assert first == 'AS_120"_Pipe_Length', first

@@ -1397,53 +1397,19 @@ class Document:
         return os.path.normpath(p if os.path.isabs(p) or not self.base_dir else os.path.join(self.base_dir, p))
 
     def gsv_set(self, src, configs, vars_, vals, ids=None):
-        """Take the exported numbers of the sketch (`src` as it is to be written in this file) and mirror its configurations.
-        vars_ = [{"name","kind","role"}], vals = {configuration: {variable: number}}, ids = the permanent id of each configuration (the sketch is the
-        master over the names: a renamed configuration is renamed here, a deleted one is deleted here).  -> messages."""
+        """Take the exported numbers of the sketch (`src` as it is to be written in this file).  The sketch is the master over the configuration names:
+        the children (cfg_tree.py) of every configuration that uses a sketch variable are added, renamed and deleted to match.  -> messages"""
+        import cfg_tree
         old = self.gsv or {}
-        mirrored = list(old.get("mirrored") or [])
+        legacy = list(old.get("mirrored") or [])
+        cids = list(ids) if ids else ["n:" + c for c in configs]
         self.gsv = {"src": src, "configs": list(configs), "vars": [dict(v) for v in vars_],
-                    "vals": {c: {k: float(x) for k, x in vals.get(c, {}).items()} for c in configs}, "mirrored": mirrored}
+                    "vals": {c: {k: float(x) for k, x in vals.get(c, {}).items()} for c in configs}, "cids": cids, "mirrored": []}
         msgs = []
-        if ids:
-            renames, adds, deletes, newmap = gsv.plan(mirrored, old.get("ids"), configs, ids)
-            for o, n in renames:
-                try:
-                    self.cfg_rename(o, n)
-                    self.gsv_retarget(o, n)
-                    msgs.append(f"configuration '{o}' renamed to '{n}'")
-                except ModelError as ex:
-                    msgs.append(f"could not rename '{o}' to '{n}': {ex}")
-            for n in adds:
-                if n not in self.cfg["names"]:
-                    first = next((x for x in mirrored if x in self.cfg["names"]), self.cfg["names"][0])
-                    self.cfg_add(n, copy_of=first)
-            for c in deletes:
-                try:
-                    self.cfg_delete(c)
-                    msgs.append(f"configuration '{c}' removed because the sketch no longer has it")
-                except ModelError:
-                    msgs.append(f"'{c}' is no longer in the sketch but is this file's only configuration: kept")
-            mirrored[:] = [c for c in configs if c in self.cfg["names"]]
-            self.gsv["ids"] = {n: i for n, i in newmap.items() if n in self.cfg["names"]}
-            return msgs
-        for c in configs:
-            if c not in self.cfg["names"]:
-                first = next((n for n in mirrored if n in self.cfg["names"]), self.cfg["names"][0])      # copy a mirrored configuration: its bound cells follow
-                self.cfg_add(c, copy_of=first)
-            if c not in mirrored:
-                mirrored.append(c)
-        gone = [c for c in mirrored if c not in configs]
-        dropped = []
-        for c in gone:                                       # the sketch deleted the configuration: the linked file's copy goes with it
-            try:
-                self.cfg_delete(c)
-                mirrored.remove(c)
-                dropped.append(c)
-            except ModelError:
-                msgs.append(f"'{c}' is no longer in the sketch but is this file's only configuration: kept")
-        if dropped:
-            msgs.append("configurations removed because the sketch no longer has them: " + ", ".join(dropped))
+        if legacy and not cfg_tree.has_tree(self):
+            msgs += cfg_tree.migrate(self, legacy, old.get("ids"))
+        msgs += cfg_tree.sync(self)
+        msgs += cfg_tree.regroup(self)
         return msgs
 
     def gsv_retarget(self, old, new):
@@ -1453,14 +1419,19 @@ class Document:
         self.features = gsv.retarget(self.features, old, new)
 
     def gsv_bind(self, key, var):
-        """Make the column `key` follow sketch variable `var`: in every configuration the sketch drives, its cell becomes {AS_@_var}."""
+        """Make the column `key` follow sketch variable `var`: the cell of the active configuration (and of every child of its variant) becomes {AS_@_var};
+        a regular configuration becomes a group with one child per sketch configuration."""
+        import cfg_tree
         if not self.gsv:
             raise ModelError("this file is not linked to an assembly sketch")
         if key not in self.cfg["cols"]:
             self.cfg_add_col(key)
-        for c in self.gsv.get("mirrored") or []:
-            if c in self.cfg["names"] and c in (self.gsv.get("configs") or []):
-                self.cfg_set_cell(c, key, "{" + gsv.PREFIX + "@_" + var + "}")
+        cfg_tree.bind_column(self, key, var)
+
+    def cfg_link_name(self, name):
+        """The assembly sketch configuration a configuration follows (its suffix when it is a nested child)."""
+        import cfg_tree
+        return cfg_tree.link_name(self, name)
 
     def gsv_clear(self):
         self.gsv = None
@@ -1674,7 +1645,7 @@ class Document:
         row = c["cells"].setdefault(c["active"], {})
         for key in c["cols"]:
             v = self.cfg_read(key)
-            if v is not None and not gsv.keep_binding(row.get(key), v, c["active"]):
+            if v is not None and not gsv.keep_binding(row.get(key), v, self.cfg_link_name(c["active"])):
                 row[key] = v
         c.setdefault("offs", {})[c["active"]] = self.label_offsets()
 
@@ -1701,7 +1672,7 @@ class Document:
         row = self.cfg["cells"].get(name, {})
         for key in self.cfg["cols"]:
             if key in row:
-                self.cfg_write(key, gsv.resolve_at(row[key], name))
+                self.cfg_write(key, gsv.resolve_at(row[key], self.cfg_link_name(name)))
         offs = self.cfg.get("offs", {})
         if name in offs:                                     # (a file from before this was kept leaves the labels where they are)
             self.apply_label_offsets(offs[name])
@@ -1727,6 +1698,7 @@ class Document:
         self.cfg["names"].remove(name)
         self.cfg["cells"].pop(name, None)
         self.cfg.get("offs", {}).pop(name, None)
+        self.cfg.get("tree", {}).get("leaf", {}).pop(name, None)
 
     def cfg_rename(self, name, new):
         new = new.strip()
@@ -1760,9 +1732,16 @@ class Document:
                 row.pop(key, None)
 
     def cfg_set_cell(self, name, key, val):
+        """A cell is edited.  A sketch variable typed into it applies the variable: a regular configuration becomes a group of nested children, a child
+        passes it on to the children of its variant (cfg_tree.py)."""
+        import cfg_tree
         self.cfg["cells"].setdefault(name, {})[key] = val
-        if name == self.cfg["active"]:
-            self.cfg_write(key, gsv.resolve_at(val, name))
+        if isinstance(val, str) and gsv.has_token(val) and self.gsv:
+            cfg_tree.after_cell(self, name, key, val)
+        act = self.cfg["active"]
+        row = self.cfg["cells"].get(act, {})
+        if key in row and (name == act or isinstance(val, str)):
+            self.cfg_write(key, gsv.resolve_at(row[key], self.cfg_link_name(act)))
 
     def cfg_label(self, key):
         kind, _, rest = key.partition(":")
