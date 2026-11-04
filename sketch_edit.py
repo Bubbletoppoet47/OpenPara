@@ -48,6 +48,7 @@ EDGE_ON_COS = 0.12          # the snap / pick / label distances are File > Setti
 CONSTRAINTS = ("horizontal", "vertical", "parallel", "perpendicular", "collinear", "coincident", "concentric", "tangent", "equal", "fixed",
                "midpoint")
 DIMS = tuple(sc.DIMENSIONS)
+SCALE_DIMS = ("dim_h", "dim_v", "dim_len", "dim_rad", "dim_dia", "dim_off")      # the dimensions that can set the scale of a part (an angle cannot)
 
 
 def disp(v, c_or_type=None):
@@ -1120,6 +1121,8 @@ class SketchEditor:
                 kw["sign"] = 1 if pb[k] - pa[k] >= 0 else -1
 
         make_driven = kw.pop("_driven", False)
+        if tool in SCALE_DIMS and not make_driven:
+            self.set_part_scale(cur, kw.get("value"))
 
         def build(mm):
             c = mm.add_con(tool, refs, **kw)
@@ -1137,6 +1140,38 @@ class SketchEditor:
         self.app.update_all(keep_props=False, light=True)
 
     last_con = None
+
+    def set_part_scale(self, cur, val):
+        """The first (driving, length-type) dimension of a part sets the scale: the whole sketch is scaled uniformly, about its origin, so the dimension is
+        true and the shape does not change; the view is scaled with it, so nothing seems to move.  It happens once; Undo can not take it back."""
+        d = self.app.doc
+        m = self.m
+        if d.scale_set:
+            return
+        if d.has_dimensions():
+            d.scale_set = True
+            return
+        d.scale_set = True
+        if m.ctx3d is not None or m.insts or m.ext or not val or not cur or cur <= 1e-9 or val <= 0:
+            return
+        k = float(val) / float(cur)
+        if abs(k - 1.0) < 1e-9:
+            return
+        m.scale_all(k)
+        d.store_sketch(self.sk_id)                    # so the Undo snapshot taken next holds the scaled sketch
+        self.app.rescale_history(self.sk_id, k)
+        self.rescale_view(k)
+
+    def rescale_view(self, k):
+        pl = self.plane()
+        if pl is None:
+            return
+        o, cam = pl[0], self.pl.camera
+        for get, put in ((cam.GetPosition, cam.SetPosition), (cam.GetFocalPoint, cam.SetFocalPoint)):
+            put(*(o + k * (np.array(get()) - o)))
+        if cam.GetParallelProjection():
+            cam.SetParallelScale(cam.GetParallelScale() * k)
+        self.pl.renderer.reset_camera_clipping_range()
 
     @staticmethod
     def dim_from_text(m, text, value, dtype=None):

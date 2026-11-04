@@ -4,6 +4,7 @@ import math
 import numpy as np
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPlainTextEdit,
                              QPushButton, QVBoxLayout, QWidget)
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QGuiApplication
 
 import asm_model as am
@@ -89,8 +90,10 @@ def rebuild_derived(win):
     a = win.asm
     wanted = {}
     for p in a.patterns:
+        if p.get("suppressed"):
+            continue                                    # a suppressed pattern makes no copies
         seeds = [a.comp(s) for s in p.get("seeds", [])]
-        seeds = [s for s in seeds if s is not None and not s.get("derived")]
+        seeds = [s for s in seeds if s is not None and not s.get("derived") and not s.get("suppressed")]       # nor does a suppressed seed
         try:
             Xs = transforms(win, p)
         except am.MateError:
@@ -222,6 +225,9 @@ def set_plane(win, item):
     if st is None:
         return
     st["data"]["plane"] = {"ref": item["ref"]}
+    st.setdefault("his", {})["plane"] = item
+    st["hi"] = list(st["his"].values())                  # the picked face / plane is drawn in the view
+    st.pop("pick_key", None)
     win.mode = "pattern"
     refresh(win)
 
@@ -233,8 +239,27 @@ def set_entity(win, item):
     key = st.get("pick_key")
     if key:
         st["data"][key] = {"ref": item["ref"]}
+        st.setdefault("his", {})[key] = item
+        st["hi"] = list(st["his"].values())
+    st.pop("pick_key", None)
     win.mode = "pattern"
     refresh(win)
+
+
+def spec_text(win, spec):
+    """What a pattern's plane / direction / axis choice is, in words: 'Right plane', 'X axis' or 'a flat face of Plate<1>'."""
+    if isinstance(spec, str):
+        return spec if spec in ("Front", "Top", "Right") and False else (spec + (" plane" if spec in ("Front", "Top", "Right") else " axis"))
+    try:
+        r = spec["ref"]
+        c = win.asm.comp(r["c"]) if r.get("c") != "@" else None
+        e = win.asm.entity(r)
+        what = {"plane": "a flat face", "axis": "a cylinder / circle", "line": "a straight edge", "point": "a point", "sphere": "a sphere"}.get(e.get("t"), "an item")
+        if r.get("c") == "@":
+            what = "a reference " + ("plane" if e.get("t") == "plane" else "axis")
+        return what + (f" of {c['name']}" if c is not None else " of the assembly")
+    except Exception:
+        return "an item that is no longer there"
 
 
 def refresh(win):
@@ -268,6 +293,14 @@ def panel(win):
         c = win.asm.comp(s)
         lst.addItem(c["name"] if c else "?")
     lay.addWidget(lst)
+    armed_c = win.mode == "pattern" and not p["seeds"]
+    n = len(p["seeds"])
+    sel = QLabel(f"<b>Components</b>: " + (f"{n} chosen" if n else "none yet - click one in the view or the tree")
+                 + ("" if n else "") + "<br><span style='color:#1f4fb4'>The faded blue copies in the view show the result; press OK to keep them.</span>")
+    sel.setTextFormat(Qt.TextFormat.RichText)
+    sel.setWordWrap(True)
+    sel.setStyleSheet("color:#b4561f;" if armed_c else "color:#14602a;" if n else "color:#8a1f1f;")
+    lay.addWidget(sel)
     form = QFormLayout()
     box = QWidget()
     box.setLayout(form)
@@ -312,6 +345,25 @@ def panel(win):
             win.mode = "pattern"
             refresh_keep(win)
         cb.currentIndexChanged.connect(ch)
+        armed = st.get("pick_key") == key and win.mode in ("mirror_plane", "axis_pick")
+        spec = p.get(key)
+        txt = spec_text(win, spec) if spec is not None else "none yet"
+        status = QLabel(f"<b>{label}</b>: {txt}" + ("   -   click " + ("a flat face or plane" if p["type"] == "mirror" else "a straight edge, cylinder, circle or face")
+                                                     + " in the view" if armed else ""))
+        status.setTextFormat(Qt.TextFormat.RichText)
+        status.setWordWrap(True)
+        status.setStyleSheet("color:#b4561f;" if armed else "color:#14602a;")
+        form.addRow(status)
+        if armed:
+            stop = QPushButton("Stop picking")
+
+            def stp():
+                st.pop("pick_key", None)
+                win.mode = "pattern"
+                win.say("")
+                panel(win)
+            stop.clicked.connect(stp)
+            form.addRow(stop)
         form.addRow(label, cb)
     if p["type"] == "linear":
         choose("Direction 1", "dir1", "Picked edge / face")

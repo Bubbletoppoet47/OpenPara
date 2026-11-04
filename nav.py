@@ -475,7 +475,7 @@ class NavHook(QObject):
                     return True
                 if ev.button() == Qt.MouseButton.RightButton:
                     self.press_pos, self.moved = (px, py), False
-                    return True
+                    return getattr(self.app, "drag_hook", None) is None      # a window with a drag hook (the assembly) wants the right button too
                 return False
             if t == QEvent.Type.MouseMove:
                 px, py = self.xy(obj, ev)
@@ -503,7 +503,7 @@ class NavHook(QObject):
                     pos, self.press_pos = self.press_pos, None
                     if not self.moved and hasattr(self.app, "context_menu"):
                         self.app.context_menu(px, py, ev.globalPosition().toPoint())
-                    return True
+                    return getattr(self.app, "drag_hook", None) is None
         except Exception:
             import traceback
             self.mode = None

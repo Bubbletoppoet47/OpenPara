@@ -8,7 +8,7 @@ import numpy as np
 from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox
 app = QApplication([])
 import units, unitctl, paths
-import pm_model as pm, sk_tools as sk, gpd_app, pm_app, sim_tab, physics_store as pstore, sketch_edit
+import pm_model as pm, sk_tools as sk, gpd_app, pm_app, sketch_edit
 MSGS = []
 QMessageBox.information = staticmethod(lambda *a, **k: MSGS.append(a[2] if len(a) > 2 else ""))
 QMessageBox.warning = staticmethod(lambda *a, **k: MSGS.append(a[2] if len(a) > 2 else ""))
@@ -188,137 +188,6 @@ assert "cubic mm" in txt and "= " in txt and "Mass" in txt
 rep, _ = evaluate.measure_report([], {"xyz": 1, "cc": 0, "mn": 1, "mx": 0}, "in")
 print("mass / measure OK")
 
-# ------------------------------------------------------------------------------------------------ a 1D beam, the same problem in mm/N and in in/kip
-def beam_problem():
-    d = pm.Document(); s = d.add(pm.new_feature("sketch", plane={"base": "Top"})); d.rebuild(); mm_ = d.models[s["id"]]
-    sk.add_line(mm_, (0, 0), (1000, 0)); sk.solve_model(mm_); d.store_sketch(s["id"])
-    d.add(pm.new_feature("extrude", sketch=s["id"], depth="10")); d.rebuild()
-    p = os.path.join(tmp, "beam.gpd"); open(p, "w").write(d.to_json()); return p
-pb = beam_problem()
-unitctl.set_units(DEF, "m/s")
-shb = gpd_app.AppShell([pb])
-wb = shb.add_sim("beam")
-tb = wb.tab
-tb.picker.select(wb.source_items()[0][0]); tb.picker.go()
-assert tb.model is not None and tb.model.unit_system == DEF, tb.model and tb.model.unit_system
-import profiles1d as pr1
-prof = pr1.compute("rect", {"b": 50.0, "h": 100.0})
-tb.set_profiles(list(range(len(tb.members))), prof)
-E = float(tb.e_E.text()); assert close(E, 200000.0)
-pts = sorted(tb.node_ids(), key=lambda i: tb.model.pts[i][0])
-tb.supports.append({"mode": "fixed", "targets": [pts[0]]}); tb.loads.append({"kind": "force", "fx": 0.0, "fy": -1000.0, "targets": [pts[1]]})
-assert tb.solve(auto=True), MSGS[-3:]
-res = tb.result
-def tip_deflection(t):
-    return float(t.result["umax"])
-v_mm = tip_deflection(tb)
-sig_mpa = tb.result["sigma_max"]
-Eexp, I = 200000.0, 50.0 * 100.0 ** 3 / 12
-assert close(abs(v_mm), 1000.0 * 1000.0 ** 3 / (3 * Eexp * I), 1e-3), (v_mm, 1000.0 * 1000.0 ** 3 / (3 * Eexp * I))
-# change the program's units: the tab converts, everything keeps its physical meaning
-unitctl.set_units("US (in, kip, ksi)", "mph")
-assert tb.model.unit_system == "US (in, kip, ksi)" and wb.host.m.unit_system == "US (in, kip, ksi)"
-assert close(float(tb.e_E.text()), 200000.0 / 6.894757293168, 1e-6), tb.e_E.text()
-assert close(tb.loads[0]["fy"], -1000.0 / 4448.2216152605, 1e-8), tb.loads[0]
-assert tb.solve(auto=True)
-v_in = tip_deflection(tb)
-assert close(abs(v_in) * 25.4, abs(v_mm), 1e-6), (v_in * 25.4, v_mm)
-assert close(tb.result["sigma_max"] * 6.894757293168, sig_mpa, 1e-6), (tb.result["sigma_max"], sig_mpa)
-unitctl.set_units("Metric (m, kN, kPa)", "km/h")
-assert tb.solve(auto=True)
-assert close(abs(tip_deflection(tb)) * 1000.0, abs(v_mm), 1e-6)
-assert close(tb.loads[0]["fy"], -1.0, 1e-8), tb.loads[0]
-unitctl.set_units("US (ft, kip, ksf)", "ft/s")
-assert tb.solve(auto=True)
-assert close(abs(tip_deflection(tb)) * 304.8, abs(v_mm), 1e-6)
-# saved in ft/kip, opened after the program was set to mm/N: converted on open
-pg = os.path.join(tmp, "beam.gps"); wb.path = pg; assert wb.save()
-unitctl.set_units(DEF, "m/s")
-wb2 = sim_tab.SimWindow.open_file(shb, pg)
-tb2 = wb2.tab
-assert tb2.model.unit_system == DEF and close(float(tb2.e_E.text()), 200000.0, 1e-6), (tb2.model.unit_system, tb2.e_E.text())
-assert close(tb2.loads[0]["fy"], -1000.0, 1e-6), tb2.loads[0]
-assert tb2.solve(auto=True) and close(abs(tip_deflection(tb2)), abs(v_mm), 1e-6)
-print("1D FEA units OK")
-
-# ------------------------------------------------------------------------------------------------ wind speed is its own unit
-wind = {"kind": "wind", "V": 60.0, "angle": 0.0, "cp": 1.0, "rho": 1.225, "targets": []}
-st = {"model_json": tb2.model.to_json(), "inputs": {}, "loads": [dict(wind)], "speed_unit": "mph"}
-st2 = pstore.speed_state(st, "mph", "m/s")
-assert close(st2["loads"][0]["V"], 60 * 0.44704) and st2["speed_unit"] == "m/s" and st["loads"][0]["V"] == 60.0
-# an old file: system name ended in "mph", no speed_unit stored -> mph
-m_old = sk.new_model("US (in, lbf, psi, mph)")
-st_old = {"model_json": m_old.to_json(), "inputs": {"e_speed": "100"}, "loads": []}
-assert pstore.state_units(st_old)[1] == "mph" and units.canon(pstore.state_units(st_old)[0]) == "US (in, lbf, psi)"
-cur = pstore.to_current_units("cfd", st_old, DEF, "m/s")
-assert close(float(cur["inputs"]["e_speed"]), 44.704, 1e-6), cur["inputs"]
-m_old2 = sk.new_model(DEF)
-st_old2 = {"model_json": m_old2.to_json(), "inputs": {"e_speed": "1000"}, "loads": []}
-assert pstore.state_units(st_old2)[1] == "mm/s"
-cur = pstore.to_current_units("cfd", st_old2, "US (in, lbf, psi)", "m/s")
-assert close(float(cur["inputs"]["e_speed"]), 1.0, 1e-6), cur["inputs"]
-print("speed OK")
-
-# ------------------------------------------------------------------------------------------------ 2D CFD and 2D FEA tabs follow, too
-unitctl.set_units(DEF, "m/s")
-pr = make_part("plate2.gpd")
-shc = gpd_app.AppShell([pr])
-wc = shc.add_sim("cfd")
-tc = wc.tab
-assert close(float(tc.e_speed.text()), 1.0)
-tc.e_speed.setText("10")
-unitctl.set_units(DEF, "mph")                                       # only the speed unit changed
-assert close(float(tc.e_speed.text()), 10 / 0.44704, 1e-5), tc.e_speed.text()
-unitctl.set_units("US (in, lbf, psi)", "mph")
-assert close(float(tc.e_speed.text()), 10 / 0.44704, 1e-5), "the speed does not depend on the system"
-assert units.get(tc.unit_name())["V"] == "mph"
-wf = shc.add_sim("fea")
-tf = wf.tab
-tf.e_E.setText("200000")
-unitctl.set_units(DEF, "m/s")
-assert wf.tab.unit_name() == DEF
-w_sl = shc.add_sim("fea")
-print("2D FEA / CFD units OK")
-
-# ------------------------------------------------------------------------------------------------ 2D FEA: the same plate in mm/N/MPa and in in/kip/ksi
-unitctl.set_units(DEF, "m/s")
-pl = make_part("plate3.gpd")
-shp = gpd_app.AppShell([pl])
-wfe = shp.add_sim("fea"); tfe = wfe.tab
-tfe.picker.select(wfe.source_items()[0][0]); tfe.picker.go()
-tfe.run_task = lambda title, fn: ("ok", fn(lambda *a, **k: None, lambda: False))
-tfe.e_t.setText("10"); tfe.e_h.setText("10")
-mdl = tfe.model
-left = [i for i, ln in mdl.lns.items() if all(abs(mdl.pts[p][0]) < 1e-9 for p in ln)]
-right_pts = [p for p, xy in mdl.pts.items() if abs(xy[0] - 100.0) < 1e-9]
-assert left and right_pts, (left, right_pts)
-tfe.canvas.sel = [("ln", left[0])]; tfe.add_support("fixed")
-tfe.canvas.sel = [("pt", p) for p in right_pts]
-import physics_tab
-physics_tab.ask_numbers = lambda *a, **k: [0.0, -1000.0]
-tfe.add_force()
-tfe.cb_auto.setChecked(False)
-tfe.run_mesh(); assert tfe.mesh is not None
-tfe.run_solve(); assert tfe.result is not None, tfe.status_text if hasattr(tfe, "status_text") else ""
-u_mm, vm_mm = float(np.max(np.hypot(tfe.result["u"][:, 0], tfe.result["u"][:, 1]))), float(np.max(tfe.result["vm"]))
-unitctl.set_units("US (in, kip, ksi)", "m/s")
-assert tfe.model.unit_system == "US (in, kip, ksi)"
-assert close(tfe.loads[0]["fy"], -1000.0 / 4448.2216152605, 1e-8), tfe.loads
-assert close(float(tfe.e_E.text()), 200000.0 / 6.894757293168, 1e-6)
-assert close(float(tfe.e_t.text()), 10 / 25.4, 1e-6), tfe.e_t.text()
-if tfe.result is not None:                                           # a converted result is kept and is in the new units
-    u_in = float(np.max(np.hypot(tfe.result["u"][:, 0], tfe.result["u"][:, 1])))
-    assert close(u_in * 25.4, u_mm, 1e-6), (u_in * 25.4, u_mm)
-    assert close(float(np.max(tfe.result["vm"])) * 6.894757293168, vm_mm, 1e-6)
-    print("2D FEA result converted in place")
-tfe.run_mesh(); tfe.run_solve(); assert tfe.result is not None
-u_in2 = float(np.max(np.hypot(tfe.result["u"][:, 0], tfe.result["u"][:, 1])))
-assert close(u_in2 * 25.4, u_mm, 2e-2), (u_in2 * 25.4, u_mm)         # a new mesh (element size 10 mm = 0.3937 in), the same physics
-assert close(float(np.max(tfe.result["vm"])) * 6.894757293168, vm_mm, 5e-2)
-unitctl.set_units(DEF, "m/s")
-assert tfe.model.unit_system == DEF and close(float(tfe.e_t.text()), 10.0, 1e-6)
-print("2D FEA units OK")
-
 # ------------------------------------------------------------------------------------------------ assembly boxes
 import asm_model as am, assembly
 unitctl.set_units(DEF, "m/s")
@@ -357,36 +226,6 @@ dict(rows(wa))["Distance (in)"].setText("2"); dict(rows(wa))["Distance (in)"].ed
 assert close(wa.mate_opts["value"], 50.8), wa.mate_opts
 unitctl.set_units(DEF, "m/s")
 print("assembly units OK")
-
-# ------------------------------------------------------------------------------------------------ the slice dialog
-import sim_slice
-unitctl.set_units("US (in, lbf, psi)", "m/s")
-from sim_slice import SliceDialog
-class P: pass
-try:
-    dlg_s = SliceDialog(sha, [("Top", {"o": np.zeros(3), "u": np.array([1.0, 0, 0]), "v": np.array([0, 1.0, 0]), "n": np.array([0, 0, 1.0])})], [], None)
-    dlg_s.offset.setText("1")
-    assert close(dlg_s.value(), 25.4), dlg_s.value()
-    dlg_s.offset.setText("1 in"); assert close(dlg_s.value(), 25.4)
-    dlg_s.step.setText("0.5"); dlg_s.nudge(+1)
-    assert close(dlg_s.value(), 25.4 + 12.7) and dlg_s.offset.text() == "1.5", dlg_s.offset.text()
-    dlg_s.reverse(); assert close(dlg_s.value(), -38.1)
-    print("slice dialog OK")
-except Exception as ex:
-    print("slice dialog could not be built in this test:", type(ex).__name__, ex)
-unitctl.set_units(DEF, "m/s")
-
-# ------------------------------------------------------------------------------------------------ the render studio
-import render_studio
-unitctl.set_units(DEF, "m/s")
-rs_ = render_studio.RenderStudio(shell=None) if False else None
-sp = render_studio.dlen(-1e6, 1e6, 25.4)
-assert sp.text() == "25.4"
-unitctl.set_units("US (in, lbf, psi)", "m/s"); sp.refresh_unit()
-assert sp.text() == "1" and close(sp.value(), 25.4)
-sp.lineEdit().setText("2"); sp.interpretText(); assert close(sp.value(), 50.8)
-unitctl.set_units(DEF, "m/s")
-print("render studio boxes OK")
 
 # ------------------------------------------------------------------------------------------------ the File > Units dialog
 import units_dialog

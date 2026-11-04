@@ -1,3 +1,5 @@
+import os as _o, sys as _s
+_s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.abspath(__file__)), "parked_addons", "render"))
 import addons; addons.startup()   # the simulation / render modules live in add-ons
 import faulthandler; faulthandler.dump_traceback_later(170, exit=True)
 import os, tempfile, json

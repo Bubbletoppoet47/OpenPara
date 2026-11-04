@@ -27,10 +27,12 @@ import asm_sub
 import config_panels
 import mini_tree
 import icons
+import icon_set
 import pm_model as pm
 import settings
 import unitctl
 import pm_app
+import part_refgeo
 import nav
 import viewpick
 
@@ -47,6 +49,8 @@ PALETTE = [(0.62, 0.70, 0.82), (0.84, 0.72, 0.60), (0.66, 0.80, 0.66), (0.80, 0.
 SEL_COL, HI_COL = (0.45, 0.72, 1.0), (1.0, 0.45, 0.0)
 MATE_NAMES = {"coincident": "Coincident", "parallel": "Parallel", "perpendicular": "Perpendicular", "tangent": "Tangent",
               "concentric": "Concentric", "lock": "Lock", "distance": "Distance", "angle": "Angle", "symmetric": "Symmetric"}
+PREVIEW_COL = (0.20, 0.45, 0.95)       # faded blue: what a pattern / mirror about to be made adds (same as the part window)
+PREVIEW_FADE = 0.42
 MATE_HELP = {"coincident": "face/face, point/point, point/face, edge/edge, ...", "parallel": "faces or edges parallel",
              "perpendicular": "faces or edges at 90 degrees", "tangent": "flat face, cylinder, sphere or straight edge touching a curved face",
              "concentric": "cylinders / circles share an axis", "lock": "the two components keep their position to each other",
@@ -90,12 +94,24 @@ class ViewGeom:
 
 
 class DragHook(QObject):
-    """Left-button drags for Move / Rotate Component.  Installed before the navigation hook."""
+    """Dragging components in the assembly view.
+
+    Left-drag moves the component under the cursor (it is selected by the press), right-drag rotates it; with Move / Rotate Component on, the left
+    button does that tool's action.  Hold X, Y or Z while dragging: a left-drag then slides along that world axis, a right-drag turns about it.  The
+    lock lasts only while the key is held (let go and the drag is free again).  Esc cancels the drag.  A press that does not move is a plain click
+    (the click hook selects).  The middle button still moves the view.  Installed before the navigation hook."""
+
+    AXIS_KEYS = {Qt.Key.Key_X: 0, Qt.Key.Key_Y: 1, Qt.Key.Key_Z: 2}
+    THRESH = 4.0
 
     def __init__(self, plotter, win):
         super().__init__(plotter)
         self.win, self.pl = win, plotter
         self.state = None
+        self.press = None                 # {"btn", "x", "y"} of a button that is down and has not started a drag yet (or whose drag is on)
+        self.held = []                    # X / Y / Z keys that are down, in the order pressed
+        self.last = (0.0, 0.0)
+        self.cancelled = False
         from PyQt6.QtWidgets import QWidget as _W
         for w in [plotter] + list(plotter.findChildren(_W)):
             w.installEventFilter(self)
@@ -105,22 +121,75 @@ class DragHook(QObject):
         p = ev.position()
         return p.x() * r, (obj.height() - p.y() - 1) * r
 
+    def axis(self):
+        return self.held[-1] if self.held else None
+
+    def kind_for(self, btn):
+        if btn == Qt.MouseButton.RightButton:
+            return "rotate"
+        return "rotate" if self.win.mode == "rotate" else "move"
+
+    def finish(self, commit=True):
+        st, self.state = self.state, None
+        if st is not None:
+            self.win.drag_end(st) if commit else self.win.drag_cancel(st)
+        self.press = None
+
     def eventFilter(self, obj, ev):
         try:
-            if self.win.mode not in ("move", "rotate"):
-                return False
             t = ev.type()
-            if t == QEvent.Type.MouseButtonPress and ev.button() == Qt.MouseButton.LeftButton:
+            if t in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease) and not ev.isAutoRepeat():
+                k = ev.key()
+                if k in self.AXIS_KEYS:
+                    ax = self.AXIS_KEYS[k]
+                    if t == QEvent.Type.KeyPress:
+                        if ax in self.held:
+                            self.held.remove(ax)
+                        self.held.append(ax)
+                    elif ax in self.held:
+                        self.held.remove(ax)
+                    if self.state is not None:                         # the lock comes and goes at once, without moving the mouse
+                        self.win.drag_move(self.state, self.last[0], self.last[1], self.axis())
+                elif k == Qt.Key.Key_Escape and t == QEvent.Type.KeyPress and self.state is not None:
+                    self.cancelled = True
+                    self.finish(commit=False)
+                return False
+            if t == QEvent.Type.FocusOut:
+                self.held.clear()
+                return False
+            if self.win.mode not in (None, "move", "rotate"):
+                return False
+            if t == QEvent.Type.MouseButtonPress and ev.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
                 x, y = self.xy(obj, ev)
-                self.state = self.win.drag_begin(x, y)
-            elif t == QEvent.Type.MouseMove and self.state is not None and (ev.buttons() & Qt.MouseButton.LeftButton):
+                self.press = {"btn": ev.button(), "x": x, "y": y}
+                self.state, self.cancelled, self.last = None, False, (x, y)
+                try:
+                    obj.setFocus()                                     # so that X / Y / Z reach this hook
+                except Exception:
+                    pass
+            elif t == QEvent.Type.MouseMove and self.press is not None and not self.cancelled:
                 x, y = self.xy(obj, ev)
-                self.win.drag_move(self.state, x, y)
-            elif t == QEvent.Type.MouseButtonRelease and ev.button() == Qt.MouseButton.LeftButton and self.state is not None:
-                self.win.drag_end(self.state)
-                self.state = None
+                self.last = (x, y)
+                if not (ev.buttons() & self.press["btn"]):
+                    return False
+                if self.state is None:
+                    if math.hypot(x - self.press["x"], y - self.press["y"]) < self.THRESH:
+                        return False
+                    self.state = self.win.drag_begin(self.press["x"], self.press["y"], self.kind_for(self.press["btn"]))
+                    if self.state is None:
+                        self.cancelled = True                          # nothing to drag here: leave this press alone
+                        return False
+                    if self.axis() is not None:                        # a key held before the drag: the lock starts at the press point
+                        self.win.drag_move(self.state, self.press["x"], self.press["y"], self.axis())
+                self.win.drag_move(self.state, x, y, self.axis())
+            elif t == QEvent.Type.MouseButtonRelease and self.press is not None and ev.button() == self.press["btn"]:
+                if self.state is not None:
+                    self.finish(commit=True)
+                elif not self.cancelled and ev.button() == Qt.MouseButton.LeftButton and self.win.mode in ("move", "rotate"):
+                    self.win.select_at(self.press["x"], self.press["y"])      # a plain click in a tool mode still selects
+                self.press, self.cancelled = None, False
         except Exception:
-            self.state = None
+            self.state, self.press = None, None
             self.win.say("Drag failed: " + traceback.format_exc(limit=2))
         return False
 
@@ -195,9 +264,12 @@ class AssemblyWindow(QMainWindow):
         self.ribbon.addTab(self.ribbon_page([
             ("mass", "⚖", "Mass\nProperties", "Mass, center of mass and moments of inertia of the whole assembly", lambda: self.mass_open()),
         ]), "Evaluate")
-        self.ribbon.addTab(self.ribbon_page([("sim_fea", "▦", "2D FEA", "Plane stress / strain FEA of a slice through this assembly", lambda: self.add_sim("fea")),
-                                    ("sim_cfd", "≋", "2D CFD", "Flow around a slice through this assembly", lambda: self.add_sim("cfd"))]), "Simulation")
-        self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "New render", "Photorealistic pictures and videos of this assembly: sun, lights, floor, cameras", lambda: self.add_render())]), "Render")
+        import ext
+        if ext.present("simulation"):
+            self.ribbon.addTab(self.ribbon_page([("sim_fea", "▦", "2D FEA", "Plane stress / strain FEA of a slice through this assembly", lambda: self.add_sim("fea")),
+                                        ("sim_cfd", "≋", "2D CFD", "Flow around a slice through this assembly", lambda: self.add_sim("cfd"))]), "Simulation")
+        if ext.present("render"):
+            self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "New render", "Photorealistic pictures and videos of this assembly: sun, lights, floor, cameras", lambda: self.add_render())]), "Render")
         self.left = QTabWidget()
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
@@ -208,6 +280,7 @@ class AssemblyWindow(QMainWindow):
         self.tree.itemDoubleClicked.connect(self.tree_double)
         self.tree.itemChanged.connect(self.tree_checked)
         self.left.setIconSize(QSize(26, 26))
+        self.left.currentChanged.connect(self.left_changed)
         self.left.addTab(self.tree, icons.icon("tab tree", 26), "")
         self.left.setTabToolTip(0, "Assembly tree")
         self.props = QWidget()
@@ -266,6 +339,8 @@ class AssemblyWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_F2), self.tree, activated=lambda: self.rename_item(), context=Qt.ShortcutContext.WidgetShortcut)
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=lambda: self.set_mode(None))
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.delete_selected)
+        QShortcut(QKeySequence.StandardKey.Copy, self, activated=self.copy_selected)
+        QShortcut(QKeySequence.StandardKey.Paste, self, activated=self.paste_component)
 
     def units_changed(self, *_a):
         """File > Units was changed: what shows a length is redrawn (the stored positions stay in mm)."""
@@ -474,7 +549,8 @@ class AssemblyWindow(QMainWindow):
                 c["path"] = os.path.relpath(ap, base)
             except ValueError:
                 pass
-        open(self.path, "w", encoding="utf-8").write(self.asm.to_json())
+        import fileio
+        fileio.write_text(self.path, self.asm.to_json())
         self.saved_json = self.asm.to_json()
         also = sim_links.save_open(self)
         self.say(f"Saved {self.path}" + (f"  (and the simulation{'s' if len(also) > 1 else ''} {', '.join(also)})" if also else ""))
@@ -527,26 +603,48 @@ class AssemblyWindow(QMainWindow):
             self.mesh_cache[key] = hit
         return hit
 
-    def pull_edges(self, *_a):
-        """Move every outline a few pixels towards the viewer (in the world, so it does not depend on the graphics card's depth-offset
-        support): the line where two parts touch lies exactly in the surface of the other part and would otherwise lose the depth test."""
+    PULL_K = 3e-5       # outline depth bias per pixel of "pull": a fraction of the distance to the camera, so it stays far thinner than any wall
+
+    def pull_matrix(self):
+        """A 4x4 that slides every point a hair towards the camera ALONG ITS OWN VIEW RAY (perspective: shrink about the eye), so the outline keeps
+        exactly the same place on the screen and only wins the depth test where two parts touch.  The earlier version moved the lines a fixed
+        distance in the world (about 25 mm on a 1.5 m tube), which on a thin part is more than its wall: far edges showed through and the lines
+        floated away from the surface."""
         pl = self.plotter
+        S = np.eye(4)
         try:
             cam = pl.camera
             p, f = np.array(cam.position, float), np.array(cam.focal_point, float)
             v = p - f
             dist = float(np.linalg.norm(v))
             if dist < 1e-9:
-                return
+                return S
+            k = settings.get("pull_px") * self.PULL_K
             if cam.GetParallelProjection():
-                eps = settings.get("pull_px") * 2.0 * cam.GetParallelScale() / max(300, pl.window_size[1])
-                off = v / dist * eps * 2.0
+                S[:3, 3] = v / dist * (k * dist)
             else:
-                eps = settings.get("pull_px") * 2.0 * dist * math.tan(math.radians(cam.GetViewAngle()) / 2) / max(300, pl.window_size[1])
-                off = v / dist * eps
-            for e in self.entries.values():
-                if e.get("edges") is not None:
-                    e["edges"].position = tuple(off)
+                S[:3, :3] *= (1.0 - k)
+                S[:3, 3] = p * k
+        except Exception:
+            pass
+        return S
+
+    def pull_edges(self, *_a):
+        """Re-apply the depth bias to every outline (and to line / point highlights) whenever the camera moves or the window is resized."""
+        try:
+            S = self.pull_matrix()
+            self._pull_S = S
+            for cid, e in self.entries.items():
+                c = self.asm.comp(cid)
+                if c is not None and e.get("edges") is not None:
+                    e["edges"].user_matrix = S @ self.asm.T4(c)
+            for a, cid in getattr(self, "pull_actors", []):
+                c = self.asm.comp(cid)
+                if c is not None:
+                    a.user_matrix = S @ self.asm.T4(c)
+            ha = getattr(self, "hover_pull", None)
+            if ha is not None and self.hover_actor is ha[0]:
+                ha[0].user_matrix = S @ np.array(ha[1])
         except Exception:
             pass
 
@@ -573,7 +671,7 @@ class AssemblyWindow(QMainWindow):
         pl.clear()
         pl.add_axes()
         self.hover_key, self.hover_actor = None, None
-        self.entries, self.hi_actors = {}, []
+        self.entries, self.hi_actors, self.pull_actors, self.hover_pull = {}, [], [], None
         for k, c in enumerate(self.asm.components):
             if c.get("hidden") or c.get("suppressed"):
                 continue
@@ -582,7 +680,10 @@ class AssemblyWindow(QMainWindow):
                 continue
             m, polys, lc = hit
             col = SEL_COL if c["id"] == self.sel_comp else self.base_color(c, k)
-            a = pl.add_mesh(m, color=col, opacity=self.opacity_of(c), smooth_shading=False, pickable=True, show_edges=False, reset_camera=False,
+            opa = self.opacity_of(c)
+            if self.pat is not None and (c.get("derived") or {}).get("pat") == self.pat["data"]["id"]:
+                col, opa = PREVIEW_COL, PREVIEW_FADE                # the copies the pattern / mirror being made will add: faded blue until OK
+            a = pl.add_mesh(m, color=col, opacity=opa, smooth_shading=False, pickable=True, show_edges=False, reset_camera=False,
                             ambient=0.28, diffuse=0.78, specular=0.30, specular_power=22)
             ml = pm_app.MainWindow.merged_lines(polys)
             ea = pl.add_mesh(ml, color=(0.13, 0.15, 0.20), line_width=settings.get("line_px"), pickable=False, reset_camera=False) if ml is not None else None
@@ -618,11 +719,13 @@ class AssemblyWindow(QMainWindow):
             M = self.asm.T4(c)
             e["actor"].user_matrix = M
             if e["edges"] is not None:
-                e["edges"].user_matrix = M
+                e["edges"].user_matrix = getattr(self, "_pull_S", np.eye(4)) @ M
+        pulled = {id(a) for a, _c in getattr(self, "pull_actors", [])}
+        S = getattr(self, "_pull_S", np.eye(4))
         for a, cid in self.hi_actors:
             c = self.asm.comp(cid)
             if c is not None:
-                a.user_matrix = self.asm.T4(c)
+                a.user_matrix = (S if id(a) in pulled else np.eye(4)) @ self.asm.T4(c)
         if render and self.plotter is not None:
             try:
                 self.plotter.render()
@@ -641,6 +744,8 @@ class AssemblyWindow(QMainWindow):
     def set_selected_color(self):
         for cid, e in self.entries.items():
             c = self.asm.comp(cid)
+            if self.pat is not None and (c.get("derived") or {}).get("pat") == self.pat["data"]["id"]:
+                continue                                              # the faded blue preview copies keep their colour
             col = SEL_COL if cid == self.sel_comp else self.base_color(c, e["k"])
             e["actor"].prop.color = col
         if self.plotter is not None:
@@ -667,13 +772,15 @@ class AssemblyWindow(QMainWindow):
             if it["kind"] == "face":
                 cs = np.where(np.array(e["mesh"].cell_data["face"]) == it["idx"])[0]
                 if len(cs):
-                    a = pl.add_mesh(e["mesh"].extract_cells(cs), color=HI_COL, lighting=False, pickable=False, reset_camera=False)
+                    a = part_refgeo.add_face_highlight(pl, e["mesh"].extract_cells(cs), HI_COL)      # lifted + depth-biased: no speckle
             elif it["kind"] == "edge" and it["idx"] < len(e["polys"]):
                 ml = pm_app.MainWindow.merged_lines([e["polys"][it["idx"]]])
                 a = pl.add_mesh(ml, color=HI_COL, line_width=5, pickable=False, reset_camera=False)
+                self.pull_actors.append((a, it["cid"]))
             elif it["kind"] == "vertex":
                 a = pl.add_mesh(pv.PolyData(np.array([it["pt"]])), color=HI_COL, point_size=12, render_points_as_spheres=True,
                                 pickable=False, reset_camera=False)
+                self.pull_actors.append((a, it["cid"]))
             if a is not None:
                 self.hi_actors.append((a, it["cid"]))
         if self.rg and self.rg.get("ent") is not None:                 # preview of the plane / axis being made
@@ -708,11 +815,14 @@ class AssemblyWindow(QMainWindow):
                 it.setData(0, Qt.ItemDataRole.UserRole, ("aref", f["id"]))
                 it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 it.setCheckState(0, Qt.CheckState.Checked if f.get("show", True) else Qt.CheckState.Unchecked)
-                try:
-                    a.ref_entity(f["id"])
-                except am.MateError as ex:
-                    it.setForeground(0, QBrush(QColor("#c00000")))
-                    it.setToolTip(0, str(ex))
+                if f.get("suppressed"):
+                    self.mark_suppressed(it, f)
+                else:
+                    try:
+                        a.ref_entity(f["id"])
+                    except am.MateError as ex:
+                        it.setForeground(0, QBrush(QColor("#c00000")))
+                        it.setToolTip(0, str(ex))
         comps = QTreeWidgetItem(root, [f"▣  Components ({len(a.components)})"])
         comps.setExpanded(True)
         for c in a.components:
@@ -723,6 +833,8 @@ class AssemblyWindow(QMainWindow):
                 tag = "(pattern)" if c["derived"].get("kind") != "mirror" else "(mirror)"
             it = QTreeWidgetItem(comps, [f"{tag + ' ' if tag else ''}{c['name']}{'  (hidden)' if c.get('hidden') else ''}"])
             it.setData(0, Qt.ItemDataRole.UserRole, ("comp", c["id"]))
+            if c.get("suppressed"):
+                self.mark_suppressed(it, c)
             if self.d_ok(c) is False:
                 it.setForeground(0, QBrush(QColor("#c00000")))
                 it.setText(0, it.text(0) + "   ✖ part file not found")
@@ -733,6 +845,10 @@ class AssemblyWindow(QMainWindow):
                 o = QTreeWidgetItem(it, ["⊹  Origin"])
                 o.setData(0, Qt.ItemDataRole.UserRole, ("corigin", c["id"]))
                 pd = self.part_doc(c)
+                it.setIcon(0, icon_set.qicon("subassembly" if getattr(pd, "is_sub", False) else "component", 16))
+                cfgs = [n for n in (a.part_cfgs_fn(c) or [])] if pd is not None else []
+                if len(cfgs) > 1:
+                    self.add_config_row(it, c, cfgs)
                 if getattr(pd, "is_sub", False):
                     inside = QTreeWidgetItem(it, [f"▣  Parts inside ({len(pd.leaf_names)})"])
                     for nm in pd.leaf_names:
@@ -747,10 +863,13 @@ class AssemblyWindow(QMainWindow):
             pp = QTreeWidgetItem(root, [f"☷  Patterns ({len(a.patterns)})"])
             pp.setExpanded(True)
             for p in a.patterns:
-                it = QTreeWidgetItem(pp, [p["name"]])
+                it = QTreeWidgetItem(pp, [p["name"] + ("  (suppressed)" if p.get("suppressed") else "")])
                 it.setData(0, Qt.ItemDataRole.UserRole, ("pattern", p["id"]))
+                if p.get("suppressed"):
+                    self.mark_suppressed(it, p)
         import sim_links
-        L = sim_links.sims(self)
+        import ext
+        L = sim_links.sims(self) if ext.present("simulation") else []      # the links stay in the file when the add-on is not there
         if L:
             si = QTreeWidgetItem(root, [f"∿  Simulations ({len(L)})"])
             si.setExpanded(True)
@@ -760,7 +879,7 @@ class AssemblyWindow(QMainWindow):
                 sit.setToolTip(0, sim_links.abs_of(self, e) + "\nDouble-click to open")
                 if sim_links.missing(self, e):
                     sit.setForeground(0, QBrush(QColor("#c00000")))
-        R = sim_links.renders(self)
+        R = sim_links.renders(self) if ext.present("render") else []
         if R:
             ri = QTreeWidgetItem(root, [f"◉  Renders ({len(R)})"])
             ri.setExpanded(True)
@@ -780,13 +899,51 @@ class AssemblyWindow(QMainWindow):
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             it.setCheckState(0, Qt.CheckState.Unchecked if m.get("suppressed") else Qt.CheckState.Checked)
             if m.get("suppressed"):
-                it.setForeground(0, QBrush(QColor("#888888")))
+                self.mark_suppressed(it, m)
             if st.startswith("error"):
                 it.setForeground(0, QBrush(QColor("#c00000")))
                 it.setToolTip(0, st)
+        icon_set.decorate_tree(self.tree, "assembly")
         self.busy = False
+        cur = self.tree.currentItem()
+        if cur is not None and self.sel_comp:
+            self.tree.scrollToItem(cur)                  # the selected component is highlighted and in view
         if getattr(self, "mini", None) is not None:
             self.mini.sync()
+
+    def add_config_row(self, parent, c, cfgs):
+        """The Configurations row of a component that has several: its icon, its label and a drop-down with the component's configurations."""
+        row = QTreeWidgetItem(parent, [""])
+        row.setData(0, Qt.ItemDataRole.UserRole, ("ccfg", c["id"]))
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 4, 0)
+        h.setSpacing(5)
+        pic = QLabel()
+        pic.setPixmap(icon_set.pixmap("config", 16))
+        h.addWidget(pic)
+        h.addWidget(QLabel("Configurations"))
+        box = QComboBox()
+        box.addItems(cfgs)
+        cur = self.asm.cfg_read("c:" + c["id"])
+        box.setCurrentIndex(max(0, box.findText(str(cur))))
+        box.setToolTip("Which configuration of this component the assembly uses (in the assembly's active configuration)")
+        box.activated.connect(lambda _i, cid=c["id"], b=box: QTimer.singleShot(0, lambda: self.set_comp_config(cid, b.currentText())))
+        h.addWidget(box)
+        h.addStretch(1)
+        self.tree.setItemWidget(row, 0, w)
+
+    def set_comp_config(self, cid, name):
+        a = self.asm
+        c = a.comp(cid)
+        if c is None or name == a.cfg_read("c:" + cid):
+            return
+        self.snapshot()
+        key = "c:" + cid
+        if key not in a.cfg["cols"]:
+            a.cfg_add_col(key)                       # the Configurations table gets its column the first time
+        a.cfg_set_cell(a.cfg["active"], key, name)
+        self.config_changed()
 
     def d_ok(self, c):
         if c.get("derived"):
@@ -804,8 +961,7 @@ class AssemblyWindow(QMainWindow):
         if data[0] in ("comp", "cplane", "corigin", "cref"):
             self.sel_comp = data[1]
             self.set_selected_color()
-            self.show_comp_props()
-            self.left.setCurrentIndex(1)
+            self.show_comp_props()                      # filled in for when you open Properties; the tab itself is left alone
         elif data[0] == "mate":
             self.show_mate_props(data[1])
         elif data[0] == "pattern":
@@ -816,6 +972,8 @@ class AssemblyWindow(QMainWindow):
         if it is None:
             return
         data = it.data(0, Qt.ItemDataRole.UserRole) or (None,)
+        if data[0] == "comp" and self.mode is None and self.sel_comp != data[1]:
+            self.tree.setCurrentItem(it)                # a right-click selects the component first, so the menu is about the part you clicked
         menu = QMenu(self)
         if data[0] in ("comp", "mate", "pattern", "aref") and not (data[0] == "comp" and (self.asm.comp(data[1]) or {}).get("derived")):
             menu.addAction("Rename...   (F2)").triggered.connect(lambda: self.rename_item(data[0], data[1]))
@@ -830,14 +988,16 @@ class AssemblyWindow(QMainWindow):
             menu.addAction("Remove from this list (the file stays)").triggered.connect(lambda: self.unlink_sim(data[1]))
         elif data[0] == "aref":
             menu.addAction("Edit").triggered.connect(lambda: asm_refs.start(self, "refplane", edit=data[1]))
+            self.suppress_menu_action(menu, "aref", data[1])
             menu.addAction("Delete").triggered.connect(lambda: asm_refs.delete_ref(self, data[1]))
         elif data[0] == "mate":
             m = self.asm.mate(data[1])
             menu.addAction("Edit Mate").triggered.connect(lambda: self.mate_edit_start(data[1]))
-            menu.addAction("Suppress" if not m.get("suppressed") else "Unsuppress").triggered.connect(lambda: self.mate_suppress(data[1]))
+            self.suppress_menu_action(menu, "mate", data[1])
             menu.addAction("Delete Mate").triggered.connect(lambda: self.delete_mate(data[1]))
         elif data[0] == "pattern":
             menu.addAction("Edit").triggered.connect(lambda: self.pattern_edit(data[1]))
+            self.suppress_menu_action(menu, "pattern", data[1])
             menu.addAction("Delete").triggered.connect(lambda: self.pattern_delete(data[1]))
         if menu.actions():
             menu.exec(self.tree.viewport().mapToGlobal(pos))
@@ -876,8 +1036,10 @@ class AssemblyWindow(QMainWindow):
         if not c.get("derived"):
             menu.addAction("Float" if c.get("fixed") else "Fix").triggered.connect(lambda: self.toggle_fixed(cid))
             menu.addAction("Edit Component").triggered.connect(lambda: (setattr(self, "sel_comp", cid), self.edit_component()))
+            menu.addAction("Duplicate component   (Ctrl+C, Ctrl+V)").triggered.connect(lambda: self.duplicate_component(cid))
         menu.addAction("Show" if c.get("hidden") else "Hide").triggered.connect(lambda: self.toggle_hidden(cid))
         if not c.get("derived"):
+            self.suppress_menu_action(menu, "comp", cid)
             menu.addAction("Delete Component").triggered.connect(lambda: self.delete_component(cid))
 
     # ------------------------------------------------------------------ component commands
@@ -902,6 +1064,11 @@ class AssemblyWindow(QMainWindow):
                     self.say(f"{os.path.basename(f)} could not be opened.")
                     continue
             c = self.asm.add_component(f, fixed=not self.asm.components)
+            try:                                    # a part / assembly with several configurations gets its choosing column at once
+                if len(self.asm.part_cfgs_fn(c) or []) > 1:
+                    self.asm.cfg_add_col("c:" + c["id"])
+            except Exception:
+                pass
             d = self.part_doc(c)
             if d is None or d.solid is None:
                 self.say(f"{os.path.basename(f)} has no solid yet (or could not be opened).")
@@ -920,6 +1087,59 @@ class AssemblyWindow(QMainWindow):
         self.solve_all()
         self.update_all(fit=len(self.asm.components) == len(files))
         self.say("The first component is fixed; the others float. Use Move Component, or Mate to put them together.")
+
+    def duplicate_component(self, cid):
+        """A copy of a component: the same part / assembly and configuration, floating (not fixed, no mates), set beside the original and selected.
+        One undo step.  Returns the new component's id (None when there is nothing to copy)."""
+        src = self.asm.comp(cid)
+        if src is None or src.get("derived"):
+            if src is not None:
+                self.say("A pattern copy cannot be duplicated: duplicate the component it was made from.")
+            return None
+        self.snapshot()
+        c = copy.deepcopy(src)
+        n = 1 + sum(1 for o in self.asm.components if o.get("base") == src.get("base"))
+        c["id"] = self.asm.next_id("C")
+        c["name"] = f"{src.get('base', 'Part')}<{n}>"
+        while any(o["name"] == c["name"] for o in self.asm.components):
+            n += 1
+            c["name"] = f"{src.get('base', 'Part')}<{n}>"
+        c["fixed"], c["hidden"] = False, False
+        c.pop("derived", None)
+        shift = 30.0
+        try:
+            d = self.part_doc(src)
+            if d is not None and d.solid is not None:
+                bb = d.solid.bounding_box()
+                shift = float(bb.size.X) + 10.0
+        except Exception:
+            pass
+        c["pos"] = [src["pos"][0] + shift, src["pos"][1], src["pos"][2]]
+        self.asm.components.append(c)
+        for key in (f"c:{cid}", f"x:{cid}"):                      # its choice of configuration / suppress switch is copied row by row
+            if key in self.asm.cfg.get("cols", []):
+                nk = key.split(":")[0] + ":" + c["id"]
+                self.asm.cfg["cols"].append(nk)
+                for row in self.asm.cfg["cells"].values():
+                    if key in row:
+                        row[nk] = row[key]
+        self.sel_comp = c["id"]
+        self.solve_all()
+        self.update_all()
+        self.say(f"Duplicated: {c['name']} is beside the original and selected - drag it into place.")
+        return c["id"]
+
+    def copy_selected(self):
+        if self.sel_comp is not None and self.asm.comp(self.sel_comp) is not None:
+            self.clip_comp = self.sel_comp
+            self.say(f"Copied {self.asm.comp(self.sel_comp)['name']}  (Ctrl+V to paste).")
+
+    def paste_component(self):
+        cid = getattr(self, "clip_comp", None)
+        if cid is None or self.asm.comp(cid) is None:
+            self.say("Nothing copied: select a component and press Ctrl+C.")
+            return
+        self.duplicate_component(cid)
 
     def toggle_fixed(self, cid):
         self.snapshot()
@@ -970,7 +1190,7 @@ class AssemblyWindow(QMainWindow):
         elif data[0] == "render":
             self.open_linked_sim(data[1], "renders")
         elif data[0] == "comp":
-            self.edit_component()
+            return                                      # double-click on a component does nothing (it is selected by the first click)
         elif data[0] == "mate" and self.mode is None:
             self.mate_edit_start(data[1])
         elif data[0] == "aref" and self.mode is None:
@@ -1018,11 +1238,58 @@ class AssemblyWindow(QMainWindow):
         self.update_all()
 
     def mate_suppress(self, mid):
+        self.toggle_suppress("mate", mid)
+
+    def item_label(self, kind, iid):
+        o = self.asm._item(kind, iid)
+        if o is None:
+            return "?"
+        return self.asm.mate_label(o) if kind == "mate" else o["name"]
+
+    def mark_suppressed(self, it, o):
+        """A suppressed item in the tree: grey and struck through (suppressed is not the same as hidden)."""
+        it.setForeground(0, QBrush(QColor("#888888")))
+        f = it.font(0)
+        f.setStrikeOut(True)
+        it.setFont(0, f)
+        by = o.get("sup_by")
+        if by:
+            k2, _, i2 = by.partition(":")
+            it.setToolTip(0, "Suppressed: it depends on " + self.item_label(k2, i2) + ".")
+            if "(suppressed" not in it.text(0):
+                it.setText(0, it.text(0) + f"  (suppressed with {self.item_label(k2, i2)})")
+        else:
+            it.setToolTip(0, "Suppressed: left out of the assembly (not drawn, not solved). Hide only stops it being drawn.")
+
+    def suppress_menu_action(self, menu, kind, iid):
+        """'Suppress' / 'Unsuppress' for a component, mate, pattern or reference item, with how many others follow it."""
+        o = self.asm._item(kind, iid)
+        if o is None:
+            return
+        if o.get("suppressed"):
+            key = f"{kind}:{iid}"
+            n = sum(1 for g in (self.asm.components, self.asm.mates, self.asm.refs, self.asm.patterns) for x in g if x.get("sup_by") == key)
+            menu.addAction("Unsuppress" + (f"  (and {n} that followed it)" if n else "")).triggered.connect(lambda: self.toggle_suppress(kind, iid))
+        else:
+            n = len(self.asm.suppress_closure(kind, iid))
+            menu.addAction("Suppress" + (f"  (and {n} that depend{'' if n != 1 else 's'} on it)" if n else "")).triggered.connect(
+                lambda: self.toggle_suppress(kind, iid))
+
+    def toggle_suppress(self, kind, iid):
+        """Suppress / unsuppress a component, mate, pattern or reference item - and what is built on it.  One undo step."""
+        o = self.asm._item(kind, iid)
+        if o is None or o.get("derived"):
+            return
         self.snapshot()
-        m = self.asm.mate(mid)
-        m["suppressed"] = not m.get("suppressed")
+        going = not o.get("suppressed")
+        changed = self.asm.set_suppressed(kind, iid, going)
+        if kind == "comp" and going and self.sel_comp == iid:
+            self.sel_comp = None
         self.solve_all()
+        self.refresh_derived()
         self.update_all()
+        names = ", ".join(self.item_label(k, i) for k, i in changed)
+        self.say(f"{self.item_label(kind, iid)} {'suppressed' if going else 'unsuppressed'}" + (f" - and {names}, which {'depend on it' if going else 'followed it'}." if changed else "."))
 
     def edit_component(self):
         c = self.asm.comp(self.sel_comp) if self.sel_comp else None
@@ -1204,6 +1471,14 @@ class AssemblyWindow(QMainWindow):
         e.editingFinished.connect(done)
         form.addRow(unitctl.label(label), e)
 
+    def left_changed(self, i):
+        """You opened the Properties tab: it shows the selected component (it is not opened for you when you click one)."""
+        if i == 1 and self.mode is None and getattr(self, "pat", None) is None and getattr(self, "rg", None) is None:
+            try:
+                self.show_comp_props()
+            except Exception:
+                pass
+
     def show_comp_props(self):
         self.clear_props()
         c = self.asm.comp(self.sel_comp) if self.sel_comp else None
@@ -1365,7 +1640,8 @@ class AssemblyWindow(QMainWindow):
             if it["kind"] == "face":
                 cs = np.where(np.array(e["mesh"].cell_data["face"]) == it["idx"])[0]
                 if len(cs):
-                    a = pl.add_mesh(e["mesh"].extract_cells(cs), color=self.HOVER_COL, lighting=False, pickable=False, reset_camera=False, opacity=0.8)
+                    a = part_refgeo.add_face_highlight(pl, e["mesh"].extract_cells(cs), self.HOVER_COL)
+                    a.prop.opacity = 0.8
             elif it["kind"] == "edge" and it["idx"] < len(e["polys"]):
                 a = pl.add_mesh(pm_app.MainWindow.merged_lines([e["polys"][it["idx"]]]), color=self.HOVER_COL, line_width=4, pickable=False, reset_camera=False)
             elif it["kind"] == "vertex":
@@ -1374,6 +1650,9 @@ class AssemblyWindow(QMainWindow):
             if a is not None:
                 try:
                     a.user_matrix = e["actor"].user_matrix       # it sits where its component sits
+                    if it["kind"] != "face":                    # lines and points get the same depth bias as the outlines
+                        self.hover_pull = (a, np.array(e["actor"].user_matrix))
+                        a.user_matrix = getattr(self, "_pull_S", np.eye(4)) @ self.hover_pull[1]
                 except Exception:
                     pass
                 self.hover_actor = a
@@ -1415,9 +1694,7 @@ class AssemblyWindow(QMainWindow):
             self.sel_comp = h[1] if h is not None else None
             self.set_selected_color()
             self.refresh_tree()
-            self.show_comp_props()
-            if h is not None:
-                self.left.setCurrentIndex(1)
+            self.show_comp_props()                      # a click only selects: Properties is opened by hand
         except Exception:
             self.say("Click failed: " + traceback.format_exc(limit=2))
 
@@ -1448,7 +1725,12 @@ class AssemblyWindow(QMainWindow):
             self.say({"move": "Move Component: drag a component (Esc to stop).", "rotate": "Rotate Component: drag a component (Esc to stop).",
                       None: "Select a component by clicking it."}.get(mode, ""))
 
-    def drag_begin(self, x, y):
+    AXIS_NAMES = ("X", "Y", "Z")
+    AXIS_COLORS = ((0.90, 0.20, 0.20), (0.20, 0.70, 0.25), (0.20, 0.40, 0.95))
+
+    def drag_begin(self, x, y, kind=None):
+        """Start dragging the component under pixel (x, y): kind is "move" or "rotate" (default: what the tool mode says).  None when there is nothing
+        to drag.  The press selects the component."""
         h = self.surface_hit(x, y)
         if h is None:
             return None
@@ -1458,37 +1740,133 @@ class AssemblyWindow(QMainWindow):
             self.say(f"{c['name']} is " + ("a pattern copy." if c.get("derived") else "fixed - right-click it and choose Float to move it."))
             return None
         self.snapshot()
+        self.asm.drag_reset()
         self.sel_comp = cid
         self.set_selected_color()
+        if self.mode in (None, "move", "rotate"):
+            self.show_comp_props()
         R, t = self.asm.pose(c)
         d, right, up = self.view_vectors()
-        return {"cid": cid, "x": x, "y": y, "hit": hit, "R": R, "t": t, "d": d, "right": right, "up": up,
-                "cluster": self.asm.cluster(cid), "lc": self.entries[cid]["lc"]}
+        lc = self.entries[cid]["lc"]
+        st = {"cid": cid, "kind": kind or ("rotate" if self.mode == "rotate" else "move"), "x": x, "y": y, "hit": hit, "R": R, "t": t,
+                "lhit": R.T @ (hit - t), "cur": (R, t), "lock": None, "p0": np.array(hit, float), "s0": 0.0, "d": d, "right": right, "up": up,
+                "cluster": self.asm.cluster(cid), "lc": lc}
+        self.show_axis_lock(st)
+        return st
 
-    def drag_move(self, st, x, y):
+    @staticmethod
+    def along_axis(origin, a, ray_o, ray_d):
+        """How far along the line origin + s*a the mouse ray comes closest (a, ray_d unit vectors)."""
+        w0 = origin - ray_o
+        b, dd, e = float(a @ ray_d), float(a @ w0), float(ray_d @ w0)
+        den = 1.0 - b * b
+        if den < 1e-6:
+            return 0.0
+        return (b * e - dd) / den
+
+    def drag_move(self, st, x, y, axis=None):
+        """One step of a drag.  axis: None (free) or 0 / 1 / 2 (X / Y / Z held): a move slides along that axis, a rotation turns about it."""
+        if axis != st["lock"]:                              # the lock was engaged or released: carry on from where the component is now
+            R1, t1 = st["cur"]
+            st["R"], st["t"] = R1, t1
+            st["hit"] = R1 @ st["lhit"] + t1
+            st["x"], st["y"] = x, y
+            st["lock"] = axis
+            if st["kind"] == "move":                          # where the mouse is now counts as the start: nothing jumps
+                p_r, dirn = self.ed.ray(x, y)
+                dirn = am.unit(dirn)
+                if axis is None:
+                    den = float(dirn @ st["d"])
+                    st["p0"] = p_r + dirn * (float((st["hit"] - p_r) @ st["d"]) / den) if abs(den) > 1e-9 else st["hit"]
+                else:
+                    st["s0"] = self.along_axis(st["hit"], np.eye(3)[axis], p_r, dirn)
+            self.show_axis_lock(st)
         c = self.asm.comp(st["cid"])
-        if self.mode == "move":
+        a = None if axis is None else np.eye(3)[axis]
+        if st["kind"] == "move":
             p_r, dirn = self.ed.ray(x, y)
-            den = float(dirn @ st["d"])
-            if abs(den) < 1e-9:
-                return
-            p1 = p_r + dirn * (float((st["hit"] - p_r) @ st["d"]) / den)
-            R, t = st["R"], st["t"] + (p1 - st["hit"])
+            dirn = am.unit(dirn)
+            if a is None:
+                den = float(dirn @ st["d"])
+                if abs(den) < 1e-9:
+                    return
+                p1 = p_r + dirn * (float((st["hit"] - p_r) @ st["d"]) / den)
+                delta = p1 - st["p0"]
+            else:
+                delta = a * (self.along_axis(st["hit"], a, p_r, dirn) - st["s0"])
+            R, t = st["R"], st["t"] + delta
         else:
-            dx, dy = x - st["x"], y - st["y"]
-            Rd = am.axis_rotation(st["up"], dx * 0.01) @ am.axis_rotation(st["right"], -dy * 0.01)
             c0 = st["R"] @ st["lc"] + st["t"]
+            if a is None:
+                dx, dy = x - st["x"], y - st["y"]
+                Rd = am.axis_rotation(st["up"], dx * 0.01) @ am.axis_rotation(st["right"], -dy * 0.01)
+            else:
+                sc = self.ed.to_screen(c0)[0]
+                v0 = np.array([st["x"] - sc[0], st["y"] - sc[1]])
+                v1 = np.array([x - sc[0], y - sc[1]])
+                sgn = 1.0 if float(-(a @ st["d"])) > 0 else -1.0       # an axis pointing at the viewer turns anticlockwise on screen
+                if np.linalg.norm(v0) > 5.0 and np.linalg.norm(v1) > 1e-6:
+                    ang = math.atan2(v0[0] * v1[1] - v0[1] * v1[0], float(v0 @ v1))
+                else:
+                    ang = (x - st["x"]) * 0.01
+                Rd = am.axis_rotation(a, ang * sgn)
             R = Rd @ st["R"]
             t = c0 - R @ st["lc"]
-        self.asm.solve(drag={st["cid"]: (R, t)}, limit=st["cluster"])
+        st["cur"] = (R, t)
+        self.asm.solve(drag={st["cid"]: (R, t)}, limit=st["cluster"], grab={st["cid"]: st["lhit"]})
         self.refresh_derived()
         self.update_poses()
 
+    def show_axis_lock(self, st):
+        """A coloured line through the component along the held axis, and the status text; both go when the key is let go."""
+        pl = self.plotter
+        try:
+            pl.remove_actor("axis_lock", render=False)
+        except Exception:
+            pass
+        ax = st["lock"]
+        what = "Move" if st["kind"] == "move" else "Rotate"
+        if ax is None:
+            self.say(f"{what} freely  (hold X, Y or Z to lock to an axis)")
+            pl.render()
+            return
+        import pyvista as pv
+        R, t = st["cur"]
+        c0 = R @ st["lc"] + t
+        a = np.eye(3)[ax]
+        L = 0.6 * float(pl.camera.GetDistance())
+        pl.add_mesh(pv.Line(tuple(c0 - a * L), tuple(c0 + a * L)), color=self.AXIS_COLORS[ax], line_width=3, name="axis_lock", pickable=False, reset_camera=False)
+        self.say(f"{what} {'along' if st['kind'] == 'move' else 'about'} {self.AXIS_NAMES[ax]}")
+        pl.render()
+
     def drag_end(self, st):
+        try:
+            self.plotter.remove_actor("axis_lock", render=False)
+        except Exception:
+            pass
         self.asm.solve()
         self.refresh_derived()
         self.refresh_tree()
         self.update_poses()
+        self.show_comp_props()
+
+    def drag_cancel(self, st):
+        """Esc during a drag: the component goes back where it was (the undo step the drag started is taken back and forgotten)."""
+        try:
+            self.plotter.remove_actor("axis_lock", render=False)
+        except Exception:
+            pass
+        mode = self.mode
+        self.do_undo()
+        self.redo.clear()
+        self.mode = mode
+        self.say("Drag cancelled.")
+
+    def select_at(self, x, y):
+        h = self.surface_hit(x, y)
+        self.sel_comp = h[1] if h is not None else None
+        self.set_selected_color()
+        self.refresh_tree()
         self.show_comp_props()
 
     # ------------------------------------------------------------------ mates

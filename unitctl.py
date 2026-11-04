@@ -113,6 +113,15 @@ def length_unit():
     return units.get(_state["system"])["L"]
 
 
+def system_code():
+    """The short code shown at the bottom right of the window: MMGS, MKS, CGS, IPS or FPS (by the length unit of the current system)."""
+    return {"mm": "MMGS", "m": "MKS", "cm": "CGS", "in": "IPS", "ft": "FPS"}.get(length_unit(), length_unit().upper())
+
+
+def system_tip():
+    return f"Units: {_state['system']};  speed in {_state['speed']}.  Change them in File > Units."
+
+
 def mm_per_unit():
     """Millimetres in one length unit of the current system."""
     return units.get(_state["system"])["L_m"] * 1000.0

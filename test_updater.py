@@ -1,4 +1,3 @@
-import addons; addons.startup()   # the simulation / render modules live in add-ons
 import faulthandler; faulthandler.dump_traceback_later(120, exit=True)
 import os, sys, json, zipfile, tempfile, threading, http.server, functools
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -12,9 +11,8 @@ assert updater.parse_version("1.2.3-beta") == (1, 2, 3)
 
 # user data goes to the user folder; shipped material library is seeded once
 assert paths.user_dir().startswith(tmp)
-import physics_materials as pm, mat_lib, result_style
-lp = pm.library_path(); assert lp.startswith(paths.user_dir()) and os.path.exists(lp), lp
-assert mat_lib.user_path().startswith(paths.user_dir()) and result_style._settings_path().startswith(paths.user_dir())
+import mat_lib
+assert mat_lib.user_path().startswith(paths.user_dir())
 
 # fake GitHub: a release feed and an app zip
 srv_dir = os.path.join(tmp, "srv"); os.makedirs(srv_dir)

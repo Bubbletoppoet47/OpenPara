@@ -1,4 +1,6 @@
 """Gear systems tab: the real program window, live read-outs, and 'Open the parts' makes separate unsaved part documents."""
+import os as _o, sys as _s
+_s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.abspath(__file__)), "addons_src", "partgen"))
 import faulthandler; faulthandler.dump_traceback_later(600, exit=True)
 import math
 import os

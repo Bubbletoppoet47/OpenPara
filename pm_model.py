@@ -44,6 +44,7 @@ def new_feature(kind, **kw):
 
 class Document:
     def __init__(self):
+        self.scale_set = False               # True once the first dimension of the part has set the scale of its sketches (never goes back)
         self.dimvals = {}                    # values of the dimensions the user gave a name, for formulas (filled by rebuild)
         self.params = {}
         self.param_kinds = {}                # {global name: 'number' | 'angle'}; anything else is a length (units follow File > Units)
@@ -71,7 +72,7 @@ class Document:
         title = {"sketch": "Sketch", "extrude": "Boss-Extrude", "cut": "Cut-Extrude", "fillet": "Fillet", "chamfer": "Chamfer",
                  "revolve": "Boss-Revolve", "revolve_cut": "Cut-Revolve", "sweep": "Boss-Sweep", "sweep_cut": "Cut-Sweep",
                  "loft": "Boss-Loft", "loft_cut": "Cut-Loft", "pattern": "Pattern", "mirror": "Mirror",
-                 "refplane": "Plane", "refaxis": "Axis", "partgen": "Part", "imported": "Imported"}[k]
+                 "refplane": "Plane", "refaxis": "Axis", "refpoint": "Point", "partgen": "Part", "imported": "Imported"}[k]
         if k == "partgen":
             title = (feat.get("gen") or "Part").replace(" ", "-")
         if k == "pattern":
@@ -91,6 +92,57 @@ class Document:
         self.features = [f for f in self.features if f["id"] != fid]
         if self.rollback is not None:
             self.rollback = min(self.rollback, len(self.features) - 1)
+
+    # ------------------------------------------------------------------ suppressing (a feature and everything that depends on it)
+    def suppress_closure(self, fid):
+        """Ids of the features that cannot be built once feature `fid` is suppressed (they use its sketch, its faces or edges, its plane / axis, or
+        repeat it), in tree order.  Found by trying it on a copy: suppress, rebuild, take the first feature that now fails, suppress that too, and so
+        on - so exactly the features that really depend on it follow, and independent features after it stay."""
+        if self.feature(fid) is None:
+            return []
+        base = {i for i, st in self.status.items() if str(st).startswith("error")}
+        try:
+            trial = Document.from_json(self.to_json())
+        except Exception:
+            return []
+        trial.rollback = None
+        t0 = trial.feature(fid)
+        if t0 is None:
+            return []
+        t0["suppressed"] = True
+        found = []
+        for _ in range(len(trial.features) + 1):
+            trial.rebuild()
+            bad = [g for g in trial.features if str(trial.status.get(g["id"], "")).startswith("error") and g["id"] not in base and g["id"] not in found]
+            if not bad:
+                break
+            found.append(bad[0]["id"])
+            bad[0]["suppressed"] = True
+        order = {g["id"]: i for i, g in enumerate(self.features)}
+        return sorted((i for i in found if i in order and not self.feature(i).get("suppressed")), key=lambda i: order[i])
+
+    def set_suppressed(self, fid, flag):
+        """Suppress / unsuppress a feature.  Suppressing also suppresses its dependents (marked "sup_by", so unsuppressing the feature brings back
+        exactly those and not the ones you suppressed yourself).  Returns the ids of the dependents that changed."""
+        f = self.feature(fid)
+        if f is None:
+            return []
+        if flag:
+            deps = self.suppress_closure(fid)
+            f["suppressed"] = True
+            f.pop("sup_by", None)
+            for i in deps:
+                g = self.feature(i)
+                g["suppressed"], g["sup_by"] = True, fid
+            return deps
+        f["suppressed"] = False
+        f.pop("sup_by", None)
+        back = [g["id"] for g in self.features if g.get("sup_by") == fid]
+        for i in back:
+            g = self.feature(i)
+            g["suppressed"] = False
+            g.pop("sup_by", None)
+        return back
 
     def index_of(self, fid):
         return next((i for i, f in enumerate(self.features) if f["id"] == fid), None)
@@ -194,7 +246,7 @@ class Document:
             self.planes[f["id"]] = self.resolve_plane(f["plane"], solid)
             self.load_sketch(f)
             return solid
-        if k in ("refplane", "refaxis"):
+        if k in ("refplane", "refaxis", "refpoint"):
             return self.run_refgeo(f, solid)
         if k in ("extrude", "cut"):
             return self.run_extrude(f, solid)
@@ -462,6 +514,12 @@ class Document:
             raise ModelError(f"'{new}' is already used")
         f["name"] = new
 
+    def has_dimensions(self):
+        """True when the part already has a dimension (a driving one) in any sketch, or its scale was set before."""
+        if self.scale_set:
+            return True
+        return any(c["type"] in sc.DIMENSIONS and not c.get("driven") for m in self.models.values() for c in m.cons)
+
     def store_sketch(self, fid):
         """Write the live Model of sketch `fid` back into its feature (without the globals)."""
         f, m = self.feature(fid), self.models[fid]
@@ -670,6 +728,32 @@ class Document:
             raise ModelError("the axis line has no length")
         return Axis(Vector(*(o + a[0] * xd + a[1] * yd)), Vector(*(d[0] * xd + d[1] * yd)))
 
+    def revolve_axis(self, f, solid, sk_):
+        """The axis a revolve spins about: a line of its sketch, a sketch axis, a reference axis ({"ref": id}) or a straight edge of the part
+        ({"edge": ref}); turned round when 'Reverse direction' is on."""
+        spec = f.get("axis")
+        if isinstance(spec, dict) and "ref" in spec:
+            e = self.refgeo.get(spec["ref"])
+            if e is None or "d" not in e:
+                raise ModelError("the reference axis it revolves about is missing or not built")
+            axis = Axis(Vector(*e["p"]), Vector(*e["d"]))
+        elif isinstance(spec, dict) and "edge" in spec:
+            if solid is None:
+                raise ModelError("the edge it revolves about does not exist yet")
+            import asm_model as am
+            try:
+                e = am.edge_entity(self.resolve_edge(spec["edge"], solid))
+            except am.MateError as ex:
+                raise ModelError(str(ex))
+            if e["t"] != "line":
+                raise ModelError("pick a straight edge as the axis")
+            axis = Axis(Vector(*e["p"]), Vector(*e["d"]))
+        else:
+            axis = self.sketch_axis(sk_, spec)
+        if f.get("reverse"):
+            axis = Axis(axis.position, -axis.direction)
+        return axis
+
     def run_revolve(self, f, solid, tool_only=False):
         k = f["kind"]
         sk_ = self.feature(f["sketch"])
@@ -678,9 +762,7 @@ class Document:
         if k == "revolve_cut" and solid is None:
             raise ModelError("nothing to cut yet")
         faces = self.profile(sk_, f.get("pts") or None)
-        axis = self.sketch_axis(sk_, f.get("axis"))
-        if f.get("reverse"):
-            axis = Axis(axis.position, -axis.direction)
+        axis = self.revolve_axis(f, solid, sk_)
         ang = self.num(f.get("angle", "360"))
         if not 0 < ang <= 360:
             raise ModelError("the angle must be between 0 and 360 degrees")
@@ -701,6 +783,8 @@ class Document:
         after = sum(x.volume for x in out.solids()) if out.solids() else 0.0
         if abs(before - after) < 1e-9 * max(1.0, before):
             raise ModelError("the cut does not touch the part")
+        if after > before * (1 + 1e-9) + 1e-9:
+            raise ModelError("the cut would add material - check the sketch and the axis")
         return self.clean(out)
 
     # ------------------------------------------------------------------ sweep and loft
@@ -785,24 +869,12 @@ class Document:
         return tool if solid is None else self.clean(solid + tool)
 
     def run_partgen(self, f, solid):
-        """A part made by the Part Generator (a gear, ...): ONE feature whose parameters are kept in the feature, so the
-        generator window can be reopened to change them.  The new solid is added to the part."""
-        import partgen
-        kind = f.get("gen")
-        if kind not in partgen.PART_TYPES:
-            raise ModelError(f"unknown generated part type {kind!r}")
-        try:
-            v = partgen.numbers(kind, f.get("params") or {}, self.num)
-            tool = partgen.build(kind, v)
-            pl = f.get("place") or {}
-            tool = partgen.placed(tool, pl.get("plane", "Top"), self.num(pl.get("ox", "0")), self.num(pl.get("oy", "0")), self.num(pl.get("oz", "0")))
-        except ModelError:
-            raise
-        except (ValueError, ZeroDivisionError) as ex:
-            raise ModelError(str(ex))
-        if not tool.is_valid:
-            raise ModelError("the generated part is not a valid solid for these inputs")
-        return self.clean(tool if solid is None else solid + tool)
+        """A part made by the Part Generator add-on: the add-on builds it; without the add-on the feature keeps its data and reports it."""
+        import ext
+        spec = ext.feature("partgen")
+        if spec is None:
+            raise ModelError("this part was made with the Part Generator: it " + ext.need_text("partgen"))
+        return spec["build"](self, f, solid)
 
     def run_sweep(self, f, solid, tool_only=False):
         cut = f["kind"] == "sweep_cut"
@@ -818,7 +890,7 @@ class Document:
         faces = self.profile(sk_, f.get("pts") or None)
         path = self.path_wire(ps, bool(f.get("reverse")))
         twist = self.num(f.get("twist", "0")) if f.get("twist_on") else 0.0
-        trans = Transition.ROUND if f.get("corners") == "round" else Transition.RIGHT
+        trans = Transition.RIGHT   # corners are always mitred (use a fillet to round them); an old "round" setting is ignored
         if twist and not self.path_smooth(path):
             raise ModelError("a twisted sweep needs a smooth path (no sharp corners); round the corners of the path sketch")
         tool = None
@@ -1241,6 +1313,8 @@ class Document:
         try:
             if f["kind"] == "refplane":
                 e = refgeo.compute_plane(f.get("ptype"), ents, self.num(f.get("d", "10")), self.num(f.get("ang", "45")), bool(f.get("flip")))
+            elif f["kind"] == "refpoint":
+                e = refgeo.compute_point(f.get("ptype"), ents)
             else:
                 e = refgeo.compute_axis(f.get("ptype"), ents)
         except refgeo.RefError as ex:
@@ -1358,7 +1432,7 @@ class Document:
     def to_json(self):
         return json.dumps({"version": 1, "params": self.params, "kinds": self.param_kinds, "features": self.features, "rollback": self.rollback,
                            "counter": self.counter, "material": self.material, "sims": self.sims, "renders": self.renders,
-                           "display": self.display, "cfg": self.cfg_snapshot()}, indent=1)
+                           "display": self.display, "cfg": self.cfg_snapshot(), "scale_set": self.scale_set}, indent=1)
 
     @classmethod
     def from_json(cls, text):
@@ -1372,6 +1446,7 @@ class Document:
         doc.renders = d.get("renders") or []
         doc.display = d.get("display") or doc.display
         doc.cfg = d.get("cfg") or doc.cfg
+        doc.scale_set = bool(d.get("scale_set"))
         return doc
 
     def copy(self):

@@ -54,7 +54,7 @@ def pagehead(title, lead):
 hero = f'''<div class="hero"><div class="wrap"><div>
 <span class="badge"><i></i>Free and open source &middot; GPL-3.0</span>
 <h1>Parametric CAD that is <em>free for everyone</em></h1>
-<p class="lede">From a first sketch to a finished, simulated and rendered design. OpenPara is an open-source modeller for hobbyists, students and engineers: constraints, assemblies, a gear generator, simulation and a photorealistic renderer in one program.</p>
+<p class="lede">From a first sketch to a finished assembly. OpenPara is an open-source modeller for hobbyists, students and engineers: constraints, parts, assemblies, and add-ons such as a gear generator and a truss generator.</p>
 <div class="btns"><a class="btn p" href="download.html">{svg("dl")}Download for Windows <span id="ver-btn" style="opacity:.75;font-weight:600"></span></a><a class="btn s" href="features.html">See what it does</a></div>
 <div class="fine">Windows installer. Linux and macOS can run it from source.</div></div>
 <figure class="shot"><div class="frame"><img src="img/planetary.jpg" width="1360" height="790" alt="A planetary gear set with a sun gear, three planet gears and a ring gear, generated in OpenPara"></div><figcaption>A planetary set made with the Part Generator</figcaption></figure></div></div>'''
@@ -65,8 +65,6 @@ home = f'''
 <div class="card">{icon("cube")}<h3>Parametric parts</h3><p>Constrained sketches, extrude, cut, revolve, sweep, loft, fillet and chamfer. Change a dimension or a named variable and the part rebuilds.</p></div>
 <div class="card">{icon("layers")}<h3>Assemblies</h3><p>Mates, sub-assemblies and variables of their own. Positions, mate values and pattern spacing can be formulas.</p></div>
 <div class="card">{icon("gear")}<h3>Part Generator</h3><p>True involute spur, helical, herringbone and ring gears from a few numbers, plus gear trains and planetary sets sized for you.</p></div>
-<div class="card">{icon("wave")}<h3>Simulation</h3><p>1D beam and frame analysis, 2D finite-element analysis and 2D flow, with results you can slice and inspect.</p></div>
-<div class="card">{icon("camera")}<h3>Photorealistic renderer</h3><p>Sun and sky from a date, time and place, lights, several cameras, still pictures and MP4 videos.</p></div>
 <div class="card">{icon("code")}<h3>Open and free</h3><p>GPL-3.0. Read the code, change it, share it. No account, no subscription, no limits.</p></div></div></div></section>
 
 <section style="padding-top:0"><div class="wrap"><div class="split">
@@ -78,10 +76,10 @@ home = f'''
 
 <section class="tight" style="background:var(--card);border-block:1px solid var(--line)"><div class="wrap"><div class="paths">
 <div class="path"><div class="eyebrow">Hobbyists and students</div><h3>New to CAD?</h3><p>You do not need an engineering degree. Type a few numbers into the Part Generator and get a real, accurate gear. Then open it and change it.</p><a class="btn p" href="guides.html#first">Make your first part</a></div>
-<div class="path"><div class="eyebrow">Engineers</div><h3>Want the details?</h3><p>Constraints, formulas, units, mates and simulations in one place, and a plain account of what has been checked and what has not.</p><a class="btn o" href="features.html#honest">Read the details</a></div></div></div></section>
+<div class="path"><div class="eyebrow">Engineers</div><h3>Want the details?</h3><p>Constraints, formulas, units and mates in one place, and a plain account of what has been checked and what has not.</p><a class="btn o" href="features.html#honest">Read the details</a></div></div></div></section>
 
 <section><div class="wrap"><div class="band"><div><h2>Try OpenPara today</h2><p>Free to download. The installer needs no administrator rights.</p></div><a class="btn p" href="download.html">{svg("dl")}Get the installer</a></div></div></section>'''
-page("index.html", "OpenPara - free parametric CAD", "OpenPara is a free, open-source parametric CAD modeller with assemblies, a gear generator, simulation and a photorealistic renderer.", home, hero)
+page("index.html", "OpenPara - free parametric CAD", "OpenPara is a free, open-source parametric CAD modeller with assemblies and add-ons such as a gear generator and a truss generator.", home, hero)
 
 # ------------------------------------------------------------------ download
 dl = f'''<section style="padding-top:56px"><div class="wrap prose" style="max-width:860px">
@@ -106,14 +104,12 @@ feat = f'''<section><div class="wrap"><div class="grid" style="grid-template-col
 {block("cube","Parts",["2D sketches with a constraint solver and dimensions","Extrude, cut, revolve, sweep (including twisted sweeps) and loft, each as a boss or a cut","Fillet, chamfer, patterns, mirrors, reference planes and axes","Named variables (Globals), formulas and configurations","One program-wide unit system: mm, cm, m, in, ft, N, kN, kip and more"])}
 {block("gear","Part Generator",["Spur, helical, herringbone and internal ring gears with true involute teeth and exact tooth counts","Size by module, diametral pitch, pitch diameter or outside diameter; optional profile shift, backlash and bore","Gear trains of up to three gears, sized from centre distances, ratios or tooth counts","Planetary sets (sun, planets, ring) with valid planet counts and the ratios for each way of holding them","Each gear opens as its own part. OpenPara gives you the centre distances and turn angles; you build the assembly"])}
 {block("layers","Assemblies",["Mates, sub-assemblies and patterns","Variables of their own","Positions, mate values and pattern spacing can be formulas"])}
-{block("wave","Simulation",["1D beam and frame analysis","2D finite-element analysis and 2D flow","Results you can slice and inspect"])}
-{block("camera","Renderer",["Sun and sky from a date, time and place","Spot light, floor and several cameras","Still pictures and MP4 videos, using Mitsuba 3"])}
-{block("code","Open source",["GPL-3.0 licensed","Built on build123d (OpenCascade), PyQt6, pyvista / VTK, gmsh and Mitsuba 3","All the code is on GitHub"])}
+{block("code","Open source",["GPL-3.0 licensed","Built on build123d (OpenCascade), PyQt6, pyvista / VTK","All the code is on GitHub"])}
 </div></div></section>
 <section style="padding-top:0" id="honest"><div class="wrap"><div class="split" style="align-items:start"><div><div class="eyebrow">Honest limits</div><h2>What is checked, and what is not</h2><p class="lead">We would rather tell you than have you find out.</p></div>
-<div class="prose"><ul class="checks" style="margin-top:0"><li>The gear geometry is checked against textbook values and against the real solids: meshing gears do not overlap, and a deliberately wrong spacing does. That is a geometry check, not a strength or life calculation.</li><li>The simulations are tools for learning and first estimates. Check anything that matters against a trusted method.</li><li>OpenPara is young software under active development. Expect rough edges, and please report them.</li></ul></div></div></div></section>
+<div class="prose"><ul class="checks" style="margin-top:0"><li>The gear geometry is checked against textbook values and against the real solids: meshing gears do not overlap, and a deliberately wrong spacing does. That is a geometry check, not a strength or life calculation.</li><li>OpenPara is young software under active development. Expect rough edges, and please report them.</li></ul></div></div></div></section>
 <section style="padding-top:0"><div class="wrap"><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))"><div class="shotph">Screenshot: sketch with constraints<br>(coming soon)</div><div class="shotph">Screenshot: assembly<br>(coming soon)</div></div></div></section>'''
-page("features.html", "Features - OpenPara", "Parametric parts, assemblies, a gear generator, simulation and a renderer in one free program.", feat, pagehead("Features", "What is in OpenPara today."))
+page("features.html", "Features - OpenPara", "Parametric parts and assemblies in one free program, with a gear generator and a truss generator as add-ons.", feat, pagehead("Features", "What is in OpenPara today."))
 
 # ------------------------------------------------------------------ guides
 def video(text):
@@ -138,7 +134,7 @@ about = f'''<section style="padding-top:52px"><div class="wrap prose">
 <p class="lead" style="margin-top:0;color:var(--ink)">OpenPara aims to be a parametric CAD program that anyone can use: someone making a part for a home project, a student, or an engineer who wants a modeller they can read and extend.</p>
 <h2 id="licence">Licence</h2><p>OpenPara is free software under the <a href="https://www.gnu.org/licenses/gpl-3.0.html">GNU General Public License, version 3</a>. You may use it, study it, change it and share it, and if you share a changed version it must stay free in the same way. The full text is in the <a href="{REPO}/blob/main/LICENSE">LICENSE</a> file.</p>
 <h2>Get involved</h2><ul><li><b>Try it and tell us.</b> Report problems and ideas on the <a href="{REPO}/issues">issues page</a>.</li><li><b>Read or change the code.</b> It is all on <a href="{REPO}">GitHub</a>.</li><li><b>Share your parts and guides.</b> More generators (keyways, bore shapes and other families) are planned.</li></ul>
-<h2>Built with</h2><p><a href="https://github.com/gumyr/build123d">build123d</a> and OpenCascade for geometry, PyQt6 for the interface, pyvista / VTK for 3D views, gmsh for meshing, and Mitsuba 3 for rendering. Thank you to everyone who made those.</p>
+<h2>Built with</h2><p><a href="https://github.com/gumyr/build123d">build123d</a> and OpenCascade for geometry, PyQt6 for the interface, and pyvista / VTK for 3D views. Thank you to everyone who made those.</p>
 </div></section>'''
 page("about.html", "About - OpenPara", "OpenPara is free software under the GPL-3.0. Learn how to get involved.", about, pagehead("About OpenPara", "Free software, built in the open."))
 print("site written")

@@ -129,7 +129,7 @@ def draw_world(win, pl, pv):
                     pickable=False, reset_camera=False)
         win.world_geo.append({"type": "point", "ref": {"c": "@", "k": "origin", "r": None}, "label": "Origin", "info": (np.zeros(3),)})
     for f in a.refs:
-        if not (f.get("show", True) and win.vis.get("refgeo", True)):
+        if f.get("suppressed") or not (f.get("show", True) and win.vis.get("refgeo", True)):
             continue
         try:
             ent = a.ref_entity(f["id"])

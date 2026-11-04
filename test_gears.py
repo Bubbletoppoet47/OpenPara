@@ -1,4 +1,6 @@
 """Spur gear geometry checked against independent facts, not against the formulas that built it."""
+import os as _o, sys as _s
+_s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.abspath(__file__)), "addons_src", "partgen"))
 import math
 
 from build123d import Axis, Circle, Edge, Face, Location, Plane, Vector, extrude

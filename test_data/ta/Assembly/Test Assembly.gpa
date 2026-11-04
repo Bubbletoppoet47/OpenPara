@@ -1,0 +1,159 @@
+{
+ "version": 1,
+ "components": [
+  {
+   "id": "C1",
+   "name": "Square Tubing<1>",
+   "base": "Square Tubing",
+   "path": "..\\Parts\\Square Tubing.gpd",
+   "pos": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rv": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "fixed": true,
+   "hidden": false
+  },
+  {
+   "id": "C2",
+   "name": "Square Tubing<2>",
+   "base": "Square Tubing",
+   "path": "..\\Parts\\Square Tubing.gpd",
+   "pos": [
+    924.9756551443359,
+    282.86919371730875,
+    -3.8424055562344592
+   ],
+   "rv": [
+    1.6169769431519372,
+    -1.6169769431520633,
+    0.8817765068699499
+   ],
+   "fixed": false,
+   "hidden": false
+  }
+ ],
+ "mates": [
+  {
+   "id": "M1",
+   "type": "coincident",
+   "refs": [
+    {
+     "c": "C1",
+     "k": "face",
+     "r": {
+      "c": [
+       6.518141869599897e-05,
+       -2.2379230279049168e-14,
+       19.050070022483546
+      ],
+      "g": "PLANE",
+      "n": [
+       -0.0,
+       0.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "c": "C2",
+     "k": "edge",
+     "r": {
+      "m": [
+       19.050070766804108,
+       0.0,
+       -12.699975388516341
+      ],
+      "g": "LINE",
+      "d": [
+       0.0,
+       1.0,
+       0.0
+      ]
+     }
+    }
+   ],
+   "suppressed": false
+  },
+  {
+   "id": "M2",
+   "type": "coincident",
+   "refs": [
+    {
+     "c": "C1",
+     "k": "face",
+     "r": {
+      "c": [
+       19.050070766829847,
+       4.47584605580984e-15,
+       6.347609626843748e-05
+      ],
+      "g": "PLANE",
+      "n": [
+       1.0,
+       0.0,
+       0.0
+      ]
+     }
+    },
+    {
+     "c": "C2",
+     "k": "face",
+     "r": {
+      "c": [
+       9.565520281196171e-06,
+       905.9255843775,
+       1.9897424619719217e-05
+      ],
+      "g": "PLANE",
+      "n": [
+       0.0,
+       1.0,
+       0.0
+      ]
+     }
+    }
+   ],
+   "suppressed": false,
+   "al": "opposed"
+  }
+ ],
+ "counter": {
+  "C": 2,
+  "M": 2
+ },
+ "patterns": [],
+ "params": {},
+ "kinds": {},
+ "exprs": {},
+ "cfg": {
+  "active": "Default",
+  "names": [
+   "Default"
+  ],
+  "cols": [
+   "c:C1",
+   "c:C2"
+  ],
+  "cells": {
+   "Default": {
+    "c:C1": "General \u00b7 123\" Breezeway",
+    "c:C2": "General \u00b7 123\" Breezeway"
+   }
+  }
+ },
+ "refs": [],
+ "world_show": {
+  "Front": true,
+  "Top": true,
+  "Right": true,
+  "origin": true
+ },
+ "sims": [],
+ "renders": []
+}

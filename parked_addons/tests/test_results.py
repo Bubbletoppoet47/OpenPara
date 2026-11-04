@@ -1,3 +1,5 @@
+import os as _o, sys as _s
+_s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.abspath(__file__)), "parked_addons", "simulation"))
 import addons; addons.startup()   # the simulation / render modules live in add-ons
 import os; os.environ["QT_QPA_PLATFORM"]="offscreen"
 import numpy as np, tempfile

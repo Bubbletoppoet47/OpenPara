@@ -396,9 +396,15 @@ class GearSystemsPage(QWidget):
                     lines.append(np.hstack([[n], np.arange(o, o + n)]))
                     o += n
             if pts:
-                pd = pv.PolyData(np.vstack(pts))
+                pd = pv.PolyData()                           # points set directly: PolyData(points) would draw every point as a dot too
+                pd.points = np.vstack(pts)
                 pd.lines = np.concatenate(lines).astype(np.int64)
-                pl.add_mesh(pd, color=(0.08, 0.10, 0.14), line_width=1.0, pickable=False, reset_camera=False)
+                try:
+                    import settings
+                    lw = settings.get("line_px")
+                except Exception:
+                    lw = 1.5
+                pl.add_mesh(pd, color=(0.13, 0.15, 0.20), line_width=lw, pickable=False, reset_camera=False)
         pl.add_axes()
         pl.view_xy()
         pl.reset_camera()

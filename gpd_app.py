@@ -12,6 +12,8 @@ from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMes
 
 import addons
 addons.startup()          # puts the shipped add-ons in place (or upgrades them) and makes the installed ones importable
+import ext
+addons.register_extensions(ext)          # the Part window and the Assembly window learn which add-ons are there
 
 import pm_app
 import settings
@@ -40,7 +42,10 @@ class AppShell(QMainWindow):
         self.setCentralWidget(self.stack)
         import update_ui
         self.updates = update_ui.UpdateController(self)
+        ext.installer = lambda aid, parent: self.need_addon(aid, "This")
         self.build_menus()
+        import autosave
+        self.autosave = autosave.AutoSave(self)           # the AutoSave switch at the top
         unitctl.on_change(self.units_changed)
         settings.on_change(self.settings_changed)
         opened = False
@@ -59,6 +64,7 @@ class AppShell(QMainWindow):
     # ------------------------------------------------------------------ menus
     def build_menus(self):
         mb = self.menuBar()
+        mb.clear()
 
         def add(menu, text, fn, key=None):
             a = QAction(text, self)
@@ -70,8 +76,13 @@ class AppShell(QMainWindow):
         fm = mb.addMenu("&File")
         add(fm, "New Part", lambda: self.new_part(), "Ctrl+N")
         add(fm, "New Assembly", self.new_assembly, "Ctrl+Shift+N")
+        kinds = addons.tab_kinds()
+        for kind, spec in kinds.items():
+            add(fm, "New " + spec.get("label", kind), lambda k=kind: self.new_addon_tab(k))
         fm.addSeparator()
         add(fm, "Open...", self.open_dialog, "Ctrl+O")
+        if any(spec.get("project_folder") for spec in kinds.values()):
+            add(fm, "Open Project Folder...", self.open_project_folder_dialog)
         add(fm, "Save", lambda: self.cur_call("save"), "Ctrl+S")
         add(fm, "Save As...", lambda: self.cur_call("save", True), "Ctrl+Shift+S")
         fm.addSeparator()
@@ -84,12 +95,15 @@ class AppShell(QMainWindow):
         fm.addSeparator()
         add(fm, "Close Tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
         add(fm, "Exit", self.close)
-        am = mb.addMenu("&Add")
-        add(am, "New render (photorealistic pictures and videos)", lambda: self.add_render())
-        am.addSeparator()
         self.add_acts = {}
-        for kind, text in (("beam", "1D FEA (frames and trusses) - of a part"), ("fea", "2D FEA"), ("cfd", "2D CFD")):
-            self.add_acts[kind] = add(am, text, lambda k=kind: self.add_sim(k))
+        if ext.present("simulation") or ext.present("render"):               # only when a simulation / renderer add-on is installed
+            am = mb.addMenu("&Add")
+            if ext.present("render"):
+                add(am, "New render (photorealistic pictures and videos)", lambda: self.add_render())
+                am.addSeparator()
+            if ext.present("simulation"):
+                for kind, text in (("beam", "1D FEA (frames and trusses) - of a part"), ("fea", "2D FEA"), ("cfd", "2D CFD")):
+                    self.add_acts[kind] = add(am, text, lambda k=kind: self.add_sim(k))
         em = mb.addMenu("&Edit")
         add(em, "Undo", lambda: self.cur_call("do_undo"), "Ctrl+Z")
         add(em, "Redo", lambda: self.cur_call("do_redo"), "Ctrl+Y")
@@ -180,6 +194,27 @@ class AppShell(QMainWindow):
         if w is not None and getattr(w, "nav", None) is not None:
             w.nav.flip_zoom(not on)
 
+    @staticmethod
+    def saveable(w):
+        """Parts, assemblies and add-on documents that have a file of their own to save."""
+        return w is not None and callable(getattr(w, "save", None)) and callable(getattr(w, "is_dirty", None))
+
+    def tab_dirty(self, w):
+        try:
+            return bool(w.is_dirty())
+        except Exception:
+            return False
+
+    def save_widget(self, w, as_new=False):
+        """Save one tab (asks for a name when it has none).  True when it was saved."""
+        try:
+            ok = w.save(as_new) if as_new else w.save()
+        except Exception as ex:
+            QMessageBox.warning(self, "Save", f"Could not save: {ex}")
+            return False
+        self.refresh_titles()
+        return ok is not False
+
     def has_docs(self):
         return self.tabs.count() > 0
 
@@ -208,7 +243,7 @@ class AppShell(QMainWindow):
             return True
         info = addons.info(aid)
         if aid not in addons.known():
-            QMessageBox.information(self, "Add-on", f"{what} needs the add-on '{aid}', which this copy of OpenPara does not know.")
+            QMessageBox.information(self, "Add-on", f"{what} needs '{aid}', which is not part of this version of OpenPara.")
             return False
         if QMessageBox.question(self, "Add-on needed", f"{what} needs the add-on '{info['name']}'.\n\nDownload and install it now? "
                                 "(It is fetched from GitHub, so this needs an internet connection.)") != QMessageBox.StandardButton.Yes:
@@ -231,8 +266,16 @@ class AppShell(QMainWindow):
         return True
 
     def addons_changed(self):
-        """Menus and buttons that depend on an add-on follow it (nothing to do now: they ask when used)."""
-        pass
+        """Menus and buttons that depend on an add-on follow it: the core is told again which add-ons are there, the menus are rebuilt."""
+        addons.register_extensions(ext)
+        self.build_menus()
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            if hasattr(w, "update_all") and hasattr(w, "refresh_tree"):
+                try:
+                    w.refresh_tree()
+                except Exception:
+                    pass
 
     def addons_dialog(self):
         import addons_dialog
@@ -281,6 +324,48 @@ class AppShell(QMainWindow):
             return None
         return self.add_tab(w)
 
+    def new_addon_tab(self, kind, path=None):
+        """A document tab of an add-on (File > New <label>, or opening one of its files / project folders)."""
+        spec = addons.tab_kinds().get(kind)
+        if spec is None:
+            return None
+        import importlib
+        try:
+            w = getattr(importlib.import_module(spec["module"]), spec.get("factory", "make_tab"))(host=self, path=path)
+        except Exception as ex:
+            QMessageBox.warning(self, "Open", f"Could not start {spec.get('label', kind)}: {ex}")
+            return None
+        if not callable(getattr(w, "title", None)):              # an add-on tab need not know how the tab strip names it
+            w.title = lambda w=w: os.path.basename(w.path.rstrip("/\\")) if getattr(w, "path", None) else spec.get("short", kind)
+        return self.add_tab(w)
+
+    def open_project_folder_dialog(self):
+        folder = QFileDialog.getExistingDirectory(self, "Open Project Folder", "")
+        if folder:
+            self.open_project_folder(folder)
+
+    def open_project_folder(self, folder):
+        """Open a project folder in the tab of the add-on that handles it (found from the marker file in it); None, with a message, when none does."""
+        import json
+        folder = os.path.abspath(folder.rstrip("/\\") or folder)
+        for kind, spec in addons.tab_kinds().items():
+            pf = spec.get("project_folder")
+            mk = os.path.join(folder, (pf or {}).get("marker", "project.json"))
+            if not pf or not os.path.isfile(mk):
+                continue
+            try:
+                fmt = json.load(open(mk, encoding="utf-8")).get("format")
+            except Exception:
+                fmt = None
+            if fmt == pf.get("format"):
+                i = self.find_tab(folder)
+                if i is not None:
+                    self.tabs.setCurrentIndex(i)
+                    return self.tabs.widget(i)
+                return self.new_addon_tab(kind, folder)
+        QMessageBox.information(self, "Open Project Folder", f"{os.path.basename(folder)} is not a project that an installed add-on can open.")
+        return None
+
     def new_part(self, demo=False):
         w = pm_app.MainWindow()
         if not demo:
@@ -302,7 +387,8 @@ class AppShell(QMainWindow):
         exchange_dialog.run_export(self, self.tabs.currentWidget())
 
     def open_dialog(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Open", "", "Parts, assemblies, simulations and renders (*.gpd *.gpa *.gps *.gpr);;Part (*.gpd);;Assembly (*.gpa);;Simulation (*.gps);;Render (*.gpr)")
+        extra = sorted({t for sp in addons.tab_kinds().values() for t in sp.get("file_types", [])})
+        files, _ = QFileDialog.getOpenFileNames(self, "Open", "", "Parts and assemblies (*.gpd *.gpa" + "".join(" *" + t for t in extra) + ");;Part (*.gpd);;Assembly (*.gpa)")
         for f in files:
             self.open_path(f)
 
@@ -319,6 +405,9 @@ class AppShell(QMainWindow):
         if i is not None:
             self.tabs.setCurrentIndex(i)
             return self.tabs.widget(i)
+        spec = next((sp for sp in addons.tab_kinds().values() if path.lower().endswith(tuple(sp.get("file_types", [])) or ("\0",))), None)
+        if spec is not None:
+            return self.new_addon_tab(next(k for k, v in addons.tab_kinds().items() if v is spec or v == spec), path)
         if path.lower().endswith(".gps"):
             if not self.need_addon("simulation", "This simulation file (.gps)"):
                 return None

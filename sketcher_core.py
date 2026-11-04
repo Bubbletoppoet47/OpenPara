@@ -208,6 +208,22 @@ class Model:
                 top = max(top, int(t[len(pre):]))
         return f"{pre}{top + 1}"
 
+    def scale_all(self, k):
+        """The whole sketch scaled by k about its origin (the shape stays the same; used when the first dimension of a part sets the scale)."""
+        for i, p in self.pts.items():
+            if i != 0:
+                p[0], p[1] = p[0] * k, p[1] * k
+        for c in self.cis.values():
+            c["r"] = c["r"] * k
+        for p in self.lock_pts.values():
+            p[0], p[1] = p[0] * k, p[1] * k
+        for i in list(self.lock_cis):
+            self.lock_cis[i] = self.lock_cis[i] * k
+        for c in self.cons:
+            if c.get("xy") is not None and not c.get("origin"):
+                c["xy"] = (c["xy"][0] * k, c["xy"][1] * k)
+        self.shapes = {}
+
     def con_by_id(self, cid):
         return next((c for c in self.cons if c["id"] == cid), None)
 

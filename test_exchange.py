@@ -1,4 +1,7 @@
 """STEP / STL export and STEP import: round trips with negative controls.  python test_exchange.py"""
+import os as _o, sys as _s
+_s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.abspath(__file__)), "addons_src", "partgen"))
+import ext, partgen_ext; partgen_ext.register(ext)          # the Part Generator add-on, straight from its source folder
 import os
 import struct
 import sys
