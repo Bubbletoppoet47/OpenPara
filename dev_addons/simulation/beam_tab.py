@@ -19,6 +19,7 @@ from PyQt6.QtCore import QItemSelectionModel, Qt, QTimer
 from PyQt6.QtGui import QBrush, QColor, QFont, QGuiApplication, QKeySequence, QShortcut
 import sim_icons  # noqa: F401
 import sim_ui
+import anim_export
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
                              QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplitter,
                              QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
@@ -288,6 +289,41 @@ class BeamTab(QWidget):
         self.cb_names = QCheckBox("Show member names")
         self.cb_names.toggled.connect(self.view_changed)
         lay.addWidget(self.cb_names)
+        self.cb_anim = QCheckBox("Animate")
+        self.cb_anim.setToolTip("Ramps the load from 0 to its full value. The analysis is linear and static, so this is a ramp, not a time simulation.")
+        self.cb_anim.toggled.connect(self.anim_toggled)
+        lay.addWidget(self.cb_anim)
+        self.anim_box = QWidget()
+        al = QFormLayout(self.anim_box)
+        al.setContentsMargins(14, 0, 0, 0)
+        self.e_frames = QLineEdit("30")
+        self.e_dur = QLineEdit("3")
+        self.loop_combo = QComboBox()
+        self.loop_combo.addItems(["Once", "Loop", "Back and forth"])
+        al.addRow("Frames", self.e_frames)
+        al.addRow("Duration (s)", self.e_dur)
+        al.addRow("Playback", self.loop_combo)
+        arow = QHBoxLayout()
+        self.b_play = QPushButton("Play")
+        self.b_play.clicked.connect(self.anim_play)
+        self.b_stop = QPushButton("Stop")
+        self.b_stop.clicked.connect(self.anim_stop)
+        arow.addWidget(self.b_play)
+        arow.addWidget(self.b_stop)
+        al.addRow(arow)
+        self.b_export = QPushButton("Export animation...")
+        self.b_export.setToolTip("Saves the animation as an animated GIF" + (", an MP4 video" if anim_export.mp4_available() else
+                                 " (an MP4 video too when OpenCV or imageio-ffmpeg is installed)") + " or a folder of PNG pictures. "
+                                 "It uses the Frames, Duration and Playback above.")
+        self.b_export.clicked.connect(lambda: self.export_animation())
+        al.addRow(self.b_export)
+        al.addRow(self.note("Ramp of the load from 0 to full (linear static analysis, not a time simulation). The colour scale and the "
+                            "diagram scale stay those of the final result."))
+        self.anim_box.setVisible(False)
+        lay.addWidget(self.anim_box)
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self.anim_step)
+        self.anim_dir, self.anim_k, self.anim_n = 1, 0, 0
         self.res_lbl = QLabel("")
         self.res_lbl.setWordWrap(True)
         self.res_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -922,6 +958,85 @@ class BeamTab(QWidget):
     # ------------------------------------------------------------------------------------------
     # joints, supports and loads
     # ------------------------------------------------------------------------------------------
+    # --- animation: the load ramps from 0 to full (deformation, diagrams and colours scale with it)
+    def anim_toggled(self, on):
+        self.anim_box.setVisible(on)
+        if not on:
+            self.anim_stop()
+
+    def anim_inputs(self, what):
+        try:
+            n = int(float(self.e_frames.text()))
+            dur = float(self.e_dur.text())
+        except ValueError:
+            QMessageBox.warning(self, what, "Frames and duration must be numbers.")
+            return None
+        if not (2 <= n <= 300) or dur <= 0:
+            QMessageBox.warning(self, what, "Use 2 to 300 frames and a positive duration.")
+            return None
+        return n, dur
+
+    def anim_play(self):
+        if self.result is None:
+            QMessageBox.information(self, "Animate", "Solve first (a frame with a mechanism or without profiles has no result).")
+            return
+        got = self.anim_inputs("Animate")
+        if got is None:
+            return
+        n, dur = got
+        self.anim_timer.stop()
+        self.anim_n, self.anim_k, self.anim_dir = n, 0, 1
+        self.canvas.ramp = 0.0
+        self.canvas.update()
+        self.anim_timer.start(max(10, int(dur * 1000 / n)))
+
+    def anim_step(self):
+        n = self.anim_n
+        k = self.anim_k + self.anim_dir
+        mode = self.loop_combo.currentIndex()
+        if k >= n:
+            if mode == 0:
+                self.anim_timer.stop()
+                k = n - 1
+            elif mode == 1:
+                k = 0
+            else:
+                self.anim_dir = -1
+                k = max(0, n - 2)
+        elif k < 0:
+            self.anim_dir = 1
+            k = min(1, n - 1)
+        self.anim_k = k
+        self.canvas.ramp = k / (n - 1) if n > 1 else 1.0
+        self.canvas.update()
+
+    def anim_stop(self):
+        self.anim_timer.stop()
+        self.canvas.ramp = 1.0
+        self.canvas.update()
+
+    def export_animation(self, path_fmt=None):
+        """Saves the load ramp as GIF / MP4 / PNG pictures (Frames, Duration and Playback of the Animate box).  -> the path written or None."""
+        if self.result is None:
+            QMessageBox.information(self, "Export animation", "Solve first.")
+            return None
+        got = self.anim_inputs("Export animation")
+        if got is None:
+            return None
+        n, dur = got
+        self.anim_timer.stop()
+        cv = self.canvas
+
+        def grab(k):
+            cv.ramp = k / (n - 1)
+            cv.repaint()
+            return cv.grab().toImage()
+        try:
+            return anim_export.export(self, "1D FEA", n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=path_fmt)
+        finally:
+            cv.ramp = 1.0
+            cv.update()
+
     def need_points(self, what):
         pts = self.sel_points()
         if not pts:

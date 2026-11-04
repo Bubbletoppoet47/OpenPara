@@ -37,6 +37,7 @@ class BeamCanvas(QWidget):
         self.pan_from = None
         self.pan_off = QPointF(0, 0)
         self.box = None                     # [start, current, additive]
+        self.ramp = 1.0                     # 0..1: the animation scales deformation, diagrams and stress colours by this (1 = the full result)
 
     # --- transforms
     def w2s(self, x, y):
@@ -175,6 +176,7 @@ class BeamCanvas(QWidget):
             txt = ("Choose a sketch and press Import (left) to begin." if tab.model is None else
                    "The sketch has no lines to use as members (construction lines are ignored).")
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, txt)
+            p.end()
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if self.pan_from is not None:
@@ -221,6 +223,8 @@ class BeamCanvas(QWidget):
             return FOS_LOW, FOS_HIGH, arr
         hi = max((float(np.nanmax(v)) for v in arr.values()), default=1.0)
         lo = min((float(np.nanmin(v)) for v in arr.values()), default=0.0)       # lowest to highest, as in the 2D tabs
+        if self.ramp != 1.0:                                                     # animation: the scale stays that of the final result
+            arr = {k: v * self.ramp for k, v in arr.items()}
         return lo, (hi if hi > lo else lo + 1.0), arr
 
     def paint_members(self, p, res, mode):
@@ -276,7 +280,7 @@ class BeamCanvas(QWidget):
         sign = -1.0 if mode == "M" else 1.0                         # the moment diagram is drawn on the tension side
         p.setFont(QFont("Arial", 8))
         for r in res["members"]:
-            arr = r[key]
+            arr = r[key] * self.ramp
             n = len(arr)
             S = [self.w2s(*r["xy0"][i]) for i in range(n)]
             nx, ny = -r["s"], -r["c"]                                # the member's left normal on the screen (y points down there)
@@ -297,7 +301,7 @@ class BeamCanvas(QWidget):
                 p.drawText(QPointF(O[j].x() + 4, O[j].y() - 4), f"{arr[j]:.4g}")
 
     def paint_deformed(self, p, res):
-        ds = self.tab.deform_scale(res)
+        ds = self.tab.deform_scale(res) * self.ramp
         p.setPen(QPen(QColor("#b02a8f"), 1.8, Qt.PenStyle.DashLine))
         for r in res["members"]:
             pts = [self.w2s(r["xy0"][i][0] + ds * r["dxy"][i][0], r["xy0"][i][1] + ds * r["dxy"][i][1]) for i in range(len(r["x"]))]

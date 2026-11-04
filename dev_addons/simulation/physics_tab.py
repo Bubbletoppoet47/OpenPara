@@ -26,6 +26,7 @@ import physics_geom as pg
 import physics_materials as pm
 import physics_refine as prefine
 import physics_split as psplit
+import anim_export
 import units
 import physics_solve as psolve
 import physics_store as pstore
@@ -446,6 +447,7 @@ class PhysCanvas(QWidget):
             p.setPen(QColor("#666666"))
             p.setFont(QFont("Arial", 11))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Choose a sketch and press Import (left) to begin.")
+            p.end()
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         # 1. regions, or the field / mesh picture
@@ -1069,6 +1071,12 @@ class PhysicsTab(QWidget):
         arow.addWidget(self.b_play)
         arow.addWidget(self.b_stop)
         al.addRow(arow)
+        self.b_export = QPushButton("Export animation...")
+        self.b_export.setToolTip("Saves the animation as an animated GIF" + (", an MP4 video" if anim_export.mp4_available() else
+                                 " (an MP4 video too when OpenCV or imageio-ffmpeg is installed)") + " or a folder of PNG pictures. "
+                                 "It uses the Frames, Duration and Playback above.")
+        self.b_export.clicked.connect(lambda: self.export_animation())
+        al.addRow(self.b_export)
         al.addRow(self.note("Ramp of the load from 0 to full (linear static analysis, not a time simulation). "
                             "The colour scale is fixed to the final result. All frames are drawn first."))
         self.anim_box.setVisible(False)
@@ -2382,6 +2390,40 @@ class PhysicsTab(QWidget):
 
     def anim_stop(self):
         self.anim_timer.stop()
+
+    def export_animation(self, path_fmt=None):
+        """Saves the load ramp as GIF / MP4 / PNG pictures (Frames, Duration and Playback of the Animate box).  -> the path written or None."""
+        cv = self.canvas
+        if self.result is None or cv.field is None:
+            QMessageBox.information(self, "Export animation", "Solve first and choose a result field to colour by.")
+            return None
+        try:
+            n = int(float(self.e_frames.text()))
+            dur = float(self.e_dur.text())
+        except ValueError:
+            QMessageBox.warning(self, "Export animation", "Frames and duration must be numbers.")
+            return None
+        if not (2 <= n <= 300) or dur <= 0:
+            QMessageBox.warning(self, "Export animation", "Use 2 to 300 frames and a positive duration.")
+            return None
+        ask = path_fmt or anim_export.ask_path(self, "FEA_animation")
+        if ask is None:
+            return None
+        self.anim_timer.stop()
+        if cv.anim_frames is None or len(cv.anim_frames) != n:
+            if not self.render_frames(n):
+                return None
+        keep = cv.anim_idx
+
+        def grab(k):
+            cv.anim_idx = k
+            cv.repaint()
+            return cv.grab().toImage()
+        try:
+            return anim_export.export(self, "2D FEA", n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=ask)
+        finally:
+            cv.anim_idx = keep
+            cv.update()
 
     # --- reading the inputs
     def read_material(self):

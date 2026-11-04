@@ -30,6 +30,7 @@ import physics_store as pstore
 import physics_geom as pg
 import physics_tab as pt
 import sim_ui
+import anim_export
 import sketcher_core as sc
 from sketch_pick import SketchPicker
 import sketcher_script as scr
@@ -417,6 +418,7 @@ class CFDCanvas(pt.PhysCanvas):
             p.setPen(QColor("#666666"))
             p.setFont(QFont("Arial", 11))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Choose a sketch and press Import (left) to begin.")
+            p.end()
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if self.pan_from is not None:
@@ -731,6 +733,11 @@ class CFDTab(QWidget):
         self.b_play = QPushButton("Play frames")
         self.b_play.clicked.connect(self.play_frames)
         row.addWidget(self.b_play)
+        self.b_export = QPushButton("Export animation...")
+        self.b_export.setToolTip("Saves the time frames as an animated GIF" + (", an MP4 video" if anim_export.mp4_available() else
+                                 " (an MP4 video too when OpenCV or imageio-ffmpeg is installed)") + " or a folder of PNG pictures.")
+        self.b_export.clicked.connect(lambda: self.export_animation())
+        row.addWidget(self.b_export)
         lay.addLayout(row)
         self.play_timer = QTimer(self)
         self.play_timer.timeout.connect(self.play_step)
@@ -1564,6 +1571,24 @@ class CFDTab(QWidget):
         self.slider.setValue(0)
         self.play_timer.start(80)
         self.b_play.setText("Stop playing")
+
+    def export_animation(self, path_fmt=None):
+        """Saves the saved time frames (the slider's positions) as GIF / MP4 / PNG pictures.  -> the path written or None."""
+        n = self.slider.maximum() + 1
+        if n < 2:
+            QMessageBox.information(self, "Export animation", "There are no time frames yet. Solve first (Frame every (steps) sets how many are saved).")
+            return None
+        self.stop_motion()
+        keep = self.slider.value()
+
+        def grab(k):
+            self.slider.setValue(k)
+            self.canvas.repaint()
+            return self.canvas.grab().toImage()
+        try:
+            return anim_export.export(self, "CFD", n, grab, 12.0, 0, say=self.status, path_fmt=path_fmt)
+        finally:
+            self.slider.setValue(keep)
 
     def play_step(self):
         v = self.slider.value() + 1
