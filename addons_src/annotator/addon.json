@@ -1,0 +1,28 @@
+{
+ "id": "annotator",
+ "name": "General Classification Annotator",
+ "version": "0.8.4",
+ "description": "Draw boxes on photos and video frames, pick LiDAR distances, pre-label with YOLO models downloaded from GitHub, hand a dataset to someone as a zip (and merge theirs into yours), annotate from a tablet. An annotator project is a folder with its dataset inside.",
+ "requires": [
+  {
+   "pip": "opencv-python-headless==4.10.0.84",
+   "import": "cv2"
+  }
+ ],
+ "tabs": [
+  {
+   "kind": "annotator",
+   "label": "Annotator",
+   "short": "Annotator",
+   "module": "annotator_tab",
+   "factory": "make_tab",
+   "args": [
+    "path"
+   ],
+   "set_host": true,
+   "project_folder": {
+    "marker": "manifest.json"
+   }
+  }
+ ]
+}

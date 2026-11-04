@@ -40,6 +40,18 @@ CATALOG = {
     "truss": {"name": "Truss Generator",
               "description": "Builds the members of a truss from the lines of a sketch: each member is a profile extruded to its longest length with "
                              "angled cuts. Exports a cut list. Opens .truss files and truss project folders."},
+    "annotator": {"name": "General Classification Annotator",
+                  "description": "Draw boxes on photos and video frames, pick LiDAR distances, pre-label with YOLO models downloaded from GitHub, hand a "
+                                 "dataset to someone as a zip (and merge theirs into yours), annotate from a tablet. An annotator project is a folder "
+                                 "with its dataset inside."},
+    "annotator_gimble": {"name": "Gimble sessions for the Annotator",
+                         "description": "Adds File > Import Gimble Session... to the Annotator: sessions recorded by the Gimble rig (camera + LiDAR) "
+                                        "become sets of photos with their depth. Needs the Annotator add-on."},
+    "trainer": {"name": "Trainer",
+                "description": "Merge annotator datasets (zips) into one training project, choose training and validation sets and distortions, and "
+                               "train a YOLO model in the background; the result is saved as a model version the Annotator lists. Needs the Annotator "
+                               "add-on, and torch, ultralytics and (to be practical) a GPU in the Python you train with. A training project is a "
+                               ".training folder."},
 }
 
 

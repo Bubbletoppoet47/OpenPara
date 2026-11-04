@@ -16,7 +16,7 @@ def importable(m):
 
 # ---- what ships
 S = addons.shipped()
-assert set(S) == {"partgen", "truss"}, S
+assert set(S) == {"partgen", "truss", "annotator", "annotator_gimble", "trainer"}, set(S)
 assert "partgen_ext" in addons.module_names("partgen") and "truss_tab" in addons.module_names("truss")
 assert addons.status("partgen") == "not installed" and not importable("partgen_ext")
 

@@ -94,7 +94,7 @@ jobs:
           Push-Location build\OpenPara\app
           $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_addons"
           $env:OPARA_ADDON_BASE = "file:///" + ($dist -replace "\\", "/") + "/"
-          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); import gpd_app, partgen_ext, truss_tab; assert addons.status('truss')=='installed' and addons.status('partgen')=='installed'; print('add-ons ok')" 2>&1
+          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); addons.install('annotator'); addons.install('annotator_gimble'); addons.install('trainer'); import gpd_app, partgen_ext, truss_tab; assert all(addons.status(a)=='installed' for a in ('partgen','truss','annotator','annotator_gimble','trainer')); print('add-ons ok')" 2>&1
           Pop-Location
           Remove-Item Env:OPARA_ADDON_BASE
           Write-Host $out

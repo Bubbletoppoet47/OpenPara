@@ -1,0 +1,13 @@
+# General Classification Annotator add-on - install everything in one go:  pip install -r requirements.txt
+
+pillow>=10.0
+numpy>=1.24
+opencv-python>=4.8        # File > Import Video, and the AI models
+qrcode>=7.4               # optional: the QR code in File > Open in browser (the address and code work without it)
+
+# AI features (the AI model box and File > Insert Assist / Scratch Model):
+torch>=2.2                # plain "pip install" gives the CPU build on Windows, which is fine for annotating.
+                          # For an NVIDIA GPU, install torch first from https://pytorch.org/get-started/locally/
+                          # (pick your CUDA version), then run this file.
+torchvision>=0.17          # must match torch (install both together)
+ultralytics>=8.4.0        # needs a recent version for the YOLO26 models
