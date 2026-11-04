@@ -1,0 +1,9 @@
+{
+ "name": "System dynamics",
+ "order": 5,
+ "status": "planned",
+ "needs": [
+  "sketch"
+ ],
+ "description": "Mechanical system dynamics: lumped masses, springs, dampers, inertias, gears and sources; time response, modes and frequency response. Shares its network solver with Circuits. Not started."
+}

@@ -12,7 +12,9 @@ from PyQt6.QtCore import QObject, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
+import channel
 import paths
+import channel
 import updater
 import version
 
@@ -117,7 +119,7 @@ class UpdateController(QObject):
             return
         if not updater.is_newer(rel["version"]):
             if self.manual:
-                QMessageBox.information(self.shell, "Updates", f"OpenPara {version.__version__} is the newest version.")
+                QMessageBox.information(self.shell, "Updates", f"{channel.app_name()} {version.__version__} is the newest version.")
             return
         if not self.manual and st.get("skip") == rel["version"]:
             return
@@ -127,7 +129,7 @@ class UpdateController(QObject):
         box = QMessageBox(self.shell)
         box.setWindowTitle("Update available")
         box.setIcon(QMessageBox.Icon.Information)
-        box.setText(f"OpenPara {rel['version']} is available (you have {version.__version__}).\n\nUpdate now?")
+        box.setText(f"{channel.app_name()} {rel['version']} is available (you have {version.__version__}).\n\nUpdate now?")
         notes = (rel.get("notes") or "").strip()
         if notes:
             box.setDetailedText(notes)
@@ -181,7 +183,7 @@ class UpdateController(QObject):
         except Exception as ex:
             QMessageBox.warning(self.shell, "Update", f"The update could not be installed: {ex}\nYour current version is unchanged.")
             return
-        r = QMessageBox.question(self.shell, "Update", f"OpenPara {rel['version']} is installed.\nRestart now? (open documents are asked about first)",
+        r = QMessageBox.question(self.shell, "Update", f"{channel.app_name()} {rel['version']} is installed.\nRestart now? (open documents are asked about first)",
                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if r == QMessageBox.StandardButton.Yes:
             self.shell.close()
@@ -190,6 +192,6 @@ class UpdateController(QObject):
                 QApplication.quit()
 
     def about(self):
-        QMessageBox.about(self.shell, "About OpenPara",
-                          f"<b>OpenPara</b> {version.__version__}<br>An open-source parametric CAD modeller.<br><br>"
+        QMessageBox.about(self.shell, "About " + channel.app_name(),
+                          f"<b>{channel.app_name()}</b> {version.__version__}<br>An open-source parametric CAD modeller.<br><br>"
                           f"Licence: GNU GPL v3<br><a href='https://github.com/{updater.REPO}'>github.com/{updater.REPO}</a>")

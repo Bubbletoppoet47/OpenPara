@@ -27,6 +27,7 @@ import tempfile
 import urllib.request
 import zipfile
 
+import channel
 import paths
 
 SRC_DIR = os.path.join(paths.CODE_DIR, "addons_src")
@@ -129,7 +130,9 @@ def dev_dir():
     """A folder of add-ons that are used where they are (never copied, never removed): set OPARA_DEV_ADDONS to it.  Used by the playground to
     run the real program with its own add-ons next to the shipped ones; a normal start does not have it."""
     d = os.environ.get("OPARA_DEV_ADDONS")
-    return os.path.abspath(d) if d and os.path.isdir(d) else None
+    if d and os.path.isdir(d):
+        return os.path.abspath(d)
+    return channel.dev_addons_dir()                      # a playground build carries its own dev_addons/ folder
 
 
 def dev_ids():
@@ -255,6 +258,9 @@ def _clean_leftovers():
 
 
 def activate():
+    sh = channel.shared_dir()                            # code the playground's dev add-ons share
+    if sh and sh not in sys.path:
+        sys.path.insert(0, sh)
     for aid in known():
         p = installed_path(aid)
         if is_installed(aid):
@@ -334,7 +340,7 @@ def release_base():
     if b:
         return b if b.endswith("/") else b + "/"
     import version
-    return f"https://github.com/{REPO}/releases/download/v{version.__version__}/"
+    return f"https://github.com/{REPO}/releases/download/{channel.tag_for(version.__version__)}/"
 
 
 def _open(url, timeout=30):

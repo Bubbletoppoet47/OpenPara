@@ -1,0 +1,17 @@
+{
+ "name": "Towers",
+ "order": 9,
+ "status": "workshopping",
+ "description": "A small Asteroids-style tower-capture game: levelled towers whose output is shared between their paths, contested paths where troops cancel head-on, random maps and a configurable AI opponent.",
+ "tabs": [
+  {
+   "kind": "towers",
+   "label": "Towers (game)",
+   "short": "Towers",
+   "module": "towers_tab",
+   "factory": "make_tab",
+   "args": [],
+   "set_host": true
+  }
+ ]
+}

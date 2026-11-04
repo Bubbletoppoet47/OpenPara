@@ -57,3 +57,20 @@ GNU General Public License v3.0 - see `LICENSE`.
 2. Commit, then tag: `git tag v<version> && git push origin v<version>`.
 3. The workflow `.github/workflows/release.yml` builds the Windows folder on GitHub, makes `OpenPara-Setup-<version>.exe` and
    `OpenPara-app-<version>.zip` (the small update zip) and publishes them as a release.
+
+## The Playground (development builds)
+
+OpenPara Playground is the same program built from the `dev` branch. It installs next to OpenPara (own name, own data folder) and
+follows the newest `dev-<version>` pre-release instead of the newest release.
+
+- Work on `dev`. Every push to `dev` runs `.github/workflows/playground.yml`, which builds `OpenPara-Playground-Setup-<version>.exe` and
+  `OpenPara-Playground-app-<version>.zip` and publishes them as the pre-release `dev-<version>` (version = `version.py` + the run number,
+  e.g. `0.8.5.37`). The newest 10 are kept.
+- Install the Playground once from that setup file. After that it offers new builds at start-up (Help > Check for updates), the same way a
+  normal OpenPara offers releases.
+- A Playground build also carries `dev_addons/` (add-ons that are not released: simulation, FEA, mesh, circuits ...) and `shared/` (code they
+  share). A release never contains them.
+- To release: merge `dev` into `main`, raise `version.py`, and run the Release workflow as above. Users on the normal program never see
+  `dev-` pre-releases.
+- What makes a build a Playground build is `channel.json` next to `channel.py` (written by the workflow); `OPARA_CHANNEL=playground` does the
+  same for a source checkout.

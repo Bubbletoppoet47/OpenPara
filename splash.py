@@ -23,6 +23,7 @@ NAVY, MID, TEAL, SKY, SNOW = "#0a2f55", "#0f4a6e", "#12b5b0", "#8fd3f4", "#f3fbf
 NAME = ("Open", "Para")
 TAG1 = "Parametric by design. Open by nature."
 TAG2 = "Built for the future."
+TAG1_PLAYGROUND = "PLAYGROUND  -  development builds, for testing"
 
 
 def asset(*parts):
@@ -52,6 +53,11 @@ class Splash(QWidget):
         self.setFixedSize(int(W * scale), int(H * scale))
         self.status, self.frac = "Starting...", 0.0
         self.version = version_text()
+        try:
+            import channel
+            self.playground = channel.is_playground()
+        except Exception:  # noqa: BLE001
+            self.playground = False
         fams = {}
         for fn, key in (("Lora-Variable.ttf", "up"), ("Lora-Italic-Variable.ttf", "it")):
             i = QFontDatabase.addApplicationFont(asset("fonts", fn))
@@ -168,7 +174,7 @@ class Splash(QWidget):
         p.setFont(f2)
         p.drawText(QPointF(x0 + w1, base), NAME[1])
         # tag lines
-        for text, key, wt, ital, y, col, a in ((TAG1, "up", 400, False, 268.0, SNOW, 0.92), (TAG2, "it", 600, True, 293.0, SKY, 1.0)):
+        for text, key, wt, ital, y, col, a in ((TAG1_PLAYGROUND if self.playground else TAG1, "up", 400, False, 268.0, SNOW if not self.playground else "#f08a24", 0.95), (TAG2, "it", 600, True, 293.0, SKY, 1.0)):
             f = self.font(key, 19, wt)
             c = QColor(col)
             c.setAlphaF(a)

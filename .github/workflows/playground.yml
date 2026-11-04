@@ -1,0 +1,160 @@
+name: Playground (dev build)
+
+# OpenPara Playground = the same program built from the dev branch, with its own name, data folder and update feed ("dev-<version>" pre-releases)
+# and with dev_addons/ + shared/ inside.  It publishes by itself on every push to dev; an installed Playground offers the newest build at start-up.
+# Version: the repository's version.py plus the run number, e.g. 0.8.5.37 (so it is newer than 0.8.5 and older than 0.8.6).
+on:
+  push:
+    branches: ["dev"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the pre-release (a push to dev always does)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: playground
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      PYTHON_VERSION: "3.12.8"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dev version and channel
+        shell: pwsh
+        run: |
+          $base = (python -c "import version; print(version.__version__)")
+          $rt = (python -c "import version; print(version.RUNTIME)")
+          $v = "$base.$env:GITHUB_RUN_NUMBER"
+          "VERSION=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "RUNTIME=$rt" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          # the dev version goes into version.py (the program, its add-ons and the updater all read it) and channel.json marks this as the playground
+          $text = Get-Content version.py -Raw
+          $text = $text -replace '__version__ = "[^"]+"', "__version__ = `"$v`""
+          Set-Content version.py $text -Encoding utf8
+          '{"channel": "playground"}' | Set-Content channel.json
+          python -c "import version; print('dev version', version.__version__)"
+
+      - name: Bundled Python with the packages
+        shell: pwsh
+        run: |
+          $py = "build\OpenPara\python"
+          New-Item -ItemType Directory -Force $py | Out-Null
+          Invoke-WebRequest "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-embed-amd64.zip" -OutFile embed.zip
+          Expand-Archive embed.zip -DestinationPath $py
+          $pth = Get-ChildItem $py -Filter "python*._pth" | Select-Object -First 1
+          # search path: the python files, its packages, the program folder; and site (so pip-installed packages are found)
+          @("python312.zip", ".", "Lib\site-packages", "..\app", "import site") | Set-Content $pth.FullName
+          Invoke-WebRequest "https://bootstrap.pypa.io/get-pip.py" -OutFile get-pip.py
+          & "$py\python.exe" get-pip.py --no-warn-script-location
+          & "$py\python.exe" -m pip install --no-warn-script-location -r requirements.txt -r requirements-playground.txt
+          & "$py\python.exe" -m pip freeze | Set-Content requirements-lock.txt
+          Copy-Item "$py\pythonw.exe" "$py\OpenPara.exe"          # the process shows up as OpenPara.exe
+
+      - name: Program files
+        shell: pwsh
+        run: |
+          $app = "build\OpenPara\app"
+          New-Item -ItemType Directory -Force $app | Out-Null
+          Get-ChildItem -File | Where-Object { $_.Extension -in ".py", ".json", ".ico", ".txt", ".md" -or $_.Name -eq "LICENSE" } |
+            Where-Object { $_.Name -notlike "test_*" -and $_.Name -ne "requirements-lock.txt" -and $_.Name -ne "get-pip.py" } | Copy-Item -Destination $app
+          Copy-Item docs -Destination "$app\docs" -Recurse
+          Copy-Item dev_addons -Destination "$app\dev_addons" -Recurse           # the playground's own add-ons: used where they are, updated with the program
+          Copy-Item shared -Destination "$app\shared" -Recurse
+          Copy-Item assets -Destination "$app\assets" -Recurse          # the logo of the start-up card, its fonts and the icons
+          foreach ($f in "assets\openpara-logo.svg", "assets\fonts\Lora-Variable.ttf") { if (-not (Test-Path "$app\$f")) { throw "missing from the app: $f" } }
+          foreach ($f in 'channel.json', 'dev_addons\dev_host\addon.json', 'shared\boot.py') { if (-not (Test-Path "$app\$f")) { throw "missing from the app: $f" } }
+          '{"runtime": ' + $env:RUNTIME + ', "version": "' + $env:VERSION + '"}' | Set-Content "$app\runtime.json"
+
+      - name: Smoke test (imports and the updater test, no window)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $ErrorActionPreference = "Continue"
+          $py = (Resolve-Path "build\OpenPara\python\python.exe").Path
+          function Report($title, $text) {          # the job log can not be read from outside, so the end of the output goes into an annotation
+            $t = ($text | Out-String)
+            if ($t.Length -gt 3500) { $t = $t.Substring($t.Length - 3500) }
+            $t = $t -replace "%", "%25" -replace "`r", "" -replace "`n", "%0A"
+            Write-Host "::error title=$title::$t"
+          }
+          # 1. the base alone: the program imports without the add-on packages
+          Push-Location build\OpenPara\app
+          $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_base"
+          $out = & $py -c "import gpd_app, addons, updater, importlib.util as u; import channel; assert channel.is_playground(), 'channel.json is not read'; assert 'simulation' in addons.dev_ids() and 'dev_host' in addons.dev_ids(), 'dev_addons are not found'; print('app imports ok')" 2>&1
+          Pop-Location
+          Write-Host $out
+          Write-Host "exit code: $LASTEXITCODE"
+          if (-not (($out | Out-String) -match "app imports ok")) { Report "import of the app failed (exit $LASTEXITCODE)" $out; exit 1 }
+          $out = & $py -c "import build123d, pyvista, pyvistaqt, scipy, numpy; print('packages ok')" 2>&1
+          Write-Host $out
+          Write-Host "exit code: $LASTEXITCODE"
+          if (-not (($out | Out-String) -match "packages ok")) { Report "import of a package failed (exit $LASTEXITCODE)" $out; exit 1 }
+          # 2. the add-ons: build the release files and install them from there (Part Generator, Truss Generator)
+          New-Item -ItemType Directory -Force dist | Out-Null
+          python tools\build_addons.py dist
+          if ($LASTEXITCODE -ne 0) { throw "add-on build failed" }
+          $dist = (Resolve-Path dist).Path
+          Push-Location build\OpenPara\app
+          $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_addons"
+          $env:OPARA_ADDON_BASE = "file:///" + ($dist -replace "\\", "/") + "/"
+          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); addons.install('annotator'); addons.install('annotator_gimble'); addons.install('trainer'); import gpd_app, partgen_ext, truss_tab; assert all(addons.status(a)=='installed' for a in ('partgen','truss','annotator','annotator_gimble','trainer')); print('add-ons ok')" 2>&1
+          Pop-Location
+          Remove-Item Env:OPARA_ADDON_BASE
+          Write-Host $out
+          Write-Host "exit code: $LASTEXITCODE"
+          if (-not (($out | Out-String) -match "add-ons ok")) { Report "add-on install failed (exit $LASTEXITCODE)" $out; exit 1 }
+          # 2b. the Annotator's AI packages (torch, torchvision, ultralytics, OpenCV ...) really load from the add-on folder, after Qt (as in the program)
+          Push-Location build\OpenPara\app
+          $out = & $py -c "import addons; addons.activate(); from PyQt6 import QtWidgets; import cv2, torch, torchvision; from ultralytics import YOLO; print('ai ok', torch.__version__)" 2>&1
+          Pop-Location
+          Write-Host $out
+          Write-Host "exit code: $LASTEXITCODE"
+          # a warning, not a failure: the release is still made, but the annotation says the AI models will not work and why
+          if (-not (($out | Out-String) -match "ai ok")) { Report "WARNING the annotator's AI packages do not load (exit $LASTEXITCODE)" $out }
+          Copy-Item test_updater.py build\OpenPara\app\
+          $out = & $py build\OpenPara\app\test_updater.py 2>&1
+          $code = $LASTEXITCODE
+          Write-Host $out
+          Remove-Item build\OpenPara\app\test_updater.py
+          Write-Host "exit code: $code"
+          if (-not (($out | Out-String) -match "update UI OK")) { Report "test_updater failed (exit $code)" $out; exit 1 }
+
+      - name: Installer and update zip
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          New-Item -ItemType Directory -Force dist | Out-Null
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DVersion=$env:VERSION" /DPlayground=1 installer\OpenPara.iss
+          if ($LASTEXITCODE -ne 0) { throw "installer build failed" }
+          7z a -tzip "dist\OpenPara-Playground-app-$env:VERSION.zip" ".\build\OpenPara\app\*" | Out-Null
+          Copy-Item requirements-lock.txt dist\
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Upload (workflow artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenPara-Playground-${{ env.VERSION }}
+          path: dist/*
+          retention-days: 14
+
+      - name: Publish the dev pre-release
+        if: github.event_name == 'push' || inputs.publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "dev-$env:VERSION" dist\* --prerelease --target $env:GITHUB_SHA --title "OpenPara Playground $env:VERSION" --notes "Development build $env:VERSION from the dev branch (commit $env:GITHUB_SHA). Install OpenPara-Playground-Setup-$env:VERSION.exe once; an installed Playground offers later builds at start-up (Help > Check for updates)."
+          # keep the newest 10 dev builds
+          $rels = gh release list --limit 100 --json tagName,createdAt | ConvertFrom-Json | Where-Object { $_.tagName -like 'dev-*' } | Sort-Object createdAt -Descending
+          $rels | Select-Object -Skip 10 | ForEach-Object { gh release delete $_.tagName --cleanup-tag --yes }

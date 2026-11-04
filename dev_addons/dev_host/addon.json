@@ -1,0 +1,8 @@
+{
+ "name": "Playground helpers",
+ "order": 0,
+ "status": "working",
+ "description": "Playground only: the helpers the older test add-ons (mesh, voxel / mesh FEA ...) expect from the Playground window - sharing a mesh between tabs, tab titles - added to OpenPara's real program window. Never part of a release.",
+ "tabs": [],
+ "extension": "dev_host_ext"
+}

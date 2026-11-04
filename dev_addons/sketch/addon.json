@@ -1,0 +1,19 @@
+{
+ "name": "Sketcher",
+ "order": 0,
+ "status": "working",
+ "description": "OpenPara's own constraint sketcher (points, lines, arcs, circles, relations, dimensions) in a part window, so every add-on can draw its input here the same way it will in OpenPara.",
+ "tabs": [
+  {
+   "kind": "sketch",
+   "label": "Sketch/Part (OpenPara part window)",
+   "short": "Sketch/Part",
+   "module": "sketch_tab",
+   "factory": "new_sketch_tab",
+   "args": [
+    "host"
+   ],
+   "in_program": false
+  }
+ ]
+}

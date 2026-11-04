@@ -9,8 +9,19 @@ import os
 import shutil
 import sys
 
-APP_NAME = "OpenPara"
 CODE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def app_name():
+    """"OpenPara", or "OpenPara Playground" for the dev build: the two never share a data folder."""
+    try:
+        import channel
+        return channel.app_name()
+    except Exception:  # noqa: BLE001
+        return "OpenPara"
+
+
+APP_NAME = app_name()
 
 
 def user_dir():

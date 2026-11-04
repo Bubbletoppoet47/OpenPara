@@ -1,0 +1,22 @@
+{
+ "name": "Circuits",
+ "order": 4,
+ "status": "workshopping",
+ "description": "Drag-and-drop circuit diagrams with a built-in simulator (modified nodal analysis): sources, passives, diodes/LEDs, transistors, buck/boost converters, voltmeter, ammeter, ohmmeter and an oscilloscope. Microcontrollers (Arduino/ESP32) come later.",
+ "tabs": [
+  {
+   "kind": "circuits",
+   "label": "Circuits",
+   "short": "Circuits",
+   "module": "circuits_tab",
+   "factory": "make_tab",
+   "args": [
+    "path"
+   ],
+   "set_host": true,
+   "file_types": [
+    ".opcirc"
+   ]
+  }
+ ]
+}

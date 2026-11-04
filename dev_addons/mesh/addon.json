@@ -1,0 +1,26 @@
+{
+ "name": "Mesh viewer",
+ "order": 1,
+ "status": "workshopping",
+ "description": "Open, look at, repair, remesh and section STL meshes (picking, holes, shells, thickness). Being polished before it becomes a proper OpenPara add-on.",
+ "tabs": [
+  {
+   "kind": "mesh",
+   "label": "Mesh fixing",
+   "short": "Mesh",
+   "module": "viewer",
+   "class": "Viewer",
+   "kwargs": [
+    "path",
+    "quiet",
+    "threaded"
+   ],
+   "set_host": true,
+   "file_types": [
+    ".stl",
+    ".obj",
+    ".ply"
+   ]
+  }
+ ]
+}

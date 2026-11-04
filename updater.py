@@ -16,12 +16,18 @@ import urllib.error
 import urllib.request
 import zipfile
 
+import channel
 import paths
 import version
 
 REPO = "Bubbletoppoet47/OpenPara"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
+API_DEV_LIST = f"https://api.github.com/repos/{REPO}/releases?per_page=30"      # the playground channel: the newest "dev-<version>" pre-release
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
+
+
+def feed_url():
+    return API_DEV_LIST if channel.is_playground() else API_LATEST
 
 
 def parse_version(text):
@@ -61,23 +67,26 @@ def _open(req, timeout):
     return urllib.request.build_opener(_NoAuthOnRedirect).open(req, timeout=timeout)
 
 
-def fetch_latest(url=API_LATEST, tok=None, timeout=8):
+def fetch_latest(url=None, tok=None, timeout=8):
     """The newest release as {'version','notes','page','app':asset|None,'setup':asset|None}, or None when there is none / no network."""
     tok = tok or token()
     try:
-        with _open(_request(url, "application/vnd.github+json", tok), timeout) as r:
+        with _open(_request(url or feed_url(), "application/vnd.github+json", tok), timeout) as r:
             rel = json.loads(r.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, ValueError):
         return None
+    if isinstance(rel, list):                       # the playground feed is a list of releases, newest first: take the newest dev build
+        rel = next((x for x in rel if isinstance(x, dict) and not x.get("draft") and str(x.get("tag_name", "")).startswith(channel.DEV_PREFIX)), None)
     if not isinstance(rel, dict) or not rel.get("tag_name") or rel.get("draft"):
         return None
-    out = {"version": rel["tag_name"].lstrip("vV"), "notes": rel.get("body") or "", "page": rel.get("html_url") or RELEASES_PAGE,
+    out = {"version": channel.version_of_tag(rel["tag_name"]), "notes": rel.get("body") or "", "page": rel.get("html_url") or RELEASES_PAGE,
            "app": None, "setup": None}
     for a in rel.get("assets", []):
         n = a.get("name", "")
-        if n.startswith("OpenPara-app-") and n.endswith(".zip"):
+        pre = channel.asset_prefix()
+        if n.startswith(pre + "app-") and n.endswith(".zip"):
             out["app"] = a
-        elif n.startswith("OpenPara-Setup-") and n.endswith(".exe"):
+        elif n.startswith(pre + "Setup-") and n.endswith(".exe"):
             out["setup"] = a
     return out
 

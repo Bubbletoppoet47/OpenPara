@@ -1,0 +1,23 @@
+{
+ "name": "Assembly",
+ "order": 2,
+ "status": "working",
+ "description": "OpenPara's assembly window as a playground tab: place part files, mate them, patterns, configurations, sub-assemblies.",
+ "tabs": [
+  {
+   "kind": "assembly",
+   "label": "Assembly (OpenPara)",
+   "short": "Assembly",
+   "module": "asm_tab",
+   "factory": "make_tab",
+   "args": [
+    "host",
+    "path"
+   ],
+   "file_types": [
+    ".gpa"
+   ],
+   "in_program": false
+  }
+ ]
+}

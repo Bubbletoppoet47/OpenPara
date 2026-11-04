@@ -7,6 +7,8 @@ import os
 import sys
 import contextlib
 
+import channel
+
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget, QVBoxLayout, QWidget
@@ -27,7 +29,7 @@ def _early():
     if sys.platform == "win32":                      # own taskbar icon / grouping instead of python's
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("OpenPara.CAD")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("OpenPara.Playground" if channel.is_playground() else "OpenPara.CAD")
         except Exception:
             pass
     app = APP = QApplication.instance() or QApplication(sys.argv)
@@ -61,7 +63,7 @@ class AppShell(QMainWindow):
     def __init__(self, files=None):
         super().__init__()
         self.tab_counts = {}
-        self.setWindowTitle("OpenPara")
+        self.setWindowTitle(channel.app_name())
         self.resize(1400, 860)
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.TabPosition.South)
@@ -219,7 +221,7 @@ class AppShell(QMainWindow):
         hm.addAction(self.auto_upd)
         add(hm, "Open the data folder", self.open_data_folder)
         hm.addSeparator()
-        add(hm, "About OpenPara", lambda: self.updates.about())
+        add(hm, "About " + channel.app_name(), lambda: self.updates.about())
 
     def settings_dialog(self):
         import settings_dialog

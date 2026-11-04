@@ -1,0 +1,35 @@
+{
+ "name": "Voxel & Mesh FEA",
+ "order": 2,
+ "status": "workshopping",
+ "needs": [
+  "mesh"
+ ],
+ "description": "3D FEA of organic STL geometry: voxel (regular grid, multigrid) and tetrahedral (graded gmsh mesh, quadratic elements) solvers with verification checks.",
+ "tabs": [
+  {
+   "kind": "voxel",
+   "label": "Voxel FEA",
+   "short": "Voxel FEA",
+   "module": "tabs",
+   "class": "VoxelTab",
+   "args": [
+    "host",
+    "quiet",
+    "threaded"
+   ]
+  },
+  {
+   "kind": "tet",
+   "label": "Mesh FEA (tetrahedra)",
+   "short": "Mesh FEA",
+   "module": "meshtab",
+   "class": "MeshFEATab",
+   "args": [
+    "host",
+    "quiet",
+    "threaded"
+   ]
+  }
+ ]
+}
