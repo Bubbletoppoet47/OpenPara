@@ -22,12 +22,13 @@ assert channel.mode() == "testing" and not channel.is_full_dev()
 assert channel.dev_addons_dir() is None and channel.shared_dir() is None and addons.dev_ids() == []
 assert channel.title() == "OpenPara Playground (testing)"
 addons.activate()
-assert not {"simulation", "mesh", "fea3d", "circuits", "towers"} & set(addons.tab_kinds()), addons.tab_kinds()
+assert not {"mesh", "fea3d", "circuits", "towers"} & set(addons.tab_kinds()), addons.tab_kinds()
+assert "simulation" in addons.known() and "simulation" in addons.CATALOG, "the Simulation add-on ships in Testing"
 # ---- Full dev: switched on, remembered, everything there
 channel.set_mode("full")
 assert json.load(open(os.path.join(paths.user_dir(), "playground.json")))["mode"] == "full"
 assert channel.mode() == "full" and channel.is_full_dev() and channel.title() == "OpenPara Playground (full dev)"
-assert channel.dev_addons_dir().endswith("dev_addons") and "simulation" in addons.dev_ids()
+assert channel.dev_addons_dir().endswith("dev_addons") and "fea3d" in addons.dev_ids() and "simulation" not in addons.dev_ids()
 addons.activate()
 assert {"circuits", "mesh", "towers"} <= set(addons.tab_kinds())
 channel.set_mode("nonsense")                                   # ignored

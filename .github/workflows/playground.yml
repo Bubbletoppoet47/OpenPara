@@ -92,7 +92,7 @@ jobs:
           Push-Location build\OpenPara\app
           $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_base"
           $env:OPARA_PLAYGROUND_MODE = "full"          # dev_addons/ is only loaded in Full dev mode
-          $out = & $py -c "import gpd_app, addons, updater, importlib.util as u; import channel; assert channel.is_playground(), 'channel.json is not read'; assert 'simulation' in addons.dev_ids() and 'dev_host' in addons.dev_ids(), 'dev_addons are not found'; print('app imports ok')" 2>&1
+          $out = & $py -c "import gpd_app, addons, updater, importlib.util as u; import channel; assert channel.is_playground(), 'channel.json is not read'; assert 'fea3d' in addons.dev_ids() and 'dev_host' in addons.dev_ids(), 'dev_addons are not found'; print('app imports ok')" 2>&1
           Pop-Location
           Remove-Item Env:OPARA_PLAYGROUND_MODE
           Write-Host $out
@@ -110,7 +110,7 @@ jobs:
           Push-Location build\OpenPara\app
           $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_addons"
           $env:OPARA_ADDON_BASE = "file:///" + ($dist -replace "\\", "/") + "/"
-          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); addons.install('annotator'); addons.install('annotator_gimble'); addons.install('trainer'); import gpd_app, partgen_ext, truss_tab; assert all(addons.status(a)=='installed' for a in ('partgen','truss','annotator','annotator_gimble','trainer')); print('add-ons ok')" 2>&1
+          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); addons.install('annotator'); addons.install('annotator_gimble'); addons.install('trainer'); addons.install('simulation'); import gpd_app, partgen_ext, truss_tab; addons.activate(); import gmsh, sim_tab, physics_tab, beam_tab, cfd_tab; assert all(addons.status(a)=='installed' for a in ('partgen','truss','annotator','annotator_gimble','trainer','simulation')); print('add-ons ok')" 2>&1
           Pop-Location
           Remove-Item Env:OPARA_ADDON_BASE
           Write-Host $out

@@ -48,6 +48,9 @@ CATALOG = {
                   "description": "Draw boxes on photos and video frames, pick LiDAR distances, pre-label with YOLO models downloaded from GitHub, hand a "
                                  "dataset to someone as a zip (and merge theirs into yours), annotate from a tablet. An annotator project is a folder "
                                  "with its dataset inside."},
+    "simulation": {"name": "Simulation (1D FEA, 2D FEA, 2D CFD)",
+                   "description": "Frames and trusses (1D FEA), plane stress / strain FEA (2D FEA) and 2D CFD of a sketch or a slice of a part or "
+                                  "assembly, with animation export. Saves .gps files. Needs gmsh for meshing."},
     "annotator_gimble": {"name": "Gimble sessions for the Annotator",
                          "description": "Adds File > Import Gimble Session... to the Annotator: sessions recorded by the Gimble rig (camera + LiDAR) "
                                         "become sets of photos with their depth. Needs the Annotator add-on."},

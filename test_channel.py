@@ -33,12 +33,12 @@ assert paths.app_name() == "OpenPara Playground"
 dev = addons.dev_dir()
 assert dev and dev.endswith("dev_addons"), dev
 ids = addons.dev_ids()
-for a in ("simulation", "fea3d", "mesh", "circuits", "dev_host"):
+for a in ("fea3d", "mesh", "circuits", "dev_host"):
     assert a in ids, (a, ids)
 assert channel.shared_dir().endswith("shared")
 addons.activate()
 assert channel.shared_dir() in sys.path
-assert addons.status("simulation") == "installed" and addons.is_dev("simulation")
+assert addons.status("fea3d") == "installed" and addons.is_dev("fea3d")
 # a build marks itself with channel.json
 os.environ.pop("OPARA_CHANNEL")
 tmp = tempfile.mkdtemp()
