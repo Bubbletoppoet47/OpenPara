@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-os.environ.pop("OPARA_CHANNEL", None)
+os.environ["OPARA_CHANNEL"] = "release"          # whatever channel.json says (a playground build carries one)
 os.environ.pop("OPARA_DEV_ADDONS", None)
 os.environ["OPARA_USER_DIR"] = tempfile.mkdtemp()
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
