@@ -17,6 +17,8 @@ import traceback
 import numpy as np
 from PyQt6.QtCore import QItemSelectionModel, Qt, QTimer
 from PyQt6.QtGui import QBrush, QColor, QFont, QGuiApplication, QKeySequence, QShortcut
+import sim_icons  # noqa: F401
+import sim_ui
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
                              QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplitter,
                              QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
@@ -116,6 +118,15 @@ class BeamTab(QWidget):
         left = QWidget()
         lay = QVBoxLayout(left)
         lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(4)
+        lay0 = lay
+        self.sections = []
+
+        def sec(n, title, open_=True, help_text=None, summary=None):
+            s_ = sim_ui.Section("beam1d", n, title, open_, help_text, summary)
+            self.sections.append(s_)
+            return s_.body
+        lay = sec(1, "Geometry", True, summary=lambda: self.info.text().split("\n")[0][:90])
         self.cb_tie = QCheckBox("Connect points that lie on members (auto tie)")
         self.cb_tie.setChecked(True)
         self.cb_tie.setToolTip("A point that lies in the middle of a member (a diagonal meeting a long rail, say) becomes part of that "
@@ -137,7 +148,9 @@ class BeamTab(QWidget):
         self.info.setWordWrap(True)
         lay.addWidget(self.info)
 
-        lay.addWidget(QLabel("<b>Material</b> (used by every member that does not choose its own)"))
+        lay = sec(2, "Material", False, help_text="Used by every member that does not choose its own. Materials come from the shared library "
+                  "(materials.json); add your own in the 2D FEA tab. A member can pick another material in its table row.",
+                  summary=lambda: self.mat_combo.currentText())
         form = QFormLayout()
         self.mat_combo = QComboBox()
         self.e_E, self.e_sy, self.e_su = QLineEdit("200000"), QLineEdit("250"), QLineEdit("400")
@@ -150,9 +163,7 @@ class BeamTab(QWidget):
         lay.addLayout(form)
         self.units_note = self.note("")
         lay.addWidget(self.units_note)
-        self.mat_note = self.note("Materials come from the shared library (materials.json); add your own in the 2D FEA tab. A member can "
-                                  "pick another material in its table row.")
-        lay.addWidget(self.mat_note)
+        self.mat_note = self.note("")
         self.fill_materials(select="Structural steel (A36)")
         self.material_picked()
         self.mat_combo.currentIndexChanged.connect(self.material_picked)
@@ -160,51 +171,70 @@ class BeamTab(QWidget):
             e.textEdited.connect(self.set_custom)
             e.editingFinished.connect(self.changed)
 
-        lay.addWidget(QLabel("<b>Joints</b> (select joints or members on the drawing first)"))
+        lay = sec(3, "Joints", True, help_text="Select joints or members on the drawing first. Rigid joint: the selected joints carry bending "
+                  "moment between the members that meet there. Pinned joint: the members can rotate freely there; a frame with pinned joints "
+                  "everywhere is a truss.", summary=lambda: self.info.text().split("\n")[0][:60])
         row = QHBoxLayout()
-        b = QPushButton("Rigid joint  (R)")
-        b.setToolTip("The selected joints carry bending moment between the members that meet there (all members meeting at a selected "
-                     "joint, or both ends of a selected member).")
-        b.clicked.connect(lambda: self.set_joint(False))
+        for text, icn, pinned, tip in (("Rigid joint", "rigid_joint", False,
+                                        "The selected joints carry bending moment between the members that meet there (all members meeting at a "
+                                        "selected joint, or both ends of a selected member)."),
+                                       ("Pinned joint", "pinned_joint", True,
+                                        "The members meeting at the selected joints can rotate freely there (they transmit no bending moment). "
+                                        "A frame with pinned joints everywhere is a truss.")):
+            b = sim_ui.icon_button(text, icn, tip)
+            b.clicked.connect(lambda _=False, p_=pinned: self.set_joint(p_))
+            row.addWidget(b)
+        lay.addLayout(row)
+
+        lay = sec(4, "Supports", True, help_text="Select joints (or members) on the drawing first, then press a button.",
+                  summary=lambda: self.count_text(self.supports, "support"))
+        for text, mode, icn, tip in (("Fixed", "fixed", "fixed", "Holds x, y and rotation."),
+                                     ("Pinned", "pinned", "pinned", "Holds x and y; rotation is free."),
+                                     ("ux = 0", "x", "ux", "Holds x only (a roller that rolls in y)."),
+                                     ("uy = 0", "y", "uy", "Holds y only (a roller that rolls in x).")):
+            b = sim_ui.icon_button(text, icn, tip)
+            b.clicked.connect(lambda _=False, m_=mode: self.add_support(m_))
+            lay.addWidget(b)
+
+        lay = sec(5, "Loads", True, help_text="Select joints or members first. Double-click a Name in the table to rename it (the Parameterization "
+                  "tab uses these names). Forces, moments and line loads can be edited in the Value column (force: Fx, Fy; moment: Mz; line "
+                  "load: the two values you entered). Wind and snow need each member's in-plane depth (Depth column).",
+                  summary=lambda: self.count_text(self.loads, "load"))
+        for text, icn, fn, tip in (("Force...", "force", self.add_force, "A force on each selected joint."),
+                                   ("Moment...", "moment", self.add_moment, "A moment on each selected joint (counter-clockwise positive)."),
+                                   ("Line load...", "line_load", self.add_dist, "A uniform load per length on each selected member."),
+                                   ("Wind...", "wind", lambda: self.add_pressure("wind"),
+                                    "Wind speed and direction on the selected members. Needs each member's in-plane depth (Depth column)."),
+                                   ("Snow...", "snow", lambda: self.add_pressure("snow"),
+                                    "Snow height and wetness on the selected members. Needs each member's in-plane depth (Depth column).")):
+            b = sim_ui.icon_button(text, icn, tip)
+            b.clicked.connect(lambda _=False, f=fn: f())
+            lay.addWidget(b)
+        lay.addWidget(QLabel("Conditions on this model"))
+        self.cond_table = QTableWidget(0, 4)
+        self.cond_table.setHorizontalHeaderLabels(["Name", "Type", "Applied to", "Value"])
+        self.cond_table.verticalHeader().hide()
+        self.cond_table.setMinimumHeight(110)
+        self.cond_table.setMaximumHeight(200)
+        self.cond_table.horizontalHeader().setStretchLastSection(True)
+        self.cond_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.cond_table.itemChanged.connect(self.cond_item_changed)
+        lay.addWidget(self.cond_table)
+        row = QHBoxLayout()
+        b = QPushButton("Edit selected wind / snow...")
+        b.clicked.connect(self.edit_pressure)
         row.addWidget(b)
-        b = QPushButton("Pinned joint  (J)")
-        b.setToolTip("The members meeting at the selected joints can rotate freely there (they transmit no bending moment). A frame with "
-                     "pinned joints everywhere is a truss.")
-        b.clicked.connect(lambda: self.set_joint(True))
+        b = QPushButton("Remove selected item")
+        b.clicked.connect(self.remove_condition)
         row.addWidget(b)
         lay.addLayout(row)
 
-        lay.addWidget(QLabel("<b>Supports and loads</b> (select joints / members first)"))
+        lay = sec(6, "Ties", False, help_text="Select one or more joints and the member they lie on (in the middle of it), then press Tie point to "
+                  "member. The joint becomes part of the member (the member is continuous through it), so other members that end there are "
+                  "connected to it. Ties made by hand are listed here (automatic ones are counted in the line under the import buttons). In the "
+                  "results a tied member is still ONE member.", summary=lambda: self.count_text(self.ties, "manual tie"))
         row = QHBoxLayout()
-        for text, mode, tip in (("Fixed  (F)", "fixed", "Holds x, y and rotation."), ("Pinned  (P)", "pinned", "Holds x and y; rotation is free."),
-                                ("ux = 0  (X)", "x", "Holds x only (a roller that rolls in y)."),
-                                ("uy = 0  (Y)", "y", "Holds y only (a roller that rolls in x).")):
-            b = QPushButton(text)
-            b.setToolTip(tip)
-            b.clicked.connect(lambda _=False, m_=mode: self.add_support(m_))
-            row.addWidget(b)
-        lay.addLayout(row)
-        row = QHBoxLayout()
-        for text, fn, tip in (("Force...  (Shift+F)", self.add_force, "A force on each selected joint."),
-                              ("Moment...  (M)", self.add_moment, "A moment on each selected joint (counter-clockwise positive)."),
-                              ("Line load...  (D)", self.add_dist, "A uniform load per length on each selected member.")):
-            b = QPushButton(text)
-            b.setToolTip(tip)
-            b.clicked.connect(lambda _=False, f=fn: f())
-            row.addWidget(b)
-        lay.addLayout(row)
-        row = QHBoxLayout()
-        for text, fn, tip in (("Wind...  (W)", lambda: self.add_pressure("wind"),
-                               "Wind speed and direction on the selected members. Needs each member's in-plane depth (Depth column)."),
-                              ("Snow...  (N)", lambda: self.add_pressure("snow"),
-                               "Snow height and wetness on the selected members. Needs each member's in-plane depth (Depth column).")):
-            b = QPushButton(text)
-            b.setToolTip(tip)
-            b.clicked.connect(lambda _=False, f=fn: f())
-            row.addWidget(b)
-        lay.addLayout(row)
-        row = QHBoxLayout()
-        b = QPushButton("Tie point to member  (T)")
+        b = QPushButton("Tie point to member")
         b.setToolTip("Select one or more joints and the member they lie on (in the middle of it), then press this. The joint becomes part of "
                      "the member (the member is continuous through it), so other members that end there are connected to it.")
         b.clicked.connect(self.add_tie)
@@ -221,37 +251,18 @@ class BeamTab(QWidget):
         self.tie_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tie_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         lay.addWidget(self.tie_table)
-        lay.addWidget(self.note("Ties made by hand are listed above (automatic ones are counted in the line under the import buttons). "
-                                "In the results a tied member is still ONE member."))
-        lay.addWidget(self.note("Hotkeys work while the drawing has the keyboard focus (click in it first). Esc clears the selection."))
-        self.cond_table = QTableWidget(0, 4)
-        self.cond_table.setHorizontalHeaderLabels(["Name", "Type", "Applied to", "Value"])
-        self.cond_table.verticalHeader().hide()
-        self.cond_table.setMinimumHeight(110)
-        self.cond_table.setMaximumHeight(200)
-        self.cond_table.horizontalHeader().setStretchLastSection(True)
-        self.cond_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.cond_table.itemChanged.connect(self.cond_item_changed)
-        lay.addWidget(self.cond_table)
-        lay.addWidget(self.note("Double-click a Name to rename it (the Parameterization tab uses these names). Forces, moments and line loads "
-                                "can be edited in the Value column (force: Fx, Fy; moment: Mz; line load: the two values you entered)."))
-        row = QHBoxLayout()
-        b = QPushButton("Edit selected wind / snow...")
-        b.clicked.connect(self.edit_pressure)
-        row.addWidget(b)
-        b = QPushButton("Remove selected item")
-        b.clicked.connect(self.remove_condition)
-        row.addWidget(b)
-        lay.addLayout(row)
 
-        lay.addWidget(QLabel("<b>Results</b>"))
+        lay = sec(7, "Results", True, summary=lambda: self.view_combo.currentText(),
+                  help_text="Beam theory (Euler-Bernoulli, linear elastic): bending and axial deformation, no shear deformation, no buckling or "
+                            "second-order (P-delta) effects, no joint stress concentrations. The Euler column shows how close a compressed member "
+                            "is to its pin-ended buckling load (1 or more = it would buckle). Use the 2D FEA tab for local effects.")
         self.cb_auto = QCheckBox("Solve automatically after every change")
         self.cb_auto.setChecked(True)
         self.cb_auto.setToolTip("A frame solves in a fraction of a second, so this is on by default.")
         lay.addWidget(self.cb_auto)
         self.b_solve = QPushButton("Solve")
+        self.b_solve.setMinimumHeight(32)
         self.b_solve.clicked.connect(lambda: self.solve(auto=False))
-        lay.addWidget(self.b_solve)
         self.view_combo = QComboBox()
         for text, key in VIEWS:
             self.view_combo.addItem(text, key)
@@ -288,21 +299,11 @@ class BeamTab(QWidget):
         b = QPushButton("Zoom to fit")
         b.clicked.connect(self.canvas.fit)
         lay.addWidget(b)
-        lay.addWidget(self.note("Beam theory (Euler-Bernoulli, linear elastic): bending and axial deformation, no shear deformation, no "
-                                "buckling or second-order (P-delta) effects, no joint stress concentrations. The Euler column shows how close "
-                                "a compressed member is to its pin-ended buckling load (1 or more = it would buckle). Use the 2D FEA tab "
-                                "for local effects."))
-        lay.addStretch(1)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(left)
-        scroll.setMinimumWidth(340)
-        scroll.setMaximumWidth(420)
-        scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
-        left.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        for s_ in sorted(self.sections, key=lambda x: x.number):
+            lay0.addWidget(s_)
+        lay0.addStretch(1)
+        scroll = sim_ui.make_panel(left, [self.b_solve], 340, 420)
 
         self.mem_table = QTableWidget(0, len(HEADERS))
         self.mem_table.setHorizontalHeaderLabels(HEADERS)
@@ -354,6 +355,15 @@ class BeamTab(QWidget):
     # ------------------------------------------------------------------------------------------
     # small helpers
     # ------------------------------------------------------------------------------------------
+    @staticmethod
+    def count_text(items, word):
+        n = len(items)
+        return f"{n} {word}{'' if n == 1 else 's'}" if n else f"no {word}s yet"
+
+    def refresh_sections(self):
+        for s_ in self.sections:
+            s_.refresh_summary()
+
     @staticmethod
     def note(text):
         lb = QLabel(text)
@@ -912,43 +922,6 @@ class BeamTab(QWidget):
     # ------------------------------------------------------------------------------------------
     # joints, supports and loads
     # ------------------------------------------------------------------------------------------
-    def handle_key(self, ev):
-        """The constraint hotkeys (the drawing has the focus). -> True when the key was used."""
-        if self.model is None:
-            return False
-        if ev.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier):
-            return False
-        shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-        k = ev.key()
-        K = Qt.Key
-        if k == K.Key_F:
-            self.add_force() if shift else self.add_support("fixed")
-        elif shift:
-            return False
-        elif k == K.Key_P:
-            self.add_support("pinned")
-        elif k == K.Key_X:
-            self.add_support("x")
-        elif k == K.Key_Y:
-            self.add_support("y")
-        elif k == K.Key_M:
-            self.add_moment()
-        elif k == K.Key_D:
-            self.add_dist()
-        elif k == K.Key_W:
-            self.add_pressure("wind")
-        elif k == K.Key_N:
-            self.add_pressure("snow")
-        elif k == K.Key_T:
-            self.add_tie()
-        elif k == K.Key_R:
-            self.set_joint(False)
-        elif k == K.Key_J:
-            self.set_joint(True)
-        else:
-            return False
-        return True
-
     def need_points(self, what):
         pts = self.sel_points()
         if not pts:
@@ -1246,6 +1219,7 @@ class BeamTab(QWidget):
         return f"{item['q1']:.10g}, {item['q2']:.10g}"
 
     def refresh_lists(self):
+        self.refresh_sections()
         t = self.cond_table
         t.blockSignals(True)
         t.setRowCount(len(self.supports) + len(self.loads))

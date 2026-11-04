@@ -1,7 +1,6 @@
 """The drawing of the 1D FEA tab: members, supports, loads, the deformed shape and the result diagrams.
 
 Click selects a joint (point) or a member (line); Ctrl / Shift adds; drag on empty space box-selects; wheel zooms; middle-drag pans.
-The constraint hotkeys work while this drawing has the keyboard focus (click in it first); they are handled by the tab.
 """
 import math
 
@@ -162,7 +161,7 @@ class BeamCanvas(QWidget):
             self.sel = []
             self.tab.selection_changed()
             self.update()
-        elif not self.tab.handle_key(ev):
+        else:
             super().keyPressEvent(ev)
 
     # --- drawing

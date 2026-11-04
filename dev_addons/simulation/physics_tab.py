@@ -32,6 +32,8 @@ import section_props as secp
 import sketcher_core as sc
 from sketch_pick import SketchPicker
 import sketcher_script as scr
+import sim_icons
+import sim_ui
 
 KIND_NAME = {"pt": "Point", "ln": "Line", "ar": "Arc", "ci": "Circle"}
 
@@ -411,7 +413,7 @@ class PhysCanvas(QWidget):
             self.sel = []
             self.tab.selection_changed()
             self.update()
-        elif not self.tab.handle_key(ev):
+        else:
             super().keyPressEvent(ev)
 
     # --- drawing
@@ -747,6 +749,14 @@ class PhysicsTab(QWidget):
         left = QWidget()
         lay = QVBoxLayout(left)
         lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(4)
+        lay0 = lay
+        self.sections = []
+
+        def sec(n, title, open_=True, help_text=None, summary=None):
+            s_ = sim_ui.Section("fea2d", n, title, open_, help_text, summary)
+            self.sections.append(s_)
+            return s_.body
 
         missing = [n for n, (v, _) in self.deps.items() if v is None]
         if missing:
@@ -758,6 +768,7 @@ class PhysicsTab(QWidget):
             warn.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             lay.addWidget(warn)
 
+        lay = sec(1, "Geometry", True, summary=lambda: self.info.text().split("\n")[0][:90])
         self.picker = SketchPicker(self.win, self.import_picked)
         lay.addWidget(self.picker)
         b = QPushButton("Clear (start over)")
@@ -776,7 +787,10 @@ class PhysicsTab(QWidget):
         self.regions.currentRowChanged.connect(self.region_picked)
         lay.addWidget(self.regions)
 
-        lay.addWidget(QLabel("<b>Material and analysis</b>"))
+        lay = sec(2, "Material and analysis", False,
+                  help_text="One material for everything. Quadratic elements need only a coarse mesh to capture bending (at least 2 elements "
+                            "through a thin sheet); linear ones are much too stiff in bending.",
+                  summary=lambda: f"{self.mat_combo.currentText()}, {'plane stress' if self.rb_stress.isChecked() else 'plane strain'}")
         row = QHBoxLayout()
         self.rb_stress = QRadioButton("Plane stress")
         self.rb_strain = QRadioButton("Plane strain")
@@ -857,8 +871,6 @@ class PhysicsTab(QWidget):
         self.order_combo.setToolTip("Quadratic elements have a node in the middle of every edge. They bend far more accurately than linear "
                                     "ones for the same mesh (linear triangles are far too stiff in bending). The mesh and its size do not change.")
         form.addRow("Elements", self.order_combo)
-        lay.addWidget(self.note("One material for everything. Quadratic elements need only a coarse mesh to capture bending (at least 2 "
-                                "elements through a thin sheet); linear ones are much too stiff in bending."))
         self.library = []
         self.fill_materials(select="Structural steel (A36)")
         self.material_picked()
@@ -871,14 +883,14 @@ class PhysicsTab(QWidget):
         self.e_sy.textEdited.connect(self.set_custom)
         self.e_su.textEdited.connect(self.set_custom)
 
-        row = QHBoxLayout()
         self.b_mesh = QPushButton("Mesh")
         self.b_mesh.clicked.connect(self.run_mesh)
         self.b_solve = QPushButton("Solve")
         self.b_solve.clicked.connect(self.run_solve)
-        row.addWidget(self.b_mesh)
-        row.addWidget(self.b_solve)
-        lay.addLayout(row)
+        for b_ in (self.b_mesh, self.b_solve):
+            b_.setMinimumHeight(32)
+        lay = sec(5, "Mesh and solve", False, summary=lambda: ("Auto-refine on" if self.cb_auto.isChecked() else "Single mesh"))
+        lay.addWidget(self.note("Mesh and Solve are at the bottom of this panel."))
         self.cb_auto = QCheckBox("Auto-refine the mesh until the result converges")
         self.cb_auto.setToolTip("Solve, then refine the mesh where the stress changes fastest and solve again, until the strain energy "
                                 "and the largest displacement change by less than 1 % between two meshes, or a limit below is reached. "
@@ -897,43 +909,41 @@ class PhysicsTab(QWidget):
         self.cb_auto.toggled.connect(self.auto_box.setVisible)
         lay.addWidget(self.auto_box)
 
-        lay.addWidget(QLabel("<b>Supports and loads</b> (select on the drawing first)"))
-        row = QHBoxLayout()
-        for text, mode in (("Fixed  (F)", "fixed"), ("ux = 0  (X)", "x"), ("uy = 0  (Y)", "y")):
-            b = QPushButton(text)
+        lay = sec(3, "Supports", True, help_text="Select edges or points on the drawing first, then press a button. Bolt and Screw ask for the head "
+                  "width. Contact lets the selected edges rest against a frictionless surface: they cannot move into it but are free to lift off.",
+                  summary=lambda: self.count_text(self.supports, "support"))
+        for text, mode, icn, tip in (("Fixed", "fixed", "fixed", "Holds x and y."), ("ux = 0", "x", "ux", "Holds x only."),
+                                     ("uy = 0", "y", "uy", "Holds y only.")):
+            b = sim_ui.icon_button(text, icn, tip)
             b.clicked.connect(lambda _, m_=mode: self.add_support(m_))
-            row.addWidget(b)
-        lay.addLayout(row)
-        row = QHBoxLayout()
-        for text, fn, tip in (("Bolt...  (B)", lambda: self.add_fastener("bolt"),
-                               "A bolt through the sheet at the selected points: a fixed patch of the width you give, held in every direction."),
-                              ("Screw...  (S)", lambda: self.add_fastener("screw"),
-                               "A screw head at the selected points: a patch of the width you give that is held sideways and "
-                               "cannot move toward the head side, but is free to move away from it."),
-                              ("Contact  (C)", self.add_contact,
-                               "The selected edges rest against a frictionless surface: they cannot move into it but are free to lift off.")):
-            b = QPushButton(text)
-            b.setToolTip(tip)
+            lay.addWidget(b)
+        for text, icn, fn, tip in (("Bolt...", "bolt", lambda: self.add_fastener("bolt"),
+                                    "A bolt through the sheet at the selected points: a fixed patch of the width you give, held in every direction."),
+                                   ("Screw...", "screw", lambda: self.add_fastener("screw"),
+                                    "A screw head at the selected points: a patch of the width you give that is held sideways and "
+                                    "cannot move toward the head side, but is free to move away from it."),
+                                   ("Contact", "contact", self.add_contact,
+                                    "The selected edges rest against a frictionless surface: they cannot move into it but are free to lift off.")):
+            b = sim_ui.icon_button(text, icn, tip)
             b.clicked.connect(fn)
-            row.addWidget(b)
-        lay.addLayout(row)
-        row = QHBoxLayout()
-        for text, fn in (("Force...  (Shift+F)", self.add_force), ("Pressure...  (P)", self.add_pressure),
-                         ("Traction...  (T)", self.add_traction)):
-            b = QPushButton(text)
+            lay.addWidget(b)
+
+        lay = sec(4, "Loads", True, help_text="Force: on points, total force. Pressure: on edges, positive pushes into the material. "
+                  "Pressure from CFD: loads the selected edges with the pressure (and optionally wall shear) of a solved CFD result, interpolated "
+                  "along the whole length of each edge. Double-click a Name in the table to rename it (the Parameterization tab uses these names). "
+                  "Force, pressure and screw / bolt head widths can be edited in the Value column.",
+                  summary=lambda: self.count_text(self.loads, "load"))
+        for text, icn, fn, tip in (("Force...", "force", self.add_force, "A force on the selected points (total force)."),
+                                   ("Pressure...", "pressure", self.add_pressure, "Pressure on the selected edges; positive pushes into the material."),
+                                   ("Pressure from CFD...", "pressure_cfd", self.add_cfd_load,
+                                    "Loads the selected edges with the pressure (and optionally wall shear) of a solved CFD result, "
+                                    "interpolated along the whole length of each edge.")):
+            b = sim_ui.icon_button(text, icn, tip)
             b.clicked.connect(fn)
-            row.addWidget(b)
-        lay.addLayout(row)
-        lay.addWidget(self.note("Hotkeys work while the drawing has the keyboard focus (click in it first): F, X, Y, B, S, C, Shift+F, P, T."))
-        b = QPushButton("Pressure from CFD...")
-        b.setToolTip("Loads the selected edges with the pressure (and optionally wall shear) of a solved CFD result, "
-                     "interpolated along the whole length of each edge.")
-        b.clicked.connect(self.add_cfd_load)
-        lay.addWidget(b)
-        lay.addWidget(self.note("Force: on points, total force. Pressure: on edges, positive pushes into the material. "
-                                "Traction: on edges, force per area in a fixed direction."))
+            lay.addWidget(b)
         self.cond_list = QListWidget()                       # plain-text copy of the table (kept for scripts and tests)
         self.cond_list.hide()
+        lay.addWidget(QLabel("Conditions on this model"))
         self.cond_table = QTableWidget(0, 4)
         self.cond_table.setHorizontalHeaderLabels(["Name", "Type", "Applied to", "Value"])
         self.cond_table.verticalHeader().hide()
@@ -943,13 +953,15 @@ class PhysicsTab(QWidget):
         self.cond_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.cond_table.itemChanged.connect(self.cond_item_changed)
         lay.addWidget(self.cond_table)
-        lay.addWidget(self.note("Double-click a Name to rename it (the Parameterization tab uses these names). Force, pressure, "
-                                "traction and screw / bolt head widths can be edited in the Value column."))
         b = QPushButton("Remove selected item")
         b.clicked.connect(self.remove_condition)
         lay.addWidget(b)
 
-        lay.addWidget(QLabel("<b>Probe regions</b> (average stress over an area of the original geometry)"))
+        lay = sec(6, "Probe regions", False, help_text="A probe is an area of the original geometry whose average stress is reported. "
+                  "FoS: the marked probe's average von Mises stress is used for the factors of safety (none marked = the largest stress). "
+                  "Trigger: the marked probe's average is tested against the nonlinear stress trigger (none marked = the largest stress). "
+                  "Rectangle: x0, y0, x1, y1. Circle: centre x, y, radius.",
+                  summary=lambda: self.count_text(self.probes, "probe"))
         row = QHBoxLayout()
         self.b_prect = QPushButton("Rectangle (drag)")
         self.b_pcirc = QPushButton("Circle (drag)")
@@ -967,14 +979,11 @@ class PhysicsTab(QWidget):
         self.probe_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.probe_table.itemChanged.connect(self.probe_item_changed)
         lay.addWidget(self.probe_table)
-        lay.addWidget(self.note("FoS: the marked probe's average von Mises stress is used for the factors of safety (none marked = the "
-                                "largest stress). Trigger: the marked probe's average is tested against the nonlinear stress trigger "
-                                "(none marked = the largest stress). Rectangle: x0, y0, x1, y1. Circle: centre x, y, radius."))
         b = QPushButton("Remove selected probe")
         b.clicked.connect(self.remove_probe)
         lay.addWidget(b)
 
-        lay.addWidget(QLabel("<b>Results</b>"))
+        lay = sec(7, "Results", True, summary=lambda: self.field.currentText())
         self.field = QComboBox()
         self.field.addItem("(none - show the mesh)", None)
         for name, key, _ in FIELDS:
@@ -1051,19 +1060,14 @@ class PhysicsTab(QWidget):
         lay.addWidget(b)
         lay.addStretch(1)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(left)
-        scroll.setMinimumWidth(340)
-        scroll.setMaximumWidth(400)
-        scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
-        left.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        for s_ in sorted(self.sections, key=lambda x: x.number):
+            lay0.addWidget(s_)
+        lay0.addStretch(1)
+        panel = sim_ui.make_panel(left, [self.b_mesh, self.b_solve])
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
-        split.addWidget(scroll)
+        split.addWidget(panel)
         split.addWidget(self.canvas)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
@@ -1078,6 +1082,15 @@ class PhysicsTab(QWidget):
         row.addWidget(self.coords)
         outer.addLayout(row)
         self.enable_buttons()
+
+    @staticmethod
+    def count_text(items, word):
+        n = len(items)
+        return f"{n} {word}{'' if n == 1 else 's'}" if n else f"no {word}s yet"
+
+    def refresh_sections(self):
+        for s_ in self.sections:
+            s_.refresh_summary()
 
     @staticmethod
     def note(text):
@@ -1235,36 +1248,6 @@ class PhysicsTab(QWidget):
                                     " on the drawing first (click; Ctrl-click to add more).")
         return t
 
-    def handle_key(self, ev):
-        """The constraint hotkeys (the drawing has the focus).  -> True when the key was used."""
-        if self.model is None or self.geom is None:
-            return False
-        if ev.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier):
-            return False
-        shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-        k, K = ev.key(), Qt.Key
-        if k == K.Key_F:
-            self.add_force() if shift else self.add_support("fixed")
-        elif shift:
-            return False
-        elif k == K.Key_X:
-            self.add_support("x")
-        elif k == K.Key_Y:
-            self.add_support("y")
-        elif k == K.Key_B:
-            self.add_fastener("bolt")
-        elif k == K.Key_S:
-            self.add_fastener("screw")
-        elif k == K.Key_C:
-            self.add_contact()
-        elif k == K.Key_P:
-            self.add_pressure()
-        elif k == K.Key_T:
-            self.add_traction()
-        else:
-            return False
-        return True
-
     def add_support(self, mode):
         t = self.targets(("pt", "ln", "ar", "ci"), "Support")
         if not t:
@@ -1335,17 +1318,6 @@ class PhysicsTab(QWidget):
         if v is None:
             return
         self.loads.append({"kind": "pressure", "p": v[0], "targets": t})
-        self.after_conditions()
-
-    def add_traction(self):
-        t = self.targets(("ln", "ar", "ci"), "Traction")
-        if not t:
-            return
-        su = units.get(self.unit_name())["S"]
-        v = ask_numbers(self, "Traction on the selected edges (force per area)", [f"Tx ({su})", f"Ty ({su})"], [0, -1])
-        if v is None:
-            return
-        self.loads.append({"kind": "traction", "tx": v[0], "ty": v[1], "targets": t})
         self.after_conditions()
 
     def add_cfd_load(self):
@@ -1487,6 +1459,7 @@ class PhysicsTab(QWidget):
                 "traction": lambda: f"{item['tx']:.10g}, {item['ty']:.10g}"}.get(k, lambda: "")()
 
     def refresh_lists(self):
+        self.refresh_sections()
         self.cond_list.clear()
         t = self.cond_table
         t.blockSignals(True)

@@ -29,6 +29,7 @@ import result_style
 import physics_store as pstore
 import physics_geom as pg
 import physics_tab as pt
+import sim_ui
 import sketcher_core as sc
 from sketch_pick import SketchPicker
 import sketcher_script as scr
@@ -544,6 +545,14 @@ class CFDTab(QWidget):
         left = QWidget()
         lay = QVBoxLayout(left)
         lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(4)
+        lay0 = lay
+        self.sections = []
+
+        def sec(n, title, open_=True, help_text=None, summary=None):
+            s_ = sim_ui.Section("cfd2d", n, title, open_, help_text, summary)
+            self.sections.append(s_)
+            return s_.body
         missing = [n for n, (v, _) in self.deps.items() if v is None]
         if missing:
             warn = QLabel("<b>Missing:</b> " + ", ".join(missing) + "<br>Install with:<br><code>pip install " +
@@ -554,6 +563,7 @@ class CFDTab(QWidget):
             warn.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             lay.addWidget(warn)
 
+        lay = sec(1, "Geometry", True, summary=lambda: self.info.text().split("\n")[0][:90])
         self.picker = SketchPicker(self.win, self.import_picked)
         lay.addWidget(self.picker)
         b = QPushButton("Clear (start over)")
@@ -565,13 +575,16 @@ class CFDTab(QWidget):
         self.info.setWordWrap(True)
         lay.addWidget(self.info)
 
-        lay.addWidget(QLabel("<b>Solid bodies</b> (tick = solid; the closed outlines of the sketch)"))
+        lay.addWidget(QLabel("Solid bodies (tick = solid; the closed outlines of the sketch)"))
         self.bodies = QListWidget()
         self.bodies.setMaximumHeight(110)
         self.bodies.itemChanged.connect(self.body_toggled)
         lay.addWidget(with_help(self.bodies, HELP["bodies"]))
 
-        lay.addWidget(QLabel("<b>Units and fluid</b> (SI inside; per metre of depth)"))
+        lay = sec(2, "Fluid and flow", True, help_text="Units: SI inside; per metre of depth. Typical fluid values - check your source. "
+                  "0 deg = the wind blows toward +x, 90 deg = toward +y. Box sides facing the wind are inlets, the opposite sides outlets; a "
+                  "side the wind runs exactly along is a free-slip wall.",
+                  summary=lambda: f"{self.fluid_combo.currentText()}, {self.e_speed.text()} at {self.e_angle.text()} deg")
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.units_note = self.note("")
@@ -586,9 +599,7 @@ class CFDTab(QWidget):
         self.lbl_mu = self.row(form, "Viscosity", self.e_mu, HELP["mu"])
         lay.addLayout(form)
         lay.addWidget(lay_units)
-        lay.addWidget(self.note("Typical fluid values - check your source."))
 
-        lay.addWidget(QLabel("<b>Flow</b>"))
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.inputs_unit = self.unit_name()          # the unit system the numbers in the boxes are in
@@ -599,10 +610,9 @@ class CFDTab(QWidget):
         lay.addLayout(form)
         self.sides_lbl = self.note("")
         lay.addWidget(self.sides_lbl)
-        lay.addWidget(self.note("0 deg = the wind blows toward +x, 90 deg = toward +y. Box sides facing the wind are inlets, the "
-                                "opposite sides outlets; a side the wind runs exactly along is a free-slip wall."))
 
-        lay.addWidget(QLabel("<b>Domain</b> (margins around the bodies, in body sizes)"))
+        lay = sec(3, "Domain", False, help_text="Margins around the bodies, in body sizes.",
+                  summary=lambda: f"margins {self.e_ml.text()} / {self.e_mr.text()} / {self.e_mb.text()} / {self.e_mt.text()}")
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.e_ml, self.e_mr, self.e_mb, self.e_mt = QLineEdit("5"), QLineEdit("12"), QLineEdit("5"), QLineEdit("5")
@@ -612,7 +622,8 @@ class CFDTab(QWidget):
         self.row(form, "Top", self.e_mt, HELP["margin"])
         lay.addLayout(form)
 
-        lay.addWidget(QLabel("<b>Mesh</b> (element sizes in sketch units)"))
+        lay = sec(4, "Mesh", False, help_text="Element sizes in sketch units. The boundary layer is used with the turbulence model.",
+                  summary=lambda: f"body {self.e_hb.text() or 'auto'}, far {self.e_hf.text() or 'auto'}")
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.e_hb, self.e_hf, self.e_tr = QLineEdit(""), QLineEdit(""), QLineEdit("3")
@@ -620,7 +631,7 @@ class CFDTab(QWidget):
         self.lbl_hf = self.row(form, "Far away", self.e_hf, HELP["hf"])
         self.row(form, "Growth (body sizes)", self.e_tr, HELP["tr"])
         lay.addLayout(form)
-        lay.addWidget(QLabel("<b>Boundary layer</b> (used with the turbulence model)"))
+        lay.addWidget(QLabel("Boundary layer"))
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.e_yp, self.e_gr = QLineEdit("1"), QLineEdit("1.2")
@@ -636,9 +647,10 @@ class CFDTab(QWidget):
         lay.addWidget(self.bl_lbl)
         self.b_mesh = QPushButton("Mesh")
         self.b_mesh.clicked.connect(self.run_mesh)
-        lay.addWidget(self.b_mesh)
 
-        lay.addWidget(QLabel("<b>Solver</b> (time marching to a steady state)"))
+        lay = sec(5, "Solver", True, help_text="Time marching to a steady state. Change per step = relative change of the velocity (and pressure) "
+                  "between two time steps. The converged state is the last time step - nothing is averaged.",
+                  summary=lambda: self.turb.currentText().split(" (")[0])
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.turb = QComboBox()
@@ -676,15 +688,13 @@ class CFDTab(QWidget):
         lay.addWidget(self.auto_box)
         self.dt_lbl = self.note("")
         lay.addWidget(self.dt_lbl)
-        row = QHBoxLayout()
         self.b_solve = QPushButton("Solve")
         self.b_solve.clicked.connect(self.run_solve)
         self.b_stop = QPushButton("Stop")
         self.b_stop.clicked.connect(self.stop_solve)
         self.b_stop.setEnabled(False)
-        row.addWidget(self.b_solve)
-        row.addWidget(self.b_stop)
-        lay.addLayout(row)
+        for b_ in (self.b_mesh, self.b_solve, self.b_stop):
+            b_.setMinimumHeight(32)
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
         lay.addWidget(self.bar)
@@ -692,10 +702,9 @@ class CFDTab(QWidget):
         lay.addWidget(self.prog_lbl)
         self.plot = ConvergencePlot()
         lay.addWidget(self.plot)
-        lay.addWidget(self.note("Change per step = relative change of the velocity (and pressure) between two time steps. "
-                                "The converged state is the last time step - nothing is averaged."))
 
-        lay.addWidget(QLabel("<b>Results</b>"))
+        lay = sec(6, "Results", True, help_text="To load a surface of the body in the FEA tab: FEA tab - Pressure from CFD...",
+                  summary=lambda: self.field.currentText())
         self.field = QComboBox()
         for name, key, _, _ in FIELD_LIST:
             self.field.addItem(name, key)
@@ -753,18 +762,11 @@ class CFDTab(QWidget):
         b = QPushButton("Zoom to fit")
         b.clicked.connect(self.canvas.fit)
         lay.addWidget(b)
-        lay.addWidget(self.note("To load a surface of the body in the FEA tab: FEA tab - Pressure from CFD..."))
-        lay.addStretch(1)
+        for s_ in sorted(self.sections, key=lambda x: x.number):
+            lay0.addWidget(s_)
+        lay0.addStretch(1)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(left)
-        scroll.setMinimumWidth(340)
-        scroll.setMaximumWidth(420)
-        scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
-        left.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        scroll = sim_ui.make_panel(left, [self.b_mesh, self.b_solve, self.b_stop], 340, 420)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
@@ -807,6 +809,10 @@ class CFDTab(QWidget):
         lab = HelpLabel(text, help_text)
         form.addRow(lab, widget)
         return lab
+
+    def refresh_sections(self):
+        for s_ in self.sections:
+            s_.refresh_summary()
 
     @staticmethod
     def note(text):
