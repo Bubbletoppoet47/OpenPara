@@ -123,9 +123,16 @@ jobs:
           # a warning, not a failure: the release is still made, but the annotation says the AI models will not work and why
           if (-not (($out | Out-String) -match "ai ok")) { Report "WARNING the annotator's AI packages do not load (exit $LASTEXITCODE)" $out }
           Copy-Item test_updater.py build\OpenPara\app\
+          Copy-Item test_channel.py build\OpenPara\app\
+          $out = & $py build\OpenPara\app\test_channel.py 2>&1
+          Write-Host $out
+          Remove-Item build\OpenPara\app\test_channel.py
+          if (-not (($out | Out-String) -match "channel OK")) { Report "test_channel failed" $out; exit 1 }
+          $env:OPARA_CHANNEL = "release"          # test_updater checks the normal program's file names; test_channel.py covers the playground's
           $out = & $py build\OpenPara\app\test_updater.py 2>&1
           $code = $LASTEXITCODE
           Write-Host $out
+          Remove-Item Env:OPARA_CHANNEL
           Remove-Item build\OpenPara\app\test_updater.py
           Write-Host "exit code: $code"
           if (-not (($out | Out-String) -match "update UI OK")) { Report "test_updater failed (exit $code)" $out; exit 1 }
