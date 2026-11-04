@@ -467,7 +467,7 @@ class AppShell(QMainWindow):
                 fmt = json.load(open(mk, encoding="utf-8")).get("format")
             except Exception:
                 fmt = None
-            if fmt == pf.get("format"):
+            if pf.get("format") in (None, fmt):                # a spec without a format is recognised by its marker file alone
                 i = self.find_tab(folder)
                 if i is not None:
                     self.tabs.setCurrentIndex(i)

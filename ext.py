@@ -18,6 +18,7 @@ OPTIONAL = {
 }
 _present = set()
 FEATURES = {}
+MENU_ITEMS = {}              # {menu name: [(text, fn(window))]}: items an add-on puts in the menu of another add-on's window, e.g. "annotator.file"
 SHELL_MIXINS = []           # classes an add-on adds to the program window (gpd_app.AppShell) to give its tabs the helpers they use
 installer = None            # set by the shell: installer(addon_id, parent) offers to install / enable an add-on
 
@@ -37,6 +38,12 @@ def add_feature(kind, **spec):
 def add_shell_mixin(cls):
     if cls not in SHELL_MIXINS:
         SHELL_MIXINS.append(cls)
+
+
+def add_menu_item(menu, text, fn):
+    items = MENU_ITEMS.setdefault(menu, [])
+    if (text, fn) not in items:
+        items.append((text, fn))
 
 
 def feature(kind):
