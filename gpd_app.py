@@ -439,6 +439,22 @@ class AppShell(QMainWindow):
         for f in files:
             self.open_path(f)
 
+    def open_sketches(self):
+        """The open part tabs that have a sketch, for any add-on that imports one:
+        [{"title": tab name, "tab": widget, "doc": the part's JSON text, "sketches": [(feature id, sketch name), ...]}]."""
+        out = []
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            d = getattr(w, "doc", None)
+            feats = getattr(d, "features", None)
+            if not feats or not callable(getattr(d, "to_json", None)):
+                continue
+            sk = [(f["id"], f["name"]) for f in feats if f["kind"] == "sketch"]
+            if sk:
+                t = self.tabs.tabText(i)
+                out.append({"title": t[:-2] if t.endswith(" *") else t, "tab": w, "doc": d.to_json(), "sketches": sk})
+        return out
+
     def find_tab(self, path):
         norm = os.path.normcase(os.path.abspath(path))
         for i in range(self.tabs.count()):

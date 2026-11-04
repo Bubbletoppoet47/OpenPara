@@ -446,7 +446,7 @@ class TrussTab(QWidget):
         root = QVBoxLayout(self)
         bar = QHBoxLayout()
         self.btn_import = QPushButton("Import sketch…")
-        self.btn_import.setToolTip("Take the sketch (and its configurations) from an open Sketch/Part tab or from a part file. A copy is saved in this project's folder as sketch.gpd; that copy is the sketch from then on.")
+        self.btn_import.setToolTip("Copy a sketch (with its configurations) into this truss from any open part tab or from a part file. The truss is saved to its .truss folder first; the copy there (sketch.gpd) is the sketch from then on, and importing again replaces it and clears the members.")
         self.btn_import.clicked.connect(self.import_menu)
         self.btn_open = QPushButton("Open project…")
         self.btn_open.setToolTip("Open a project folder (File > Open Project Folder)")
@@ -454,6 +454,9 @@ class TrussTab(QWidget):
         self.btn_edit = QPushButton("Open sketch for editing")
         self.btn_edit.setToolTip("Open this project's own sketch.gpd in a Sketch/Part tab: add lines or configurations there, save it, then press Refresh from sketch.")
         self.btn_edit.clicked.connect(self.open_sketch_for_editing)
+        self.btn_clear = QPushButton("Clear sketch")
+        self.btn_clear.setToolTip("Remove this truss's sketch and all its members, to start again from a clean slate")
+        self.btn_clear.clicked.connect(self.clear_sketch)
         self.btn_refresh = QPushButton("Refresh from sketch")
         self.btn_refresh.setToolTip("Read the project's sketch.gpd again after you saved it. Members, joints and profiles stay; new configurations are built.")
         self.btn_refresh.clicked.connect(self.refresh_from_sketch)
@@ -467,7 +470,7 @@ class TrussTab(QWidget):
         self.btn_export = QPushButton("Export assembly…")
         self.btn_export.setToolTip("Writes ONE configurable assembly file (every sketch configuration in it), the part files, one cut list, and STEP / STL per configuration")
         self.btn_export.clicked.connect(lambda _=False: self.export_dialog())
-        for w_ in (QLabel("Project"), self.name_edit, self.btn_open, self.btn_import, self.btn_edit, self.btn_refresh, self.lbl_sketch, QLabel("Configuration"), self.cfg):
+        for w_ in (QLabel("Project"), self.name_edit, self.btn_open, self.btn_import, self.btn_edit, self.btn_refresh, self.btn_clear, self.lbl_sketch, QLabel("Configuration"), self.cfg):
             bar.addWidget(w_)
         bar.addStretch(1)
         bar.addWidget(self.btn_export)
@@ -631,55 +634,105 @@ class TrussTab(QWidget):
         self.dirty = False
 
     # ------------------------------------------------------------------ the sketch
+    def need_folder(self, why):
+        """A truss lives in its own .truss folder; that is where its sketch is kept.  True when the project has one (asks to save when it has not)."""
+        if self.path:
+            return True
+        QMessageBox.information(self, "Save the truss first", f"{why}\n\nA truss is kept in its own .truss folder, with its sketch inside. Choose where to save it.")
+        return bool(self.save())
+
+    def sketch_choices(self):
+        """[(label, doc JSON text, sketch id or None)] for every sketch in an open part tab."""
+        out = []
+        fn = getattr(self.host, "open_sketches", None)
+        if callable(fn):
+            for e in fn():
+                for sid, nm in e["sketches"]:
+                    out.append((f"Tab: {e['title']}" + (f" - {nm}" if len(e["sketches"]) > 1 else ""), e["doc"], sid))
+        return out
+
     def import_menu(self):
-        choices = []
-        tabs = getattr(getattr(self.host, "tabs", None), "count", lambda: 0)()
-        for i in range(tabs):
-            w = self.host.tabs.widget(i)
-            if getattr(w, "kind", "") == "sketch" and hasattr(w, "doc") and any(f["kind"] == "sketch" for f in w.doc.features):
-                choices.append((self.host.tabs.tabText(i), w))
-        items = [f"Tab: {t}" for t, _ in choices] + ["A part file (.gpd)…"]
+        if not self.need_folder("Importing a sketch puts a copy of it in the truss."):
+            return
+        choices = self.sketch_choices()
+        items = [c[0] for c in choices] + ["A part file (.gpd)..."]
         pick, ok = QInputDialog.getItem(self, "Import sketch", "Take the sketch from", items, 0, False)
         if not ok:
             return
-        if pick.startswith("Tab: "):
-            w = dict((f"Tab: {t}", w) for t, w in choices)[pick]
-            self.import_doc(w.doc.to_json())
+        if pick in [c[0] for c in choices]:
+            c = choices[[x[0] for x in choices].index(pick)]
+            self.import_doc(c[1], c[2])
         else:
             path, _ = QFileDialog.getOpenFileName(self, "Part with the sketch", "", "Part (*.gpd)")
             if path:
                 with open(path, encoding="utf-8") as f:
                     self.import_doc(f.read())
 
-    def import_doc(self, text):
+    def import_doc(self, text, sid=None):
         import pm_model as pm
         d = pm.Document.from_json(text)
         sk = [f for f in d.features if f["kind"] == "sketch"]
         if not sk:
             return QMessageBox.information(self, "Import", "That part has no sketch.")
-        old = (self.p.get("sketch") or {}).get("sid")
-        if old and any(f["id"] == old for f in sk):
-            sid = old
-        elif len(sk) == 1:
-            sid = sk[0]["id"]
-        else:
-            names = [f["name"] for f in sk]
-            nm, ok = QInputDialog.getItem(self, "Import sketch", "Which sketch?", names, 0, False)
-            if not ok:
-                return
-            sid = sk[names.index(nm)]["id"]
+        if sid is None or not any(f["id"] == sid for f in sk):
+            if len(sk) == 1:
+                sid = sk[0]["id"]
+            else:
+                names = [f["name"] for f in sk]
+                nm, ok = QInputDialog.getItem(self, "Import sketch", "Which sketch?", names, 0, False)
+                if not ok:
+                    return
+                sid = sk[names.index(nm)]["id"]
+        if self.p.get("sketch") and QMessageBox.question(
+                self, "Replace the sketch?", "This replaces the truss's sketch, and its members are cleared.\n\nReplace it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        self.reset_members()
         self.p["sketch"] = {"doc": text, "sid": sid, "name": d.feature(sid)["name"]}
-        if self.path:                                           # the copy in the project folder is the sketch from now on
+        self.config = None
+        if self.path:                                           # the copy in the truss folder is the sketch from now on
             tc.save(self.p, self.path)
-        self.touch()
+            self.dirty = False
+        else:
+            self.touch()
         self.load_source()
         self.refresh_all()
+        self.say("Sketch imported into the truss. Double-click a line to make it a member.")
+
+    def reset_members(self):
+        self.p["members"] = []
+        self.p["names"] = {}
+        self.p["place"] = {}
+        self.p["next"] = 1
+        self.sel_line = self.sel_member = None
+
+    def clear_sketch(self):
+        if not self.p.get("sketch"):
+            return QMessageBox.information(self, "Sketch", "There is no sketch to clear.")
+        if QMessageBox.question(self, "Clear the sketch?", "This removes the truss's sketch and all its members.\n\nClear it?",
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        self.reset_members()
+        self.p["sketch"] = None
+        self.config = None
+        if self.path:
+            try:
+                os.remove(os.path.join(self.path, tc.SKETCH_FILE))
+            except OSError:
+                pass
+            tc.save(self.p, self.path)
+            self.dirty = False
+        else:
+            self.touch()
+        self.load_source()
+        self.refresh_all()
+        self.say("The sketch and its members are cleared. Import a sketch to start again.")
 
     def open_sketch_for_editing(self):
         if not self.p.get("sketch"):
             return QMessageBox.information(self, "Sketch", "Import a sketch first.")
-        if not self.path and not self.save():
-            return
+        if not self.path:
+            return QMessageBox.information(self, "Save the truss first", "Save this truss first (File > Save). It is kept in a .truss folder, and its sketch is the sketch.gpd inside that folder.")
         tc.save(self.p, self.path)
         f = os.path.join(self.path, tc.SKETCH_FILE)
         if hasattr(self.host, "open_path") and self.host.open_path(f) is not None:
@@ -689,7 +742,7 @@ class TrussTab(QWidget):
 
     def refresh_from_sketch(self):
         if not self.path or not self.p.get("sketch"):
-            return QMessageBox.information(self, "Sketch", "Save the project first: its sketch lives in the project folder.")
+            return QMessageBox.information(self, "Sketch", "Save the truss first: its sketch lives in the truss folder.")
         try:
             i = self.host.find_tab(os.path.join(self.path, tc.SKETCH_FILE)) if hasattr(self.host, "find_tab") else None
             w = self.host.tabs.widget(i) if i is not None else None
