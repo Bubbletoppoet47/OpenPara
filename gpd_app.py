@@ -602,9 +602,18 @@ class AppShell(QMainWindow):
         import exchange_dialog
         exchange_dialog.run_export(self, self.tabs.currentWidget())
 
-    def open_dialog(self):
+    def open_filter(self):
+        """The file-type filter of File > Open: parts, assemblies, what the active add-ons open themselves, and the files of add-ons the program
+        opens through them (.gps simulation files, .gpr render files) whenever that add-on is available (installed, or one click away)."""
         extra = sorted({t for sp in addons.tab_kinds().values() for t in sp.get("file_types", [])})
-        files, _ = QFileDialog.getOpenFileNames(self, "Open", "", "Parts and assemblies (*.gpd *.gpa" + "".join(" *" + t for t in extra) + ");;Part (*.gpd);;Assembly (*.gpa)")
+        own = [(ext, label) for ext, (aid, label) in addons.OPENABLE.items() if aid in addons.known() and ext not in extra]
+        every = ["*.gpd", "*.gpa"] + ["*" + t for t in extra] + ["*" + e for e, _ in own]
+        parts = ["All supported files (" + " ".join(every) + ")", "Part (*.gpd)", "Assembly (*.gpa)"]
+        parts += [f"{label} (*{ext})" for ext, label in own]
+        return ";;".join(parts)
+
+    def open_dialog(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Open", "", self.open_filter())
         for f in files:
             self.open_path(f)
 

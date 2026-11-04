@@ -60,6 +60,10 @@ CATALOG = {
 }
 
 
+# files the program opens through an add-on although the add-on has no document tab of its own: extension -> (add-on id, name in the Open dialog)
+OPENABLE = {".gps": ("simulation", "Simulation"), ".gpr": ("render", "Render")}
+
+
 class AddonError(Exception):
     pass
 
