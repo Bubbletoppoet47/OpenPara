@@ -216,3 +216,67 @@ def ext_keys(m):
         if "ln" in rec:
             out.add(("ln", rec["ln"]))
     return out
+
+
+# ------------------------------------------------------------------------------------------------ used by the editor's direct picking
+def rec_of(m, key):
+    """The reference record that owns point / line `key` of the model, or None."""
+    k, i = key
+    for rec in m.ext:
+        if k == "pt" and (rec.get("pt") == i or i in rec.get("pts", [])):
+            return rec
+        if k == "ln" and rec.get("ln") == i:
+            return rec
+    return None
+
+
+def crossings(doc, fid, rec):
+    """World points where the curve of a "pierce" reference crosses its sketch plane, nearest to its current choice first."""
+    sm, sfr = source(doc, rec)
+    plane = doc.planes.get(fid)
+    k, i = rec["ent"]
+    return pierce_points(sm, (k, i), sfr, frame(plane), rec.get("last"))
+
+
+def remove_record(m, rec):
+    """Take a reference out of the model: its record, its line and its points (their relations go with them)."""
+    items = []
+    if "ln" in rec:
+        items.append(("ln", rec["ln"]))
+    for p in ([rec["pt"]] if "pt" in rec else rec.get("pts", [])):
+        items.append(("pt", p))
+    m.ext = [r for r in m.ext if r is not rec]
+    m.delete(items)
+
+
+def prune(m, keep=()):
+    """Remove references nothing uses any more (no relation or dimension on their points / line, no sketch line on a point of theirs).
+    `keep`: keys that are selected or being picked. Returns how many were removed."""
+    keep = set(keep)
+    n = 0
+    for rec in list(m.ext):
+        pts = [rec["pt"]] if "pt" in rec else list(rec.get("pts", []))
+        keys = {("pt", p) for p in pts} | ({("ln", rec["ln"])} if "ln" in rec else set())
+        if keys & keep:
+            continue
+        used = False
+        for c in m.cons:
+            if c["type"] == "fixed" and len(c["refs"]) == 1 and c["refs"][0][0] == "pt" and c["refs"][0][1] in pts:
+                continue
+            if any(tuple(r) in keys for r in c["refs"]):
+                used = True
+                break
+        if not used:
+            for lid, (a, b) in m.lns.items():
+                if ("ln", lid) not in keys and (a in pts or b in pts):
+                    used = True
+            for ar in m.ars.values():
+                if ar["c"] in pts or ar["s"] in pts or ar["e"] in pts:
+                    used = True
+            for ci in m.cis.values():
+                if ci["c"] in pts:
+                    used = True
+        if not used:
+            remove_record(m, rec)
+            n += 1
+    return n

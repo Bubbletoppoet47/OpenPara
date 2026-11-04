@@ -43,6 +43,7 @@ SPEC = {
     "text_pt": (14.0, 8.0, 30.0, "Label text size"),
     "dim_color": ("#1a1a1a", None, "color", "Dimension colour"),
     "dim_sel_color": ("#ff7300", None, "color", "Selected dimension colour"),
+    "dim_driven_color": ("#6f7f9e", None, "color", "Driven (measured) dimension colour"),
 }
 FINE_EDGE, FINE_SURF = 0.004, 0.02          # below these a big model gets slow: the dialog warns
 _state = {}

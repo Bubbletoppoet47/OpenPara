@@ -1,0 +1,524 @@
+{
+ "version": 1,
+ "params": {
+  "Pipe_Length": "3048",
+  "Pirpe_Thickness": "0.0704",
+  "Pipe_Height": "38.1",
+  "Top_Cut": "135",
+  "Bottom_Cut": "135"
+ },
+ "kinds": {
+  "Pirpe_Thickness": "number",
+  "Top_Cut": "angle",
+  "Bottom_Cut": "angle"
+ },
+ "features": [
+  {
+   "id": "F1",
+   "name": "Sketch1",
+   "kind": "sketch",
+   "suppressed": false,
+   "plane": {
+    "base": "Front"
+   },
+   "model": "{\"pts\": {\"0\": [0.0, 0.0], \"153\": [-12.699957654691133, 12.700070022501519], \"154\": [-12.699973683193928, 19.050070022483546], \"155\": [-19.0499576547215, 12.700061714281613], \"157\": [12.70010404603132, 19.050070022483546], \"159\": [-12.700070766904778, -12.700070022509651], \"160\": [-19.05007076668218, -12.700016014700351], \"161\": [-12.699998256368458, -19.05007002214593], \"162\": [-19.049957654754515, 12.700061714281613], \"165\": [12.700070766881327, -12.69992997754607], \"166\": [12.700079472484436, -19.049929977543258], \"167\": [19.05007076677837, -12.699975388516341], \"168\": [-12.699998256368458, -19.050070022182013], \"171\": [12.700070766905428, 12.700070022510308], \"172\": [19.050070766829847, 12.700102340708879], \"173\": [12.70010404603132, 19.050070022456783], \"174\": [19.050070766829847, -12.699975388516341], \"189\": [-12.699951074883282, 12.699927959787662], \"192\": [-12.699933342764643, -12.699927959780384], \"195\": [12.699933342735351, -12.700072040260576], \"198\": [12.69993334276454, 12.699927959780082]}, \"lns\": {\"158\": [154, 157], \"163\": [160, 162], \"169\": [166, 168], \"175\": [172, 174], \"201\": [159, 0], \"202\": [0, 171]}, \"cis\": {}, \"ars\": {\"156\": {\"c\": 153, \"s\": 154, \"e\": 155}, \"164\": {\"c\": 159, \"s\": 160, \"e\": 161}, \"170\": {\"c\": 165, \"s\": 166, \"e\": 167}, \"176\": {\"c\": 171, \"s\": 172, \"e\": 173}}, \"cons\": [{\"id\": 0, \"type\": \"fixed\", \"refs\": [[\"pt\", 0]], \"xy\": [0.0, 0.0], \"origin\": true}, {\"id\": 64, \"type\": \"tangent\", \"refs\": [[\"ln\", 158], [\"ar\", 156]]}, {\"id\": 65, \"type\": \"tangent\", \"refs\": [[\"ar\", 176], [\"ln\", 175]]}, {\"id\": 66, \"type\": \"tangent\", \"refs\": [[\"ar\", 170], [\"ln\", 169]]}, {\"id\": 67, \"type\": \"tangent\", \"refs\": [[\"ar\", 164], [\"ln\", 163]]}, {\"id\": 68, \"type\": \"coincident\", \"refs\": [[\"pt\", 155], [\"pt\", 162]]}, {\"id\": 69, \"type\": \"coincident\", \"refs\": [[\"pt\", 173], [\"pt\", 157]]}, {\"id\": 70, \"type\": \"coincident\", \"refs\": [[\"pt\", 167], [\"pt\", 174]]}, {\"id\": 71, \"type\": \"coincident\", \"refs\": [[\"pt\", 168], [\"pt\", 161]]}, {\"id\": 72, \"type\": \"equal\", \"refs\": [[\"ln\", 158], [\"ln\", 175], [\"ln\", 169], [\"ln\", 163]]}, {\"id\": 73, \"type\": \"equal\", \"refs\": [[\"ar\", 156], [\"ar\", 176], [\"ar\", 170], [\"ar\", 164]]}, {\"id\": 74, \"type\": \"horizontal\", \"refs\": [[\"ln\", 158]]}, {\"id\": 75, \"type\": \"tangent\", \"refs\": [[\"ln\", 169], [\"ar\", 164]]}, {\"id\": 76, \"type\": \"tangent\", \"refs\": [[\"ln\", 163], [\"ar\", 156]]}, {\"id\": 77, \"type\": \"tangent\", \"refs\": [[\"ln\", 158], [\"ar\", 176]]}, {\"id\": 78, \"type\": \"tangent\", \"refs\": [[\"ln\", 175], [\"ar\", 170]]}, {\"id\": 79, \"type\": \"vertical\", \"refs\": [[\"ln\", 175]]}, {\"id\": 80, \"type\": \"dim_rad\", \"refs\": [[\"ar\", 176]], \"name\": \"R1\", \"value\": 6.35, \"driven\": false, \"off\": [5.3065, 5.423]}, {\"id\": 81, \"type\": \"dim_v\", \"refs\": [[\"pt\", 173], [\"pt\", 166]], \"name\": \"Pipe_Height\", \"value\": 38.1, \"expr\": \"Pipe_Height\", \"sign\": -1, \"driven\": false, \"off\": [29.1782, -4.1587]}, {\"id\": 90, \"type\": \"equal\", \"refs\": [[\"ln\", 202], [\"ln\", 201]]}, {\"id\": 91, \"type\": \"collinear\", \"refs\": [[\"ln\", 202], [\"ln\", 201]]}], \"nid\": 203, \"ncon\": 92, \"ndim\": 40, \"params\": {\"V1\": {\"vals\": [7.790999999754954], \"input\": true, \"expr\": null}, \"O1\": {\"vals\": [0.0704], \"input\": true, \"expr\": null}, \"O2\": {\"vals\": [1.78816], \"input\": true, \"expr\": null}, \"O3\": {\"vals\": [1.78816], \"input\": true, \"expr\": null}}, \"configs\": [\"Config 1\"], \"active\": 0, \"constr\": [[\"ln\", 201], [\"ln\", 202]], \"lock_pts\": {}, \"lock_cis\": {}, \"unit\": \"Metric (mm, kg, N, s, MPa)\", \"insts\": {}, \"p3\": {}}",
+   "show": false
+  },
+  {
+   "id": "F2",
+   "name": "Length Extrude",
+   "kind": "extrude",
+   "suppressed": false,
+   "sketch": "F1",
+   "depth": "{AS_123\" Breezeway_Cross_Beam_Length}",
+   "end1": "mid",
+   "merge": true,
+   "thin": true,
+   "thickness": "1.78816",
+   "pts": [],
+   "thin_side": "inside"
+  },
+  {
+   "id": "F3",
+   "name": "Sketch2",
+   "kind": "sketch",
+   "suppressed": false,
+   "plane": {
+    "base": "Right"
+   },
+   "model": "{\"pts\": {\"0\": [0.0, 0.0], \"22\": [1494.9800325043072, 20.320000000000753], \"23\": [1526.5400000000009, 20.320000000001], \"25\": [1526.5400000000002, -20.319999999998753], \"27\": [1494.9800325043063, -20.31999999999851], \"29\": [1524.0000000000007, 1.501718548191282e-14]}, \"lns\": {\"24\": [22, 23], \"26\": [23, 25], \"28\": [25, 27], \"30\": [27, 29], \"31\": [29, 22], \"32\": [0, 29]}, \"cis\": {}, \"ars\": {}, \"cons\": [{\"id\": 0, \"type\": \"fixed\", \"refs\": [[\"pt\", 0]], \"xy\": [0.0, 0.0], \"origin\": true}, {\"id\": 18, \"type\": \"equal\", \"refs\": [[\"ln\", 30], [\"ln\", 31]]}, {\"id\": 19, \"type\": \"equal\", \"refs\": [[\"ln\", 28], [\"ln\", 24]]}, {\"id\": 20, \"type\": \"horizontal\", \"refs\": [[\"ln\", 24]]}, {\"id\": 21, \"type\": \"horizontal\", \"refs\": [[\"ln\", 28]]}, {\"id\": 22, \"type\": \"vertical\", \"refs\": [[\"ln\", 26]]}, {\"id\": 23, \"type\": \"dim_v\", \"refs\": [[\"ln\", 26]], \"name\": \"Pipe_Height_2\", \"value\": 40.64, \"expr\": \"Pipe_Height+2.54\", \"sign\": -1, \"driven\": false, \"user_name\": true, \"off\": [355.2118, 151.9184]}, {\"id\": 24, \"type\": \"horizontal\", \"refs\": [[\"ln\", 32]], \"auto\": true}, {\"id\": 25, \"type\": \"dim_h\", \"refs\": [[\"ln\", 32]], \"name\": \"H1\", \"value\": 1524.0, \"expr\": \"Pipe_Length/2\", \"sign\": 1, \"driven\": false}, {\"id\": 26, \"type\": \"dim_ang\", \"refs\": [[\"ln\", 32], [\"ln\", 30]], \"name\": \"A1\", \"s1\": 1, \"s2\": -1, \"eps\": -1, \"value\": 145.0, \"driven\": false, \"aoff\": [0.6666, 0.7513]}, {\"id\": 27, \"type\": \"dim_h\", \"refs\": [[\"pt\", 29], [\"pt\", 23]], \"name\": \"H2\", \"value\": 2.54, \"sign\": 1, \"driven\": false, \"off\": [90.729, 209.6234]}], \"nid\": 33, \"ncon\": 28, \"ndim\": 7, \"params\": {}, \"configs\": [\"Config 1\"], \"active\": 0, \"constr\": [[\"ln\", 32]], \"lock_pts\": {}, \"lock_cis\": {}, \"unit\": \"Metric (mm, kg, N, s, MPa)\", \"insts\": {}, \"p3\": {}}",
+   "show": false
+  },
+  {
+   "id": "F4",
+   "name": "Cut-Extrude1",
+   "kind": "cut",
+   "suppressed": true,
+   "sketch": "F3",
+   "depth": "10",
+   "end1": "through",
+   "dir": 1,
+   "reverse": true,
+   "dir2": true,
+   "depth2": "10",
+   "end2": "through",
+   "pts": []
+  },
+  {
+   "id": "F5",
+   "name": "Sketch3",
+   "kind": "sketch",
+   "suppressed": false,
+   "plane": {
+    "base": "Right"
+   },
+   "model": "{\"pts\": {\"0\": [0.0, 0.0], \"1\": [1483.3600000000001, -20.32], \"2\": [1524.0, 20.32], \"4\": [1524.0, -20.32], \"7\": [1503.68, -4.995801655871351e-18], \"10\": [-1524.0, 20.31999999999997], \"11\": [-1483.3599999999913, -20.320000000000032], \"13\": [-1524.0, -20.320000000000032], \"16\": [-1503.6799999999957, -1.0003923655960728e-17]}, \"lns\": {\"5\": [2, 4], \"6\": [4, 1], \"8\": [1, 7], \"9\": [7, 2], \"14\": [11, 13], \"15\": [13, 10], \"17\": [10, 16], \"18\": [16, 11]}, \"cis\": {}, \"ars\": {}, \"cons\": [{\"id\": 0, \"type\": \"fixed\", \"refs\": [[\"pt\", 0]], \"xy\": [0.0, 0.0], \"origin\": true}, {\"id\": 1, \"type\": \"vertical\", \"refs\": [[\"ln\", 5]], \"auto\": true}, {\"id\": 2, \"type\": \"horizontal\", \"refs\": [[\"ln\", 6]]}, {\"id\": 4, \"type\": \"dim_h\", \"refs\": [[\"pt\", 2], [\"pt\", 0]], \"name\": \"H1\", \"value\": 1524.0, \"expr\": \"Pipe_Length/2\", \"sign\": -1, \"driven\": false, \"off\": [-5.8759, 35.2552]}, {\"id\": 5, \"type\": \"collinear\", \"refs\": [[\"ln\", 9], [\"ln\", 8]]}, {\"id\": 6, \"type\": \"equal\", \"refs\": [[\"ln\", 9], [\"ln\", 8]]}, {\"id\": 7, \"type\": \"horizontal\", \"refs\": [[\"pt\", 7], [\"pt\", 0]]}, {\"id\": 8, \"type\": \"dim_ang\", \"refs\": [[\"ln\", 8], [\"ln\", 6]], \"name\": \"Top_Cut\", \"s1\": 1, \"s2\": 1, \"eps\": 1, \"value\": 135.0, \"expr\": \"Top_Cut\", \"driven\": false, \"aoff\": [0.6814, 16.2995]}, {\"id\": 9, \"type\": \"vertical\", \"refs\": [[\"ln\", 15]], \"auto\": true}, {\"id\": 10, \"type\": \"horizontal\", \"refs\": [[\"ln\", 14]]}, {\"id\": 12, \"type\": \"dim_h\", \"refs\": [[\"pt\", 0], [\"pt\", 10]], \"name\": \"H1\", \"value\": 1524.0, \"expr\": \"H1\", \"sign\": -1, \"driven\": false, \"off\": [-109.55, 230.1068]}, {\"id\": 13, \"type\": \"dim_v\", \"refs\": [[\"ln\", 15]], \"name\": \"V2\", \"value\": 40.64, \"expr\": \"Pipe_Height+2.54\", \"sign\": 1, \"driven\": false, \"off\": [-294.8409, 179.2637]}, {\"id\": 14, \"type\": \"collinear\", \"refs\": [[\"ln\", 18], [\"ln\", 17]]}, {\"id\": 15, \"type\": \"equal\", \"refs\": [[\"ln\", 18], [\"ln\", 17]]}, {\"id\": 16, \"type\": \"horizontal\", \"refs\": [[\"pt\", 16], [\"pt\", 0]]}, {\"id\": 19, \"type\": \"dim_v\", \"refs\": [[\"pt\", 2], [\"pt\", 4]], \"name\": \"V3\", \"value\": 40.64, \"expr\": \"Pipe_Height+2.54\", \"sign\": -1, \"driven\": false, \"off\": [260.1458, -140.9623]}, {\"id\": 20, \"type\": \"dim_ang\", \"refs\": [[\"ln\", 18], [\"ln\", 14]], \"name\": \"Bottom_Cut\", \"s1\": -1, \"s2\": -1, \"eps\": -1, \"value\": 135.0, \"expr\": \"Bottom_Cut\", \"driven\": false, \"aoff\": [0.5385, 15.5953]}], \"nid\": 19, \"ncon\": 21, \"ndim\": 11, \"params\": {\"V1\": {\"vals\": [59.33999999983581], \"input\": true, \"expr\": null}, \"H1\": {\"vals\": [1524.0], \"input\": true, \"expr\": null}}, \"configs\": [\"Config 1\"], \"active\": 0, \"constr\": [], \"lock_pts\": {}, \"lock_cis\": {}, \"unit\": \"Metric (mm, kg, N, s, MPa)\", \"insts\": {}, \"p3\": {}}"
+  },
+  {
+   "id": "F6",
+   "name": "Cut-Extrude2",
+   "kind": "cut",
+   "suppressed": false,
+   "sketch": "F5",
+   "depth": "Pipe_Height+ 2.54",
+   "end1": "mid",
+   "dir": -1
+  }
+ ],
+ "rollback": null,
+ "counter": {
+  "sketch": 3,
+  "extrude": 1,
+  "cut": 2
+ },
+ "material": {
+  "name": "Steel (generic)",
+  "density": 7850.0,
+  "E_MPa": 200000.0,
+  "nu": 0.3,
+  "Sy_MPa": 250.0,
+  "Su_MPa": 400.0
+ },
+ "sims": [],
+ "renders": [],
+ "gsv": {
+  "src": "..\\Assembly Sketch\\Test Assembly Sketch.gpk",
+  "configs": [
+   "123\" Breezeway"
+  ],
+  "vars": [
+   {
+    "name": "I1",
+    "kind": "number",
+    "role": "driving"
+   },
+   {
+    "name": "I2",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "I3",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "I4",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "I5",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "I6",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "I7",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "I8",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "I9",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "I10",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "Middle_End_Bttm_Length",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "Middle_End_Top_Length",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "Cross_Beam_Length",
+    "kind": "length",
+    "role": "driven"
+   },
+   {
+    "name": "CB_Top_Angle",
+    "kind": "angle",
+    "role": "driven"
+   },
+   {
+    "name": "CB_Bttm_Angle",
+    "kind": "angle",
+    "role": "driven"
+   },
+   {
+    "name": "Breezeway_Length",
+    "kind": "length",
+    "role": "driving"
+   },
+   {
+    "name": "Pitch_Angle",
+    "kind": "angle",
+    "role": "driving"
+   },
+   {
+    "name": "Pipe_Width",
+    "kind": "length",
+    "role": "driving"
+   },
+   {
+    "name": "I1",
+    "kind": "length",
+    "role": "driving"
+   }
+  ],
+  "vals": {
+   "123\" Breezeway": {
+    "I1": 88.13800519103702,
+    "I2": 248.63166265828264,
+    "I3": 407.85691239991826,
+    "I4": 579.778987974848,
+    "I5": 584.0112632530202,
+    "I6": 755.9333388278104,
+    "I7": 921.5070014859589,
+    "I8": 1087.0806641441075,
+    "I9": 1097.6613523385154,
+    "I10": 1351.597869004291,
+    "Middle_End_Bttm_Length": 3019.1710000000003,
+    "Middle_End_Top_Length": 3060.7960319750023,
+    "Cross_Beam_Length": 1811.8511687549837,
+    "CB_Top_Angle": 53.714846828815425,
+    "CB_Bttm_Angle": 36.28515317118459,
+    "Breezeway_Length": 1562.1,
+    "Pitch_Angle": 9.46,
+    "Pipe_Width": 38.099999999999994
+   }
+  },
+  "cids": [
+   "n:123\" Breezeway"
+  ],
+  "mirrored": []
+ },
+ "export": [],
+ "display": {
+  "color": null,
+  "opacity": 1.0
+ },
+ "cfg": {
+  "active": "General \u00b7 123\" Breezeway",
+  "names": [
+   "CB \u00b7 123\" Breezeway",
+   "General \u00b7 123\" Breezeway",
+   "CB \u00b7 $SUPPRESS unsuppressed \u00b7 123\" Breezeway"
+  ],
+  "cols": [
+   "s:F4",
+   "g:Pipe_Length"
+  ],
+  "cells": {
+   "General \u00b7 123\" Breezeway": {
+    "s:F4": true,
+    "g:Pipe_Length": "3048"
+   },
+   "CB \u00b7 123\" Breezeway": {
+    "s:F4": true,
+    "g:Pipe_Length": "{AS_@_Cross_Beam_Length}"
+   },
+   "CB \u00b7 $SUPPRESS unsuppressed \u00b7 123\" Breezeway": {
+    "s:F4": false,
+    "g:Pipe_Length": "{AS_@_Cross_Beam_Length}"
+   }
+  },
+  "offs": {
+   "General \u00b7 123\" Breezeway": {
+    "F1:80": {
+     "off": [
+      5.3065,
+      5.423
+     ]
+    },
+    "F1:81": {
+     "off": [
+      29.1782,
+      -4.1587
+     ]
+    },
+    "F3:23": {
+     "off": [
+      355.2118,
+      151.9184
+     ]
+    },
+    "F3:26": {
+     "aoff": [
+      0.6666,
+      0.7513
+     ]
+    },
+    "F3:27": {
+     "off": [
+      90.729,
+      209.6234
+     ]
+    },
+    "F5:4": {
+     "off": [
+      -5.8759,
+      35.2552
+     ]
+    },
+    "F5:8": {
+     "aoff": [
+      0.6814,
+      16.2995
+     ]
+    },
+    "F5:12": {
+     "off": [
+      -109.55,
+      230.1068
+     ]
+    },
+    "F5:13": {
+     "off": [
+      -294.8409,
+      179.2637
+     ]
+    },
+    "F5:19": {
+     "off": [
+      260.1458,
+      -140.9623
+     ]
+    },
+    "F5:20": {
+     "aoff": [
+      0.5385,
+      15.5953
+     ]
+    }
+   },
+   "CB \u00b7 123\" Breezeway": {
+    "F1:80": {
+     "off": [
+      5.3065,
+      5.423
+     ]
+    },
+    "F1:81": {
+     "off": [
+      29.1782,
+      -4.1587
+     ]
+    },
+    "F3:23": {
+     "off": [
+      355.2118,
+      151.9184
+     ]
+    },
+    "F3:26": {
+     "aoff": [
+      0.6666,
+      0.7513
+     ]
+    },
+    "F3:27": {
+     "off": [
+      90.729,
+      209.6234
+     ]
+    },
+    "F5:4": {
+     "off": [
+      -5.8759,
+      35.2552
+     ]
+    },
+    "F5:8": {
+     "aoff": [
+      0.6814,
+      16.2995
+     ]
+    },
+    "F5:12": {
+     "off": [
+      -109.55,
+      230.1068
+     ]
+    },
+    "F5:13": {
+     "off": [
+      -294.8409,
+      179.2637
+     ]
+    },
+    "F5:19": {
+     "off": [
+      260.1458,
+      -140.9623
+     ]
+    },
+    "F5:20": {
+     "aoff": [
+      0.5385,
+      15.5953
+     ]
+    }
+   },
+   "CB \u00b7 $SUPPRESS unsuppressed \u00b7 123\" Breezeway": {
+    "F1:80": {
+     "off": [
+      5.3065,
+      5.423
+     ]
+    },
+    "F1:81": {
+     "off": [
+      29.1782,
+      -4.1587
+     ]
+    },
+    "F3:23": {
+     "off": [
+      355.2118,
+      151.9184
+     ]
+    },
+    "F3:26": {
+     "aoff": [
+      0.6666,
+      0.7513
+     ]
+    },
+    "F3:27": {
+     "off": [
+      90.729,
+      209.6234
+     ]
+    },
+    "F5:4": {
+     "off": [
+      -5.8759,
+      35.2552
+     ]
+    },
+    "F5:8": {
+     "aoff": [
+      0.6814,
+      16.2995
+     ]
+    },
+    "F5:12": {
+     "off": [
+      -109.55,
+      230.1068
+     ]
+    },
+    "F5:13": {
+     "off": [
+      -294.8409,
+      179.2637
+     ]
+    },
+    "F5:19": {
+     "off": [
+      260.1458,
+      -140.9623
+     ]
+    },
+    "F5:20": {
+     "aoff": [
+      0.5385,
+      15.5953
+     ]
+    }
+   }
+  },
+  "ids": {
+   "General \u00b7 123\" Breezeway": "n:123\" Breezeway",
+   "CB \u00b7 123\" Breezeway": "n:120\"",
+   "CB \u00b7 $SUPPRESS unsuppressed \u00b7 123\" Breezeway": "57e764d5d9"
+  },
+  "tree": {
+   "nid": 6,
+   "groups": [
+    {
+     "id": "G2",
+     "name": "General",
+     "variants": [
+      {
+       "id": "V3",
+       "name": null
+      }
+     ]
+    },
+    {
+     "id": "G4",
+     "name": "CB",
+     "variants": [
+      {
+       "id": "V5",
+       "name": null
+      },
+      {
+       "id": "V6",
+       "name": "$SUPPRESS unsuppressed"
+      }
+     ]
+    }
+   ],
+   "leaf": {
+    "General \u00b7 123\" Breezeway": {
+     "g": "G2",
+     "v": "V3",
+     "aid": "n:123\" Breezeway",
+     "suffix": "123\" Breezeway"
+    },
+    "CB \u00b7 123\" Breezeway": {
+     "g": "G4",
+     "v": "V5",
+     "aid": "n:123\" Breezeway",
+     "suffix": "123\" Breezeway"
+    },
+    "CB \u00b7 $SUPPRESS unsuppressed \u00b7 123\" Breezeway": {
+     "g": "G4",
+     "v": "V6",
+     "aid": "n:123\" Breezeway",
+     "suffix": "123\" Breezeway"
+    }
+   }
+  }
+ }
+}

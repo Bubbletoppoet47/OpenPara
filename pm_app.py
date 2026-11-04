@@ -28,9 +28,12 @@ import evaluate
 import config_panels
 import sketch_edit
 import icons
+import icon_set
 import nav
 import mini_tree
 import part_refgeo
+import part_preview
+import part_repeat
 import viewpick
 
 try:
@@ -45,9 +48,12 @@ else:
 PART = (0.62, 0.70, 0.82)
 SKETCH_COL, SKETCH_SEL = (0.95, 0.55, 0.05), (0.1, 0.45, 1.0)
 FACE_SEL, EDGE_SEL = (0.3, 0.65, 1.0), (1.0, 0.45, 0.0)
+
+
+add_face_highlight = part_refgeo.add_face_highlight
 PLANE_COL = {"Front": (0.35, 0.60, 0.95), "Top": (0.45, 0.80, 0.45), "Right": (0.90, 0.55, 0.40)}
 ICON = {"sketch": "✎", "extrude": "▣", "cut": "▢", "fillet": "◜", "chamfer": "◿",
-        "revolve": "◔", "revolve_cut": "◒", "partgen": "⚙", "imported": "⇩", "sweep": "⥁", "sweep_cut": "⥀", "loft": "⏢", "loft_cut": "⏥", "pattern": "☷", "mirror": "⧓", "refplane": "▱", "refaxis": "⁞"}
+        "revolve": "◔", "revolve_cut": "◒", "partgen": "⚙", "imported": "⇩", "sweep": "⥁", "sweep_cut": "⥀", "loft": "⏢", "loft_cut": "⏥", "pattern": "☷", "mirror": "⧓", "refplane": "▱", "refaxis": "⁞", "refpoint": "·"}
 
 
 class MainWindow(QMainWindow):
@@ -115,7 +121,7 @@ class MainWindow(QMainWindow):
             ("loft", "⏢", "Lofted\nBoss/Base", "Blend two or more section sketches into a solid", lambda: self.command("loft")),
             "|",
             ("cut", "▢", "Extruded\nCut", "Remove material with a sketch", lambda: self.command("cut")),
-            (None, "◎", "Hole\nWizard", "", None), ("revolve_cut", "◒", "Revolved\nCut", "Spin a sketch around an axis to remove material", lambda: self.command("revolve_cut")),
+            ("revolve_cut", "◒", "Revolved\nCut", "Spin a sketch around an axis to remove material", lambda: self.command("revolve_cut")),
             ("sweep_cut", "⥀", "Swept\nCut", "Slide a profile sketch along a path sketch to remove material", lambda: self.command("sweep_cut")),
             ("loft_cut", "⏥", "Lofted\nCut", "Blend section sketches into a shape and remove it", lambda: self.command("loft_cut")),
             "|",
@@ -125,8 +131,8 @@ class MainWindow(QMainWindow):
                 ("Linear Pattern", lambda: self.command("pattern_linear")), ("Circular Pattern", lambda: self.command("pattern_circular"))]),
             (None, "◫", "Shell", "", None), ("mirror", "⧓", "Mirror", "Mirror features about a plane or a flat face", lambda: self.command("mirror")),
             "|",
-            ("menu_cmd", "▱", "Reference\nGeometry", "Planes and axes to sketch on, mirror about or mate to", [
-                ("Plane", lambda: self.command("refplane")), ("Axis", lambda: self.command("refaxis"))]),
+            ("menu_cmd", "▱", "Reference\nGeometry", "Planes, axes and points to sketch on, mirror about or mate to", [
+                ("Plane", lambda: self.command("refplane")), ("Axis", lambda: self.command("refaxis")), ("Point", lambda: self.command("refpoint"))]),
             "|",
             ("partgen", "⚙", "Part\nGenerator", "Make gears (spur, helical, herringbone) and other parts from a few parameters", lambda: self.command("partgen")),
         ]), "Part Features")
@@ -160,15 +166,11 @@ class MainWindow(QMainWindow):
             (None, "✥", "Move\nEntities", "Select entities first, then enter how far", lambda: self.ed.command_move()),
             (None, "┄", "Construction", "Make the selected lines / arcs / circles construction geometry (or normal again)", lambda: self.ed.command_construction()),
             (None, "⤓", "Convert\nEntities", "Copy the edges of the part that lie in this plane into the sketch", lambda: self.ed.command_convert()),
-            ("menu_cmd", "⌖", "Other\nSketch", "Use geometry of another sketch (shown, earlier in the tree): then add relations to it", [
-                ("Pierce point (where a path passes through this plane)", lambda: self.ed.command_extref("pierce") and self.sync_tool()),
-                ("Project point of another sketch", lambda: self.ed.command_extref("pt") and self.sync_tool()),
-                ("Project line of another sketch", lambda: self.ed.command_extref("ln") and self.sync_tool())]),
             "|",
             ("menu_rel", "⟂", "Add\nRelation", "Select entities then pick a relation - or pick the relation then click entities", [
                 ("Horizontal", "horizontal"), ("Vertical", "vertical"), ("Parallel", "parallel"), ("Perpendicular", "perpendicular"),
                 ("Collinear", "collinear"), ("Coincident", "coincident"), ("Concentric", "concentric"), ("Tangent", "tangent"),
-                ("Equal", "equal"), ("Fix", "fixed"), ("Midpoint", "midpoint")]),
+                ("Equal", "equal"), ("Fix", "fixed"), ("Midpoint", "midpoint"), ("Pierce (other sketch)", "pierce")]),
             ("menu_rel", "↔", "Dimension", "Click the entities, then type a value, a symbol or an equation (e.g. Width/2)", [
                 ("Horizontal", "dim_h"), ("Vertical", "dim_v"), ("Length / distance", "dim_len"), ("Radius", "dim_rad"),
                 ("Diameter", "dim_dia"), ("Angle", "dim_ang")]),
@@ -177,13 +179,20 @@ class MainWindow(QMainWindow):
             ("mass", "⚖", "Mass\nProperties", "Mass, volume, center of mass and moments of inertia", lambda: self.mass_open()),
             ("measure", "↔", "Measure", "Measure points, edges and faces: click one or two items in the view", lambda: self.measure_toggle()),
         ]), "Evaluate")
-        self.ribbon.addTab(self.ribbon_page([("sim_beam", "┼", "1D FEA\n(frames)", "Frames and trusses from a sketch of this part", lambda: self.add_sim("beam")),
-                                    ("sim_fea", "▦", "2D FEA", "Plane stress / strain FEA of a sketch or a slice of this part", lambda: self.add_sim("fea")),
-                                    ("sim_cfd", "≋", "2D CFD", "Flow around a sketch or a slice of this part", lambda: self.add_sim("cfd"))]), "Simulation")
-        self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "New render", "Photorealistic pictures and videos of this part: sun, lights, floor, cameras", lambda: self.add_render())]), "Render")
+        import ext
+        if ext.present("simulation"):
+            self.ribbon.addTab(self.ribbon_page([("sim_beam", "┼", "1D FEA\n(frames)", "Frames and trusses from a sketch of this part", lambda: self.add_sim("beam")),
+                                        ("sim_fea", "▦", "2D FEA", "Plane stress / strain FEA of a sketch or a slice of this part", lambda: self.add_sim("fea")),
+                                        ("sim_cfd", "≋", "2D CFD", "Flow around a sketch or a slice of this part", lambda: self.add_sim("cfd"))]), "Simulation")
+        if ext.present("render"):
+            self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "New render", "Photorealistic pictures and videos of this part: sun, lights, floor, cameras", lambda: self.add_render())]), "Render")
         self.ribbon.setCurrentIndex(0)
         # ---- the left panel: FeatureManager / PropertyManager / Equations
         self.left = QTabWidget()
+        self.axis_pick = False
+        self.face_pick = None
+        self.face_pick_off = set()
+        self.left.currentChanged.connect(lambda _i: self.draw() if getattr(self, "plotter", None) is not None and not self.busy else None)
         self.left.setTabPosition(QTabWidget.TabPosition.North)
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
@@ -278,6 +287,10 @@ class MainWindow(QMainWindow):
             wa.setDefaultWidget(cbx)
             sm.addAction(wa)
             self.show_checks[key] = cbx
+        sm.addSeparator()
+        wl = QWidgetAction(sm)
+        wl.setDefaultWidget(nav.lock_checkbox(self))
+        sm.addAction(wl)
         sb.setMenu(sm)
         bl.addWidget(sb)
         bl.addStretch(1)
@@ -322,7 +335,9 @@ class MainWindow(QMainWindow):
             self.hook = viewpick.ClickHook(self.plotter, self.on_click)
             self.ed = sketch_edit.SketchEditor(self)
             self.sk_hook = sketch_edit.SketchHook(self.plotter, self.ed)
+            self.sync_sketch_buttons()
             self.nav = nav.NavHook(self.plotter, self)         # installed last: it sees the mouse events first
+            nav.sync_lock_checkbox(self)
             self.flip_act.blockSignals(True)
             self.flip_act.setChecked(self.nav.wheel_sign == 1)
             self.flip_act.blockSignals(False)
@@ -330,7 +345,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(view)
         self.mode_label = QLabel("Editing Part")
         self.statusBar().addPermanentWidget(self.mode_label)
-        self.statusBar().addPermanentWidget(QLabel("   MMGS   "))
+        self.units_label = QLabel()
+        self.statusBar().addPermanentWidget(self.units_label)
+        self.show_units_label()
+        unitctl.on_change(self.show_units_label)
+        self.destroyed.connect(lambda *_: unitctl.off_change(self.show_units_label))
         self.statusBar().showMessage("Select a plane, then press Sketch.")
         self.created_new = None          # feature id made by the command now open in the PropertyManager
         from PyQt6.QtGui import QShortcut
@@ -432,11 +451,17 @@ class MainWindow(QMainWindow):
         self.menu_btns[b] = names
 
     def pm_ok(self):
+        self.axis_pick = False
+        self.face_pick = None
+        self.rp_pick = None
         self.created_new = None
         self.rg_edit = None
         self.left.setCurrentIndex(0)
 
     def pm_cancel(self):
+        self.axis_pick = False
+        self.face_pick = None
+        self.rp_pick = None
         if self.created_new and self.doc.feature(self.created_new) is not None:
             self.do_undo()
         self.created_new = None
@@ -458,6 +483,7 @@ class MainWindow(QMainWindow):
         self.show_props()
         self.set_tool("select")
         self.mode_label.setText("Editing Sketch")
+        self.sync_sketch_buttons()
         self.say("Sketch open: pick a tool in the ribbon. Alt+drag orbits, middle drag pans, wheel zooms. Esc ends a tool, Exit Sketch leaves.")
 
     def set_tool(self, name):
@@ -504,6 +530,21 @@ class MainWindow(QMainWindow):
         if self.undo:
             self.undo.pop()
 
+    def sync_sketch_buttons(self):
+        """In a sketch only Exit Sketch is offered; outside one only Sketch."""
+        inside = self.ed is not None and self.ed.active
+        if self.act.get("sketch") is not None:
+            self.act["sketch"].setVisible(not inside)
+        if self.act.get("exit") is not None:
+            self.act["exit"].setVisible(inside)
+
+    stale = False
+
+    def ensure_built(self):
+        """Bring the feature tree and the 3D part up to date after edits made inside a sketch (one rebuild, when it is needed)."""
+        if self.stale:
+            self.update_all(keep_props=True)
+
     def leave_sketch(self):
         self.created_new = None
         if self.ed is not None and self.ed.active:
@@ -511,7 +552,11 @@ class MainWindow(QMainWindow):
         self.mode_label.setText("Editing Part")
         self.left.setCurrentIndex(0)
         self.ribbon.setCurrentIndex(0)
-        self.draw()
+        self.sync_sketch_buttons()
+        if self.stale:
+            self.update_all(keep_props=True)            # the one rebuild of everything the sketch edits changed
+        else:
+            self.draw()
 
     def say(self, text):
         self.statusBar().showMessage(text)
@@ -528,6 +573,27 @@ class MainWindow(QMainWindow):
         self.undo.append((self.doc.to_json(), self.sel))
         self.undo = self.undo[-60:]
         self.redo = []
+
+    def rescale_history(self, sid, k):
+        """The first dimension of a part set the scale of sketch `sid` (times k): every earlier state kept for Undo / Redo gets the same scale, so Undo can
+        take back the dimension but never the scale."""
+        import sketcher_core as sc
+
+        def fix(js):
+            try:
+                d = pm.Document.from_json(js)
+                f = d.feature(sid)
+                if f is not None and f.get("model"):
+                    m = sc.Model()
+                    m.from_json(f["model"])
+                    m.scale_all(k)
+                    f["model"] = m.to_json()
+                d.scale_set = True
+                return d.to_json()
+            except Exception:
+                return js
+        self.undo = [(fix(js), sel) for js, sel in self.undo]
+        self.redo = [(fix(js), sel) for js, sel in self.redo]
 
     def restore(self, js, sel):
         self.doc = pm.Document.from_json(js)
@@ -567,6 +633,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Open", str(ex))
 
     def save(self, as_new=False):
+        self.ensure_built()
         import sim_links
         old_base = sim_links.base_dir(self)
         if as_new or not self.path:
@@ -576,7 +643,8 @@ class MainWindow(QMainWindow):
             self.path = p if p.endswith(".gpd") else p + ".gpd"
         import sim_links
         sim_links.rebase(self, old_base)
-        open(self.path, "w", encoding="utf-8").write(self.doc.to_json())
+        import fileio
+        fileio.write_text(self.path, self.doc.to_json())
         self.saved_json = self.doc.to_json()
         self.setWindowTitle(f"Parametric Modeller - {os.path.basename(self.path)}")
         also = sim_links.save_open(self)
@@ -586,7 +654,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ commands (the toolbar)
     def command(self, key):
         d = self.doc
-        if key in ("refplane", "refaxis"):
+        if key in ("refplane", "refaxis", "refpoint"):
             self.rg_start(key)
             return
         if key == "partgen":
@@ -694,31 +762,29 @@ class MainWindow(QMainWindow):
                 self.say("Make a solid first.")
                 return
             self.snapshot()
-            f = d.add(pm.new_feature(key, size="2", edges=list(self.sel_edges)))
-            self.sel_edges = []
+            edges = list(self.sel_edges)
+            if not edges and self.sel_face is not None:
+                try:
+                    edges = [d.edge_ref(e) for e in d.solid.faces()[self.sel_face["index"]].edges()]
+                except Exception:
+                    edges = []
+            f = d.add(pm.new_feature(key, size="2", edges=edges))
+            self.sel_edges, self.sel_face = [], None
             self.sel = f["id"]
             self.created_new = f["id"]
             self.update_all()
             self.left.setCurrentIndex(1)
-            self.say(("Edges from your selection are used. " if f["edges"] else "")
-                     + "Click edges to add or remove them (Shift is not needed). Pick another item in the tree when done.")
+            self.say(("Your selection is used. " if f["edges"] else "")
+                     + "Click edges (or a face for all its edges) to add or remove them, set the size, then press OK. The faded colour shows the change.")
 
     def partgen_dialog(self, f):
-        """Open the Part Generator window to make a new part (f is None) or to change the parameters of the part feature f."""
-        import partgen_dialog
-        dlg = partgen_dialog.PartGenDialog(self.doc, f, self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        """Make a new generated part (f is None) or change feature f: the Part Generator add-on's window; asks to install it when it is missing."""
+        import ext
+        spec = ext.feature("partgen")
+        if spec is None:
+            ext.ask_install("partgen", self)
             return
-        kind, params, place = dlg.result_data()
-        self.snapshot()
-        if f is None:
-            f = self.doc.add(pm.new_feature("partgen", gen=kind, params=params, place=place))
-            self.created_new = f["id"]
-        else:
-            f["params"], f["place"] = params, place
-        self.sel = f["id"]
-        self.update_all()
-        self.left.setCurrentIndex(1)
+        spec["edit"](self, f)
 
     def make_sketch(self, plane):
         self.snapshot()
@@ -804,7 +870,8 @@ class MainWindow(QMainWindow):
         oi.setFlags(oi.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         oi.setCheckState(0, Qt.CheckState.Checked if self.show_origin_item else Qt.CheckState.Unchecked)
         import sim_links
-        L = sim_links.sims(self)
+        import ext
+        L = sim_links.sims(self) if ext.present("simulation") else []      # the links stay in the file when the add-on is not there
         if L:
             si = QTreeWidgetItem(root, [f"∿  Simulations ({len(L)})"])
             si.setData(0, Qt.ItemDataRole.UserRole, ("sims", None))
@@ -814,7 +881,7 @@ class MainWindow(QMainWindow):
                 sit.setToolTip(0, sim_links.abs_of(self, e) + "\nDouble-click to open")
                 if sim_links.missing(self, e):
                     sit.setForeground(0, QBrush(QColor(200, 0, 0)))
-        R = sim_links.renders(self)
+        R = sim_links.renders(self) if ext.present("render") else []
         if R:
             ri = QTreeWidgetItem(root, [f"◉  Renders ({len(R)})"])
             ri.setData(0, Qt.ItemDataRole.UserRole, ("renders", None))
@@ -829,12 +896,15 @@ class MainWindow(QMainWindow):
 
         def add_feature(parent, f, i):
             st = d.status.get(f["id"], "")
-            tag = {"ok": "", "suppressed": "  (suppressed)", "rolled back": "", "not built": "  (not built)"}.get(st, "  ✖")
+            by = d.feature(f.get("sup_by")) if f.get("sup_by") else None
+            tag = {"ok": "", "suppressed": "  (suppressed)" if by is None else f"  (suppressed with {by['name']})", "rolled back": "",
+                   "not built": "  (not built)"}.get(st, "  ✖")
             sk = f["kind"] == "sketch"
             under = ""
             if sk:
                 under = "(-) "                       # an under-defined sketch: dimensions are only expressions here
-            it = QTreeWidgetItem(parent, [f"{'' if sk else ICON[f['kind']] + '  '}{under}{f['name']}{tag}"])
+            it = QTreeWidgetItem(parent, [f"{under}{f['name']}{tag}"])
+            it.setIcon(0, icon_set.for_feature(f["kind"]))
             it.setData(0, Qt.ItemDataRole.UserRole, ("feature", f["id"]))
             if sk:
                 it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -847,6 +917,11 @@ class MainWindow(QMainWindow):
                 it.setToolTip(0, st)
             elif st in ("not built", "suppressed", "rolled back"):
                 it.setForeground(0, QBrush(QColor(150, 150, 150)))
+                if st == "suppressed":                 # struck through: suppressed (not the same as hidden)
+                    fnt = it.font(0)
+                    fnt.setStrikeOut(True)
+                    it.setFont(0, fnt)
+                    it.setToolTip(0, "Suppressed: skipped when the part is built." + (f" It depends on {by['name']}." if by is not None else ""))
             if f["id"] == self.sel:
                 self.tree.setCurrentItem(it)
             item_of[f["id"]] = it
@@ -875,6 +950,7 @@ class MainWindow(QMainWindow):
             bar = QTreeWidgetItem(root, ["━━━━━━━━━━━━━━━━━━━━━━"])
             bar.setForeground(0, QBrush(QColor(0, 110, 200)))
             bar.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        icon_set.decorate_tree(self.tree, "component")
         self.tree.expandAll()
         self.busy = False
         if getattr(self, "mini", None) is not None:
@@ -929,7 +1005,16 @@ class MainWindow(QMainWindow):
         m.addAction("Roll back to here", lambda: self.set_rollback(key))
         m.addAction("Roll forward (to the end)", lambda: self.set_rollback(None))
         m.addSeparator()
-        m.addAction("Unsuppress" if f["suppressed"] else "Suppress", lambda: self.toggle_suppress(key))
+        if f["suppressed"]:
+            back = [g["name"] for g in self.doc.features if g.get("sup_by") == key]
+            m.addAction("Unsuppress" + (f"  (and {len(back)} that followed it)" if back else ""), lambda: self.toggle_suppress(key))
+        else:
+            try:
+                n = len(self.doc.suppress_closure(key))
+            except Exception:
+                n = 0
+            m.addAction("Suppress" + (f"  (and {n} feature{'s' if n != 1 else ''} that depend{'' if n != 1 else 's'} on it)" if n else ""),
+                        lambda: self.toggle_suppress(key))
         m.addAction("Delete", lambda: self.delete_feature(key))
         m.exec(self.tree.viewport().mapToGlobal(pos))
 
@@ -968,10 +1053,18 @@ class MainWindow(QMainWindow):
         self.update_all()
 
     def toggle_suppress(self, fid):
-        self.snapshot()
+        """Suppress / unsuppress a feature.  Features that cannot be built without it are suppressed with it (and come back with it)."""
         f = self.doc.feature(fid)
-        f["suppressed"] = not f["suppressed"]
+        if f is None:
+            return
+        self.snapshot()
+        going = not f["suppressed"]
+        changed = self.doc.set_suppressed(fid, going)
+        if self.sel in changed or (going and self.sel == fid):
+            self.left.setCurrentIndex(0)
         self.update_all()
+        names = ", ".join(self.doc.feature(i)["name"] for i in changed if self.doc.feature(i) is not None)
+        self.say(f"{f['name']} {'suppressed' if going else 'unsuppressed'}" + (f" - and {names}, which {'depend' if going else 'followed it'}." if changed else "."))
 
     def delete_feature(self, fid):
         users = [g["name"] for g in self.doc.features if fid in self.doc.feature_sketches(g)]
@@ -1086,19 +1179,7 @@ class MainWindow(QMainWindow):
         if cur in ("blind", "mid"):
             self.expr_edit(form, "Depth (mm)", f, "depth")
         if cur == "face" or (f.get("dir2") and d.end_condition(f, 2) == "face"):
-            lab = QLabel("Face: " + ("chosen" if f.get("to_face") else "none yet - click a flat face in the view, then press the button"))
-            form.addRow(lab)
-            b = QPushButton("Use the selected face")
-
-            def useface():
-                if self.sel_face is None or self.sel_face.get("ref") is None:
-                    self.say("Click a flat face of the part first.")
-                    return
-                self.snapshot()
-                f["to_face"] = self.sel_face["ref"]
-                self.update_all()
-            b.clicked.connect(useface)
-            form.addRow(b)
+            self.face_row(form, f)
         self.check(form, "Reverse direction", f, "reverse")
         if cur != "mid":
             self.check(form, "Direction 2", f, "dir2")
@@ -1139,28 +1220,7 @@ class MainWindow(QMainWindow):
             self.update_all()
         cb.currentIndexChanged.connect(ch)
         form.addRow("Sketch", cb)
-        sk_ = d.feature(f["sketch"])
-        m = d.models.get(sk_["id"]) if sk_ is not None else None
-        opts = [("auto", "Centerline (or vertical axis)"), ("sy", "Sketch vertical axis"), ("sx", "Sketch horizontal axis")]
-        cur = f.get("axis", "auto")
-        if m is not None:
-            for lid in m.lns:
-                opts.append((f"ln{lid}", f"Line {lid}"))
-        if isinstance(cur, dict):
-            cur = f"ln{cur['ln']}"
-        cbx = QComboBox()
-        for v, t in opts:
-            cbx.addItem(t, v)
-        vals = [v for v, _ in opts]
-        cbx.setCurrentIndex(vals.index(cur) if cur in vals else 0)
-
-        def cha(_i):
-            self.snapshot()
-            v = cbx.currentData()
-            f["axis"] = {"ln": int(v[2:])} if v.startswith("ln") else v
-            self.update_all()
-        cbx.currentIndexChanged.connect(cha)
-        form.addRow("Axis", cbx)
+        self.axis_panel_rows(form, f)
         self.expr_edit(form, "Angle (deg)", f, "angle")
         self.check(form, "Reverse direction", f, "reverse")
         if f["kind"] == "revolve":
@@ -1173,24 +1233,22 @@ class MainWindow(QMainWindow):
         s = self.doc.after.get(f["id"])
         if s is not None:
             b = s.bounding_box()
-            form.addRow("Size", QLabel(f"{b.size.X:.4g} x {b.size.Y:.4g} x {b.size.Z:.4g} mm"))
-            form.addRow("Volume", QLabel(f"{s.volume:.5g} mm3"))
+            form.addRow("Size", QLabel(f"{unitctl.to_disp(b.size.X):.4g} x {unitctl.to_disp(b.size.Y):.4g} x {unitctl.to_disp(b.size.Z):.4g} {unitctl.length_unit()}"))
+            form.addRow("Volume", QLabel(unitctl.volume_text(s.volume, 5)))
         form.addRow(QLabel("The shape is stored inside this part. Add sketches, cuts, holes and fillets on top of it."))
 
     def partgen_panel(self, form, f):
-        """A generated part: a short summary and the button that reopens the Part Generator window on it."""
-        import partgen
+        """A generated part: the add-on's summary, or a note that the add-on is needed (the data stays in the file)."""
+        import ext
         form.addRow("Type", QLabel(f.get("gen", "?")))
-        try:
-            v = partgen.numbers(f["gen"], f.get("params") or {}, self.doc.num)
-            for lab, txt in partgen.readouts(f["gen"], v)[:6]:
-                form.addRow(lab, QLabel(txt))
-        except Exception:
-            pass
-        b = QPushButton("Edit in Part Generator...")
-        b.setToolTip("Change the parameters of this part (double-clicking it in the tree does the same)")
-        b.clicked.connect(lambda: self.partgen_dialog(f))
-        form.addRow(b)
+        spec = ext.feature("partgen")
+        if spec is None:
+            form.addRow(QLabel("This part " + ext.need_text("partgen") + ".\nIts parameters are kept in the file."))
+            b = QPushButton("Get the Part Generator...")
+            b.clicked.connect(lambda: ext.ask_install("partgen", self))
+            form.addRow(b)
+            return
+        spec["panel"](self, form, f)
 
     def sketch_pick(self, form, label, f, key, exclude=()):
         """A drop-down of the sketches that can be picked for f[key]."""
@@ -1217,7 +1275,6 @@ class MainWindow(QMainWindow):
         self.sketch_pick(form, "Profile", f, "sketch")
         self.sketch_pick(form, "Path", f, "path")
         self.check(form, "Reverse path direction", f, "reverse")
-        self.combo(form, "Corners", f, "corners", [("sharp", "Sharp (mitred)"), ("round", "Rounded")], "sharp")
         self.combo(form, "Profile turns", f, "orient", [("follow", "Follows the path"), ("frenet", "Frenet frame (bends with the curve)")], "follow")
         self.check(form, "Twist along the path", f, "twist_on")
         if f.get("twist_on"):
@@ -1392,7 +1449,8 @@ class MainWindow(QMainWindow):
             return
         self.props_title.setText(f"{f['name']}  ({f['kind']})")
         st = d.status.get(f["id"], "")
-        if st.startswith("error"):
+        waiting = (f["kind"] in ("fillet", "chamfer") and not f.get("edges")) or "pick the face to extrude up to" in st
+        if st.startswith("error") and not waiting:
             lab = QLabel(st)
             lab.setStyleSheet("color:#c00000;")
             lab.setWordWrap(True)
@@ -1422,15 +1480,12 @@ class MainWindow(QMainWindow):
             self.ref_panel(form, f)
         else:
             self.expr_edit(form, "Radius (mm)" if k == "fillet" else "Distance (mm)", f, "size")
-            form.addRow("Edges", QLabel(f"{len(f['edges'])} selected  (click edges in the view)"))
-            b = QPushButton("Clear edges")
+            self.edge_list_panel(form, f)
 
-            def clr():
-                self.snapshot()
-                f["edges"] = []
-                self.update_all(keep_props=True)
-            b.clicked.connect(clr)
-            form.addRow(b)
+    def set_free_motion(self, on):
+        self.free_motion = bool(on)
+        if self.ed is not None:
+            self.ed.redraw()
 
     def sketch_table(self, sk):
         """Properties of a sketch: how well it is defined, its dimensions (editable) and its relations (deletable)."""
@@ -1442,6 +1497,11 @@ class MainWindow(QMainWindow):
                       "Fully defined." if rep.dof == 0 else f"Under defined: {rep.dof} degrees of freedom left.") if rep else "")
         lab.setStyleSheet("font-weight:bold; color:" + ("#c00000" if rep and rep.conflicts else "#1a7f1a" if rep and rep.dof == 0 else "#1f4fb4"))
         self.props_lay.addWidget(lab)
+        fm = QCheckBox("Show free motion")
+        fm.setToolTip("Light up the points that can still move and draw an arrow along each free direction, so you know where to add a constraint")
+        fm.setChecked(bool(getattr(self, "free_motion", False)))
+        fm.toggled.connect(self.set_free_motion)
+        self.props_lay.addWidget(fm)
         if self.ed is not None:
             self.ed.hl = set()
         dims = [c for c in m.cons if c["type"] in sketch_edit.DIMS]
@@ -1569,7 +1629,6 @@ class MainWindow(QMainWindow):
         self.doc.store_sketch(sid)
         self.update_all()
 
-    # ----- what the Configurations and Display tabs ask of the window
     def cfg_model(self):
         return self.doc
 
@@ -1615,8 +1674,14 @@ class MainWindow(QMainWindow):
         if self.ed is not None and self.ed.active and keys & {"snap_px", "pick_px", "label_px", "dim_line_px", "dim_line_style", "ext_line_px", "ext_line_style", "ext_gap_pct", "ext_over_pct", "arrow_pct", "arrow_style", "text_pt", "dim_color", "dim_sel_color"}:
             self.ed.redraw()
 
+    def show_units_label(self, *_a):
+        """The unit code at the bottom right (MMGS / IPS ...) follows the unit system chosen in File > Units."""
+        self.units_label.setText(f"   {unitctl.system_code()}   ")
+        self.units_label.setToolTip(unitctl.system_tip())
+
     def units_changed(self, *_a):
         """File > Units was changed: everything that shows a length is redrawn in the new unit (nothing stored changes)."""
+        self.show_units_label()
         self.measure_unit = unitctl.length_unit()
         if self.mass_dialog is not None:
             self.mass_dialog.units_changed()
@@ -1721,7 +1786,18 @@ class MainWindow(QMainWindow):
             self.update_all(keep_props=True)
 
     # ------------------------------------------------------------------ rebuild + draw
-    def update_all(self, fit=False, keep_props=False):
+    def update_all(self, fit=False, keep_props=False, light=False):
+        """Rebuild and redraw.  light=True (an edit inside a sketch): only the sketch is rebuilt and drawn - the feature tree and the 3D part
+        are rebuilt once, when the sketch is left (or before anything needs the part: Save, Export, mass properties ...)."""
+        if light and self.ed is not None and self.ed.active and self.ed.sk_id and self.doc.feature(self.ed.sk_id) is not None:
+            self.doc.rebuild_sketch(self.ed.sk_id)
+            self.stale = True
+            self.refresh_globals()
+            if not keep_props:
+                self.show_props()
+            self.ed.redraw()
+            return
+        self.stale = False
         self.doc.rebuild()
         if self.ed is not None and self.ed.active and (self.doc.feature(self.ed.sk_id) is None or self.ed.sk_id not in self.doc.planes):
             self.ed.end()
@@ -1743,11 +1819,15 @@ class MainWindow(QMainWindow):
 
     def shown_solid(self):
         """The solid drawn in the view: the part (while a fillet / chamfer is selected it shows the rounded result, as a preview)."""
-        return self.doc.solid
+        info = self.preview_info()
+        return info["before"] if info is not None else self.doc.solid
 
     def pick_solid(self):
         """The solid whose edges can be picked: the part, or - while a fillet / chamfer is selected - the part before it."""
         d = self.doc
+        info = self.preview_info()
+        if info is not None:                               # a feature is being previewed: its edges / faces are those of the part before it
+            return info["before"]
         f = d.feature(self.sel) if self.sel else None
         if f is not None and f["kind"] in ("fillet", "chamfer") and d.status.get(f["id"]) == "ok":
             i = d.features.index(f)
@@ -1766,6 +1846,9 @@ class MainWindow(QMainWindow):
         Selecting a sketch does not show it.  Only the sketch that is open for editing is always drawn (by the sketch editor)."""
         if self.ed is not None and self.ed.active and self.ed.sk_id == f["id"]:
             return True
+        cur = self.doc.feature(self.sel) if self.sel else None
+        if cur is not None and cur["kind"] != "sketch" and self.left.currentIndex() == 1 and f["id"] in self.doc.feature_sketches(cur):
+            return True                                     # the sketch a feature is being made from stays visible while its panel is open
         return bool(self.vis["sketches"]) and self.sketch_flag(f)
 
     def set_show(self, key, on):
@@ -1835,7 +1918,7 @@ class MainWindow(QMainWindow):
                 m = pv.PolyData(np.vstack(verts), np.concatenate(cells))
                 m.cell_data["face"] = np.array(face_id)
                 self.view_cells = m
-                self.actor_part = pl.add_mesh(m, color=d.display.get("color") or PART, opacity=float(d.display.get("opacity", 1.0)),
+                self.actor_part = pl.add_mesh(m, color=d.display.get("color") or PART, opacity=self.part_opacity(),
                                               smooth_shading=False, pickable=True, show_edges=False, reset_camera=False,
                                               ambient=0.28, diffuse=0.78, specular=0.30, specular_power=22)
                 if self.measuring:
@@ -1843,11 +1926,11 @@ class MainWindow(QMainWindow):
                         if it["kind"] == "face":
                             cs = np.where(np.array(face_id) == it["idx"])[0]
                             if len(cs):
-                                pl.add_mesh(m.extract_cells(cs), color=FACE_SEL, lighting=False, pickable=False, reset_camera=False)
+                                add_face_highlight(pl, m.extract_cells(cs), FACE_SEL)
                 if self.sel_face is not None and solid is d.solid:
                     cs = np.where(np.array(face_id) == self.sel_face["index"])[0]
                     if len(cs):
-                        pl.add_mesh(m.extract_cells(cs), color=FACE_SEL, lighting=False, pickable=False, reset_camera=False)
+                        add_face_highlight(pl, m.extract_cells(cs), FACE_SEL)
         if pick is not None:
             self.edge_polys = d.edge_lines(pick)
             if self.vis["edges"]:
@@ -1905,6 +1988,7 @@ class MainWindow(QMainWindow):
                 a_ = pl.add_mesh(sq, color=PLANE_COL[nm], opacity=0.45 if sel else 0.12, pickable=True, lighting=False, reset_camera=False)
                 self.actor_planes[nm] = a_
         self.draw_refgeo(pl, pv, solid, size)
+        self.draw_preview(pl, pv)
         if self.vis["origin"] and self.show_origin_item:
             L = 0.45 * size
             for vec, col in (((L, 0, 0), (0.85, 0.2, 0.2)), ((0, L, 0), (0.2, 0.7, 0.2)), ((0, 0, L), (0.2, 0.35, 0.9))):
@@ -1924,6 +2008,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ clicks in the view
     # ------------------------------------------------------------------ evaluate: mass properties and measure
     def mass_open(self):
+        self.ensure_built()
         if self.doc.solid is None:
             self.say("Make a solid first.")
             return
@@ -2078,6 +2163,14 @@ class MainWindow(QMainWindow):
         if not sketching and self.rg_feature() is not None:
             self.rg_pick(x, y)
             return
+        if not sketching and getattr(self, "axis_pick", False) and self.rv_axis_pick(x, y):
+            return
+        if not sketching and self.face_pick_active():
+            self.pick_to_face(x, y)
+            return
+        if not sketching and self.rp_pick_active():
+            self.rp_pick_click(x, y)
+            return
         f = self.doc.feature(self.sel) if self.sel else None
         solid = self.shown_solid()
         ei = self.pick_edge(x, y)
@@ -2131,6 +2224,9 @@ class MainWindow(QMainWindow):
             return
         idx = int(self.view_cells.cell_data["face"][cid])
         face = solid.faces()[idx]
+        if not sketching and f is not None and f["kind"] in ("fillet", "chamfer"):
+            self.fc_toggle_face(f, face)                    # a face while rounding: all of its edges
+            return
         flat = face.geom_type.name == "PLANE"
         self.sel_face = {"ref": self.doc.face_ref(face) if flat else None, "index": idx}
         self.sel_plane, self.sel_edges = None, ([] if not shift else self.sel_edges)
@@ -2202,6 +2298,8 @@ def apply_theme(app):
 
 
 part_refgeo.install(MainWindow)
+part_preview.install(MainWindow)
+part_repeat.install(MainWindow)
 
 
 def main():

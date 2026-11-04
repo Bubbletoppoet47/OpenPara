@@ -66,7 +66,6 @@ class ViewCube:
         self.cam.ParallelProjectionOn()
         self.cam.SetParallelScale(2.1)
         self.ren.SetActiveCamera(self.cam)
-        self.actors = []
         rw = self.pl.render_window
         rw.SetNumberOfLayers(3)
         rw.AddRenderer(self.ren)
@@ -79,6 +78,9 @@ class ViewCube:
                 if j > i and int(np.sum(np.abs(a - b) > 0)) == 1:
                     fs = [nm for nm, n in FACES if np.dot(n, a) > 0.5 and np.dot(n, b) > 0.5]
                     self.edges.append((i, j, fs))
+        self.cam.SetParallelScale(2.1)
+        self.cam.SetClippingRange(1, 30)
+        self.build()
         self.cam_obs = self.pl.camera.AddObserver("ModifiedEvent", lambda *_: self.sync())
         self.sync()
 
@@ -89,6 +91,8 @@ class ViewCube:
         s, m = int(self.SIZE * r), int(self.MARGIN * r)
         self.box = (W - m - s, H - m - s, W - m, H - m)
         self.ren.SetViewport(self.box[0] / W, self.box[1] / H, self.box[2] / W, self.box[3] / H)
+        if getattr(self, "button_actors", None) is not None and hasattr(self, "face_actors"):
+            self.build_buttons()
 
     @property
     def side(self):
@@ -205,98 +209,94 @@ class ViewCube:
         self.finish()
 
     def finish(self):
-        self.pl.renderer.reset_camera_clipping_range()
+        self.pl.renderer.ResetCameraClippingRange()
         self.sync()
         self.pl.render()
 
     # ------------------------------------------------------------------ drawing
+    # The cube is an object in space that is built ONCE (build): six faces, twelve edges, the face labels, a marker for a hovered corner.  Turning the
+    # model only turns the cube's camera to the same angle (sync), and hovering only recolours the piece that was entered or left (_style).  The little
+    # buttons are screen-fixed; they are rebuilt only when the window changes size (build_buttons).
+    DEFAULT_EDGE = (0.25, 0.28, 0.35)
+    BUTTON = (0.45, 0.50, 0.60)
+
     def sync(self):
-        """Turn the cube like the model (called whenever the main camera changes) and redraw its parts."""
+        """Turn the cube like the model (called whenever the main camera changes): only the camera of the cube moves."""
         try:
             right, up, toward = view_dirs(self.pl.camera)
-            self.cam.SetPosition(*(toward * 12))
-            self.cam.SetFocalPoint(0, 0, 0)
-            self.cam.SetViewUp(*up)
-            self.cam.SetParallelScale(2.1)
-            self.cam.SetClippingRange(1, 30)
-            self.redraw(right, up, toward)
+            c = self.cam
+            c.SetPosition(*(toward * 12))
+            c.SetFocalPoint(0, 0, 0)
+            c.SetViewUp(*up)
         except Exception:
             pass
 
-    def clear(self):
-        for a in self.actors:
-            self.ren.RemoveActor(a)
-            try:
-                self.ren.RemoveActor2D(a)
-            except Exception:
-                pass
-        self.actors = []
-
-    def add(self, mesh, color, width=1.0, points=False, opacity=1.0):
-        m = vtkPolyDataMapper()
-        m.SetInputData(mesh)
-        a = vtkActor()
-        a.SetMapper(m)
-        p = a.GetProperty()
+    def _prop(self, actor, color, width=1.0, points=False):
+        p = actor.GetProperty()
         p.SetColor(*color)
-        p.SetLighting(False)
-        p.SetOpacity(opacity)
         if points:
             p.SetPointSize(width)
             p.SetRenderPointsAsSpheres(True)
         else:
             p.SetLineWidth(width)
+
+    def _actor(self, mesh, color, width=1.0, points=False, lit=False):
+        m = vtkPolyDataMapper()
+        m.SetInputData(mesh)
+        a = vtkActor()
+        a.SetMapper(m)
+        p = a.GetProperty()
+        p.SetLighting(lit)
+        if lit:
+            p.SetAmbient(0.82)                         # the cube lies in the light of the viewer: faces turned to you are a little brighter
+            p.SetDiffuse(0.18)
+            p.SetSpecular(0.0)
+        self._prop(a, color, width, points)
         self.ren.AddActor(a)
-        self.actors.append(a)
+        return a
 
-    def face_label(self, name, n):
-        """Letters as flat vector lines lying just above a face (depth-tested, so they can never poke through the cube)."""
-        from vtkmodules.vtkRenderingFreeType import vtkVectorText
-        vt = vtkVectorText()
-        vt.SetText(name)
-        vt.Update()
-        pts = pv.wrap(vt.GetOutput())
-        if pts.n_points == 0:
-            return pv.PolyData()
-        lo, hi = np.array(pts.bounds[0::2]), np.array(pts.bounds[1::2])
-        mid = (lo + hi) / 2
-        scale = min(1.30 / max(hi[0] - lo[0], 1e-6), 0.50 / max(hi[1] - lo[1], 1e-6))
-        up = np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.5 else np.array([0.0, 1.0, 0.0])
-        right = np.cross(up, n)
-        xy = (np.array(pts.points) - mid) * scale
-        world = n * 1.012 + xy[:, 0:1] * right + xy[:, 1:2] * up
-        return pv.PolyData(world, faces=pts.faces)
-
-    def redraw(self, right, up, toward):
-        self.clear()
-        h = self.hover
-        light = np.array([-0.35, 0.55, 0.75])
-        light /= np.linalg.norm(light)
+    def build(self):
+        """Create the cube once."""
+        self.face_actors, self.edge_actors, self.label_actors = {}, [], []
         for nm, n in FACES:
-            q = face_quad(n)
-            mesh = pv.PolyData(np.array(q), faces=np.array([4, 0, 1, 2, 3]))
-            col = np.array(BASE[nm])
-            lv = 0.82 + 0.18 * max(0.0, float(np.dot(np.array(n, float), right * light[0] + up * light[1] + toward * light[2])))
-            col = col * lv
-            if h and h[0] == "face" and h[1] == nm:
-                col = np.array(HOVER)
-            self.add(mesh, tuple(np.clip(col, 0, 1)))
-        for k, (i, j, fs) in enumerate(self.edges):
-            hot = h and h[0] == "edge" and h[1] == k
+            mesh = pv.PolyData(np.array(face_quad(n)), faces=np.array([4, 0, 1, 2, 3]))
+            self.face_actors[nm] = self._actor(mesh, BASE[nm], lit=True)
+        for (i, j, fs) in self.edges:
             seg = pv.lines_from_points(np.array([self.corners[i] * 1.002, self.corners[j] * 1.002]))
-            self.add(seg, HOVER if hot else (0.25, 0.28, 0.35), 5.0 if hot else 1.5)
-        if h and h[0] == "corner":
-            self.add(pv.PolyData(np.array([self.corners[h[1]] * 1.01])), HOVER, 14.0, points=True)
-        for nm, n in FACES:
-            if np.dot(n, toward) > 0.25:          # only the faces turned towards you carry a label; it lies flat on the face
-                self.add(self.face_label(nm, np.array(n, float)), (0.12, 0.14, 0.2), 2.0)
-        self.draw_buttons()
+            self.edge_actors.append(self._actor(seg, self.DEFAULT_EDGE, 1.5))
+        for nm, n in FACES:                                 # the labels lie flat on their faces; the ones on the far side are hidden by the depth test
+            self.label_actors.append(self._actor(self.face_label(nm, np.array(n, float)), (0.12, 0.14, 0.2), 2.0))
+        self.corner_actor = self._actor(pv.PolyData(np.array([self.corners[0] * 1.01])), HOVER, 14.0, points=True)
+        self.corner_actor.SetVisibility(False)
+        self.button_actors = {}
+        self.build_buttons()
 
-    def draw_buttons(self):
-        r = self.pl.devicePixelRatioF()
+    def _style(self, h, on):
+        """Draw the piece `h` as hovered (on) or as normal."""
+        if not h:
+            return
+        if h[0] == "face":
+            a = self.face_actors[h[1]]
+            self._prop(a, HOVER if on else BASE[h[1]])
+        elif h[0] == "edge":
+            self._prop(self.edge_actors[h[1]], HOVER if on else self.DEFAULT_EDGE, 5.0 if on else 1.5)
+        elif h[0] == "corner":
+            if on:
+                self.corner_actor.GetMapper().GetInput().GetPoints().SetPoint(0, *(self.corners[h[1]] * 1.01))
+                self.corner_actor.GetMapper().GetInput().Modified()
+            self.corner_actor.SetVisibility(bool(on))
+        elif h[0] in ("arrow", "home"):
+            nm = "home" if h[0] == "home" else h[1]
+            if nm in self.button_actors:
+                self.button_actors[nm].GetProperty().SetColor(*(HOVER if on else self.BUTTON))
+
+    def build_buttons(self):
+        """The five little buttons around the cube (screen-fixed 2D shapes)."""
+        for act in getattr(self, "button_actors", {}).values():
+            self.ren.RemoveViewProp(act)
+        self.button_actors = {}
         for nm, (c, a) in self.arrows().items():
             lc = c - np.array([self.box[0], self.box[1]])
-            hot = self.hover and ((nm == "home" and self.hover[0] == "home") or (self.hover[0] == "arrow" and self.hover[1] == nm))
             s = a * 0.8
             if nm == "up":
                 pts = [(lc[0] - s, lc[1] - s * 0.6), (lc[0] + s, lc[1] - s * 0.6), (lc[0], lc[1] + s * 0.7)]
@@ -316,15 +316,34 @@ class ViewCube:
             m.SetInputData(poly)
             act = vtkActor2D()
             act.SetMapper(m)
-            act.GetProperty().SetColor(*(HOVER if hot else (0.45, 0.50, 0.60)))
-            self.ren.AddActor2D(act)
-            self.actors.append(act)
-        del r
+            act.GetProperty().SetColor(*self.BUTTON)
+            self.ren.AddViewProp(act)
+            self.button_actors[nm] = act
+        self._style(self.hover, True)
+
+    def face_label(self, name, n):
+        """Letters as flat vector lines lying just above a face (depth-tested, so they can never poke through the cube)."""
+        from vtkmodules.vtkRenderingFreeType import vtkVectorText
+        vt = vtkVectorText()
+        vt.SetText(name)
+        vt.Update()
+        pts = pv.wrap(vt.GetOutput())
+        if pts.n_points == 0:
+            return pv.PolyData()
+        lo, hi = np.array(pts.bounds[0::2]), np.array(pts.bounds[1::2])
+        mid = (lo + hi) / 2
+        scale = min(1.30 / max(hi[0] - lo[0], 1e-6), 0.50 / max(hi[1] - lo[1], 1e-6))
+        up = np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.5 else np.array([0.0, 1.0, 0.0])
+        right = np.cross(up, n)
+        xy = (np.array(pts.points) - mid) * scale
+        world = n * 1.012 + xy[:, 0:1] * right + xy[:, 1:2] * up
+        return pv.PolyData(world, faces=pts.faces)
 
     def set_hover(self, h):
         if h != self.hover:
+            self._style(self.hover, False)
             self.hover = h
-            self.sync()
+            self._style(h, True)
             self.pl.render()
 
 
@@ -344,6 +363,7 @@ class NavHook(QObject):
         except Exception:
             self.wheel_sign = 1
         # the wheel as asked: rolling toward you zooms in  ->  sign for angleDelta().y() < 0 is zoom in
+        self.lock = QSettings("GenParametricDesigner", "Modeller").value("lock_view", "0") in ("1", 1, True, "true")   # Show > Lock view
         self.cube = None
         try:
             from PyQt6.QtWidgets import QWidget as _W
@@ -358,6 +378,11 @@ class NavHook(QObject):
             self.cube = ViewCube(app)
         except Exception:
             self.cube = None
+
+    def set_lock(self, on):
+        """Lock view: a plain middle-button drag pans (instead of rotating), so sketching does not need Ctrl held down."""
+        self.lock = bool(on)
+        QSettings("GenParametricDesigner", "Modeller").setValue("lock_view", "1" if on else "0")
 
     def flip_zoom(self, flipped):
         self.wheel_sign = -1 if flipped else 1
@@ -418,7 +443,7 @@ class NavHook(QObject):
         self.refresh()
 
     def refresh(self):
-        self.pl.renderer.reset_camera_clipping_range()
+        self.pl.renderer.ResetCameraClippingRange()
         self.pl.render()
 
     # ------------------------------------------------------------------ events
@@ -444,12 +469,13 @@ class NavHook(QObject):
                         return True
                 if ev.button() == Qt.MouseButton.MiddleButton:
                     mods = ev.modifiers()
-                    self.mode = "pan" if mods & Qt.KeyboardModifier.ControlModifier else "zoom" if mods & Qt.KeyboardModifier.ShiftModifier else "rotate"
+                    self.mode = ("zoom" if mods & Qt.KeyboardModifier.ShiftModifier else
+                                 "pan" if (mods & Qt.KeyboardModifier.ControlModifier) or self.lock else "rotate")
                     self.last = (px, py)
                     return True
                 if ev.button() == Qt.MouseButton.RightButton:
                     self.press_pos, self.moved = (px, py), False
-                    return True
+                    return getattr(self.app, "drag_hook", None) is None      # a window with a drag hook (the assembly) wants the right button too
                 return False
             if t == QEvent.Type.MouseMove:
                 px, py = self.xy(obj, ev)
@@ -477,7 +503,7 @@ class NavHook(QObject):
                     pos, self.press_pos = self.press_pos, None
                     if not self.moved and hasattr(self.app, "context_menu"):
                         self.app.context_menu(px, py, ev.globalPosition().toPoint())
-                    return True
+                    return getattr(self.app, "drag_hook", None) is None
         except Exception:
             import traceback
             self.mode = None
@@ -486,3 +512,22 @@ class NavHook(QObject):
             except Exception:
                 pass
         return False
+
+
+def lock_checkbox(win):
+    """The 'Lock view' tick box of the Show menu of a window that has a NavHook in win.nav (made after the view)."""
+    from PyQt6.QtWidgets import QCheckBox
+    cbx = QCheckBox("Lock view (middle drag pans)")
+    cbx.setToolTip("Tick while sketching: a plain middle-button drag moves the view sideways instead of rotating it (no Ctrl needed)")
+    cbx.setStyleSheet("QCheckBox{padding:4px 14px 4px 10px;} QCheckBox:hover{background:#dbe8fa;}")
+    cbx.toggled.connect(lambda on: win.nav.set_lock(on) if getattr(win, "nav", None) is not None else None)
+    win.lock_cb = cbx
+    return cbx
+
+
+def sync_lock_checkbox(win):
+    cb = getattr(win, "lock_cb", None)
+    if cb is not None and getattr(win, "nav", None) is not None:
+        cb.blockSignals(True)
+        cb.setChecked(win.nav.lock)
+        cb.blockSignals(False)

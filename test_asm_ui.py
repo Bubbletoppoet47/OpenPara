@@ -61,7 +61,8 @@ st = w.drag_begin.__func__  # exists
 c1["fixed"] = False
 A.mates = [m for m in A.mates if m["id"] != "M2"]; w.solve_all()
 R0, t0 = A.pose(c1); d_, r_, u_ = w.view_vectors()
-st = {"cid": c1["id"], "x": 100, "y": 100, "hit": np.array(t0), "R": R0, "t": t0, "d": d_, "right": r_, "up": u_, "cluster": A.cluster(c1["id"]), "lc": np.array([5.0, 5.0, 5.0])}
+st = {"cid": c1["id"], "x": 100, "y": 100, "hit": np.array(t0), "R": R0, "t": t0, "d": d_, "right": r_, "up": u_, "cluster": A.cluster(c1["id"]), "lc": np.array([5.0, 5.0, 5.0]),
+      "kind": "move", "lhit": np.zeros(3), "cur": (R0, t0), "lock": None, "p0": np.array(t0, float), "s0": 0.0}
 w.mode = "move"; w.drag_move(st, 130, 120); print("dragged (stays on the base top)", [round(x, 2) for x in c1["pos"]], A.status)
 assert abs(c1["pos"][2] - 10) < 1e-3
 w.mode = "rotate"; w.drag_move(st, 140, 100); print("rotated, still on top:", [round(x, 2) for x in c1["pos"]], np.round(am.rodrigues(c1["rv"])[:, 2], 3)); w.drag_end(st)

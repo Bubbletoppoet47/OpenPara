@@ -34,12 +34,12 @@ REPO = "Bubbletoppoet47/OpenPara"
 
 # what the dialog and the "install it?" questions show before anything is downloaded (tests keep it equal to addons_src/*/addon.json)
 CATALOG = {
-    "simulation": {"name": "Simulation",
-                   "description": "1D FEA (frames and trusses), 2D FEA (plane stress / strain) and 2D CFD of a sketch or a slice of a part or "
-                                  "assembly, with the material library and the result viewer. Saved simulations (.gps) need it."},
-    "render": {"name": "Renderer",
-               "description": "Render Studio: photorealistic pictures and videos of a part or assembly with sun, lights, floor and cameras. "
-                              "Saved renders (.gpr) need it."},
+    "partgen": {"name": "Part Generator",
+                "description": "Gears (spur, helical, herringbone), gear systems and other parts made from a few parameters. Parts made with it "
+                               "need it to be rebuilt."},
+    "truss": {"name": "Truss Generator",
+              "description": "Builds the members of a truss from the lines of a sketch: each member is a profile extruded to its longest length with "
+                             "angled cuts. Exports a cut list. Opens .truss files and truss project folders."},
 }
 
 
@@ -243,6 +243,29 @@ def startup():
                     sys.stderr.write(f"add-on {aid}: could not install: {ex}\n")
     finally:
         activate()
+
+
+def register_extensions(ext):
+    """Tell the core (ext.py) which add-ons are active and let those that extend the Part / Assembly windows register.  Safe to call again
+    after an add-on was installed or removed."""
+    ext.FEATURES.clear()
+    for aid in known():
+        on = is_active(aid)
+        ext.mark_present(aid, on)
+        m = installed_manifest(aid) if on else None
+        if m and m.get("extension"):
+            mod = importlib.import_module(m["extension"])
+            mod.register(ext)
+
+
+def tab_kinds():
+    """{kind: spec} of the document tabs the active add-ons offer (their manifest "tabs"); spec has aid, label, short, module, factory, file_types ..."""
+    out = {}
+    for aid in known():
+        m = installed_manifest(aid) if is_active(aid) else None
+        for t in (m or {}).get("tabs", []):
+            out[t["kind"]] = dict(t, aid=aid)
+    return out
 
 
 # ---------------------------------------------------------------- getting an add-on

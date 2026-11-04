@@ -4,16 +4,19 @@
 
 An open-source parametric CAD modeller written in Python (working title: *Gen Parametric Designer*).
 
-- Parametric parts: sketches with a constraint solver, extrude / cut / revolve / sweep / loft (boss and cut; sweeps can twist), fillet / chamfer, configurations, a Part Generator (spur, helical, herringbone and internal ring gears with true involute teeth; a Gear systems tab sizes a train of up to three gears from centre distances or ratios, or a planetary sun / planet / ring set, and opens each gear as its own part), STEP and STL export of parts and assemblies, and STEP import (File > Import STEP... / Export...; an imported body is the first feature of a new part, and a STEP with several solids can open as one assembly)
+- Parametric parts: sketches with a constraint solver, extrude / cut / revolve / sweep / loft (boss and cut; sweeps can twist), fillet / chamfer, configurations, STEP and STL export of parts and assemblies, and STEP import (File > Import STEP... / Export...; an imported body is the first feature of a new part, and a STEP with several solids can open as one assembly)
 - Sketches can use geometry of other sketches (ribbon: Other Sketch): a point, a line, or the point where a sweep path pierces the sketch plane, so a profile can be tied to its path with normal relations and follows it when the path changes
 - Assemblies with mates, sub-assemblies and their own Globals (positions, mate values and pattern spacing take formulas)
 - One program-wide unit system (File > Units: mm, cm, m, in, ft, N, kN, kip, ... and a separate speed unit)
-- Built-in simulations: 1D beam / frame FEA, 2D FEA, 2D CFD (results and slicing)
-- Photorealistic renderer ("Renderer" tab): sun and sky from date / time / place, spot light, floor, several cameras, still pictures and MP4 videos (Mitsuba 3)
 
-Simulation and the renderer are **add-ons** (File > Add-ons..., or the question that appears when you use one): they are downloaded from the GitHub release of your version, together with the packages only they need (gmsh; Mitsuba and the video encoder), so the installer stays smaller and you only carry what you use. Uninstalling removes the add-on and its packages, never your .gps / .gpr files or your material library. Installing needs an internet connection; once installed an add-on works offline. After a program update, File > Add-ons shows "update available" for installed add-ons (the old ones keep working until you update them). The core (parts, sketches, assemblies, STEP / STL, units, settings) is always there.
+The core is **Sketch/Part and Assembly** (with STEP / STL exchange, units, settings, materials and AutoSave). Everything else is an **add-on** (File > Add-ons..., or the question that appears when you use one), downloaded from the GitHub release of your version:
 
-Built on [build123d](https://github.com/gumyr/build123d) (OpenCascade), PyQt6, pyvista / VTK, gmsh and Mitsuba 3.
+- **Part Generator**: spur, helical, herringbone and internal ring gears with true involute teeth; a Gear systems tab sizes a train of up to three gears from centre distances or ratios, or a planetary sun / planet / ring set, and opens each gear as its own part.
+- **Truss Generator**: builds the members of a truss from the lines of a sketch (profile, longest length, angled end cuts) and writes a cut list.
+
+Parts that use the Part Generator keep their data without the add-on and say that they need it. Uninstalling an add-on never touches your files or your material library. Installing needs an internet connection; once installed an add-on works offline. Simulation and the renderer are not part of this version; they are being reworked and will return as add-ons.
+
+Built on [build123d](https://github.com/gumyr/build123d) (OpenCascade), PyQt6, pyvista / VTK.
 
 ## Install (Windows)
 
@@ -32,12 +35,9 @@ Windows: double-click `run_modeller.bat` (installs the packages the first time),
     pip install -r requirements.txt
     python gpd_app.py
 
-The render studio can also run on its own: `run_render_studio.bat`.
-
 ## Guides
 
 - `docs/README_modeller.txt` - how the modeller works
-- `docs/README_render.txt` - the render studio
 
 ## Tests
 

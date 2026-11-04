@@ -197,14 +197,32 @@ class Model:
         return c
 
     def next_dim_name(self, typ, extra=()):
-        """The default name of a new dimension: the prefix of its type with the LOWEST number that is not used yet (not by a symbol, a
-        dimension, or a name in `extra`, e.g. the symbols of the sketches linked to this one)."""
+        """The default name of a new dimension: the prefix of its type with the number after the HIGHEST one in use (a symbol, a dimension,
+        or a name in `extra`, e.g. the symbols of the sketches linked to this one)."""
         pre = DIM_PREFIX[typ]
         taken = set(self.params) | set(extra) | {c.get("name") for c in self.cons if c["type"] in DIMENSIONS}
-        n = 1
-        while f"{pre}{n}" in taken:
-            n += 1
-        return f"{pre}{n}"
+        # one more than the highest number in use (L1, L2, L4 -> L5, not L3); when the highest is deleted its number is free again
+        top = 0
+        for t in taken:
+            if isinstance(t, str) and t.startswith(pre) and t[len(pre):].isdigit():
+                top = max(top, int(t[len(pre):]))
+        return f"{pre}{top + 1}"
+
+    def scale_all(self, k):
+        """The whole sketch scaled by k about its origin (the shape stays the same; used when the first dimension of a part sets the scale)."""
+        for i, p in self.pts.items():
+            if i != 0:
+                p[0], p[1] = p[0] * k, p[1] * k
+        for c in self.cis.values():
+            c["r"] = c["r"] * k
+        for p in self.lock_pts.values():
+            p[0], p[1] = p[0] * k, p[1] * k
+        for i in list(self.lock_cis):
+            self.lock_cis[i] = self.lock_cis[i] * k
+        for c in self.cons:
+            if c.get("xy") is not None and not c.get("origin"):
+                c["xy"] = (c["xy"][0] * k, c["xy"][1] * k)
+        self.shapes = {}
 
     def con_by_id(self, cid):
         return next((c for c in self.cons if c["id"] == cid), None)
@@ -320,7 +338,7 @@ class Model:
         return None, None
 
     # ----- delete -----------------------------------------------------------------------------
-    def delete(self, items, force3d=False):
+    def delete(self, items, force3d=False, orphans=False):
         """Delete entities (and everything that depends on them) or constraints/dimensions.  The projected points and lines of 3D placed
         parts are not deleted one by one (they follow the part) unless force3d."""
         dead = set(items) - {("pt", 0), ("con", 0)}
@@ -349,6 +367,32 @@ class Model:
                 if ("pt", a["c"]) in dead or ("pt", a["s"]) in dead or ("pt", a["e"]) in dead:
                     changed |= ("ar", aid) not in dead
                     dead.add(("ar", aid))
+        if orphans:                                           # the endpoints / centres that nothing else uses go with the line, arc or circle
+            used = set()
+            for lid, (p, q) in self.lns.items():
+                if ("ln", lid) not in dead:
+                    used |= {p, q}
+            for cid, c in self.cis.items():
+                if ("ci", cid) not in dead:
+                    used.add(c["c"])
+            for aid, ar in self.ars.items():
+                if ("ar", aid) not in dead:
+                    used |= {ar["c"], ar["s"], ar["e"]}
+            keep = {0}
+            for r in self.ext:                                # points that follow geometry of earlier sketches
+                keep |= {r.get("pt")} | set(r.get("pts") or [])
+            for k, i in list(dead):
+                if k == "ln":
+                    cand = set(self.lns[i])
+                elif k == "ci":
+                    cand = {self.cis[i]["c"]}
+                elif k == "ar":
+                    cand = {self.ars[i]["c"], self.ars[i]["s"], self.ars[i]["e"]}
+                else:
+                    continue
+                for p in cand:
+                    if p in self.pts and p not in used and p not in keep and ("pt", p) not in dead and not (self.p3 and self.p3_owner("pt", p)):
+                        dead.add(("pt", p))
         for k, i in dead:
             if k == "ln":
                 self.lns.pop(i, None)
@@ -649,7 +693,7 @@ class Model:
                 txt = c["expr"]
             txt += f" = {c['value']:.4g}" + (" deg" if c["type"] == "dim_ang" else "")
         else:
-            txt = LABEL[c["type"]]
+            txt = "Pierce" if c.get("pierce") else LABEL[c["type"]]
         return txt + "  (" + ", ".join(names) + ")"
 
     # ----- changing the unit system -------------------------------------------------------------
@@ -801,6 +845,22 @@ class Model:
     def param_values(self):
         """Numeric value of every symbol in the active configuration (defined symbols are evaluated)."""
         vals = self.base_values()
+        pending = {k: p["expr"] for k, p in self.params.items() if p.get("expr")}
+        for _ in range(len(pending) + 1):
+            for k, e in list(pending.items()):
+                try:
+                    vals[k] = safe_eval(e, vals)
+                    del pending[k]
+                except (KeyError, ValueError, ZeroDivisionError, SyntaxError):
+                    pass
+        for k in pending:
+            vals[k] = float("nan")
+        return vals
+
+    def param_values_with(self, over):
+        """param_values() with some plain symbols replaced (the measured ones, while the solver tries a geometry)."""
+        vals = self.base_values()
+        vals.update(over)
         pending = {k: p["expr"] for k, p in self.params.items() if p.get("expr")}
         for _ in range(len(pending) + 1):
             for k, e in list(pending.items()):
@@ -1201,6 +1261,7 @@ class Model:
             eqs = [e for e in S.equations([c for c in self.cons if not c.get("driven")])
                    if e[1]["type"] not in ("_pin", "_lock", "_lockr")]
             _, J = S.jacobian(eqs, S.x, central=True)
+            J = row_scale(J)
             _, _, Vt = np.linalg.svd(J if J.shape[0] else np.zeros((1, S.n)))
             N = Vt[S.n - rep.dof:]                                    # rep.dof free motions
             pre = {}
@@ -1279,19 +1340,68 @@ class Model:
             e = c.get("expr")
             if not e:
                 c["driven"] = False
+                c["coupled"] = False
                 continue
             try:
                 syms = expr_symbols(e)
-                c["driven"] = any(self.is_output(x) for x in syms)
+                p = self.params.get(e) if str(e).isidentifier() else None
+                # driven: the dimension measures the geometry (its own symbol is an output).  coupled: its equation uses measured values, so
+                # it still constrains the geometry, towards a target that follows them (a proportion: B = 2 * A) - solved in the same system.
+                c["driven"] = bool(p is not None and not p.get("expr") and not p.get("input", True))
+                c["coupled"] = (not c["driven"]) and any(self.is_output(x) for x in syms)
                 v = safe_eval(e, vals)
                 if not (isinstance(v, float) and math.isnan(v)):
                     c["value"] = v
             except (KeyError, ValueError, ZeroDivisionError, SyntaxError):
                 c["driven"] = False
+                c["coupled"] = False
         for cid, v in self.value_override.items():
             c = self.con_by_id(cid)
             if c is not None and not c.get("driven"):
                 c["value"] = v
+
+    def set_driven(self, cid, on):
+        """Make a dimension driven (it measures the geometry; its variable becomes an output) or driving (an input that constrains it).
+        The variable and every equation that uses it keep working; a dimension's own equation is kept aside and comes back when it drives again."""
+        c = self.con_by_id(cid)
+        if c is None or c["type"] not in DIMENSIONS:
+            raise ValueError("not a dimension")
+        e = c.get("expr")
+        sym = e if (e and str(e).isidentifier() and e in self.params and not self.params[e].get("doc")) else None
+        if on:
+            if c.get("driven"):
+                return
+            if sym is None:
+                if e:
+                    c["expr_saved"] = e
+                name = c.get("name") or "D"
+                if not str(name).isidentifier() or name in self.params or name in _FUNCS or name in _CONSTS:
+                    k, name0 = 1, (name if str(name).isidentifier() else "D")
+                    while f"{name0}_{k}" in self.params:
+                        k += 1
+                    name = f"{name0}_{k}"
+                self.add_param(name, c["value"], is_input=False)
+                self.params[name]["made"] = True
+                c["expr"], c["name"] = name, name
+            else:
+                p = self.params[sym]
+                if p.get("expr"):
+                    p["expr_saved"] = p.pop("expr")
+                p["input"] = False
+        else:
+            if not c.get("driven") or sym is None:
+                return
+            p = self.params[sym]
+            if c.get("expr_saved"):
+                c["expr"] = c.pop("expr_saved")
+                if p.get("made") and not any(k is not c and k.get("expr") == sym for k in self.cons):
+                    del self.params[sym]
+            elif p.get("expr_saved"):
+                p["expr"] = p.pop("expr_saved")
+                p["input"] = True
+            else:
+                p["input"] = True
+        self.update_values()
 
     def refresh_driven(self):
         """After a solve: driven dimensions show what the geometry measures; output symbols take those values."""
@@ -1305,6 +1415,15 @@ class Model:
                 if e in self.params and not self.params[e].get("expr"):
                     self.params[e]["vals"][self.active] = v
                 c["value"] = v
+        over = {c["expr"]: c["value"] for c in self.cons if c["type"] in DIMENSIONS and c.get("driven")}
+        for c in self.cons:
+            if c["type"] in DIMENSIONS and c.get("coupled"):
+                try:
+                    v = safe_eval(c["expr"], self.param_values_with(over))
+                    if not (isinstance(v, float) and math.isnan(v)):
+                        c["value"] = v
+                except (KeyError, ValueError, ZeroDivisionError, SyntaxError):
+                    pass
 
     def analyze_inputs(self, max_sets=12):
         return analyze_inputs(self, max_sets)
@@ -1316,7 +1435,34 @@ class Model:
         self.update_values()
         rep = Solver(self).run(pin)
         self.refresh_driven()
+        self.flag_circular(rep)
         return rep
+
+    def flag_circular(self, rep):
+        """A coupled dimension that measures nothing but what it also controls (B = 2 * A with A measured on B's own line) is a loop."""
+        coupled = [c for c in self.cons if c["type"] in DIMENSIONS and c.get("coupled")]
+        if not coupled:
+            return
+
+        def deep(names, seen):
+            for n in names:
+                if n in seen:
+                    continue
+                seen.add(n)
+                p = self.params.get(n)
+                if p and p.get("expr"):
+                    deep(expr_symbols(p["expr"]), seen)
+            return seen
+        for c in coupled:
+            used = deep(expr_symbols(c["expr"]), set())
+            mine = {tuple(r) for r in c["refs"]}
+            for d in self.cons:
+                if d["type"] in DIMENSIONS and d.get("driven") and d.get("expr") in used and mine & {tuple(r) for r in d["refs"]}:
+                    if c["id"] not in rep.conflicts:
+                        rep.conflicts.append(c["id"])
+                    rep.ok = False
+                    rep.messages.append(f"{c.get('name', 'A dimension')} depends on {d.get('name', d['expr'])}, which measures the same geometry it controls "
+                                        "(a loop). Measure something else, or make one of them driving.")
 
     # ----- construction / overhead symbols ----------------------------------------------------
     def construction_only(self):
@@ -1464,6 +1610,7 @@ class Report:
         self.redundant = []      # constraint ids that add nothing new
         self.free_pts = set()    # point ids not fully determined
         self.free_circles = set()
+        self.free_dirs = {}      # point id -> unit directions it can still move in: one (either way) or two (it is free in the plane)
         self.dof_constr = 0      # freedom that exists only in construction geometry (not counted in dof)
         self.messages = []
 
@@ -1474,6 +1621,18 @@ class Report:
         if self.dof == 0:
             return "Fully defined"
         return f"Under defined ({self.dof} DOF)"
+
+
+def row_scale(J):
+    """Every equation row scaled to length 1, for counting degrees of freedom.  Rows have very different sizes (a length changes 1 per mm, an
+    angle only 1/length per mm), so on a big sketch an angle looked 'too weak to matter' next to the rest and was reported redundant while the
+    sketch was still shown as free.  Rows that are zero for real (below 1e-7) stay as they are."""
+    J = np.asarray(J, float)
+    if not J.shape[0]:
+        return J
+    nr = np.linalg.norm(J, axis=1)
+    sc_ = np.where(nr > 1e-7, nr, 1.0)
+    return J / sc_[:, None]
 
 
 class Solver:
@@ -1590,7 +1749,7 @@ class Solver:
         if t == "proj_pt":
             return self.proj(c, x)
         # dimensions
-        v = c["value"]
+        v = self.dim_target(c, x) if c.get("coupled") else c["value"]
         if t == "dim_h":
             a, b = self.two_pts(x, refs)
             return [(b[0] - a[0]) * c.get("sign", 1) - v]
@@ -1750,6 +1909,31 @@ class Solver:
             if k == "ar" and loc["pts"] & {self.m.ars[i]["c"], self.m.ars[i]["s"], self.m.ars[i]["e"]}:
                 return True
         return False
+
+    def measured(self, d, x):
+        """What the (driven) dimension d measures in the geometry x."""
+        t, refs = d["type"], d["refs"]
+        if t == "dim_ang":
+            (a1, b1), (a2, b2) = self.ln(x, refs[0][1]), self.ln(x, refs[1][1])
+            d1 = (b1[0] - a1[0], b1[1] - a1[1])
+            d2 = (b2[0] - a2[0], b2[1] - a2[1])
+            deg = d.get("eps", 1) * math.degrees(math.atan2(d1[0] * d2[1] - d1[1] * d2[0], d1[0] * d2[0] + d1[1] * d2[1]))
+            return deg + 180.0 * round((d["value"] - deg) / 180.0)          # the representative of the angle (mod 180) nearest its last value
+        z = dict(d)
+        z["value"] = 0.0
+        z.pop("coupled", None)
+        return abs(self.res(z, x)[0]) if t in ("dim_len", "dim_rad", "dim_dia") else self.res(z, x)[0]
+
+    def dim_target(self, c, x):
+        """The number a coupled dimension has to reach: its equation, with the measured symbols taken from the geometry x."""
+        if not hasattr(self, "_drv"):
+            self._drv = [(d["expr"], d) for d in self.m.cons if d["type"] in DIMENSIONS and d.get("driven")]
+        over = {sym: self.measured(d, x) for sym, d in self._drv}
+        try:
+            v = safe_eval(c["expr"], self.m.param_values_with(over))
+        except (KeyError, ValueError, ZeroDivisionError, SyntaxError):
+            return c["value"]
+        return c["value"] if (isinstance(v, float) and math.isnan(v)) else v
 
     def eq_res(self, c, x):
         if c["type"] == "_arc":
@@ -1918,6 +2102,7 @@ class Solver:
         # degrees of freedom from the Jacobian of the satisfied equations (without the drag pull)
         eqs_nopin = [e for e in eqs if e[1]["type"] not in ("_pin", "_lock", "_lockr")]
         _, J = self.jacobian(eqs_nopin, x, central=True)
+        J = row_scale(J)
         if J.shape[0]:
             sv = np.linalg.svd(J, compute_uv=False)
             rank = int(np.sum(sv > 1e-6 * max(sv[0], 1.0)))
@@ -1931,6 +2116,14 @@ class Solver:
             free = np.any(np.abs(nullity) > 1e-5, axis=0) if len(nullity) else np.zeros(self.n, bool)
             rep.free_pts = {pid for pid, i in self.pidx.items() if (free[i] or free[i + 1]) and pid not in cpts}
             rep.free_circles = {cid for cid, i in self.cidx.items() if free[i] and cid not in ccis}
+            for pid in rep.free_pts:                      # the free directions of each loose point: null space rows restricted to its x, y
+                if len(nullity):
+                    i = self.pidx[pid]
+                    _, sv2, vt2 = np.linalg.svd(nullity[:, i:i + 2], full_matrices=False)
+                    if len(sv2) > 1 and sv2[1] >= 0.3 * sv2[0]:
+                        rep.free_dirs[pid] = [(1.0, 0.0), (0.0, 1.0)]
+                    elif sv2[0] > 1e-5:
+                        rep.free_dirs[pid] = [(float(vt2[0][0]), float(vt2[0][1]))]
             if (cpts or ccis) and len(nullity):
                 keep = np.ones(self.n, bool)
                 for pid in cpts:
@@ -2013,6 +2206,8 @@ def analyze_inputs(m, max_sets=12):
                 Jp[ri, j] = -dv * (c.get("eps", 1) * math.pi / 180 if c["type"] == "dim_ang" else
                                    c.get("sign", 1) if c["type"] == "dim_off" else 1.0)
     J = np.hstack([Jx, Jp]) if len(owners) else np.zeros((1, nx + nP))
+    J = row_scale(J)
+    Jx = row_scale(Jx)
     n = nx + nP
     sv = np.linalg.svd(J, compute_uv=False)
     rank = int(np.sum(sv > 1e-7 * max(sv[0], 1.0))) if len(sv) else 0

@@ -450,7 +450,7 @@ def draw(name, g):
         g.drawEllipse(QPointF(15.6, 22.4), 2.1, 1.5)
         g.setBrush(QBrush(ACC2))
         g.drawEllipse(QPointF(28, 19), 1.5, 1.5)
-    elif n in ("hole wizard", "wrap", "boundary boss/base",
+    elif n in ("wrap", "boundary boss/base",
                "boundary cut", "rib", "draft", "intersect"):
         g.setPen(pen(QColor("#9aa3b5"), 2))
         g.setBrush(QBrush(QColor("#eef1f7")))
@@ -482,6 +482,11 @@ def icon(name, size=40):
     key = (name.lower().replace("\n", " "), size)
     if key in _cache:
         return _cache[key]
+    import icon_set
+    ic = icon_set.by_label(name, size)              # the picked set first; the buttons it does not cover are drawn below
+    if ic is not None:
+        _cache[key] = ic
+        return ic
     pm = QPixmap(size * 2, size * 2)
     pm.fill(Qt.GlobalColor.transparent)
     g = QPainter(pm)

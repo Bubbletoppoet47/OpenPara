@@ -84,7 +84,7 @@ jobs:
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "packages ok")) { Report "import of a package failed (exit $LASTEXITCODE)" $out; exit 1 }
-          # 2. the add-ons: build the release files and install both from them (real pip install of gmsh / mitsuba with this python)
+          # 2. the add-ons: build the release files and install them from there (Part Generator, Truss Generator)
           New-Item -ItemType Directory -Force dist | Out-Null
           python tools\build_addons.py dist
           if ($LASTEXITCODE -ne 0) { throw "add-on build failed" }
@@ -92,7 +92,7 @@ jobs:
           Push-Location build\OpenPara\app
           $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_addons"
           $env:OPARA_ADDON_BASE = "file:///" + ($dist -replace "\\", "/") + "/"
-          $out = & $py -c "import addons; addons.install('simulation'); addons.install('render'); import gpd_app, sim_tab, render_studio, gmsh, mitsuba, imageio_ffmpeg; assert addons.status('render')=='installed'; print('add-ons ok')" 2>&1
+          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); import gpd_app, partgen_ext, truss_tab; assert addons.status('truss')=='installed' and addons.status('partgen')=='installed'; print('add-ons ok')" 2>&1
           Pop-Location
           Remove-Item Env:OPARA_ADDON_BASE
           Write-Host $out

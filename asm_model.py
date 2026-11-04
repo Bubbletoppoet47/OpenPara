@@ -403,6 +403,83 @@ class Assembly:
     def mate(self, mid):
         return next((m for m in self.mates if m["id"] == mid), None)
 
+    # ------------------------------------------------------------------ suppressing (an item and what is built on it)
+    @staticmethod
+    def _spec_refs(spec):
+        """The reference dicts inside a pattern's plane / direction / axis choice (a plain "X" / "Front" has none)."""
+        out = []
+        if isinstance(spec, dict):
+            r = spec.get("ref")
+            if isinstance(r, dict):
+                out.append(r)
+        return out
+
+    def _uses(self, ref, cids, rids):
+        return ref.get("c") in cids or (ref.get("c") == "@" and (ref.get("r") or {}).get("id") in rids)
+
+    def suppress_closure(self, kind, iid):
+        """[(kind, id)] of the items that cannot work once component / reference item / mate / pattern `iid` is suppressed: reference planes and
+        axes built on a component, mates that use the component or such a plane, patterns that repeat the component or are placed by it."""
+        cids, rids = set(), set()
+        if kind == "comp":
+            cids.add(iid)
+        elif kind == "aref":
+            rids.add(iid)
+        else:
+            return []
+        out = []
+        grew = True
+        while grew:
+            grew = False
+            for r in self.refs:
+                if r["id"] in rids or r.get("suppressed"):
+                    continue
+                if any(self._uses(x, cids, rids) for x in r["refs"]):
+                    rids.add(r["id"])
+                    out.append(("aref", r["id"]))
+                    grew = True
+        for m in self.mates:
+            if not m.get("suppressed") and any(self._uses(r, cids, rids) for r in m["refs"]):
+                out.append(("mate", m["id"]))
+        for p in self.patterns:
+            if p.get("suppressed"):
+                continue
+            seeds = [x for x in p.get("seeds", [])]
+            specs = [r for k in ("plane", "dir1", "dir2", "axis") for r in self._spec_refs(p.get(k))]
+            if (seeds and all(x in cids for x in seeds)) or any(self._uses(r, cids, rids) for r in specs):
+                out.append(("pattern", p["id"]))
+        return out
+
+    def _item(self, kind, iid):
+        return {"comp": self.comp, "mate": self.mate, "aref": lambda i: next((r for r in self.refs if r["id"] == i), None),
+                "pattern": lambda i: next((p for p in self.patterns if p["id"] == i), None)}[kind](iid)
+
+    def set_suppressed(self, kind, iid, flag):
+        """Suppress / unsuppress a component, mate, pattern or reference item.  Suppressing also suppresses what depends on it (marked "sup_by", so
+        unsuppressing brings back exactly those).  Returns [(kind, id)] of the dependents that changed."""
+        it = self._item(kind, iid)
+        if it is None:
+            return []
+        key = f"{kind}:{iid}"
+        if flag:
+            deps = self.suppress_closure(kind, iid)
+            it["suppressed"] = True
+            it.pop("sup_by", None)
+            for k2, i2 in deps:
+                o = self._item(k2, i2)
+                o["suppressed"], o["sup_by"] = True, key
+            return deps
+        it["suppressed"] = False
+        it.pop("sup_by", None)
+        back = []
+        for k2, group in (("comp", self.components), ("mate", self.mates), ("aref", self.refs), ("pattern", self.patterns)):
+            for o in group:
+                if o.get("sup_by") == key:
+                    o["suppressed"] = False
+                    o.pop("sup_by", None)
+                    back.append((k2, o["id"]))
+        return back
+
     def add_component(self, path, name=None, pos=(0.0, 0.0, 0.0), fixed=False):
         base = os.path.splitext(os.path.basename(path))[0]
         n = 1 + sum(1 for c in self.components if c.get("base") == base)
@@ -452,7 +529,8 @@ class Assembly:
 
     @classmethod
     def from_json(cls, text):
-        d = json.loads(text)
+        import legacy
+        d = legacy.flatten(json.loads(text))
         a = cls()
         a.components, a.mates, a.counter, a.patterns = d["components"], d.get("mates", []), d.get("counter", {}), d.get("patterns", [])
         a.cfg = d.get("cfg") or a.cfg
@@ -469,6 +547,8 @@ class Assembly:
         f = next((r for r in self.refs if r["id"] == rid), None)
         if f is None:
             raise MateError("the reference plane / axis it uses was deleted")
+        if f.get("suppressed"):
+            raise MateError(f"{f['name']} is suppressed")
         if depth > 8:
             raise MateError("reference planes / axes refer to each other in a loop")
         ents = [self.entity(r, poses, depth + 1) for r in f["refs"]]
@@ -596,7 +676,7 @@ class Assembly:
                             todo.append(o)
         return seen & (fl | {cid})
 
-    def solve(self, drag=None, weight=0.02, extra=None, iters=80, limit=None):
+    def solve(self, drag=None, weight=0.02, extra=None, iters=80, limit=None, grab=None):
         """Move the floating components so that all mates hold.  drag = {component id: (R, t)} pulls those gently to a target pose.
         Returns True when every mate is satisfied.  Fills self.status and self.dof."""
         if drag is None and (self.params or self.exprs):
@@ -614,6 +694,9 @@ class Assembly:
 
         def poses_of(x):
             return {c["id"]: (rodrigues(x[6 * i + 3:6 * i + 6]), x[6 * i:6 * i + 3]) for i, c in enumerate(fl)}
+
+        if targets and mates and fl:           # a drag: glide along what the mates leave free, never pull against them
+            return self._drag_step(fl, mates, {cid: v for cid, v in (drag or {}).items() if cid in idx}, extra, limit, grab or {})
 
         def res(x, with_drag=True):
             P = poses_of(x)
@@ -695,6 +778,157 @@ class Assembly:
                 self.status[m["id"]] = "ok"
         if limit is None:
             self.dof = self.degrees_of_freedom(fl, mates, x, poses_of)
+        return ok
+
+    def drag_reset(self):
+        """A new drag starts: forget where the mouse target was."""
+        self._drag_last = {}
+
+    def _comp_scale(self, c):
+        """A typical size of a component (half its bounding diagonal): turns radians into the same units as millimetres when steps are measured."""
+        try:
+            bb = self.solid_fn(c).bounding_box()
+            return max(1.0, 0.5 * float(np.linalg.norm([bb.max.X - bb.min.X, bb.max.Y - bb.min.Y, bb.max.Z - bb.min.Z])))
+        except Exception:
+            return 100.0
+
+    def _drag_step(self, fl, mates, drag, extra, limit, grab, rounds=8):
+        """Follow the mouse while the mates hold.  The old way pulled the component towards the mouse with a soft spring and then snapped the mates
+        back: pull a tube against the face it butts on and the spring won out over a tilt of the face, the snap got stuck in the tilted pose and
+        the part sat half through the other.  Now only the part of the wanted move that the mates leave FREE is taken (their null space, from the
+        Jacobian), one small step at a time, and each step is snapped back onto the mates exactly - so a push into a face does nothing, a push along
+        it slides, and where the part can only roll or swing it follows that motion smoothly."""
+        n = 6 * len(fl)
+        L = np.array([self._comp_scale(c) for c in fl])
+        W = np.concatenate([[1, 1, 1, L[i], L[i], L[i]] for i in range(len(fl))])          # radians count as arm-length millimetres
+        mates_all = list(mates)
+
+        def getx():
+            return np.concatenate([np.concatenate([c["pos"], c["rv"]]) for c in fl])
+
+        def put(x):
+            for i, c in enumerate(fl):
+                c["pos"], c["rv"] = list(map(float, x[6 * i:6 * i + 3])), list(map(float, x[6 * i + 3:6 * i + 6]))
+
+        def poses_of(x):
+            return {c["id"]: (rodrigues(x[6 * i + 3:6 * i + 6]), x[6 * i:6 * i + 3]) for i, c in enumerate(fl)}
+
+        def res(x):
+            P = poses_of(x)
+            out = []
+            for m in mates_all:
+                out += self.mate_residual(m, P)
+            return np.array(out, float)
+
+        def want(x):
+            """The step the mouse asks for, in the weighted coordinates (translation difference, world-frame turn difference)."""
+            d = np.zeros(n)
+            for i, c in enumerate(fl):
+                if c["id"] in drag:
+                    Rt, tt = drag[c["id"]]
+                    Rc = rodrigues(x[6 * i + 3:6 * i + 6])
+                    d[6 * i:6 * i + 3] = tt - x[6 * i:6 * i + 3]
+                    d[6 * i + 3:6 * i + 6] = L[i] * rotvec(Rt @ Rc.T)
+            return d
+
+        def to_x(dw, x):
+            """Weighted step -> new x (turn applied as a rotation on top of the current one, so nothing wraps)."""
+            xn = x.copy()
+            for i in range(len(fl)):
+                xn[6 * i:6 * i + 3] += dw[6 * i:6 * i + 3]
+                th = dw[6 * i + 3:6 * i + 6] / L[i]
+                xn[6 * i + 3:6 * i + 6] = rotvec(rodrigues(th) @ rodrigues(x[6 * i + 3:6 * i + 6]))
+            return xn
+
+        # how far the mouse itself travelled since the last call: the part never moves much faster than that, so a target that cannot be reached
+        # (pushed into a face, past the end of a roll) makes it hold still or creep instead of jumping to whichever pose happens to be nearest
+        last = getattr(self, "_drag_last", None)
+        if last is None:
+            last = self._drag_last = {}
+        allow = 0.5
+        for i, c in enumerate(fl):
+            if c["id"] not in drag:
+                continue
+            Rt, tt = drag[c["id"]]
+            Rl, tl = last.get(c["id"]) or (rodrigues(c["rv"]), np.array(c["pos"], float))
+            if c["id"] in grab:
+                lh = np.asarray(grab[c["id"]], float)
+                trav = float(np.linalg.norm((Rt @ lh + tt) - (Rl @ lh + tl)))
+            else:
+                trav = float(np.linalg.norm(tt - tl)) + L[i] * float(np.linalg.norm(rotvec(Rt @ Rl.T)))
+            allow += 1.5 * trav
+            last[c["id"]] = (Rt, np.array(tt, float))
+        ok = True
+        x = getx()
+        try:
+            r0 = res(x)
+        except MateError:
+            raise
+        if len(r0) and float(np.max(np.abs(r0))) > 1e-4:           # not on the mates yet (a mate was just added / edited): settle first
+            self.solve(extra=extra, iters=60, limit=limit)
+            x = getx()
+        for _ in range(rounds):
+            r = res(x)
+            J = np.zeros((len(r), n))
+            for j in range(n):
+                h = (1e-6 if j % 6 < 3 else 1e-7)
+                xp = x.copy()
+                xp[j] += h
+                J[:, j] = (res(xp) - r) / h
+            Jw = J / W                                                  # columns in weighted units
+            if len(r):
+                u, sv, vt = np.linalg.svd(Jw, full_matrices=True)
+                tol = 1e-6 * max(1.0, sv.max() if len(sv) else 1.0)
+                rank = int(np.sum(sv > tol))
+                N = vt[rank:].T
+            else:
+                N = np.eye(n)
+            d = want(x)
+            step = np.zeros(n)
+            if N.size:
+                # best follow of the mouse inside the free motions: the grabbed point counts most (so a part that can only roll or swing still
+                # follows the point you hold), the pose as a whole a little (so the free directions that do not move that point settle at the target)
+                rows, rhs = [], []
+                for i, c in enumerate(fl):
+                    if c["id"] not in drag:
+                        continue
+                    sl = slice(6 * i, 6 * i + 6)
+                    eps = 0.15 if c["id"] in grab else 1.0
+                    rows.append(eps * np.eye(n)[sl]); rhs.append(eps * d[sl])
+                    if c["id"] in grab:
+                        Rt, tt = drag[c["id"]]
+                        Rc, tc = rodrigues(x[6 * i + 3:6 * i + 6]), x[6 * i:6 * i + 3]
+                        lh = np.asarray(grab[c["id"]], float)
+                        rr = Rc @ lh
+                        A = np.zeros((3, n))
+                        A[:, 6 * i:6 * i + 3] = np.eye(3)
+                        A[:, 6 * i + 3:6 * i + 6] = -np.array([[0, -rr[2], rr[1]], [rr[2], 0, -rr[0]], [-rr[1], rr[0], 0]]) / L[i]
+                        rows.append(A); rhs.append((Rt @ lh + tt) - (rr + tc))
+                if rows:
+                    M = np.vstack(rows) @ N
+                    z = np.linalg.lstsq(M, np.concatenate(rhs), rcond=1e-8)[0]
+                    step = N @ z
+            size = float(np.linalg.norm(step))
+            if size < 1e-6:
+                break
+            cap = min(0.25 * max(L), allow)                             # one step is never more than about a quarter of the part, nor more than the mouse moved
+            if cap < 1e-9:
+                break
+            if size > cap:
+                step *= cap / size
+            xn = to_x(step, x)
+            put(xn)
+            ok = self.solve(extra=extra, iters=40, limit=limit)         # snap exactly onto the mates (no pull)
+            if not ok:                                                  # could not follow: stay where we were
+                put(x)
+                self.solve(extra=extra, iters=40, limit=limit)
+                return False
+            xs = getx()
+            moved = float(np.linalg.norm((xs - x) * W))
+            allow -= max(moved, min(size, cap) * 0.0)
+            x = xs
+            if moved < 1e-4:
+                break
         return ok
 
     def degrees_of_freedom(self, fl, mates, x, poses_of):

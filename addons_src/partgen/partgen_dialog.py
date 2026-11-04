@@ -232,9 +232,15 @@ class PartGenDialog(QDialog):
             lines.append(np.hstack([[n], np.arange(off, off + n)]))
             off += n
         if pts:
-            pd = pv.PolyData(np.vstack(pts))
+            pd = pv.PolyData()                 # points set directly (PolyData(points) would also draw every point as a dot)
+            pd.points = np.vstack(pts)
             pd.lines = np.concatenate(lines).astype(np.int64)
-            pl.add_mesh(pd, color=(0.08, 0.10, 0.14), line_width=1.5, pickable=False, reset_camera=False,
+            try:
+                import settings
+                lw = settings.get("line_px")
+            except Exception:
+                lw = 1.5
+            pl.add_mesh(pd, color=(0.13, 0.15, 0.20), line_width=lw, pickable=False, reset_camera=False,
                         render_lines_as_tubes=False)
 
     # ------------------------------------------------------------------ result

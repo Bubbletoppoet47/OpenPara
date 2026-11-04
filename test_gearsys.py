@@ -1,4 +1,6 @@
 """Gear systems: centre distances, profile shift, trains and planetary sets, checked against the real solids."""
+import os as _o, sys as _s
+_s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.abspath(__file__)), "addons_src", "partgen"))
 import math
 import sys
 

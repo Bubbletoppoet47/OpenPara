@@ -23,6 +23,7 @@ print(evaluate.mass_text("Part1", p, "US (in, lb)", 7850.0)[:700])
 w.mass_open(); print(w.mass_dialog.out.toPlainText()[:120]); w.mass_dialog.mat.setCurrentIndex(2); print(d.material, w.mass_dialog.out.toPlainText().split("\n")[3:6])
 d2 = pm.Document.from_json(d.to_json()); assert d2.material == d.material
 # measure
+w.left.setCurrentIndex(0)                                  # the feature panel is closed: the finished part is what is shown and measured (an open panel shows the faded preview instead)
 w.measure_toggle(); assert w.measuring
 sol = w.shown_solid()
 faces = sol.faces(); verts = sol.vertices()

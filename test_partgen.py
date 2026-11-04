@@ -1,4 +1,7 @@
 """Part Generator: the window, the single feature it makes, reopening it to edit, save / load."""
+import os as _o, sys as _s
+_s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.abspath(__file__)), "addons_src", "partgen"))
+import ext, partgen_ext; partgen_ext.register(ext)          # the Part Generator add-on, straight from its source folder
 import faulthandler; faulthandler.dump_traceback_later(240, exit=True)
 import math
 import os

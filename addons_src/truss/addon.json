@@ -1,0 +1,27 @@
+{
+ "id": "truss",
+ "name": "Truss Generator",
+ "version": "0.3.4",
+ "description": "Builds the members of a truss from the lines of a sketch: each member is a profile extruded to its longest length with angled cuts. Exports a cut list. Opens .truss files and truss project folders.",
+ "requires": [],
+ "tabs": [
+  {
+   "kind": "truss",
+   "label": "Truss Generator",
+   "short": "Truss",
+   "module": "truss_tab",
+   "factory": "make_tab",
+   "args": [
+    "host",
+    "path"
+   ],
+   "file_types": [
+    ".truss"
+   ],
+   "project_folder": {
+    "marker": "project.json",
+    "format": "openpara-truss"
+   }
+  }
+ ]
+}

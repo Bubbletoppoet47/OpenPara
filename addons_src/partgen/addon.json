@@ -1,0 +1,8 @@
+{
+ "id": "partgen",
+ "name": "Part Generator",
+ "version": "0.3.4",
+ "description": "Gears (spur, helical, herringbone), gear systems and other parts made from a few parameters. Parts made with it need it to be rebuilt.",
+ "requires": [],
+ "extension": "partgen_ext"
+}

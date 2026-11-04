@@ -13,7 +13,7 @@ import numpy as np
 PLANE_TYPES = [
     ("offset", "Offset distance", "a plane or flat face", "Parallel to it, moved by a distance"),
     ("angle", "At angle", "a plane or face, then an edge or axis", "Turn the plane about the edge / axis by an angle"),
-    ("parallel", "Parallel at point", "a plane or face, then a point", "Parallel to the plane and through the point"),
+    ("parallel", "Parallel at point", "a plane or face, then a point or an edge", "Parallel to the plane and through the point (an edge: through its middle)"),
     ("perp", "Perpendicular", "an edge or axis (then a point)", "Square to the edge / axis (through the point)"),
     ("mid", "Mid plane", "two parallel planes or faces", "Half way between the two"),
     ("three", "Through 3 points", "three points", "The plane through the three points"),
@@ -26,7 +26,107 @@ AXIS_TYPES = [
     ("cyl", "Cylindrical face", "a cylindrical face", "Along the centre line of the cylinder"),
     ("pointplane", "Point and face / plane", "a point, then a plane or face", "Square to the plane, through the point"),
 ]
-NEEDS = {"offset": 1, "angle": 2, "parallel": 2, "perp": 1, "mid": 2, "three": 3, "coincident": 1,
+POINT_TYPES = [
+    ("vertex", "At a point", "a vertex, the origin or another reference point", "A point exactly there"),
+    ("mid", "Midpoint", "two points, or one straight edge", "Half way between the two points / along the edge"),
+    ("center", "Centre", "a circular edge or a spherical face", "The centre of the circle / sphere"),
+    ("lineplane", "Line meets plane", "an edge or axis, then a plane or face", "Where the line crosses the plane"),
+]
+# What each type uses, in pick order: (label, optional).  The panel lists these so it is clear what to pick next.
+SLOTS = {
+    "offset": [("Plane or face", False)],
+    "angle": [("Plane or face", False), ("Edge or axis (the hinge)", False)],
+    "parallel": [("Plane or face", False), ("Point or edge to pass through", False)],
+    "perp": [("Edge or axis", False), ("Point to pass through", True)],
+    "mid": [("Plane or face", False), ("Parallel plane or face", False)],
+    "three": [("First point", False), ("Second point", False), ("Third point", False)],
+    "coincident": [("Plane or face (or an edge, then a point)", False), ("Point (only with an edge)", True)],
+    "line": [("Edge, circle or axis", False)],
+    "planes": [("First plane or face", False), ("Second plane or face", False)],
+    "points": [("First point", False), ("Second point", False)],
+    "cyl": [("Cylindrical face", False)],
+    "pointplane": [("Point", False), ("Plane or face", False)],
+    "vertex": [("Point, vertex or origin", False)],
+    "mid_pt": [("First point (or a straight edge)", False), ("Second point", True)],
+    "center": [("Circular edge or spherical face", False)],
+    "lineplane": [("Edge or axis", False), ("Plane or face", False)],
+}
+KIND_WORD = {"plane": "plane or face", "line": "edge or axis", "point": "point"}
+
+
+def slot_key(ptype, family):
+    return "mid_pt" if (family == "point" and ptype == "mid") else ptype
+
+
+def slot_report(ptype, family, ents, labels):
+    """What the picks are doing for this type -> (rows, notes).  rows: (slot label, what is picked or '' , state) with state 'ok' | 'wait' |
+    'optional'; notes: plain sentences about missing / unused picks (shown in the panel instead of silence)."""
+    slots = SLOTS.get(slot_key(ptype, family), [])
+    rows, notes = [], []
+    for i, (lab, opt) in enumerate(slots):
+        if i < len(labels):
+            rows.append((lab, labels[i], "ok"))
+        else:
+            rows.append((lab, "", "optional" if opt else "wait"))
+    if len(labels) > len(slots):
+        extra = ", ".join(f"pick {i + 1} ({labels[i]})" for i in range(len(slots), len(labels)))
+        notes.append(f"Not used by this type: {extra}. Remove it, or choose a type that uses it.")
+    need = [lab for lab, got, st in rows if st == "wait"]
+    if need:
+        notes.append("Waiting for: " + need[0] + ".")
+    return rows, notes
+
+
+def infer_point_type(ents):
+    ks = [kind_of(e) for e in ents]
+    if not ks:
+        return "vertex"
+    if ks[0] == "point" and len(ks) >= 2 and ks[1] == "point":
+        return "mid"
+    if ks[0] == "point":
+        return "vertex"
+    if ks[0] == "line" and ents[0]["t"] == "circle":
+        return "center"
+    if ks[0] == "line" and len(ks) >= 2 and ks[1] == "plane":
+        return "lineplane"
+    if ks[0] == "line":
+        return "mid"
+    if ents[0]["t"] == "sphere":
+        return "center"
+    return "vertex"
+
+
+def compute_point(ptype, ents):
+    ptype = ptype or infer_point_type(ents)
+    if not ents:
+        raise RefError("pick the references for the point")
+    e0 = ents[0]
+    if ptype == "vertex":
+        if kind_of(e0) != "point":
+            raise RefError("pick a vertex, the origin or a reference point")
+        return {"t": "point", "p": np.asarray(e0["p"], float)}
+    if ptype == "mid":
+        if len(ents) >= 2 and kind_of(e0) == "point" and kind_of(ents[1]) == "point":
+            return {"t": "point", "p": 0.5 * (np.asarray(e0["p"], float) + np.asarray(ents[1]["p"], float))}
+        if e0["t"] == "line":
+            return {"t": "point", "p": np.asarray(e0["p"], float)}          # a straight edge: its "p" is the middle of the edge
+        raise RefError("pick two points, or one straight edge")
+    if ptype == "center":
+        if e0["t"] in ("circle", "sphere"):
+            return {"t": "point", "p": np.asarray(e0["p"], float)}
+        raise RefError("pick a circular edge or a spherical face")
+    if ptype == "lineplane":
+        _need(ents, ["line", "plane"], "an edge or axis, then a plane or face")
+        ln, pl = e0, ents[1]
+        den = float(np.asarray(ln["d"], float) @ pl["n"])
+        if abs(den) < 1e-9:
+            raise RefError("the line is parallel to the plane - they do not cross")
+        t = float((np.asarray(pl["p"], float) - np.asarray(ln["p"], float)) @ pl["n"]) / den
+        return {"t": "point", "p": np.asarray(ln["p"], float) + t * np.asarray(ln["d"], float)}
+    raise RefError(f"unknown point type {ptype}")
+
+
+NEEDS = {"vertex": 1, "mid": 1, "center": 1, "lineplane": 2, "offset": 1, "angle": 2, "parallel": 2, "perp": 1, "mid": 2, "three": 3, "coincident": 1,
          "line": 1, "planes": 2, "points": 2, "cyl": 1, "pointplane": 2}
 
 
@@ -121,7 +221,9 @@ def compute_plane(ptype, ents, dist=10.0, ang=45.0, flip=False):
         x = _rot(a["x"], ln["d"], th) if a.get("x") is not None else None
         return _plane(ln["p"], n, x)
     if ptype == "parallel":
-        _need(ents, ["plane", "point"], "a plane or face, then a point")
+        _need(ents[:1], ["plane"], "a plane or face, then a point or an edge")
+        if len(ents) < 2 or kind_of(ents[1]) == "plane":
+            raise RefError("pick a plane or face, then a point or an edge (the plane passes through it)")
         return _plane(ents[1]["p"], ents[0]["n"] * sg, ents[0].get("x"))
     if ptype == "perp":
         _need(ents, ["line"], "an edge or axis")

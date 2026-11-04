@@ -255,6 +255,7 @@ HINTS = {
     "text_pt": "Size of the dimension text.",
     "dim_color": "Colour of dimensions.",
     "dim_sel_color": "Colour of a selected dimension.",
+    "dim_driven_color": "Colour of a driven dimension (it measures; label in brackets).",
 }
 UNITS = {"line_px": "px", "pull_px": "px", "pick3d_px": "px", "snap_px": "px", "pick_px": "px", "label_px": "px", "dim_line_px": "px",
          "ext_line_px": "px", "ext_gap_pct": "%", "ext_over_pct": "%", "arrow_pct": "%", "text_pt": "pt"}
@@ -401,7 +402,7 @@ class SettingsDialog(QDialog):
         self.section("Outlines", [("line_px", self.line), ("pull_px", self.pull)])
         self.section("Dimensions", [("dim_line_px", None), ("dim_line_style", None), ("ext_line_px", None), ("ext_line_style", None),
                                     ("ext_gap_pct", None), ("ext_over_pct", None), ("arrow_pct", None), ("arrow_style", None),
-                                    ("text_pt", None), ("dim_color", None), ("dim_sel_color", None)], top=self.dimprev)
+                                    ("text_pt", None), ("dim_color", None), ("dim_sel_color", None), ("dim_driven_color", None)], top=self.dimprev)
         self.hover = QCheckBox("Highlight the face, edge or point under the cursor while picking")
         self.hover.setChecked(bool(settings.get("hover")))
         self.section("Picking && Snapping", [("pick3d_px", None), ("snap_px", None), ("pick_px", None), ("label_px", None)], extra=self.hover)

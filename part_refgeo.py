@@ -12,12 +12,41 @@ import viewpick
 
 REF_COL = (0.20, 0.68, 0.74)
 AXIS_COL = (0.62, 0.30, 0.80)
+POINT_COL = (0.85, 0.25, 0.55)
 PICK_COL = (1.0, 0.45, 0.0)
 ORD = ["First", "Second", "Third"]
 
 
+def add_face_highlight(pl, mesh, color):
+    """A selected face drawn over the part without z-fighting (the speckle seen on a picked face): the copy is lifted a hair off the surface along
+    its normals and its depth is biased towards the viewer."""
+    try:
+        if not hasattr(mesh, "compute_normals"):
+            try:
+                mesh = mesh.extract_surface(algorithm="dataset_surface")    # extract_cells gives an unstructured grid; normals need a surface mesh
+            except TypeError:
+                mesh = mesh.extract_surface()
+        diag = float(np.linalg.norm(np.array(mesh.bounds[1::2]) - np.array(mesh.bounds[0::2]))) or 1.0
+        m = mesh.compute_normals(cell_normals=False, point_normals=True, split_vertices=False, inplace=False)
+        m.points = m.points + m.point_data["Normals"] * (diag * 4e-4)
+    except Exception:
+        m = mesh
+    a = pl.add_mesh(m, color=color, lighting=False, pickable=False, reset_camera=False)
+    try:
+        mp = a.GetMapper()
+        mp.SetResolveCoincidentTopologyToPolygonOffset()
+        mp.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2.0, -2.0)
+    except Exception:
+        pass
+    return a
+
+
 def is_ref(f):
-    return f is not None and f["kind"] in ("refplane", "refaxis")
+    return f is not None and f["kind"] in ("refplane", "refaxis", "refpoint")
+
+
+FAMILY = {"refplane": "plane", "refaxis": "line", "refpoint": "point"}
+TITLE = {"refplane": "plane", "refaxis": "axis", "refpoint": "point"}
 
 
 def spec_kind(spec):
@@ -58,11 +87,25 @@ def describe(win, spec):
     return k
 
 
-def retype(f):
+def entities(win, f):
+    """The picks of a feature as geometry: the real entity when it can be found, else a stand-in of the right kind."""
+    out = []
+    for s in f.get("refs", []):
+        e = None
+        if win is not None:
+            try:
+                e = win.doc.spec_entity(s, win.shown_solid())
+            except Exception:
+                e = None
+        out.append(e if e is not None else fake(spec_kind(s)))
+    return out
+
+
+def retype(f, win=None):
     """Auto mode: choose the type from what is picked."""
     if f.get("auto", True):
-        ents = [fake(spec_kind(s)) for s in f.get("refs", [])]
-        f["ptype"] = refgeo.infer_plane_type(ents) if f["kind"] == "refplane" else refgeo.infer_axis_type(ents)
+        ents = entities(win, f)
+        f["ptype"] = {"refplane": refgeo.infer_plane_type, "refaxis": refgeo.infer_axis_type, "refpoint": refgeo.infer_point_type}[f["kind"]](ents)
 
 
 # ------------------------------------------------------------------------------------------- state
@@ -85,10 +128,10 @@ def rg_start(self, key):
         refs.append({"k": "edge", "r": e})
     sel = d.feature(self.sel) if self.sel else None
     if is_ref(sel) and not refs:
-        refs.append({"k": "ref", "id": sel["id"], "kind": "plane" if sel["kind"] == "refplane" else "line"})
+        refs.append({"k": "ref", "id": sel["id"], "kind": FAMILY[sel["kind"]]})
     self.snapshot()
     f = d.add(pm.new_feature(key, refs=refs[:3], ptype=None, auto=True, d="10", ang="45", flip=False))
-    retype(f)
+    retype(f, self)
     self.sel, self.sel_face, self.sel_plane, self.sel_edges = f["id"], None, None, []
     self.rg_edit = f["id"]
     self.created_new = f["id"]
@@ -106,7 +149,7 @@ def rg_toggle(self, f, spec):
         refs = refs[-3:]
     self.snapshot()
     f["refs"] = refs
-    retype(f)
+    retype(f, self)
     self.update_all()
 
 
@@ -151,7 +194,7 @@ def rg_pick(self, x, y):
     for fid, a in getattr(self, "actor_refs", {}).items():
         if viewpick.same_actor(a, actor) and fid != f["id"]:
             g = self.doc.feature(fid)
-            return rg_toggle(self, f, {"k": "ref", "id": fid, "kind": "plane" if g["kind"] == "refplane" else "line"})
+            return rg_toggle(self, f, {"k": "ref", "id": fid, "kind": FAMILY[g["kind"]]})
     if self.actor_part is None or not viewpick.same_actor(self.actor_part, actor) or solid is None:
         return
     idx = int(self.view_cells.cell_data["face"][cid])
@@ -177,7 +220,7 @@ def rg_pick_tree(self, kind, key):
     elif kind == "feature":
         g = self.doc.feature(key)
         if is_ref(g) and g["id"] != f["id"]:
-            rg_toggle(self, f, {"k": "ref", "id": key, "kind": "plane" if g["kind"] == "refplane" else "line"})
+            rg_toggle(self, f, {"k": "ref", "id": key, "kind": FAMILY[g["kind"]]})
         else:
             return False
     else:
@@ -186,23 +229,62 @@ def rg_pick_tree(self, kind, key):
 
 
 # ------------------------------------------------------------------------------------------- panel
+def type_table(kind):
+    return {"refplane": refgeo.PLANE_TYPES, "refaxis": refgeo.AXIS_TYPES, "refpoint": refgeo.POINT_TYPES}[kind]
+
+
+def pick_report(self, f):
+    """(rows, notes) for the panel: what each pick slot of the chosen type wants and whether it is filled; plus plain-language notes."""
+    labels = [describe(self, s) for s in f.get("refs", [])]
+    return refgeo.slot_report(f.get("ptype"), FAMILY[f["kind"]], entities(self, f), labels)
+
+
 def ref_panel(self, form, f):
     d = self.doc
     plane = f["kind"] == "refplane"
+    what = TITLE[f["kind"]]
     editing = self.rg_feature() is f
-    types = refgeo.PLANE_TYPES if plane else refgeo.AXIS_TYPES
+    types = type_table(f["kind"])
     info = QLabel("Pick the references in the view or in the small tree (top left of the view). Click a pick again to remove it."
-                  if editing else "Press  Edit references  to change what this " + ("plane" if plane else "axis") + " is built from.")
+                  if editing else "Press  Edit references  to change what this " + what + " is built from.")
     info.setWordWrap(True)
     info.setStyleSheet("color:#1f4fb4; padding:2px 0;")
     form.addRow(info)
-    lw = QListWidget()
-    lw.setMaximumHeight(92)
+
+    # 1. the type first: it decides which picks are needed
+    form.addRow(QLabel("<b>Type</b>"))
+    grp = QButtonGroup(self.props)
+    cur = f.get("ptype")
+    for t, name, needs, tip in types:
+        rb = QRadioButton(name + ("   -  picks: " + needs if cur == t else ""))
+        rb.setToolTip(f"{tip}.  Needs: {needs}")
+        rb.setChecked(cur == t)
+        rb.toggled.connect(lambda on, t=t: on and self.rg_set_type(f, t))
+        grp.addButton(rb)
+        form.addRow(rb)
+    if f.get("auto", True):
+        form.addRow(QLabel("<i>The type follows what you pick - choose one above to fix it.</i>"))
+
+    # 2. the pick slots of that type, filled in order
+    form.addRow(QLabel("<b>Picks</b>"))
+    rows, notes = pick_report(self, f)
+    nxt = next((i for i, r in enumerate(rows) if r[2] == "wait"), None) if editing else None
+    for i, (lab, got, st) in enumerate(rows):
+        if st == "ok":
+            txt, col = f"{i + 1}.  {lab}:  <b>{got}</b>", "#14602a"
+        elif st == "optional":
+            txt, col = f"{i + 1}.  {lab}  (optional)", "#666666"
+        else:
+            txt, col = f"{i + 1}.  {lab}:  " + ("<b>pick this next</b>" if i == nxt else "-"), "#b4561f" if i == nxt else "#666666"
+        q = QLabel(txt)
+        q.setStyleSheet(f"color:{col};")
+        form.addRow(q)
+    n_used = len(rows)
     for i, s in enumerate(f.get("refs", [])):
-        lw.addItem(f"{ORD[i]}:  {describe(self, s)}")
-    if not f.get("refs"):
-        lw.addItem("(nothing picked yet)")
-    form.addRow(lw)
+        if i >= n_used:
+            q = QLabel(f"{i + 1}.  <s>{describe(self, s)}</s>  (not used by this type)")
+            q.setStyleSheet("color:#999999;")
+            form.addRow(q)
     row = QHBoxLayout()
     if editing:
         b = QPushButton("Remove last pick")
@@ -218,18 +300,7 @@ def ref_panel(self, form, f):
     w = QWidget()
     w.setLayout(row)
     form.addRow(w)
-    form.addRow(QLabel("<b>Type</b>"))
-    grp = QButtonGroup(self.props)
-    cur = f.get("ptype")
-    for t, name, needs, tip in types:
-        rb = QRadioButton(name)
-        rb.setToolTip(f"{tip}.  Needs: {needs}")
-        rb.setChecked(cur == t)
-        rb.toggled.connect(lambda on, t=t: on and self.rg_set_type(f, t))
-        grp.addButton(rb)
-        form.addRow(rb)
-    if f.get("auto", True):
-        form.addRow(QLabel("<i>The type follows what you pick - choose one above to fix it.</i>"))
+
     t = f.get("ptype")
     if plane and t == "offset":
         self.expr_edit(form, "Distance (mm)", f, "d")
@@ -237,13 +308,30 @@ def ref_panel(self, form, f):
         self.expr_edit(form, "Angle (deg)", f, "ang")
     if plane:
         self.check(form, "Flip", f, "flip")
+
+    # 3. the result: fully defined, or exactly what is wrong
     st = d.status.get(f["id"], "")
+    msgs = [n for n in notes if st == "ok" or not n.startswith("Waiting")]
     if st == "ok":
-        ok = QLabel("Fully defined")
-        ok.setStyleSheet("background:#8cf58c; padding:3px; font-weight:bold;")
-        form.addRow(ok)
-    if plane and t == "angle" and f.get("refs") and st == "ok":
-        pass
+        box = QLabel("Fully defined")
+        box.setStyleSheet("background:#8cf58c; padding:3px; font-weight:bold;")
+        form.addRow(box)
+    elif st.startswith("error"):
+        box = QLabel(st.split(":", 1)[-1].strip().capitalize())
+        box.setWordWrap(True)
+        box.setStyleSheet("background:#ffd6c9; padding:3px; font-weight:bold;")
+        form.addRow(box)
+    elif notes:
+        box = QLabel(notes[-1] if notes else "")
+        box.setWordWrap(True)
+        box.setStyleSheet("background:#fff3c4; padding:3px;")
+        form.addRow(box)
+    for n in msgs:
+        if n.startswith("Not used"):
+            q = QLabel(n)
+            q.setWordWrap(True)
+            q.setStyleSheet("color:#b4561f; padding:2px 0;")
+            form.addRow(q)
 
 
 def rg_set_type(self, f, t):
@@ -258,14 +346,14 @@ def rg_remove_last(self, f):
     if f.get("refs"):
         self.snapshot()
         f["refs"] = f["refs"][:-1]
-        retype(f)
+        retype(f, self)
         self.update_all()
 
 
 def rg_clear(self, f):
     self.snapshot()
     f["refs"] = []
-    retype(f)
+    retype(f, self)
     self.update_all()
 
 
@@ -293,7 +381,7 @@ def draw_refgeo(self, pl, pv, solid, size):
                                if faces[i].geom_type.name == s["r"].get("g", "PLANE") else 1e18)
                     cs = np.where(np.array(self.view_cells.cell_data["face"]) == best)[0]
                     if len(cs):
-                        pl.add_mesh(self.view_cells.extract_cells(cs), color=PICK_COL, lighting=False, pickable=False, reset_camera=False)
+                                        add_face_highlight(pl, self.view_cells.extract_cells(cs), PICK_COL)
                 elif s["k"] == "edge":
                     ml = self.merged_lines([self.edge_pts(s["r"], solid)])
                     if ml is not None:
@@ -328,6 +416,10 @@ def draw_refgeo(self, pl, pv, solid, size):
             self.actor_refs[f["id"]] = a
             cor = np.array([p - x * h - y * h, p + x * h - y * h, p + x * h + y * h, p - x * h + y * h, p - x * h - y * h])
             pl.add_mesh(self.merged_lines([cor]), color=REF_COL, line_width=2.5 if hot else 1.2, pickable=False, reset_camera=False)
+        elif f["kind"] == "refpoint":
+            sph = pv.Sphere(radius=size * (0.022 if hot else 0.015), center=tuple(np.asarray(e["p"], float)))
+            a = pl.add_mesh(sph, color=PICK_COL if f["id"] in picked else POINT_COL, pickable=True, lighting=False, reset_camera=False)
+            self.actor_refs[f["id"]] = a
         else:
             p, dv = np.asarray(e["p"], float), np.asarray(e["d"], float)
             L = 0.7 * size

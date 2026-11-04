@@ -40,6 +40,7 @@ except Exception:
 COL_FREE, COL_FIXED, COL_BAD = (0.05, 0.30, 0.85), (0.10, 0.60, 0.20), (0.85, 0.10, 0.10)
 COL_SEL, COL_CONSTR, COL_PREVIEW, COL_TAG = (1.0, 0.45, 0.0), (0.50, 0.55, 0.70), (0.45, 0.55, 0.75), (0.10, 0.10, 0.10)
 COL_ORIGIN = (0.80, 0.15, 0.55)
+COL_MOTION = (1.0, 0.55, 0.0)             # Show free motion: points that can still move, and their arrows
 COL_EXT = (0.55, 0.25, 0.75)              # points / lines that follow geometry of another sketch (sketch_ext.py)
 AX_U, AX_V = (0.85, 0.15, 0.15), (0.15, 0.65, 0.15)
 EDGE_ON_COS = 0.12          # the snap / pick / label distances are File > Settings
@@ -47,6 +48,7 @@ EDGE_ON_COS = 0.12          # the snap / pick / label distances are File > Setti
 CONSTRAINTS = ("horizontal", "vertical", "parallel", "perpendicular", "collinear", "coincident", "concentric", "tangent", "equal", "fixed",
                "midpoint")
 DIMS = tuple(sc.DIMENSIONS)
+SCALE_DIMS = ("dim_h", "dim_v", "dim_len", "dim_rad", "dim_dia", "dim_off")      # the dimensions that can set the scale of a part (an angle cannot)
 
 
 def disp(v, c_or_type=None):
@@ -145,17 +147,36 @@ def ask_angle(parent, acute, obtuse, default, preview=None):
     return "acute" if ra.isChecked() else "obtuse"
 
 
-def ask_dim(parent, title, text, symbols, names=None):
-    """A number, a symbol name or an expression (e.g. Width/2) -> text or None.  `names` (a function) feeds the suggestion list."""
+def ask_dim(parent, title, text, symbols, names=None, driven=None, default_name=""):
+    """A number, a symbol name or an expression (e.g. Width/2) -> text or None.  `names` (a function) feeds the suggestion list.
+    driven: a dict {"driven": False} adds the check box 'Driven (measure only)' (assembly sketch); it is filled with the answer.  When it is
+    ticked the box holds the dimension's name instead of a value (default_name), because a driven dimension only measures."""
     d = QDialog(parent)
     d.setWindowTitle(title)
     lay = QVBoxLayout(d)
-    lay.addWidget(QLabel("Value, symbol or equation  (a new name makes a symbol; globals such as Width can be used):\n"
-                         + ("Existing: " + ", ".join(symbols) if symbols else "")))
+    head = QLabel("Value, symbol or equation  (a new name makes a symbol; globals such as Width can be used):\n"
+                  + ("Existing: " + ", ".join(symbols) if symbols else ""))
+    lay.addWidget(head)
     e = QLineEdit(text)
     if names is not None:
         suggest.attach(e, names)
     lay.addWidget(e)
+    if driven is not None:
+        cb = QCheckBox("Driven (measure only: it does not constrain the sketch)")
+        cb.setToolTip("A driven dimension shows what the geometry measures. It never adds a constraint, so it cannot make the sketch redundant or conflicting.")
+        lay.addWidget(cb)
+        keep = {"value": text}
+
+        def flip(on):
+            if on:
+                keep["value"] = e.text()
+                head.setText("Name of the driven dimension (its value is measured from the geometry):")
+                e.setText(default_name)
+            else:
+                head.setText("Value, symbol or equation  (a new name makes a symbol; globals such as Width can be used):")
+                e.setText(keep["value"])
+            e.selectAll()
+        cb.toggled.connect(flip)
     bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
     bb.accepted.connect(d.accept)
     bb.rejected.connect(d.reject)
@@ -163,6 +184,8 @@ def ask_dim(parent, title, text, symbols, names=None):
     e.selectAll()
     if d.exec() != QDialog.DialogCode.Accepted:
         return None
+    if driven is not None:
+        driven["driven"] = cb.isChecked()
     return e.text().strip()
 
 
@@ -254,12 +277,6 @@ def wrap_pi(a):
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
-EXT_PROMPT = {"pt": "Click a point of another (shown) sketch: it appears here, projected onto this plane, and follows that sketch. Esc cancels.",
-              "ln": "Click a line of another (shown) sketch: it appears here, projected onto this plane, and follows that sketch. Esc cancels.",
-              "pierce": "Click the line, arc or circle of another (shown) sketch that should pass through this plane (a sweep path): "
-                        "a fixed point appears where it pierces the plane. Esc cancels."}
-
-
 class SketchEditor:
     def __init__(self, app):
         self.app = app
@@ -279,6 +296,7 @@ class SketchEditor:
         self.hl = set()                   # entities lit up because a row of the dimension / relation table is selected
         self.angle_prev = None            # (s1, s2, constraint refs) of the sector shown while the angle dialog is open
         self.tag_len = {}                 # dimension id -> characters of its label
+        self.choose = None                # several crossings of a pierce: {"rec": point id, "hits": [world points]} (click one)
         self.host = None                  # tangent arc: the line / arc it continues
         self.poly_n = 6
         self.fillet_r = 5.0
@@ -286,7 +304,10 @@ class SketchEditor:
         self.arc_acc, self.arc_last = 0.0, None
         self.tags = []                    # (u, v, con id) positions of the dimension labels
         self.ren = None
-        self.actors = []
+        self.actors = []                  # the dynamic layer: cursor, rubber band, selection box (changes with every mouse move)
+        self.geo_actors = []              # the geometry layer: axes, lines, points (changes when the sketch or the selection changes)
+        self.dim_actors = {}              # dimension id -> its actors (so dragging one label rebuilds only that dimension)
+        self._sink = None
         self.size_fn = self.default_size  # (W, H) of the view in device pixels (tests replace it)
 
     @property
@@ -322,6 +343,11 @@ class SketchEditor:
         self.normal_to()
 
     def end(self):
+        try:
+            self.prune_ext()
+        except Exception:
+            pass
+        self.choose = None
         self.sk_id, self.pending, self.cursor, self.sel, self.picks = None, [], None, [], []
         self.box = None
         self.hide_band()
@@ -563,7 +589,7 @@ class SketchEditor:
             return True
         if t == "select":
             tag = self.pick_tag(px, py)
-            key = ("con", tag) if tag is not None else self.pick(px, py)
+            key = ("con", tag) if tag is not None else self.pick_any(px, py)
             if tag is not None:
                 self.select_click(px, py, shift, key)
                 c = self.m.con_by_id(tag)
@@ -585,8 +611,6 @@ class SketchEditor:
             self.press_first = not self.pending
             self.click(hit[0], hit[1])
             return True
-        if t == "extref":
-            return self.pick_ext(px, py)
         if t == "trim":
             key = self.pick(px, py, kinds=("ln", "ar", "ci"))
             uv = self.to_plane(px, py)
@@ -612,8 +636,8 @@ class SketchEditor:
             self.reset_tool("select")
             self.app.sync_tool()
             return True
-        if t in CONSTRAINTS or t in DIMS:
-            key = self.pick(px, py, kinds=("pt", "ln", "ci", "ar"))
+        if t in CONSTRAINTS or t in DIMS or t == "pierce":
+            key = self.pick_any(px, py, kinds=("pt", "ln", "ci", "ar"))
             if key is None:
                 return True
             self.picks.append(key)
@@ -626,7 +650,7 @@ class SketchEditor:
         """A click with the Select tool: pick the entity under it (or, on empty space, clear the selection and pick the part)."""
         if key is None:
             tag = self.pick_tag(px, py)
-            key = ("con", tag) if tag is not None else self.pick(px, py)
+            key = ("con", tag) if tag is not None else self.pick_any(px, py)
         if key is None:
             if not shift:
                 self.sel = []
@@ -741,12 +765,12 @@ class SketchEditor:
             if self.arc_last is not None:
                 self.arc_acc += wrap_pi(a - self.arc_last)
             self.arc_last = a
-        self.redraw()
+        self.redraw_dyn()
 
     # ------------------------------------------------------------------ selection box
     def show_band(self):
         """The selection box is drawn inside the 3D view (blue = window, left to right; green = crossing, right to left)."""
-        self.redraw()
+        self.redraw_dyn()
 
     def hide_band(self):
         pass
@@ -863,7 +887,7 @@ class SketchEditor:
                     self.pending = [] if closed else [("pt", h["e"])]
                     if closed:
                         self.chain_start = None
-                    self.app.update_all(keep_props=False)
+                    self.app.update_all(keep_props=False, light=True)
         elif t == "arc_tangent":
             if not p:
                 if not sk.is_ref(spec):
@@ -914,8 +938,9 @@ class SketchEditor:
             self.app.say("Click the next point (double-click or Esc ends the chain)." if self.pending else "Click the start point.")
         elif t == "arc_tangent":
             self.app.say(DRAW[t][2][min(len(self.pending), 1)])
-        elif t == "extref":
-            self.app.say(EXT_PROMPT[getattr(self, "ext_kind", "pierce")])
+        elif t == "pierce":
+            self.app.say("Pierce: click a point of this sketch, then a line, arc, circle or point of another SHOWN sketch (it is held where it passes "
+                         "through this plane).")
 
     def commit(self, fn, refresh=True):
         """Run `fn(model)` as one undoable edit, re-solve, store the sketch and rebuild."""
@@ -934,7 +959,7 @@ class SketchEditor:
         self.app.doc.reports[self.sk_id] = sk.solve_model(m)
         self.app.doc.store_sketch(self.sk_id)
         if refresh:
-            self.app.update_all(keep_props=False)
+            self.app.update_all(keep_props=False, light=True)
         return res
 
     def drag_label(self, px, py):
@@ -960,10 +985,10 @@ class SketchEditor:
             return
         pos = (d["pos0"][0] + uv[0] - d["start"][0], d["pos0"][1] + uv[1] - d["start"][1])
         if c["type"] == "dim_ang" and sk_dimlines.set_angle_label(self, c, pos):
-            self.redraw()                  # an angle's label slides along its arc, between its two lines
+            self.redraw_label(c["id"])     # an angle's label slides along its arc, between its two lines
             return
         c["off"] = [round(pos[0] - base[0], 4), round(pos[1] - base[1], 4)]
-        self.redraw()
+        self.redraw_label(c["id"])
 
     def choose_angle(self, refs):
         """(s1, s2, eps, value) for a new angle dimension.  When the two lines cross, a dialog asks which angle is meant (acute / obtuse), with
@@ -1025,10 +1050,21 @@ class SketchEditor:
         m = self.m
         self.app.doc.reports[self.sk_id] = sk.solve_model(m)
         self.app.doc.store_sketch(self.sk_id)
-        self.app.update_all(keep_props=False)
+        self.app.update_all(keep_props=False, light=True)
 
     # ------------------------------------------------------------------ relations and dimensions
     def try_apply(self):
+        if self.tool == "pierce":
+            if len(self.picks) < 2:
+                return
+            msg = self.pierce_apply()
+            self.picks = []
+            if isinstance(msg, str):
+                self.app.say(msg)
+            else:
+                self.app.say("Pierce relation added: the point follows where the other sketch's geometry passes through this plane.")
+            self.prune_ext()
+            return
         res = make_constraint(self.tool, self.picks)
         if res == "more":
             self.app.say("Pick the next entity.")
@@ -1039,6 +1075,7 @@ class SketchEditor:
             return
         self.apply(self.tool, res)
         self.picks = []
+        self.prune_ext()
 
     def apply(self, tool, refs):
         m = self.m
@@ -1057,27 +1094,41 @@ class SketchEditor:
             else:
                 cur = m.measure(tool, refs)
             nxt = m.next_dim_name(tool, list(self.app.doc.params))
+            choice = {"driven": False}
             txt = ask_dim(self.app, "Dimension " + nxt + ("" if tool == "dim_ang" else f"  ({unitctl.length_unit()})"),
-                          f"{disp(cur, tool):.8g}", list(m.params), names=self.suggest_names)
+                          f"{disp(cur, tool):.8g}", list(m.params), names=self.suggest_names, driven=choice, default_name=nxt)
             if txt is None:
                 return
-            try:
-                expr, val = self.dim_from_text(m, txt, cur, tool)
-            except ValueError as ex:
-                self.app.say(str(ex))
-                return
-            kw["value"] = val
-            kw["name"] = expr if expr and expr.isidentifier() else nxt
-            if expr:
-                kw["expr"] = expr
+            if choice is not None and choice["driven"]:
+                # a driven dimension only measures: the box held its name; the value is what the geometry has now
+                used = set(m.params) | set(self.app.doc.params) | {c.get("name") for c in m.cons}
+                kw["value"] = cur
+                kw["name"] = txt if (txt.isidentifier() and txt not in used) else nxt
+                kw["_driven"] = True
+            else:
+                try:
+                    expr, val = self.dim_from_text(m, txt, cur, tool)
+                except ValueError as ex:
+                    self.app.say(str(ex))
+                    return
+                kw["value"] = val
+                kw["name"] = expr if expr and expr.isidentifier() else nxt
+                if expr:
+                    kw["expr"] = expr
             if tool in ("dim_h", "dim_v"):
                 pa, pb = m._two_points(refs)
                 k = 0 if tool == "dim_h" else 1
                 kw["sign"] = 1 if pb[k] - pa[k] >= 0 else -1
 
+        make_driven = kw.pop("_driven", False)
+        if tool in SCALE_DIMS and not make_driven:
+            self.set_part_scale(cur, kw.get("value"))
+
         def build(mm):
             c = mm.add_con(tool, refs, **kw)
             self.last_con = c["id"]
+            if make_driven:
+                mm.set_driven(c["id"], True)
 
         self.commit(build, refresh=False)
         rep = self.rep
@@ -1086,9 +1137,41 @@ class SketchEditor:
         elif rep is not None and self.last_con in rep.redundant:
             self.app.say("Note: that is redundant (already implied by other relations).")
         self.app.doc.store_sketch(self.sk_id)
-        self.app.update_all(keep_props=False)
+        self.app.update_all(keep_props=False, light=True)
 
     last_con = None
+
+    def set_part_scale(self, cur, val):
+        """The first (driving, length-type) dimension of a part sets the scale: the whole sketch is scaled uniformly, about its origin, so the dimension is
+        true and the shape does not change; the view is scaled with it, so nothing seems to move.  It happens once; Undo can not take it back."""
+        d = self.app.doc
+        m = self.m
+        if d.scale_set:
+            return
+        if d.has_dimensions():
+            d.scale_set = True
+            return
+        d.scale_set = True
+        if m.ctx3d is not None or m.insts or m.ext or not val or not cur or cur <= 1e-9 or val <= 0:
+            return
+        k = float(val) / float(cur)
+        if abs(k - 1.0) < 1e-9:
+            return
+        m.scale_all(k)
+        d.store_sketch(self.sk_id)                    # so the Undo snapshot taken next holds the scaled sketch
+        self.app.rescale_history(self.sk_id, k)
+        self.rescale_view(k)
+
+    def rescale_view(self, k):
+        pl = self.plane()
+        if pl is None:
+            return
+        o, cam = pl[0], self.pl.camera
+        for get, put in ((cam.GetPosition, cam.SetPosition), (cam.GetFocalPoint, cam.SetFocalPoint)):
+            put(*(o + k * (np.array(get()) - o)))
+        if cam.GetParallelProjection():
+            cam.SetParallelScale(cam.GetParallelScale() * k)
+        self.pl.renderer.reset_camera_clipping_range()
 
     @staticmethod
     def dim_from_text(m, text, value, dtype=None):
@@ -1147,13 +1230,14 @@ class SketchEditor:
             else:
                 c.pop("expr", None)
         r = self.commit(build, refresh=False)
-        self.app.update_all(keep_props=True)
+        self.app.update_all(keep_props=True, light=True)
         return r
 
     def cancel(self):
         """Esc: drop the shape / relation being made; else go back to the select tool; else leave the sketch."""
         if self.pending or self.picks or self.axis_wait:
             self.pending, self.picks, self.host, self.axis_wait = [], [], None, False
+            self.prune_ext()
             self.redraw()
         elif self.tool != "select":
             self.app.set_tool("select")
@@ -1164,6 +1248,14 @@ class SketchEditor:
         """Add Relation / Dimension from the ribbon: entities that are already selected are used at once."""
         self.reset_tool(name)
         self.picks = [k for k in self.sel if k[0] in ("pt", "ln", "ci", "ar")]
+        if name == "pierce":
+            if len(self.picks) >= 2:
+                self.picks = self.picks[:2]
+                self.try_apply()
+                return
+            self.picks = []
+            self.say_prompt()
+            return
         if self.picks:
             res = make_constraint(name, self.picks)
             if res is None:
@@ -1212,10 +1304,21 @@ class SketchEditor:
                 out.append(("Change which angle...", lambda: [self.change_angle(c["id"]) for c in cons if c and c["type"] == "dim_ang"][:1]))
             if any(c and (c.get("off") or c.get("aoff")) for c in cons):
                 out.append(("Reset label position", self.reset_labels))
+            if len(cons) == 1 and cons[0]:
+                out.append(("Make driving" if cons[0].get("driven") else "Make driven", lambda cid=cons[0]["id"]: self.toggle_driven(cid)))
         if not out:
             out = [("Select", lambda: self.app.set_tool("select"))]
         out += [("Normal To", self.normal_to), ("Exit Sketch", self.app.leave_sketch)]
         return out
+
+    def toggle_driven(self, cid):
+        """A driving dimension becomes a measurement of the geometry (driven), or the other way round."""
+        c = self.m.con_by_id(cid)
+        if c is None:
+            return
+        on = not c.get("driven")
+        self.commit(lambda m: m.set_driven(cid, on))
+        self.app.say(("Driven: the dimension now measures the geometry." if on else "Driving: the dimension now constrains the geometry."))
 
     def reset_labels(self):
         ids = [k[1] for k in self.sel if k[0] == "con"]
@@ -1235,12 +1338,13 @@ class SketchEditor:
         if not self.confirm_delete(items):
             return
         gone = [i for k, i in items if k == "con"]
-        self.commit(lambda m: m.delete(items))
+        self.commit(lambda m: m.delete(items, orphans=True))
         self.sel = []
         self.hl = set()
+        self.prune_ext()
         if gone:
             self.app.doc.prune_cfg()
-            self.app.update_all(keep_props=False)
+            self.app.update_all(keep_props=False, light=True)
 
     def confirm_delete(self, items):
         """Deleting a dimension whose name a formula elsewhere uses would break that formula: say so first."""
@@ -1387,49 +1491,52 @@ class SketchEditor:
             out.append((f, doc.models[f["id"]], sketch_ext.frame(doc.planes[f["id"]])))
         return out
 
-    def command_extref(self, kind):
-        """Reference geometry of another sketch: kind 'pt' (point), 'ln' (line) projected onto this plane, or 'pierce' (where a curve passes through it)."""
-        earlier = self.earlier_sketches(with_later=True)
-        if not earlier:
-            self.app.say("There is no other sketch this one can refer to (one drawn on a face, or used by a feature that is built first, cannot be moved behind it).")
-            return False
-        if not any(self.app.sketch_shown(f) for f, _m, _fr in earlier):
-            self.app.say("Show the other sketch first (tick its box in the feature tree), then click its geometry. You can hide it again afterwards.")
-            return False
-        self.reset_tool("extref")
-        self.ext_kind = kind
-        self.say_prompt()
-        return True
-
-    def pick_ext(self, px, py):
-        kind = getattr(self, "ext_kind", "pierce")
-        tol = 1.5 * settings.get("snap_px") * self.pl.devicePixelRatioF()
-        best = None                                           # (distance px, feature, entity key, world point)
+    def other_hit(self, px, py, kinds=None):
+        """The geometry of another SHOWN sketch under the pixel (the sketch can be built before this one, or moved behind it):
+        (distance px, feature, entity key, world point on it) or None.  Points first, then the closest line / arc / circle."""
+        tol = settings.get("pick_px") * self.pl.devicePixelRatioF()
+        best_pt = best = None
         for f, sm, sfr in self.earlier_sketches(with_later=True):
             if not self.app.sketch_shown(f):
                 continue
-            if kind == "pt":
+            if kinds is None or "pt" in kinds:
                 ids = list(sm.pts)
                 if ids:
                     W = np.array([sketch_ext.lift(sfr, sm.pts[i]) for i in ids])
                     d = np.linalg.norm(self.to_screen(W) - np.array([px, py]), axis=1)
                     j = int(np.argmin(d))
-                    if best is None or d[j] < best[0]:
-                        best = (float(d[j]), f, ("pt", ids[j]), W[j])
-                continue
-            keys = [("ln", i) for i in sm.lns] + ([] if kind == "ln" else [("ar", i) for i in sm.ars] + [("ci", i) for i in sm.cis])
-            for key in keys:
-                uv = sk.polyline(sm, key, 48)
-                W = np.array([sketch_ext.lift(sfr, q) for q in uv])
+                    if d[j] <= tol and (best_pt is None or d[j] < best_pt[0]):
+                        best_pt = (float(d[j]), f, ("pt", ids[j]), W[j])
+            for key in [("ln", i) for i in sm.lns] + [("ar", i) for i in sm.ars] + [("ci", i) for i in sm.cis]:
+                if kinds is not None and key[0] not in kinds:
+                    continue
+                W = np.array([sketch_ext.lift(sfr, q) for q in sk.polyline(sm, key, 48)])
                 dist, i, t = self.seg_dist(self.to_screen(W), px, py)
-                if best is None or dist < best[0]:
+                if dist <= tol and (best is None or dist < best[0]):
                     best = (dist, f, key, W[i] + (W[i + 1] - W[i]) * t)
-        if best is None or best[0] > tol:
-            self.app.say("Nothing of a shown, earlier sketch is under the click. " + EXT_PROMPT[kind])
-            return True
-        _d, f, key, near = best
+        return best_pt or best
+
+    def pick_any(self, px, py, kinds=None):
+        """Like pick(), and when nothing of this sketch is there, geometry of another shown sketch: it is brought into this sketch as a reference
+        (a projected point / line, or - for an arc or circle - the point where it passes through this plane) and its key is returned."""
+        if self.choose is not None and self.choose_click(px, py):
+            return None
+        self.prune_ext()                                           # references brought in earlier and never used
+        own = self.pick(px, py, kinds)
+        if own is not None or self.m is None:
+            return own
+        hit = self.other_hit(px, py, kinds)
+        if hit is None:
+            return None
+        _d, f, key, near = hit
+        kind = {"pt": "pt", "ln": "ln", "ar": "pierce", "ci": "pierce"}[key[0]]
+        return self.bring_in(kind, f, key, near)
+
+    def bring_in(self, kind, f, key, near):
+        """Add a reference to entity `key` of sketch feature `f` to this sketch (moving this sketch behind it in the tree when it is later).
+        Returns the key of the new point / line in this sketch, or None (the reason is said)."""
         doc = self.app.doc
-        moved, note = None, ""
+        moved = None
         if doc.index_of(f["id"]) > doc.index_of(self.sk_id):         # a sketch is built from what comes before it: move this one behind it
             self.app.snapshot()
             moved = doc.index_of(self.sk_id)
@@ -1439,19 +1546,107 @@ class SketchEditor:
         if moved is not None:
             if res is None:
                 self.app.undo_pop()                                    # one Undo takes back the move and the reference together
-                note = f" '{doc.feature(self.sk_id)['name']}' was moved behind '{f['name']}' in the feature tree so it can follow it."
+                self.app.say(f"'{doc.feature(self.sk_id)['name']}' was moved behind '{f['name']}' in the feature tree so it can follow it.")
             else:                                                     # it did not work out: put the sketch back
                 f_ = doc.features.pop(doc.index_of(self.sk_id))
                 doc.features.insert(moved, f_)
                 doc.rebuild()
                 self.app.undo_pop()
-                self.app.update_all(keep_props=False)
-        if res is None:
-            self.reset_tool("select")
-            self.app.sync_tool()
-            self.app.say({"pt": "Point added", "ln": "Line added", "pierce": "Pierce point added"}[kind] +
-                         f" (follows '{f['name']}'). Now select it and a point of this sketch and add a Coincident relation." + note)
+                self.app.update_all(keep_props=False, light=True)
+        if res is not None:
+            return None
+        rec = self.m.ext[-1]
+        if kind == "pierce":
+            try:
+                hits = sketch_ext.crossings(doc, self.sk_id, rec)
+            except sketch_ext.Lost:
+                hits = []
+            if len(hits) > 1:                                         # several crossings: the nearest is taken, the others can be clicked
+                self.choose = {"rec": rec["pt"], "hits": [np.array(h) for h in hits]}
+                self.app.say("The curve crosses this plane in several places: the nearest to your click is used. Click another highlighted crossing to use that one.")
+            self.redraw()
+        return ("pt", rec["pt"]) if kind in ("pt", "pierce") else ("ln", rec["ln"])
+
+    def choose_click(self, px, py):
+        """With several crossings shown: a click on one of them takes it. True when the click was used."""
+        ch = self.choose
+        pl = self.plane()
+        if ch is None or pl is None:
+            return False
+        tol = 1.5 * settings.get("pick_px") * self.pl.devicePixelRatioF()
+        scr = self.to_screen(np.array(ch["hits"]))
+        d = np.linalg.norm(scr - np.array([px, py]), axis=1)
+        j = int(np.argmin(d))
+        self.choose = None
+        if d[j] > tol:
+            self.redraw()
+            return False
+        rec = next((r for r in self.m.ext if r.get("pt") == ch["rec"]), None)
+        if rec is None:
+            self.redraw()
+            return True
+        hit = ch["hits"][j]
+
+        def build(m):
+            r = next((x for x in m.ext if x.get("pt") == ch["rec"]), None)
+            r["last"] = [float(v) for v in hit]
+        self.commit(build)
+        self.app.say("Crossing chosen. It stays on that crossing when the path changes.")
         return True
+
+    def prune_ext(self):
+        """Remove references nothing uses (the ones brought in for a relation that was not made)."""
+        m = self.m
+        if m is None or not m.ext:
+            return
+        keep = set(self.sel) | set(self.picks)
+        if sketch_ext.prune(m, keep):
+            self.app.doc.reports[self.sk_id] = sk.solve_model(m)
+            self.app.doc.store_sketch(self.sk_id)
+            self.app.update_all(keep_props=False, light=True)
+
+    def pierce_apply(self):
+        """The Pierce relation: a point of this sketch is held where a curve of another sketch passes through this plane (or on another
+        sketch's point). A line against a line has too few degrees of freedom to be defined that way, so it is refused."""
+        m = self.m
+        a, b = self.picks[:2]
+        ra, rb = sketch_ext.rec_of(m, a), sketch_ext.rec_of(m, b)
+        if (ra is None) == (rb is None):
+            return "Pick one thing of this sketch and one of another sketch (click the other sketch's line, arc, circle or point)."
+        own, other, rec = (a, b, rb) if ra is None else (b, a, ra)
+        if own[0] != "pt":
+            return ("A line against a line cannot be fixed by a pierce relation: it does not have enough degrees of freedom. Pick a point of "
+                    "this sketch (or put a point on the line first).")
+        if other[0] == "ln":                                      # the projected line becomes the point where the line passes through the plane
+            ent, label, near = tuple(rec["ent"]), rec.get("label"), rec.get("last")
+            sketch_id = rec["sketch"]
+            doc = self.app.doc
+
+            def build(mm):
+                r = sketch_ext.rec_of(mm, other)
+                if r is None:
+                    return "That reference is gone."
+                sketch_ext.remove_record(mm, r)
+                err = sketch_ext.add_reference(doc, self.sk_id, mm, "pierce", sketch_id, ent, near, label=label)
+                if err:
+                    return err
+                c = mm.add_con("coincident", [own, ("pt", mm.ext[-1]["pt"])])
+                c["pierce"] = True
+                self.last_con = c["id"]
+            res = self.commit(build, refresh=False)
+            if res is None:
+                self.app.update_all(keep_props=False, light=True)
+            return res
+        c_ref = ("pt", rec["pt"] if "pt" in rec else rec["pts"][0])
+
+        def build2(mm):
+            c = mm.add_con("coincident", [own, other])
+            c["pierce"] = True
+            self.last_con = c["id"]
+        res = self.commit(build2, refresh=False)
+        if res is None:
+            self.app.update_all(keep_props=False, light=True)
+        return res
 
     def command_convert(self):
         """Convert Entities: copy picked edges (or the outline of a picked face) of the part into the sketch, projected onto its plane.
@@ -1557,11 +1752,18 @@ class SketchEditor:
         self.ren.SetActiveCamera(self.pl.camera)
         return self.ren
 
-    def clear_actors(self):
+    def drop(self, lst):
         if self.ren is not None:
-            for a in self.actors:
+            for a in lst:
                 self.ren.RemoveActor(a)
-        self.actors = []
+        lst.clear()
+
+    def clear_actors(self):
+        self.drop(self.actors)
+        self.drop(self.geo_actors)
+        for lst in self.dim_actors.values():
+            self.drop(lst)
+        self.dim_actors = {}
 
     def actor(self, mesh, color, width=2.0, points=False):
         m = vtkPolyDataMapper()
@@ -1577,7 +1779,7 @@ class SketchEditor:
         else:
             pr.SetLineWidth(width)
         self.layer().AddActor(a)
-        self.actors.append(a)
+        (self._sink if self._sink is not None else self.actors).append(a)
 
     def polyline(self, uv, color, width=2.0):
         if len(uv) >= 2:
@@ -1602,7 +1804,7 @@ class SketchEditor:
         tp.SetBold(True)
         a.SetDisplayOffset(6, 6)
         self.layer().AddActor(a)
-        self.actors.append(a)
+        (self._sink if self._sink is not None else self.actors).append(a)
 
     def entity_color(self, key):
         m, rep = self.m, self.rep
@@ -1665,13 +1867,110 @@ class SketchEditor:
         sh = sk_dimlines.shapes(self, c)
         return None if sh is None else sh["label"]
 
+    def draw_free_motion(self, rep, extk):
+        """Show free motion: the points that can still move, lit up, each with an arrow along its free direction (two arrows,
+        horizontal and vertical, when it is free in every direction).  Only points - lines, arcs and circles are never lit."""
+        m = self.m
+        L = 0.05 * self.view_height()
+        ids = [i for i in rep.free_dirs if i in m.pts and i != 0 and ("pt", i) not in extk and not (m.p3 and m.p3_owner("pt", i))]
+        if not ids:
+            return
+        self.actor(pv.PolyData(self.to_world(np.array([m.pts[i] for i in ids]))), COL_MOTION, 13.0, points=True)
+        for i in ids:
+            p = np.array(m.pts[i], float)
+            for d in rep.free_dirs[i]:
+                d = np.array(d, float)
+                n = np.array([-d[1], d[0]])
+                self.polyline(np.array([p - d * L, p + d * L]), COL_MOTION, 2.5)
+                for s_ in (1, -1):
+                    tip = p + s_ * d * L
+                    self.fill([tip, tip - s_ * d * 0.35 * L + n * 0.18 * L, tip - s_ * d * 0.35 * L - n * 0.18 * L], COL_MOTION)
+
     def redraw(self):
+        """Everything: geometry layer, dimension layer and dynamic layer."""
         if not self.active or pv is None:
             return
         self.clear_actors()
         m = self.m
         if m is None or self.plane() is None:
             return
+        self.build_geo()
+        self.build_dims()
+        self.build_dyn()
+        self.pl.render()
+
+    def redraw_dyn(self):
+        """Only the dynamic layer (cursor, rubber band, selection box): what a plain mouse move changes."""
+        if not self.active or pv is None:
+            return
+        self.drop(self.actors)
+        if self.m is None or self.plane() is None:
+            return
+        self.build_dyn()
+        self.pl.render()
+
+    def redraw_label(self, cid):
+        """Only one dimension (its lines, arrowheads and label): what dragging that label changes.  Nothing else is touched."""
+        if not self.active or pv is None:
+            return
+        c = self.m.con_by_id(cid) if self.m is not None else None
+        if c is None or cid not in self.dim_actors:
+            self.redraw()
+            return
+        self.drop(self.dim_actors[cid])
+        self.tags = [t for t in self.tags if t[2] != cid]
+        self.build_dim(c)
+        self.pl.render()
+
+    def build_dyn(self):
+        self._sink = self.actors
+        try:
+            self.draw_preview()
+        finally:
+            self._sink = None
+
+    def build_dims(self):
+        self.tags = []
+        self.dim_actors = {}
+        for c in self.m.cons:
+            self.build_dim(c)
+
+    def build_dim(self, c):
+        m = self.m
+        if not (c["type"] in DIMS and c.get("grp") is None and self.app.vis["dims"]):
+            return
+        sh = sk_dimlines.shapes(self, c)
+        a = None if sh is None else sh["label"]
+        if a is None:
+            return
+        lst = self.dim_actors[c["id"]] = []
+        self._sink = lst
+        try:
+            self.tags.append((a[0], a[1], c["id"]))
+            sel_c = ("con", c["id"]) in self.sel
+            drv = bool(c.get("driven"))
+            for kind, pts, wd, rgb in sk_dimlines.primitives(sh, sk_dimlines.extent(m), sel_c, drv):
+                if kind == "line":
+                    self.polyline(pts, rgb, wd)
+                else:
+                    self.fill(pts, rgb)
+            txt = f"{c.get('name', '')} = {disp(c['value'], c):.4g}"
+            if drv:
+                txt = f"({txt})"                                           # a measured (driven) dimension
+            self.tag_len[c["id"]] = len(txt)
+            self.text(a, txt, settings.rgb("dim_sel_color" if sel_c else "dim_driven_color" if drv else "dim_color"), int(round(settings.get("text_pt"))))
+        finally:
+            self._sink = None
+
+    def build_geo(self):
+        m = self.m
+        self._sink = self.geo_actors
+        try:
+            self._build_geo(m)
+        finally:
+            self._sink = None
+
+    def _build_geo(self, m):
         self._lit = set(self.hl)                 # what a selected dimension (or a selected table row) measures lights up
         for k_, i_ in self.sel:
             if k_ == "con":
@@ -1705,24 +2004,10 @@ class SketchEditor:
         for pts, col, size in ((free, COL_FREE, 7.0), (fixed, COL_FIXED, 7.0), (extp, COL_EXT, 9.0), (sel, COL_SEL, 10.0)):
             if pts:
                 self.actor(pv.PolyData(self.to_world(np.array(pts))), col, size, points=True)
-        self.tags = []
-        for c in m.cons:
-            if c["type"] in DIMS and c.get("grp") is None and self.app.vis["dims"]:
-                sh = sk_dimlines.shapes(self, c)
-                a = None if sh is None else sh["label"]
-                if a is not None:
-                    self.tags.append((a[0], a[1], c["id"]))
-                    sel_c = ("con", c["id"]) in self.sel
-                    for kind, pts, wd, rgb in sk_dimlines.primitives(sh, sk_dimlines.extent(m), sel_c):
-                        if kind == "line":
-                            self.polyline(pts, rgb, wd)
-                        else:
-                            self.fill(pts, rgb)
-                    txt = f"{c.get('name', '')} = {disp(c['value'], c):.4g}"
-                    self.tag_len[c["id"]] = len(txt)
-                    self.text(a, txt, settings.rgb("dim_sel_color" if sel_c else "dim_color"), int(round(settings.get("text_pt"))))
-        self.draw_preview()
-        self.pl.render()
+        if getattr(self.app, "free_motion", False) and rep is not None and not rep.conflicts:
+            self.draw_free_motion(rep, extk)
+        if self.choose is not None and len(self.choose["hits"]) > 1:   # the crossings of a curve with this plane: click one
+            self.actor(pv.PolyData(np.array(self.choose["hits"], float)), (1.0, 0.80, 0.10), 14.0, points=True)
 
     def draw_angle_prev(self):
         (a, b), refs = self.angle_prev

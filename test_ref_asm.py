@@ -27,7 +27,7 @@ pc = os.path.join(tmp, "ref.gpd"); open(pc, "w").write(d.to_json())
 sh = gpd_app.AppShell([]); w = sh.new_assembly(); w.insert_files([pa, pc]); A = w.asm
 c0, c1 = A.components[:2]
 print("tree top items", [w.tree.topLevelItem(0).child(i).text(0) for i in range(w.tree.topLevelItem(0).childCount())])
-assert [w.tree.topLevelItem(0).child(i).text(0) for i in range(4)][:3] == ["▯  Front Plane", "▯  Top Plane", "▯  Right Plane"]
+assert [w.tree.topLevelItem(0).child(i).text(0).split("  ")[-1] for i in range(4)][:3] == ["Front Plane", "Top Plane", "Right Plane"]
 # toggle origin plane via checkbox
 root = w.tree.topLevelItem(0); fp = root.child(0)
 fp.setCheckState(0, Qt.CheckState.Unchecked); app.processEvents(); app.processEvents()

@@ -52,3 +52,45 @@ ed.reset_tool("dim_h"); ed.picks = [("pt", 0)]
 corner = [i for i, p in ed.m.pts.items() if i and abs(p[0] - 30) < 1e-6 and abs(p[1] - 20) < 1e-6][0]
 ed.picks.append(("pt", corner)); ed.try_apply(); print("dims", [(c["type"], c["value"]) for c in ed.m.cons if c["type"].startswith("dim")], "dof", ed.rep.dof)
 w.leave_sketch(); print("OK")
+
+# --- the cube is built once: turning the model and hovering create nothing new, hovering recolours only the entered / left piece
+n0 = cube.ren.GetViewProps().GetNumberOfItems()
+for i in range(30):
+    nv.rotate(7, 3)
+assert cube.ren.GetViewProps().GetNumberOfItems() == n0, "turning the model rebuilt the cube"
+cube.set_hover(("face", "Top")); assert np.allclose(cube.face_actors["Top"].GetProperty().GetColor(), nav.HOVER)
+cube.set_hover(("edge", 3)); assert np.allclose(cube.face_actors["Top"].GetProperty().GetColor(), nav.BASE["Top"]) and np.allclose(cube.edge_actors[3].GetProperty().GetColor(), nav.HOVER)
+cube.set_hover(("corner", 5)); assert cube.corner_actor.GetVisibility() and np.allclose(cube.edge_actors[3].GetProperty().GetColor(), cube.DEFAULT_EDGE)
+cube.set_hover(("arrow", "left")); assert not cube.corner_actor.GetVisibility() and np.allclose(cube.button_actors["left"].GetProperty().GetColor(), nav.HOVER)
+cube.set_hover(None); assert np.allclose(cube.button_actors["left"].GetProperty().GetColor(), cube.BUTTON)
+assert cube.ren.GetViewProps().GetNumberOfItems() == n0
+# the cube's camera follows the angle of the model's camera
+r1, u1, t1 = nav.view_dirs(nv.pl.camera); r2, u2, t2 = nav.view_dirs(cube.cam); assert np.allclose(t1, t2, atol=1e-6) and np.allclose(u1, u2, atol=1e-6)
+print("OK cube static")
+
+# --- lock view: plain middle drag pans instead of rotating; Ctrl pans, Shift zooms; persisted; checkbox in the Show menu
+from PyQt6.QtCore import QSettings
+def middle_press(mods):
+    ev = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(300, 200), QPointF(300, 200), Qt.MouseButton.MiddleButton, Qt.MouseButton.MiddleButton, mods)
+    nv.eventFilter(w.plotter, ev); m = nv.mode
+    ev = QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(300, 200), QPointF(300, 200), Qt.MouseButton.MiddleButton, Qt.MouseButton.NoButton, mods)
+    nv.eventFilter(w.plotter, ev); return m
+NO, CT, SH = Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.ControlModifier, Qt.KeyboardModifier.ShiftModifier
+nv.set_lock(False); assert middle_press(NO) == "rotate" and middle_press(CT) == "pan" and middle_press(SH) == "zoom"
+w.lock_cb.setChecked(True); assert nv.lock and middle_press(NO) == "pan" and middle_press(CT) == "pan" and middle_press(SH) == "zoom"
+assert QSettings("GenParametricDesigner", "Modeller").value("lock_view") == "1"
+w.lock_cb.setChecked(False); assert not nv.lock and middle_press(NO) == "rotate"
+nv.set_lock(True); w2 = pm_app.MainWindow(); assert w2.nav.lock and w2.lock_cb.isChecked(); nv.set_lock(False)
+print("OK lock view")
+
+# --- deleting a line removes the end points nothing else uses (Delete key path only)
+w.sel_plane = "Front"; w.command("sketch"); ed = w.ed; ed.size_fn = lambda: (1000.0, 700.0); m = ed.m
+pts0 = set(m.pts)
+sk.add_rect_corner(m, (10, 10), (30, 20))
+lids = list(m.lns); assert len(lids) == 4
+before = len(m.pts)
+ed.sel = [("ln", lids[0])]; ed.delete_selected()
+assert len(ed.m.lns) == 3 and len(ed.m.pts) == before - 0 - (0 if True else 0) or len(ed.m.pts) == before - 0
+for l in list(ed.m.lns): ed.sel = [("ln", l)]; ed.delete_selected()
+assert not ed.m.lns and set(ed.m.pts) == pts0, (ed.m.pts, pts0)      # all rectangle corners gone, origin kept
+print("OK orphan delete")
