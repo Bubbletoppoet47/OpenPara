@@ -604,6 +604,9 @@ class AppShell(QMainWindow):
         return True
 
     def confirm_close(self, w):
+        ask = getattr(w, "can_close", None)               # a tab with work running in the background asks for itself
+        if callable(ask) and not ask():
+            return False
         try:
             dirty = w.is_dirty()
         except Exception:

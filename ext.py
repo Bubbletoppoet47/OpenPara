@@ -19,6 +19,7 @@ OPTIONAL = {
 _present = set()
 FEATURES = {}
 MENU_ITEMS = {}              # {menu name: [(text, fn(window))]}: items an add-on puts in the menu of another add-on's window, e.g. "annotator.file"
+MODEL_TRAINERS = {}          # {model type key: spec}: model types an add-on adds to the Trainer (see add_model_trainer)
 SHELL_MIXINS = []           # classes an add-on adds to the program window (gpd_app.AppShell) to give its tabs the helpers they use
 installer = None            # set by the shell: installer(addon_id, parent) offers to install / enable an add-on
 
@@ -44,6 +45,13 @@ def add_menu_item(menu, text, fn):
     items = MENU_ITEMS.setdefault(menu, [])
     if (text, fn) not in items:
         items.append((text, fn))
+
+
+def add_model_trainer(key, **spec):
+    """Adds a model type to the Trainer add-on's model list.  spec: label, script (a Python file the Trainer runs in the background with
+    the path of a job.json as its argument; see trainer/job_common.py), sizes (e.g. ("n", "s")), default_size, models_key ("assist" or
+    "scratch": the folder of the Models folder its results go to), needs (names of extra Python packages it imports)."""
+    MODEL_TRAINERS[key] = spec
 
 
 def feature(kind):
