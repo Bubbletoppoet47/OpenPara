@@ -29,7 +29,7 @@ import partgen
 kind = next(iter(partgen.PART_TYPES))
 assert ext.present("partgen") and ext.feature("partgen") is not None
 w = pm_app.MainWindow()
-assert "Part Features" in tabs(w) and "Simulation" not in tabs(w) and "Render" not in tabs(w), tabs(w)      # this release has neither
+assert "Part Features" in tabs(w) and "Render" not in tabs(w), tabs(w)      # Simulation ships now, Render does not
 d = pm.Document()
 f = d.add(pm.new_feature("partgen", gen=kind, params={}, place={"plane": "Top"}))
 d.rebuild()
@@ -38,7 +38,7 @@ assert d.solid is not None and not str(d.status.get(f["id"])).startswith("error"
 saved = d.to_json()
 
 # ---- every optional add-on removed
-for aid in ("partgen", "truss"):
+for aid in ("partgen", "truss", "simulation"):
     addons.uninstall(aid)
 addons.register_extensions(ext)
 assert not ext.present("partgen") and not ext.present("simulation") and not ext.present("render") and ext.feature("partgen") is None
