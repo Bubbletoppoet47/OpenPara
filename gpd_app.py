@@ -10,12 +10,47 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget
 
+SPLASH = None
+APP = None               # kept alive here: if the QApplication were dropped, Qt would delete the card with it
+
+
+def _step(text, frac):
+    if SPLASH is not None:
+        SPLASH.step(text, frac)
+
+
+def _early():
+    """Started as the program: make the window system and the start-up card FIRST, so the card is on the screen while the slow imports
+    below (geometry kernel, 3D view) run.  Importing this module from a test or another script does none of this."""
+    global SPLASH, APP
+    if sys.platform == "win32":                      # own taskbar icon / grouping instead of python's
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("OpenPara.CAD")
+        except Exception:
+            pass
+    app = APP = QApplication.instance() or QApplication(sys.argv)
+    try:
+        import splash
+        SPLASH = splash.show(app)
+    except Exception:
+        import traceback
+        print("splash: not available:\n" + traceback.format_exc(), file=sys.stderr)
+        SPLASH = None
+
+
+if __name__ == "__main__":
+    _early()
+
+_step("Loading add-ons...", 0.08)
 import addons
 addons.startup()          # puts the shipped add-ons in place (or upgrades them) and makes the installed ones importable
 import ext
 addons.register_extensions(ext)          # the Part window and the Assembly window learn which add-ons are there
 
+_step("Loading geometry kernel...", 0.2)
 import pm_app
+_step("Loading settings and units...", 0.8)
 import settings
 import unitctl
 import pm_model as pm
@@ -531,24 +566,20 @@ def install_excepthook():
 
 
 def main():
-    if sys.platform == "win32":                      # own taskbar icon / grouping instead of python's
-        try:
-            import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("OpenPara.CAD")
-        except Exception:
-            pass
-    app = QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(sys.argv)
     ico = os.path.join(os.path.dirname(os.path.abspath(__file__)), "OpenPara.ico")
     if os.path.exists(ico):
         from PyQt6.QtGui import QIcon
         app.setWindowIcon(QIcon(ico))
     install_excepthook()
     pm_app.apply_theme(app)
+    _step("Opening the window...", 0.92)
     w = AppShell(sys.argv[1:])
     w.show()
+    if SPLASH is not None:
+        SPLASH.finish(w)                              # the card goes away when the window is up
     w.updates.check_later()
     sys.exit(app.exec())
-
 
 if __name__ == "__main__":
     main()
