@@ -57,6 +57,8 @@ jobs:
           Get-ChildItem -File | Where-Object { $_.Extension -in ".py", ".json", ".ico", ".txt", ".md" -or $_.Name -eq "LICENSE" } |
             Where-Object { $_.Name -notlike "test_*" -and $_.Name -ne "requirements-lock.txt" -and $_.Name -ne "get-pip.py" } | Copy-Item -Destination $app
           Copy-Item docs -Destination "$app\docs" -Recurse
+          Copy-Item assets -Destination "$app\assets" -Recurse          # the logo of the start-up card, its fonts and the icons
+          foreach ($f in "assets\openpara-logo.svg", "assets\fonts\Lora-Variable.ttf") { if (-not (Test-Path "$app\$f")) { throw "missing from the app: $f" } }
           '{"runtime": ' + $env:RUNTIME + ', "version": "' + $env:VERSION + '"}' | Set-Content "$app\runtime.json"
 
       - name: Smoke test (imports and the updater test, no window)

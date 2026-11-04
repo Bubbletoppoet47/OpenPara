@@ -1,7 +1,7 @@
 {
  "id": "truss",
  "name": "Truss Generator",
- "version": "0.8.3",
+ "version": "0.8.4",
  "description": "Builds the members of a truss from the lines of a sketch: each member is a profile extruded to its longest length with angled cuts. Exports a cut list. Opens .truss files and truss project folders.",
  "requires": [],
  "tabs": [
