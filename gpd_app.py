@@ -59,6 +59,7 @@ import pm_model as pm
 class AppShell(QMainWindow):
     def __init__(self, files=None):
         super().__init__()
+        self.tab_counts = {}
         self.setWindowTitle("OpenPara")
         self.resize(1400, 860)
         self.tabs = QTabWidget()
@@ -359,19 +360,30 @@ class AppShell(QMainWindow):
             return None
         return self.add_tab(w)
 
-    def new_addon_tab(self, kind, path=None):
-        """A document tab of an add-on (File > New <label>, or opening one of its files / project folders)."""
+    def new_addon_tab(self, kind, path=None, title=None):
+        """A document tab of an add-on (File > New <label>, or opening one of its files / project folders).  The add-on's manifest says how:
+        module + factory (or class), the arguments to give it (host, path, quiet, threaded), and whether the tab needs w.host."""
         spec = addons.tab_kinds().get(kind)
         if spec is None:
             return None
         import importlib
+        ctx = {"host": self, "path": path, "quiet": False, "threaded": True}
         try:
-            w = getattr(importlib.import_module(spec["module"]), spec.get("factory", "make_tab"))(host=self, path=path)
+            mod = importlib.import_module(spec["module"])
+            if spec.get("factory"):
+                w = getattr(mod, spec["factory"])(*[ctx[k] for k in spec.get("args", [])])
+            else:
+                w = getattr(mod, spec["class"])(*[ctx[k] for k in spec.get("args", [])], **{k: ctx[k] for k in spec.get("kwargs", [])})
+            if spec.get("set_host"):
+                w.host = self
+            w.kind = kind
         except Exception as ex:
             QMessageBox.warning(self, "Open", f"Could not start {spec.get('label', kind)}: {ex}")
             return None
+        self.tab_counts[kind] = self.tab_counts.get(kind, 0) + 1
+        name = title or (os.path.basename(path.rstrip("/\\")) if path else f"{spec.get('short', spec.get('label', kind))} {self.tab_counts[kind]}")
         if not callable(getattr(w, "title", None)):              # an add-on tab need not know how the tab strip names it
-            w.title = lambda w=w: os.path.basename(w.path.rstrip("/\\")) if getattr(w, "path", None) else spec.get("short", kind)
+            w.title = lambda w=w, name=name: os.path.basename(w.path.rstrip("/\\")) if getattr(w, "path", None) else name
         return self.add_tab(w)
 
     def open_project_folder_dialog(self):
@@ -574,7 +586,8 @@ def main():
     install_excepthook()
     pm_app.apply_theme(app)
     _step("Opening the window...", 0.92)
-    w = AppShell(sys.argv[1:])
+    shell = type("Shell", (*ext.SHELL_MIXINS, AppShell), {}) if ext.SHELL_MIXINS else AppShell     # add-ons may give the window helpers their tabs use
+    w = shell(sys.argv[1:])
     w.show()
     if SPLASH is not None:
         SPLASH.finish(w)                              # the card goes away when the window is up

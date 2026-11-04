@@ -18,6 +18,7 @@ OPTIONAL = {
 }
 _present = set()
 FEATURES = {}
+SHELL_MIXINS = []           # classes an add-on adds to the program window (gpd_app.AppShell) to give its tabs the helpers they use
 installer = None            # set by the shell: installer(addon_id, parent) offers to install / enable an add-on
 
 
@@ -31,6 +32,11 @@ def present(aid):
 
 def add_feature(kind, **spec):
     FEATURES[kind] = spec
+
+
+def add_shell_mixin(cls):
+    if cls not in SHELL_MIXINS:
+        SHELL_MIXINS.append(cls)
 
 
 def feature(kind):

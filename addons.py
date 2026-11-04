@@ -90,6 +90,7 @@ def _manifest(folder):
     try:
         with open(os.path.join(folder, MANIFEST), encoding="utf-8") as f:
             m = json.load(f)
+        m.setdefault("id", os.path.basename(os.path.normpath(folder)))        # the folder name is the id when the file does not say
         if m.get("id") and m.get("name"):
             m.setdefault("version", "0")
             m.setdefault("description", "")
@@ -111,10 +112,28 @@ def shipped():
     return out
 
 
+def dev_dir():
+    """A folder of add-ons that are used where they are (never copied, never removed): set OPARA_DEV_ADDONS to it.  Used by the playground to
+    run the real program with its own add-ons next to the shipped ones; a normal start does not have it."""
+    d = os.environ.get("OPARA_DEV_ADDONS")
+    return os.path.abspath(d) if d and os.path.isdir(d) else None
+
+
+def dev_ids():
+    d = dev_dir()
+    if not d:
+        return []
+    return [n for n in sorted(os.listdir(d)) if _manifest(os.path.join(d, n)) is not None]
+
+
+def is_dev(aid):
+    return aid in dev_ids()
+
+
 def known():
-    """All add-on ids that can be installed: the catalog plus anything in the program folder."""
+    """All add-on ids that can be installed: the catalog plus anything in the program folder (and the development folder, when set)."""
     ids = list(CATALOG)
-    for a in shipped():
+    for a in list(shipped()) + dev_ids():
         if a not in ids:
             ids.append(a)
     return ids
@@ -136,6 +155,8 @@ def target_version():
 
 
 def installed_path(aid):
+    if is_dev(aid):
+        return os.path.join(dev_dir(), aid)
     return os.path.join(addons_dir(), aid)
 
 
@@ -157,6 +178,8 @@ def status(aid):
     m = installed_manifest(aid)
     if m is None:
         return "not installed"
+    if is_dev(aid):
+        return "installed"
     if _vkey(target_version()) > _vkey(m["version"]):
         return "update"
     return "installed"
@@ -264,6 +287,8 @@ def tab_kinds():
     for aid in known():
         m = installed_manifest(aid) if is_active(aid) else None
         for t in (m or {}).get("tabs", []):
+            if t.get("in_program") is False:                       # a tab that only the playground's own window needs (the program has Part / Assembly itself)
+                continue
             out[t["kind"]] = dict(t, aid=aid)
     return out
 
@@ -420,6 +445,10 @@ def install(aid, progress=None, activate_now=True):
     """Install or update an add-on. progress(text, fraction_or_None) may return False to cancel (Cancelled is raised, nothing is changed)."""
     if aid not in known():
         raise KeyError(f"unknown add-on '{aid}'")
+    if is_dev(aid):                                                        # used where it is: nothing to install
+        if activate_now:
+            activate()
+        return
     ad = addons_dir()
     work = os.path.join(ad, f".dl-{aid}")
     shutil.rmtree(work, ignore_errors=True)
@@ -478,6 +507,8 @@ def _unload(aid):
 def uninstall(aid):
     """Remove an installed add-on with its packages: modules dropped from memory, folder deleted. True when the folder is gone; otherwise the
     add-on is already marked as removed and the rest is deleted at the next start."""
+    if is_dev(aid):                                                        # a development add-on is the folder you work in: never deleted
+        return False
     p = installed_path(aid)
     _unload(aid)
     mf = os.path.join(p, MANIFEST)

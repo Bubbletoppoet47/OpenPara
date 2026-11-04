@@ -75,6 +75,8 @@ class UpdateController(QObject):
 
     # ---- settings
     def auto_enabled(self):
+        if os.environ.get("OPARA_NO_UPDATE") == "1":                      # the playground: a source copy never updates itself
+            return False
         return load_state().get("auto", True)
 
     def set_auto(self, on):
