@@ -25,6 +25,7 @@ import physics_fea as pf
 import physics_geom as pg
 import physics_materials as pm
 import physics_refine as prefine
+import physics_split as psplit
 import units
 import physics_solve as psolve
 import physics_store as pstore
@@ -237,9 +238,10 @@ class PhysCanvas(QWidget):
         self.anim_frames = None           # list of pre-rendered pictures (ramp 0 -> full), or None
         self.anim_idx = 0
         self.box = None                   # rubber-band selection: [start QPointF, current QPointF, additive]
-        self.mode = "select"              # "select", "rect" / "circle" (drawing a probe region) or "node" (node probe)
+        self.mode = "select"              # "select", "rect" / "circle" (drawing a probe region), "node" (node probe) or "split" (Split edge)
         self.drag = None                  # probe region being drawn: [start (x, y), current (x, y)] in sketch units
         self.node_sel = None              # the node picked with the node probe
+        self.split_mark = None            # (x, y) of the first point picked on a circle while splitting
 
     # --- transforms
     def w2s(self, x, y):
@@ -294,6 +296,14 @@ class PhysCanvas(QWidget):
                 best = (d, ("pt", pid))
         if best:
             return best[1]
+        return self.hit_edge(sp)
+
+    def hit_edge(self, sp):
+        """The edge (its source (kind, id)) under the screen point, points ignored; None when there is none."""
+        tab = self.tab
+        if tab.geom is None:
+            return None
+        best = None
         for e, pts in zip(tab.geom["edges"], tab.geom["polys"]):
             sp_pts = [self.w2s(*p) for p in pts]
             if e["kind"] == "ci":
@@ -322,6 +332,9 @@ class PhysCanvas(QWidget):
             return
         if ev.button() == Qt.MouseButton.LeftButton and self.mode == "node":
             self.tab.pick_node(ev.position())
+            return
+        if ev.button() == Qt.MouseButton.LeftButton and self.mode == "split":
+            self.tab.split_click(ev.position())
             return
         if ev.button() == Qt.MouseButton.LeftButton:
             h = self.hit(ev.position())
@@ -466,6 +479,12 @@ class PhysCanvas(QWidget):
         self.paint_fasteners(p)
         self.paint_probes(p)
         p.resetTransform()
+        if self.split_mark is not None:                        # the first point picked on a circle
+            q = self.w2s(*self.split_mark)
+            p.setPen(QPen(QColor("#f08a24"), 2))
+            p.setBrush(QColor(240, 138, 36, 120))
+            p.drawEllipse(q, 6, 6)
+            p.setBrush(Qt.BrushStyle.NoBrush)
         if self.box is not None:
             p.setPen(QPen(QColor("#3a7bd5"), 1, Qt.PenStyle.DashLine))
             p.setBrush(QColor(58, 123, 213, 30))
@@ -768,7 +787,12 @@ class PhysicsTab(QWidget):
             warn.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             lay.addWidget(warn)
 
-        lay = sec(1, "Geometry", True, summary=lambda: self.info.text().split("\n")[0][:90])
+        lay = sec(1, "Geometry", True, summary=lambda: self.info.text().split("\n")[0][:90],
+                  help_text="Split edge: cuts an edge in two (for example when an imported slice has a load that only goes part way up an "
+                            "edge). Click the edge where it is to be cut, then type the length from the nearer end. A circle is cut at two "
+                            "points. Supports and loads already on the edge stay on both halves; the mesh is cleared. Merge edges: select the "
+                            "point where two such edges meet and press it. The cut is made on this tab's copy of the sketch only; importing the "
+                            "sketch again starts over.")
         self.picker = SketchPicker(self.win, self.import_picked)
         lay.addWidget(self.picker)
         b = QPushButton("Clear (start over)")
@@ -786,6 +810,19 @@ class PhysicsTab(QWidget):
         self.regions.itemChanged.connect(self.region_toggled)
         self.regions.currentRowChanged.connect(self.region_picked)
         lay.addWidget(self.regions)
+        lay.addWidget(QLabel("<b>Edges</b>"))
+        row = QHBoxLayout()
+        self.b_split = QPushButton("Split edge")
+        self.b_split.setCheckable(True)
+        self.b_split.setToolTip("Cuts an edge in two at a point you click, so a support or load can cover only part of the edge. You then type "
+                                "the length from the nearer end. A circle is cut at two clicked points.")
+        self.b_split.clicked.connect(lambda on: self.set_tool("split" if on else "select"))
+        self.b_merge = QPushButton("Merge edges")
+        self.b_merge.setToolTip("Select the point where two split edges meet (on one straight line, or on one arc) and press this to join them again.")
+        self.b_merge.clicked.connect(self.merge_selected)
+        row.addWidget(self.b_split)
+        row.addWidget(self.b_merge)
+        lay.addLayout(row)
 
         lay = sec(2, "Material and analysis", False,
                   help_text="One material for everything. Quadratic elements need only a coarse mesh to capture bending (at least 2 elements "
@@ -1631,11 +1668,246 @@ class PhysicsTab(QWidget):
             self.update_profile_label()
             self.after_conditions()
 
+    # --- splitting and merging edges
+    split_first = None
+
+    def split_click(self, sp):
+        c = self.canvas
+        src = c.hit_edge(sp)
+        if src is None:
+            self.status("Click on an edge.  Esc cancels.")
+            return
+        wx, wy = c.s2w(sp)
+        m = self.model
+        if src[0] == "ci":
+            ang = psplit.nearest_dist(m, src, wx, wy)
+            cx, cy = m.pts[m.cis[src[1]]["c"]]
+            r = m.cis[src[1]]["r"]
+            if self.split_first is None or self.split_first[0] != src:
+                self.split_first = (src, ang)
+                c.split_mark = (cx + r * math.cos(ang), cy + r * math.sin(ang))
+                self.status("Now click the second point on the same circle.  Esc cancels.")
+                c.update()
+                return
+            first = self.split_first[1]
+            self.split_first, c.split_mark = None, None
+            try:
+                self.apply_split_circle(src, first, ang)
+            except psplit.SplitError as ex:
+                QMessageBox.information(self, "Split edge", str(ex))
+            return
+        self.split_first, c.split_mark = None, None
+        L = psplit.edge_length(m, src)
+        d = psplit.nearest_dist(m, src, wx, wy)
+        res = self.ask_split_length(src, L, d)
+        if res is None:
+            return
+        try:
+            self.apply_split(src, res)
+        except psplit.SplitError as ex:
+            QMessageBox.information(self, "Split edge", str(ex))
+
+    def edge_end_ids(self, src):
+        m = self.model
+        return (m.lns[src[1]][0], m.lns[src[1]][1]) if src[0] == "ln" else (m.ars[src[1]]["s"], m.ars[src[1]]["e"])
+
+    def ask_split_length(self, src, L, d):
+        """The box for the length from the nearer end -> the distance from the edge's START, or None when cancelled."""
+        a_id, b_id = self.edge_end_ids(src)
+        near_start = d <= L / 2
+        lu = units.get(self.unit_name())["L"]
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Split edge")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(f"{KIND_NAME[src[0]]} {src[1]}, length {L:.6g} {lu}.\n"
+                             f"Length from the nearer end (point {a_id if near_start else b_id}), {lu}  (a number or a calculation, e.g. 100/3):"))
+        e = QLineEdit(f"{(d if near_start else L - d):.6g}")
+        lay.addWidget(e)
+        cb = QCheckBox(f"Measure from the other end (point {b_id if near_start else a_id}) instead")
+        lay.addWidget(cb)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        e.selectAll()
+        while True:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return None
+            try:
+                v = psplit.eval_length(e.text())
+            except ValueError as ex:
+                QMessageBox.warning(self, "Split edge", str(ex))
+                continue
+            if not (0 < v < L):
+                QMessageBox.warning(self, "Split edge", f"The length must be between 0 and {L:.6g} {lu}.")
+                continue
+            from_start = near_start != cb.isChecked()
+            return v if from_start else L - v
+
+    def snapshot_faces(self):
+        return [{"c": f["centroid"], "a": f["net_area"], "inc": bool(f["included"]), "name": (self.region_names or {}).get(f["id"]),
+                 "mat": (self.region_mats or {}).get(f["id"]), "id": f["id"]} for f in self.geom["faces"]]
+
+    def apply_split(self, src, dist):
+        """Splits the line / arc `src` at `dist` from its start (no dialog).  -> the psplit info dict."""
+        faces = self.snapshot_faces()
+        info = psplit.split_edge(self.model, src, dist)
+        self.retarget(src, [info["first"], info["second"]], [info["frac"]])
+        self.geometry_changed(faces, f"{KIND_NAME[src[0]]} {src[1]} split at {dist:.6g} from its start: new point {info['pt']}, new "
+                                     f"{KIND_NAME[info['second'][0]].lower()} {info['second'][1]}. The mesh was cleared: mesh again.")
+        self.canvas.sel = [("pt", info["pt"])]
+        self.canvas.update()
+        return info
+
+    def apply_split_circle(self, src, ang1, ang2):
+        """Cuts the circle `src` at the angles ang1 and ang2 (radians) into two arcs (no dialog).  -> the psplit info dict."""
+        for ld in self.loads:
+            if ld["kind"] == "cfd" and any(tuple(pr["target"]) == tuple(src) for pr in ld["pairs"]):
+                raise psplit.SplitError("This circle carries a pressure from the CFD. Remove that load first, split the circle, then add it again.")
+        faces = self.snapshot_faces()
+        info = psplit.split_circle(self.model, src[1], ang1, ang2)
+        self.retarget(src, info["arcs"], None)
+        self.geometry_changed(faces, f"Circle {src[1]} split into two arcs (points {info['pts'][0]} and {info['pts'][1]}). The mesh was cleared: mesh again.")
+        self.canvas.sel = [("pt", p_) for p_ in info["pts"]]
+        self.canvas.update()
+        return info
+
+    def retarget(self, old, new, fracs):
+        """Moves supports and loads that sit on the edge `old` onto the pieces `new` (a list).  `fracs` = [split fraction] for a two-piece split
+        of a line / arc: it cuts the range of a CFD link between the pieces."""
+        old = tuple(old)
+        for item in self.supports + self.loads:
+            tg = []
+            for t in item["targets"]:
+                tg += [tuple(x) for x in new] if tuple(t) == old else [tuple(t)]
+            item["targets"] = tg
+        for ld in self.loads:
+            if ld["kind"] != "cfd":
+                continue
+            pairs = []
+            for pr in ld["pairs"]:
+                if tuple(pr["target"]) != old:
+                    pairs.append(pr)
+                    continue
+                u0, u1 = pr.get("span") or (0.0, 1.0)
+                f = fracs[0] if fracs else 0.5
+                mid = u0 + (u1 - u0) * f
+                pairs.append(dict(pr, target=tuple(new[0]), span=[u0, mid]))
+                pairs.append(dict(pr, target=tuple(new[1]), span=[mid, u1]))
+            ld["pairs"] = pairs
+            ld["targets"] = [tuple(pr["target"]) for pr in pairs]
+
+    def geometry_changed(self, old_faces, msg):
+        """The model changed shape (a split or a merge): analyse it again and carry the regions' on / off state, names and materials over."""
+        m = self.model
+        self.geom = pg.analyze(m)
+        self.geom["used_edges_src"] = {self.geom["edges"][k]["src"] for k in self.geom["used_edges"]}
+        mats, names = {}, {}
+        for f in self.geom["faces"]:
+            best = None
+            for o in old_faces:
+                d = math.hypot(o["c"][0] - f["centroid"][0], o["c"][1] - f["centroid"][1])
+                if abs(o["a"] - f["net_area"]) <= 1e-6 * max(abs(o["a"]), 1e-300) and (best is None or d < best[0]):
+                    best = (d, o)
+            if best is not None:
+                f["included"] = best[1]["inc"]
+                if best[1]["name"] is not None:
+                    names[f["id"]] = best[1]["name"]
+                if best[1]["mat"] is not None:
+                    mats[f["id"]] = best[1]["mat"]
+        self.region_mats, self.region_names = mats, names
+        self.mesh = None
+        self.result = None
+        self.canvas.field = None
+        self.field.setCurrentIndex(0)
+        self.canvas.sel = []
+        self.fill_regions()
+        self.refresh_lists()
+        self.canvas.invalidate()
+        self.enable_buttons()
+        self.status(msg)
+
+    def merge_selected(self):
+        pts = [i for k, i in self.canvas.sel if k == "pt"]
+        if len(pts) != 1 or self.model is None:
+            QMessageBox.information(self, "Merge edges", "Select the one point where the two edges meet (click it on the drawing), then press Merge edges.")
+            return None
+        return self.merge_at(pts[0], ask=True)
+
+    def merge_at(self, pid, ask=False):
+        """Joins the two edges that meet at point `pid`.  -> the psplit info dict, or None when it was refused (the reason is shown when ask)."""
+        def refuse(text):
+            if ask:
+                QMessageBox.information(self, "Merge edges", text)
+            self.status("Not merged: " + text)
+            return None
+        ok, what = psplit.can_merge(self.model, pid)
+        if not ok:
+            return refuse(what)
+        first, second = what
+        if any(("pt", pid) in [tuple(t) for t in item["targets"]] for item in self.supports + self.loads):
+            return refuse(f"A support or load is set on point {pid}. Remove it first, then merge.")
+        why = self.merge_blocker(first, second)
+        if why:
+            return refuse(why)
+        faces = self.snapshot_faces()
+        info = psplit.merge_at(self.model, pid)
+        self.retarget_merge(first, second)
+        self.geometry_changed(faces, f"{KIND_NAME[first[0]]} {first[1]} and {second[1]} merged into {KIND_NAME[first[0]].lower()} {first[1]}. "
+                                     "The mesh was cleared: mesh again.")
+        return info
+
+    def merge_blocker(self, first, second):
+        """A reason why the two edges cannot be merged with the supports and loads they carry, or None."""
+        first, second = tuple(first), tuple(second)
+        for item in self.supports + self.loads:
+            tg = {tuple(t) for t in item["targets"]}
+            if (first in tg) != (second in tg):
+                return ("A support or load is on only one of the two edges. Put it on both (or remove it) before merging, because the merged "
+                        "edge cannot carry it on a part.")
+            if item.get("kind") == "cfd":
+                a = [pr for pr in item["pairs"] if tuple(pr["target"]) == first]
+                b = [pr for pr in item["pairs"] if tuple(pr["target"]) == second]
+                if a and b:
+                    sa, sb = a[0].get("span") or (0.0, 1.0), b[0].get("span") or (0.0, 1.0)
+                    if tuple(a[0]["source"]) != tuple(b[0]["source"]) or abs(sa[1] - sb[0]) > 1e-9:
+                        return "The pressure from the CFD on the two edges does not continue along one CFD edge, so they cannot be merged."
+        return None
+
+    def retarget_merge(self, first, second):
+        first, second = tuple(first), tuple(second)
+        for item in self.supports + self.loads:
+            seen, tg = set(), []
+            for t in item["targets"]:
+                t = first if tuple(t) == second else tuple(t)
+                if t not in seen:
+                    seen.add(t)
+                    tg.append(t)
+            item["targets"] = tg
+        for ld in self.loads:
+            if ld["kind"] != "cfd":
+                continue
+            pairs = []
+            for pr in ld["pairs"]:
+                t = tuple(pr["target"])
+                if t == second:
+                    continue
+                if t == first:
+                    sec_ = [q for q in ld["pairs"] if tuple(q["target"]) == second]
+                    if sec_:
+                        u0 = (pr.get("span") or (0.0, 1.0))[0]
+                        u1 = (sec_[0].get("span") or (0.0, 1.0))[1]
+                        pr = dict(pr, span=None if (abs(u0) < 1e-12 and abs(u1 - 1) < 1e-12) else [u0, u1])
+                pairs.append(pr)
+            ld["pairs"] = pairs
+            ld["targets"] = [tuple(pr["target"]) for pr in pairs]
+
     # --- probe regions and the node probe
     def set_tool(self, mode):
         self.canvas.mode = mode
         self.canvas.drag = None
-        for b_, m in ((self.b_prect, "rect"), (self.b_pcirc, "circle"), (self.b_node, "node")):
+        self.canvas.split_mark, self.split_first = None, None
+        for b_, m in ((self.b_prect, "rect"), (self.b_pcirc, "circle"), (self.b_node, "node"), (self.b_split, "split")):
             b_.blockSignals(True)
             b_.setChecked(mode == m)
             b_.blockSignals(False)
@@ -1645,6 +1917,8 @@ class PhysicsTab(QWidget):
                         "Drag from the centre outward to set the circle's radius.  Esc cancels.")
         elif mode == "node":
             self.status("Click near a node of the result.  Esc leaves the node probe.")
+        elif mode == "split":
+            self.status("Split edge: click the edge where it is to be cut (a circle: click two points).  Esc cancels.")
         self.canvas.update()
 
     def unique_probe_name(self, base, skip=None):

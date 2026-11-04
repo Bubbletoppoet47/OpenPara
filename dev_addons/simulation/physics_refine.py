@@ -170,7 +170,7 @@ def resolve_cfd_links(loads, info, fea_geoms, factor):
                 raise pf.ModelError(f"The CFD result has no wall data for CFD edge {src[0]} {src[1]} (is its body switched on, "
                                     "and did the sketch change?).")
             tb = walls[src]
-            pairs.append({"target": tgt, "source": src, "fea_geom": fea_geoms[tgt], "table": tb, "factor": factor,
+            pairs.append({"target": tgt, "source": src, "fea_geom": fea_geoms[tgt], "table": tb, "factor": factor, "span": pr.get("span"),
                           "closed": tgt[0] == "ci" and src[0] == "ci",
                           "pmax": float(max(np.max(np.abs(tb["p_a"])), np.max(np.abs(tb["p_b"]))))})
         new = dict(ld)

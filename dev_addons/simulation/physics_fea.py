@@ -339,6 +339,9 @@ def cfd_edge_loads(mesh, owner, pair, include_shear, notes):
         if np.dot(nrm, cen - 0.5 * (pa + pb)) > 0:
             nrm = -nrm                                            # outward normal of the body
         sa, sb = pcfd.wall_segments_param(g, nodes, [na], [nb])
+        if pair.get("span"):                                      # this edge is one piece of a split edge: its 0..1 is only a part of the CFD edge
+            u0, u1 = pair["span"]
+            sa, sb = u0 + sa * (u1 - u0), u0 + sb * (u1 - u0)
         pr_a, tax, tay = pcfd.sample_wall(table, float(sa[0]), closed)
         pr_b, tbx, tby = pcfd.sample_wall(table, float(sb[0]), closed)
         pr_a, pr_b = pr_a * factor, pr_b * factor
