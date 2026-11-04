@@ -13,7 +13,7 @@ import addons, ext
 addons.startup(); addons.register_extensions(ext)
 f = lambda w: None
 ext.add_menu_item("annotator.file", "Do it", f); ext.add_menu_item("annotator.file", "Do it", f)
-assert ext.MENU_ITEMS["annotator.file"] == [("Do it", f)]
+assert ext.MENU_ITEMS["annotator.file"].count(("Do it", f)) == 1          # added twice, listed once (the shipped Gimble add-on adds its own item here too)
 import gpd_app
 from PyQt6.QtWidgets import QApplication
 app = QApplication([])

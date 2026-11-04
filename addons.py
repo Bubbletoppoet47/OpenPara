@@ -16,6 +16,7 @@ Your own files (.gps, .gpr, the material library) are never touched by installin
 """
 import hashlib
 import importlib
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -263,6 +264,27 @@ def activate():
     importlib.invalidate_caches()
 
 
+def outdated():
+    """Ids of the installed add-ons that are older than this program (they are not updated by themselves)."""
+    return [a for a in known() if not is_dev(a) and status(a) == "update"]
+
+
+def update_prompt_declined():
+    """True when the person already said 'not now' to the start-up update question for this version of the program."""
+    import version
+    return _read_state().get("declined_update") == version.__version__
+
+
+def set_update_prompt_declined(on=True):
+    import version
+    s = _read_state()
+    if on:
+        s["declined_update"] = version.__version__
+    else:
+        s.pop("declined_update", None)
+    _write_state(s)
+
+
 def startup():
     """Called once when the program starts: tidy, put add-ons that ship in the program folder in place (or upgrade them), activate."""
     try:
@@ -353,11 +375,22 @@ def _safe_extract(zpath, dest):
         z.extractall(dest)
 
 
-def _missing_packages(manifest):
+def _importable_without(mod, aid=None):
+    """Whether `mod` can be imported from somewhere other than the installed copy of add-on `aid`.  That copy (and its site/ folder) is about to be
+    replaced, so what only it has does not count; modules that are already loaded do not count either (the path is searched, sys.modules is not)."""
+    skip = []
+    if aid:
+        p = installed_path(aid)
+        skip = [os.path.normcase(os.path.realpath(q)) for q in (p, os.path.join(p, "site"))]
+    path = [q for q in sys.path if os.path.normcase(os.path.realpath(q or ".")) not in skip]
+    return importlib.machinery.PathFinder.find_spec(mod.split(".")[0], path) is not None or mod in sys.builtin_module_names
+
+
+def _missing_packages(manifest, aid=None):
     out = []
     for r in manifest.get("requires", []):
         mod = r.get("import") or r["pip"].split("=")[0].replace("-", "_")
-        if os.environ.get("OPARA_ADDON_FORCE_PIP") or importlib.util.find_spec(mod) is None:
+        if os.environ.get("OPARA_ADDON_FORCE_PIP") or not _importable_without(mod, aid):
             out.append(r["pip"])
     return out
 
@@ -474,7 +507,7 @@ def install(aid, progress=None, activate_now=True):
         m = _manifest(work)
         if not m or m["id"] != aid:
             raise AddonError(f"The downloaded file is not the add-on '{aid}'.")
-        pins = _missing_packages(m)
+        pins = _missing_packages(m, aid)           # an update must bring the packages the OLD copy had too: its folder is removed below
         if pins:
             _pip_install(pins, os.path.join(work, "site"), progress)
         dest = installed_path(aid)

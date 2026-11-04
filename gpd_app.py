@@ -360,6 +360,28 @@ class AppShell(QMainWindow):
                 return False
         return True
 
+    def offer_addon_updates(self):
+        """At start: add-ons you installed that are older than this program (it was just updated) are offered an update, with their packages.
+        'Not now' is remembered for this version of the program; File > Add-ons > Update still works."""
+        if os.environ.get("OPARA_NO_UPDATE") or addons.update_prompt_declined():
+            return
+        old = addons.outdated()
+        if not old:
+            return
+        names = ", ".join(addons.info(a)["name"] for a in old)
+        r = QMessageBox.question(self, "Add-ons need an update",
+                                 f"OpenPara was updated. These add-ons are for the previous version: {names}.\n\nUpdate them now? This downloads what they need from "
+                                 "GitHub (an add-on with AI support can be a few hundred MB, so it may take a few minutes) and needs an internet connection. "
+                                 "Your own files are not touched.\n\nIf you choose No, they keep working as they are and you can update them later in File > Add-ons.")
+        if r != QMessageBox.StandardButton.Yes:
+            addons.set_update_prompt_declined()
+            return
+        import addons_dialog
+        for a in old:
+            if not addons_dialog.install_with_progress(self, a):
+                break
+        self.addons_changed()
+
     def addons_changed(self):
         """Menus and buttons that depend on an add-on follow it: the core is told again which add-ons are there, the menus are rebuilt."""
         addons.register_extensions(ext)
@@ -680,6 +702,7 @@ def main():
     if SPLASH is not None:
         SPLASH.finish(w)                              # the card goes away when the window is up
     w.updates.check_later()
+    QTimer.singleShot(2500, w.offer_addon_updates)
     sys.exit(app.exec())
 
 if __name__ == "__main__":

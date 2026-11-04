@@ -5,8 +5,80 @@
  "description": "Draw boxes on photos and video frames, pick LiDAR distances, pre-label with YOLO models downloaded from GitHub, hand a dataset to someone as a zip (and merge theirs into yours), annotate from a tablet. An annotator project is a folder with its dataset inside.",
  "requires": [
   {
-   "pip": "opencv-python-headless==4.10.0.84",
+   "pip": "opencv-python-headless==4.14.0.94",
    "import": "cv2"
+  },
+  {
+   "pip": "torch==2.15.0",
+   "import": "torch"
+  },
+  {
+   "pip": "torchvision==0.29.2",
+   "import": "torchvision"
+  },
+  {
+   "pip": "ultralytics==8.4.202",
+   "import": "ultralytics"
+  },
+  {
+   "pip": "filelock==4.2.8",
+   "import": "filelock"
+  },
+  {
+   "pip": "setuptools==84.2.1",
+   "import": "setuptools"
+  },
+  {
+   "pip": "networkx==3.7",
+   "import": "networkx"
+  },
+  {
+   "pip": "jinja2==3.1.6",
+   "import": "jinja2"
+  },
+  {
+   "pip": "fsspec==2026.9.0",
+   "import": "fsspec"
+  },
+  {
+   "pip": "polars==2.1.0",
+   "import": "polars"
+  },
+  {
+   "pip": "nvidia-ml-py==13.615.71",
+   "import": "pynvml"
+  },
+  {
+   "pip": "ultralytics-thop==2.2.5",
+   "import": "thop"
+  },
+  {
+   "pip": "ultralytics-platform==0.1.102",
+   "import": "ultralytics_platform"
+  },
+  {
+   "pip": "markupsafe==3.0.4",
+   "import": "markupsafe"
+  },
+  {
+   "pip": "polars-runtime-32==2.1.0",
+   "import": "_polars_runtime_32"
+  },
+  {
+   "pip": "httpx==0.28.1",
+   "import": "httpx"
+  },
+  {
+   "pip": "anyio==4.16.0",
+   "import": "anyio"
+  },
+  {
+   "pip": "httpcore==1.0.9",
+   "import": "httpcore"
+  },
+  {
+   "pip": "h11==0.16.0",
+   "import": "h11"
   }
  ],
  "tabs": [

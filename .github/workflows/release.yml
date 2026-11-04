@@ -100,6 +100,14 @@ jobs:
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "add-ons ok")) { Report "add-on install failed (exit $LASTEXITCODE)" $out; exit 1 }
+          # 2b. the Annotator's AI packages (torch, torchvision, ultralytics, OpenCV ...) really load from the add-on folder, after Qt (as in the program)
+          Push-Location build\OpenPara\app
+          $out = & $py -c "import addons; addons.activate(); from PyQt6 import QtWidgets; import cv2, torch, torchvision; from ultralytics import YOLO; print('ai ok', torch.__version__)" 2>&1
+          Pop-Location
+          Write-Host $out
+          Write-Host "exit code: $LASTEXITCODE"
+          # a warning, not a failure: the release is still made, but the annotation says the AI models will not work and why
+          if (-not (($out | Out-String) -match "ai ok")) { Report "WARNING the annotator's AI packages do not load (exit $LASTEXITCODE)" $out }
           Copy-Item test_updater.py build\OpenPara\app\
           $out = & $py build\OpenPara\app\test_updater.py 2>&1
           $code = $LASTEXITCODE

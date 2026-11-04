@@ -1,4 +1,4 @@
-"""The General Classification Annotator as a playground tab (and later an OpenPara add-on): a Qt window in app/ rebuilt from the
+"""The General Classification Annotator as an OpenPara add-on: a Qt window in app/ rebuilt from the
 Tkinter program of the General-Classification-Annotator repository. app/ holds the toolkit-free code of the original unchanged
 (annotator_core, share_zip, web_mode, model_* ...) plus the Qt window (annotator_window / annotator_canvas / annotator_dialogs / qtk).
 """
