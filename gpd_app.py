@@ -5,10 +5,11 @@ Run:  python gpd_app.py [file.gpd | file.gpa ...]
 """
 import os
 import sys
+import contextlib
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QKeySequence
-from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget
+from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget, QVBoxLayout, QWidget
 
 SPLASH = None
 APP = None               # kept alive here: if the QApplication were dropped, Qt would delete the card with it
@@ -76,6 +77,9 @@ class AppShell(QMainWindow):
         self.stack.addWidget(self.blank)
         self.stack.addWidget(self.tabs)
         self.setCentralWidget(self.stack)
+        self.add_gl_anchor()
+        self._busy_depth = 0
+        self._busy_veil = None
         import update_ui
         self.updates = update_ui.UpdateController(self)
         ext.installer = lambda aid, parent: self.need_addon(aid, "This")
@@ -93,6 +97,61 @@ class AppShell(QMainWindow):
         self.timer = QTimer(self)                     # a star after the tab name while a document has unsaved changes
         self.timer.timeout.connect(self.refresh_titles)
         self.timer.start(1500)
+
+    def add_gl_anchor(self):
+        """The first 3D tab used to make the whole window close and open again: Qt re-creates a window that is already on screen the first time
+        a GPU-drawn widget is added to it.  A tiny GPU widget (kept outside the visible area) is added BEFORE the window is first shown, so the
+        window is made the right way from the start and the first tab just opens in it."""
+        self.gl_anchor = None
+        try:
+            from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+            a = QOpenGLWidget(self)
+            a.setFixedSize(2, 2)
+            a.move(-4, -4)                                         # outside the window: never seen, but part of it
+            a.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            self.gl_anchor = a
+        except Exception:
+            pass
+
+    @contextlib.contextmanager
+    def busy(self, text):
+        """A small card over a dimmed window while something slow is built ("Opening a new part...").  Nested uses show one card."""
+        self._busy_depth += 1
+        first = self._busy_depth == 1
+        if first:
+            self.show_busy(text)
+        try:
+            yield
+        finally:
+            self._busy_depth -= 1
+            if first:
+                self.hide_busy()
+
+    def show_busy(self, text):
+        try:
+            veil = QWidget(self)
+            veil.setStyleSheet("background: rgba(0, 0, 0, 90);")
+            veil.setGeometry(self.rect())
+            lay = QVBoxLayout(veil)
+            lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            card = QLabel(text + "\n\nJust a second...")
+            card.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            card.setStyleSheet("background: #2b2f36; color: #f0f0f0; border: 1px solid #5a6270; border-radius: 8px; padding: 22px 34px; font-size: 14px;")
+            lay.addWidget(card)
+            veil.show()
+            veil.raise_()
+            self._busy_veil = veil
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            QApplication.processEvents()                        # paint the card before the slow work starts
+        except Exception:
+            self._busy_veil = None
+
+    def hide_busy(self):
+        v, self._busy_veil = self._busy_veil, None
+        if v is not None:
+            QApplication.restoreOverrideCursor()
+            v.hide()
+            v.deleteLater()
 
     def show_stack(self):
         self.stack.setCurrentWidget(self.tabs if self.tabs.count() else self.blank)
@@ -368,6 +427,10 @@ class AppShell(QMainWindow):
             return None
         import importlib
         ctx = {"host": self, "path": path, "quiet": False, "threaded": True}
+        with self.busy("Opening " + (os.path.basename(path.rstrip("/\\")) if path else "a new " + spec.get("short", spec.get("label", kind)))):
+            return self._new_addon_tab(spec, kind, path, title, ctx, importlib)
+
+    def _new_addon_tab(self, spec, kind, path, title, ctx, importlib):
         try:
             mod = importlib.import_module(spec["module"])
             if spec.get("factory"):
@@ -414,16 +477,18 @@ class AppShell(QMainWindow):
         return None
 
     def new_part(self, demo=False):
-        w = pm_app.MainWindow()
-        if not demo:
-            w.doc = pm.Document()
-            w.update_all(fit=True)
-            w.saved_json = w.doc.to_json()
-        return self.add_tab(w)
+        with self.busy("Opening a new part"):
+            w = pm_app.MainWindow()
+            if not demo:
+                w.doc = pm.Document()
+                w.update_all(fit=True)
+                w.saved_json = w.doc.to_json()
+            return self.add_tab(w)
 
     def new_assembly(self):
         import assembly
-        return self.add_tab(assembly.AssemblyWindow(shell=self))
+        with self.busy("Opening a new assembly"):
+            return self.add_tab(assembly.AssemblyWindow(shell=self))
 
     def import_step(self):
         import exchange_dialog
@@ -468,6 +533,10 @@ class AppShell(QMainWindow):
         if i is not None:
             self.tabs.setCurrentIndex(i)
             return self.tabs.widget(i)
+        with self.busy("Opening " + os.path.basename(path)):
+            return self._open_path(path)
+
+    def _open_path(self, path):
         spec = next((sp for sp in addons.tab_kinds().values() if path.lower().endswith(tuple(sp.get("file_types", [])) or ("\0",))), None)
         if spec is not None:
             return self.new_addon_tab(next(k for k, v in addons.tab_kinds().items() if v is spec or v == spec), path)

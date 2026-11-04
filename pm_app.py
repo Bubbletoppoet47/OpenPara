@@ -2117,15 +2117,17 @@ class MainWindow(QMainWindow):
             acts = self.ed.context_actions(x, y)
         else:
             ei = self.pick_edge(x, y)
-            if ei is not None and not self.sel_edges:
-                self.pick_model(x, y)
+            if not self.sel_edges:
+                self.pick_model(x, y)                  # whatever is under the cursor (an edge, a face or a plane) is what the menu is about
             acts = []
             if self.sel_edges:
                 acts += [("Fillet", lambda: self.command("fillet")), ("Chamfer", lambda: self.command("chamfer"))]
             if self.sel_face is not None:
                 acts += [("Sketch on this face", lambda: self.command("sketch"))]
+            elif self.sel_plane is not None and not self.sel_edges:
+                acts += [("Sketch on this plane", lambda: self.command("sketch"))]
             if not acts:
-                acts = [("Sketch", lambda: self.command("sketch")), ("Fillet", lambda: self.command("fillet"))]
+                acts = [("Sketch", lambda: self.command("sketch"))]
         for label, fn in acts:
             menu.addAction(label).triggered.connect(lambda _c=False, f=fn: f())
         menu.exec(gpos)
