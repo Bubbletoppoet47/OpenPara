@@ -68,8 +68,16 @@ follows the newest `dev-<version>` pre-release instead of the newest release.
   e.g. `0.8.5.37`). The newest 10 are kept.
 - Install the Playground once from that setup file. After that it offers new builds at start-up (Help > Check for updates), the same way a
   normal OpenPara offers releases.
-- A Playground build also carries `dev_addons/` (add-ons that are not released: simulation, FEA, mesh, circuits ...) and `shared/` (code they
-  share). A release never contains them.
+- A Playground build has two modes (Help > Playground mode; it asks to restart):
+  - **Testing** (the default): exactly what the next release would be. Only the add-ons in `addons_src/` (the ones that ship) are available,
+    so the menus match OpenPara.
+  - **Full dev**: no restrictions. It also loads `dev_addons/` (unreleased add-ons: simulation, FEA, mesh, circuits ...) and `shared/` (code they
+    share).
+  A release never contains `dev_addons/` or `shared/`.
+- Putting an add-on "in testing" means moving it from `dev_addons/<id>/` to `addons_src/<id>/` with an `id`, `version` and `requires` (its pip
+  packages) in its `addon.json`, a line in `addons.CATALOG`, and the id in the release workflow's smoke test. From then on it is in Testing mode
+  and in the next release.
+- On its first start a Playground offers to copy the settings and material library from OpenPara and to install the add-ons OpenPara offers.
 - To release: merge `dev` into `main`, raise `version.py`, and run the Release workflow as above. Users on the normal program never see
   `dev-` pre-releases.
 - What makes a build a Playground build is `channel.json` next to `channel.py` (written by the workflow); `OPARA_CHANNEL=playground` does the

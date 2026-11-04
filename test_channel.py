@@ -24,6 +24,7 @@ assert addons.dev_dir() is None and channel.dev_addons_dir() is None and channel
 
 # ---- the playground
 os.environ["OPARA_CHANNEL"] = "playground"
+os.environ["OPARA_PLAYGROUND_MODE"] = "full"                    # dev_addons/ and shared/ are loaded in Full dev mode only (test_playground_modes.py covers Testing)
 assert channel.is_playground() and channel.app_name() == "OpenPara Playground" and channel.asset_prefix() == "OpenPara-Playground-"
 assert channel.tag_for("0.8.5.37") == "dev-0.8.5.37" and channel.version_of_tag("dev-0.8.5.37") == "0.8.5.37"
 assert updater.feed_url() == updater.API_DEV_LIST

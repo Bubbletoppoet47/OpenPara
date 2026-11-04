@@ -10,7 +10,7 @@ import contextlib
 import channel
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QKeySequence
+from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
 from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget, QVBoxLayout, QWidget
 
 SPLASH = None
@@ -60,10 +60,11 @@ import pm_model as pm
 
 
 class AppShell(QMainWindow):
+    _project_hint_busy = False                       # True while "install the add-on, then open the folder" runs, so it is asked only once
     def __init__(self, files=None):
         super().__init__()
         self.tab_counts = {}
-        self.setWindowTitle(channel.app_name())
+        self.setWindowTitle(channel.title())
         self.resize(1400, 860)
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.TabPosition.South)
@@ -178,8 +179,7 @@ class AppShell(QMainWindow):
             add(fm, "New " + spec.get("label", kind), lambda k=kind: self.new_addon_tab(k))
         fm.addSeparator()
         add(fm, "Open...", self.open_dialog, "Ctrl+O")
-        if any(spec.get("project_folder") for spec in kinds.values()):
-            add(fm, "Open Project Folder...", self.open_project_folder_dialog)
+        add(fm, "Open Project Folder...", self.open_project_folder_dialog)          # always there: it offers the add-on that opens the folder
         add(fm, "Save", lambda: self.cur_call("save"), "Ctrl+S")
         add(fm, "Save As...", lambda: self.cur_call("save", True), "Ctrl+Shift+S")
         fm.addSeparator()
@@ -220,6 +220,16 @@ class AppShell(QMainWindow):
         self.auto_upd.toggled.connect(lambda on: self.updates.set_auto(on))
         hm.addAction(self.auto_upd)
         add(hm, "Open the data folder", self.open_data_folder)
+        if channel.is_playground():
+            hm.addSeparator()
+            grp = QActionGroup(self)
+            for m, label in (("testing", "Playground mode: Testing (exactly the next release)"), ("full", "Playground mode: Full dev (all experimental add-ons)")):
+                a = QAction(label, self)
+                a.setCheckable(True)
+                a.setChecked(channel.mode() == m)
+                a.setActionGroup(grp)
+                a.triggered.connect(lambda _c=False, m=m: self.set_playground_mode(m))
+                hm.addAction(a)
         hm.addSeparator()
         add(hm, "About " + channel.app_name(), lambda: self.updates.about())
 
@@ -384,6 +394,60 @@ class AppShell(QMainWindow):
                 break
         self.addons_changed()
 
+    def restart_program(self):
+        """Closes the window (open documents are asked about first) and starts the program again."""
+        import subprocess
+        import updater
+        lay = updater.installed_layout()
+        self.close()
+        if not self.isVisible():
+            subprocess.Popen(updater.restart_command(), cwd=lay[0] if lay else os.getcwd())
+            QApplication.quit()
+
+    def set_playground_mode(self, m):
+        if m == channel.mode():
+            return
+        channel.set_mode(m)
+        what = "Testing: exactly what the next release would be" if m == "testing" else "Full dev: everything, including the experimental add-ons"
+        r = QMessageBox.question(self, "Playground mode", f"Mode set to {what}.\n\nRestart now to use it? (open documents are asked about first)")
+        if r == QMessageBox.StandardButton.Yes:
+            self.restart_program()
+
+    def offer_first_run(self):
+        """First start of a Playground: offer to bring over the OpenPara settings and to install the add-ons OpenPara offers, so it behaves like OpenPara.
+        Asked once; the add-ons can always be installed later in File > Add-ons."""
+        import playground
+        if os.environ.get("OPARA_NO_UPDATE") or not playground.first_run_pending():
+            return
+        playground.mark_first_run_done()                      # asked once, whatever the answers
+        copied = []
+        names = playground.copyable_settings()
+        if names:
+            r = QMessageBox.question(self, "Welcome to the Playground",
+                                     "This is a separate copy of OpenPara for trying the next version, with its own settings.\n\nCopy your settings and material "
+                                     f"library from OpenPara so it feels the same? ({len(names)} file(s); OpenPara's own files are not changed.)")
+            if r == QMessageBox.StandardButton.Yes:
+                copied = playground.copy_settings()
+        todo = playground.addons_to_offer()
+        installed = False
+        if todo:
+            lst = ", ".join(addons.info(a)["name"] for a in todo)
+            r = QMessageBox.question(self, "Add-ons",
+                                     f"OpenPara offers these add-ons: {lst}.\n\nInstall them here too, so the Playground can do the same things? This downloads them "
+                                     "from GitHub (the Annotator brings the AI packages and is a few hundred MB, so it may take a few minutes) and needs an internet "
+                                     "connection.\n\nIf you choose No, you can install them later in File > Add-ons.")
+            if r == QMessageBox.StandardButton.Yes:
+                import addons_dialog
+                for a in todo:
+                    if not addons_dialog.install_with_progress(self, a):
+                        break
+                    installed = True
+                self.addons_changed()
+        if copied:
+            r = QMessageBox.question(self, "Settings copied", "Restart now so the copied settings are used?")
+            if r == QMessageBox.StandardButton.Yes:
+                self.restart_program()
+
     def addons_changed(self):
         """Menus and buttons that depend on an add-on follow it: the core is told again which add-ons are there, the menus are rebuilt."""
         addons.register_extensions(ext)
@@ -497,6 +561,22 @@ class AppShell(QMainWindow):
                     self.tabs.setCurrentIndex(i)
                     return self.tabs.widget(i)
                 return self.new_addon_tab(kind, folder)
+        aid = addons.project_hint(folder)
+        if aid and not self._project_hint_busy:
+            name = addons.info(aid)["name"]
+            r = QMessageBox.question(self, "Open Project Folder",
+                                     f"{os.path.basename(folder)} looks like a project of the '{name}' add-on, which is not installed.\n\nInstall it now? This "
+                                     "downloads it from GitHub and needs an internet connection.")
+            if r == QMessageBox.StandardButton.Yes:
+                import addons_dialog
+                if addons_dialog.install_with_progress(self, aid):
+                    self.addons_changed()
+                    self._project_hint_busy = True
+                    try:
+                        return self.open_project_folder(folder)
+                    finally:
+                        self._project_hint_busy = False
+            return None
         QMessageBox.information(self, "Open Project Folder", f"{os.path.basename(folder)} is not a project that an installed add-on can open.")
         return None
 
@@ -704,7 +784,7 @@ def main():
     if SPLASH is not None:
         SPLASH.finish(w)                              # the card goes away when the window is up
     w.updates.check_later()
-    QTimer.singleShot(2500, w.offer_addon_updates)
+    QTimer.singleShot(2500, lambda: (w.offer_first_run(), w.offer_addon_updates()))          # one after the other, never two questions at once
     sys.exit(app.exec())
 
 if __name__ == "__main__":

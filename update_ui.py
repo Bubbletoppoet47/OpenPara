@@ -193,5 +193,5 @@ class UpdateController(QObject):
 
     def about(self):
         QMessageBox.about(self.shell, "About " + channel.app_name(),
-                          f"<b>{channel.app_name()}</b> {version.__version__}<br>An open-source parametric CAD modeller.<br><br>"
+                          f"<b>{channel.title()}</b> {version.__version__}<br>An open-source parametric CAD modeller.<br><br>"
                           f"Licence: GNU GPL v3<br><a href='https://github.com/{updater.REPO}'>github.com/{updater.REPO}</a>")

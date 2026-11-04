@@ -39,17 +39,20 @@ CATALOG = {
     "partgen": {"name": "Part Generator",
                 "description": "Gears (spur, helical, herringbone), gear systems and other parts made from a few parameters. Parts made with it "
                                "need it to be rebuilt."},
-    "truss": {"name": "Truss Generator",
+    "truss": {"project_marker": {"marker": "project.json", "format": "openpara-truss"},
+              "name": "Truss Generator",
               "description": "Builds the members of a truss from the lines of a sketch: each member is a profile extruded to its longest length with "
                              "angled cuts. Exports a cut list. Opens .truss files and truss project folders."},
-    "annotator": {"name": "General Classification Annotator",
+    "annotator": {"project_marker": {"marker": "manifest.json"},
+                  "name": "General Classification Annotator",
                   "description": "Draw boxes on photos and video frames, pick LiDAR distances, pre-label with YOLO models downloaded from GitHub, hand a "
                                  "dataset to someone as a zip (and merge theirs into yours), annotate from a tablet. An annotator project is a folder "
                                  "with its dataset inside."},
     "annotator_gimble": {"name": "Gimble sessions for the Annotator",
                          "description": "Adds File > Import Gimble Session... to the Annotator: sessions recorded by the Gimble rig (camera + LiDAR) "
                                         "become sets of photos with their depth. Needs the Annotator add-on."},
-    "trainer": {"name": "Trainer",
+    "trainer": {"project_marker": {"marker": "training.json", "format": "openpara-training"},
+                "name": "Trainer",
                 "description": "Merge annotator datasets (zips) into one training project, choose training and validation sets and distortions, and "
                                "train a YOLO model in the background; the result is saved as a model version the Annotator lists. Needs the Annotator "
                                "add-on, and torch, ultralytics and (to be practical) a GPU in the Python you train with. A training project is a "
@@ -153,6 +156,26 @@ def known():
         if a not in ids:
             ids.append(a)
     return ids
+
+
+def project_hint(folder):
+    """The id of a catalog add-on that is NOT installed and whose project folder `folder` looks like (by its marker file), else None."""
+    for aid, c in CATALOG.items():
+        pm = c.get("project_marker")
+        if not pm or is_installed(aid):
+            continue
+        mk = os.path.join(folder, pm["marker"])
+        if not os.path.isfile(mk):
+            continue
+        if pm.get("format"):
+            try:
+                with open(mk, encoding="utf-8") as f:
+                    if json.load(f).get("format") != pm["format"]:
+                        continue
+            except (OSError, ValueError, AttributeError):
+                continue
+        return aid
+    return None
 
 
 def info(aid):
