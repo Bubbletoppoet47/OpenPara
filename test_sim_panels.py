@@ -76,7 +76,8 @@ for t in tabs.values():
     lay = col.layout()
     i = lay.indexOf(holder)
     assert i >= 0, "Solve sits in the scrolled column"
-    assert lay.itemAt(i + 1).widget() is [x for x in t.sections if x.title == "Results"][0], "Solve is directly above the Results"
+    assert lay.itemAt(i + 1).widget() is t.study_box, "the parametric-study slot is right under Solve"
+    assert lay.itemAt(i + 2).widget() is [x for x in t.sections if x.title == "Results"][0], "Solve (and its study slot) sit directly above the Results"
 mesh_sec = [x for x in fea.sections if x.title == "Mesh"][0]
 assert "Mesh" in texts(fea, "Mesh") and fea.e_h.parent() is not None
 assert mesh_sec.isAncestorOf(fea.e_h) and mesh_sec.isAncestorOf(fea.order_combo) and mesh_sec.isAncestorOf(fea.cb_auto)
