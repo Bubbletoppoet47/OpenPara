@@ -1,10 +1,11 @@
 """
-sim_tab.py - the 1D FEA, 2D FEA and 2D CFD containers (a "simulation" document tab, saved as a .gps file).
+sim_tab.py - the 1D FEA, 2D FEA and 2D CFD containers (a "simulation" document tab, saved as a PROJECT FOLDER: .gpb / .gpf / .gpc).
 
-A simulation belongs to a part or an assembly (its source).  What it works on is a COPY (a snapshot) of a 2D sketch:
+A simulation is a project folder (sim_project.py).  New project makes the folder; Import copies a part or an assembly INTO it (source/), and
+the simulation only ever works on that copy (sim_source.py), so the original can be moved or deleted.  What it solves is a snapshot of
   * a part:      one of its sketches, or a slice - a plane that cuts the part (a base plane, a reference plane, with an offset)
   * an assembly: only a slice (a plane cuts all its parts; touching parts are bonded)
-The Refresh button takes the snapshot again from the source (the sketch or the slice as it is now); that clears the mesh and result.
+"Update from original" copies the original again into the project and takes the snapshot again; that clears the mesh and result.
 The material of the part (Material in its tree) fills the material boxes by itself; in an assembly slice every region uses the material
 of the part it was cut from.  The solvers and tabs are the ones of the earlier program (physics_tab, cfd_tab, beam_tab).
 """
@@ -14,7 +15,8 @@ import types
 
 import numpy as np
 
-from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox, QPushButton, QVBoxLayout,
+                             QWidget)
 
 import beam_tab
 import cfd_tab
@@ -22,7 +24,9 @@ import mat_lib
 import physics_materials as pmat
 import physics_store as pstore
 import physics_tab
+import sim_project
 import sim_slice
+import sim_source
 import sketcher_core as sc
 import slice3d
 import slice_sketch as ss
@@ -87,22 +91,35 @@ class SimWindow(QWidget):
         self.kind = kind
         self.label, cls = KINDS[kind]
         self.shell = shell
-        self.src_tab = src_tab
-        self.path = path
+        self.candidate = src_tab                  # an open part / assembly tab that Import offers first (the ribbon button of that tab)
+        self.path = path                          # the project folder (None until New project / Open project)
+        self.source = None                        # the sim_source.Source loaded from the project's copy
         self.src = {"type": "asm" if (src_tab is not None and hasattr(src_tab, "asm")) else "part", "path": getattr(src_tab, "path", None),
                     "name": src_tab.title() if src_tab is not None else ""}
         self.meta = {"sid": None, "slice": None}
         self.pending = None
+        self.units_note = ""
         self.host = SimHost(self)
         self.saved_sig = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
         bar = QHBoxLayout()
         self.src_lbl = QLabel()
+        self.src_lbl.setWordWrap(True)
         bar.addWidget(self.src_lbl, 1)
-        self.b_refresh = QPushButton("Refresh from source")
-        self.b_refresh.setToolTip("Takes the sketch or the slice again from the part / assembly as it is now. This clears the mesh and "
-                                  "result, because the geometry may have changed.")
+        self.b_new = QPushButton("New project...")
+        self.b_new.setToolTip(f"Makes the project folder of this simulation ({sim_project.ext_of(kind)}). The source is copied into it, so the "
+                              "simulation never depends on the original part.")
+        self.b_new.clicked.connect(self.new_project)
+        bar.addWidget(self.b_new)
+        self.b_import = QPushButton("Import source...")
+        self.b_import.setToolTip("Copies a part or an assembly into the project folder (an open tab, or a .gpd / .gpa file). The simulation "
+                                 "works on the copy; the original can be moved or deleted.")
+        self.b_import.clicked.connect(self.import_source)
+        bar.addWidget(self.b_import)
+        self.b_refresh = QPushButton("Update from original")
+        self.b_refresh.setToolTip("Copies the original part / assembly into the project again (as it is now) and takes the sketch or the slice "
+                                  "again. This clears the mesh and result, because the geometry may have changed.")
         self.b_refresh.clicked.connect(self.refresh)
         bar.addWidget(self.b_refresh)
         lay.addLayout(bar)
@@ -117,14 +134,30 @@ class SimWindow(QWidget):
 
     # ------------------------------------------------------------------ title / dirty / files
     def title(self):
-        base = os.path.splitext(os.path.basename(self.path))[0] if self.path else f"{self.label} - {self.src.get('name') or 'source'}"
-        return base
+        if self.path:
+            return os.path.splitext(os.path.basename(self.path.rstrip("/\\")))[0]
+        return f"{self.label} - {self.src.get('name') or 'new'}"
 
     def show_source(self):
+        have = self.project_ok()
+        self.b_new.setVisible(not have)
+        self.b_import.setEnabled(have)
+        self.b_refresh.setEnabled(self.source is not None)
+        if not have:
+            self.src_lbl.setText(f"<b>{self.label}</b> - no project yet. <b>New project...</b> makes the folder of this simulation, then "
+                                 "<b>Import source...</b> copies a part or an assembly into it.")
+            return
+        if self.source is None:
+            self.src_lbl.setText(f"<b>{self.label}</b> - project <b>{os.path.basename(self.path.rstrip('/' + chr(92)))}</b>. Press <b>Import source...</b> "
+                                 "to copy a part or an assembly into it.")
+            return
         kind = "assembly" if self.src["type"] == "asm" else "part"
         rule = ("slice only (a plane through the parts; touching parts are bonded)" if kind == "assembly" else
                 ("sketch of the part" if self.kind == "beam" else "sketch of the part, or a slice"))
-        self.src_lbl.setText(f"<b>{self.label}</b> of the {kind} <b>{self.src.get('name') or '?'}</b> - works on: {rule}")
+        self.src_lbl.setText(f"<b>{self.label}</b> of the {kind} <b>{self.src.get('name') or '?'}</b> (the copy in the project) - works on: {rule}")
+
+    def project_ok(self):
+        return bool(self.path) and sim_project.kind_of_folder(self.path) == self.kind
 
     def signature(self):
         t = self.tab
@@ -141,72 +174,206 @@ class SimWindow(QWidget):
     def is_dirty(self):
         return self.signature() != self.saved_sig
 
-    def save(self, as_new=False):
-        path = self.path
-        if as_new or not path:
-            start = path or (os.path.join(os.path.dirname(self.src["path"] or ""), self.title() + ".gps") if self.src.get("path") else self.title() + ".gps")
-            path, _ = QFileDialog.getSaveFileName(self, "Save simulation", start, "Simulation (*.gps)")
-            if not path:
-                return False
-            if not path.lower().endswith(".gps"):
-                path += ".gps"
-        meta = {"kind": self.kind, "source": {"type": self.src["type"], "name": self.src.get("name"),
-                                              "path": self.rel(path, self.src.get("path"))},
-                "meta": self.meta}
+    # ------------------------------------------------------------------ the project folder
+    def new_project(self):
+        """Asks where to put the project folder, makes it, and offers the import of the source."""
+        folder = os.path.dirname(self.src["path"]) if self.src.get("path") else ""
+        start = sim_project.default_name(self.kind, self.src.get("name") or self.label, folder or os.getcwd())
+        ext = sim_project.ext_of(self.kind)
+        path, _ = QFileDialog.getSaveFileName(self, "New simulation project (a folder)", start, f"{self.label} project (*{ext})")
+        if not path:
+            return False
+        return self.create_project(path)
+
+    def create_project(self, path):
+        ext = sim_project.ext_of(self.kind)
+        if not path.lower().endswith(ext):
+            path += ext
         try:
-            pstore.save(path, {"main": self.tab}, extras={"sim.json": json.dumps(meta).encode("utf-8")})
+            sim_project.create(path, self.kind)
+        except sim_project.ProjectError as ex:
+            QMessageBox.warning(self, "New project", str(ex))
+            return False
+        self.path = os.path.abspath(path)
+        self.show_source()
+        self.say(f"Project folder {self.path} made.")
+        if self.candidate is not None and self.candidate_ok():
+            return self.import_tab(self.candidate)
+        return True
+
+    def say(self, text):
+        self.status_lbl.setText(text)
+
+    def candidate_ok(self):
+        c = self.candidate
+        try:
+            c.title()
+        except RuntimeError:
+            return False
+        if self.shell is not None and self.shell.tabs.indexOf(c) < 0:
+            return False
+        return self.kind != "beam" or not hasattr(c, "asm")
+
+    def open_tabs(self):
+        """[(label, tab)] of the open parts and assemblies the source can come from."""
+        out = []
+        if self.shell is None:
+            return out
+        for i in range(self.shell.tabs.count()):
+            w = self.shell.tabs.widget(i)
+            if hasattr(w, "asm") or (getattr(w, "doc", None) is not None and hasattr(w.doc, "features")):
+                if self.kind == "beam" and hasattr(w, "asm"):
+                    continue
+                out.append((("assembly - " if hasattr(w, "asm") else "part - ") + w.title(), w))
+        return out
+
+    def import_source(self):
+        """Choose what to copy into the project: an open part / assembly tab, or a file."""
+        if not self.project_ok():
+            if not self.new_project():
+                return False
+            if self.source is not None:
+                return True
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Import source")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Copy this into the project (the simulation then works on the copy):"))
+        lst = QListWidget()
+        tabs = self.open_tabs()
+        for text, w in tabs:
+            lst.addItem(text)
+        if self.candidate is not None:
+            for i, (_t, w) in enumerate(tabs):
+                if w is self.candidate:
+                    lst.setCurrentRow(i)
+        elif tabs:
+            lst.setCurrentRow(0)
+        lay.addWidget(lst)
+        pick = {"file": None}
+        b_file = QPushButton("Browse for a .gpd / .gpa file...")
+        lay.addWidget(b_file)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        lay.addWidget(bb)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+
+        def browse():
+            filt = "Part (*.gpd)" if self.kind == "beam" else "Part or assembly (*.gpd *.gpa)"
+            f, _ = QFileDialog.getOpenFileName(dlg, "Part or assembly to copy", os.path.dirname(self.src.get("path") or ""), filt)
+            if f:
+                pick["file"] = f
+                dlg.accept()
+        b_file.clicked.connect(browse)
+        if not dlg.exec():
+            return False
+        if pick["file"]:
+            return self.import_file(pick["file"])
+        row = lst.currentRow()
+        if row < 0:
+            return False
+        return self.import_tab(tabs[row][1])
+
+    def import_tab(self, w):
+        """Copies an open part / assembly tab into the project: its live state (unsaved edits included) and, for an assembly, its part files."""
+        p = getattr(w, "path", None)
+        if hasattr(w, "asm"):
+            text = w.asm.to_json()
+            if not p:
+                QMessageBox.information(self, "Import source", "Save the assembly once first: its parts are found from its file.")
+                return False
+        else:
+            text = w.doc.to_json()
+        return self.do_import(p, text, name=(os.path.splitext(os.path.basename(p))[0] if p else w.title()), ext=".gpa" if hasattr(w, "asm") else ".gpd")
+
+    def import_file(self, path):
+        return self.do_import(path, None)
+
+    def do_import(self, orig, text, name=None, ext=None):
+        """The copy itself: files into source/, the source loaded, the tab told.  The geometry the tab holds is cleared."""
+        if not self.project_ok():
+            return False
+        t = self.tab
+        if getattr(t, "model", None) is not None and (t.result is not None or t.mesh is not None or getattr(t, "supports", None) or getattr(t, "loads", None)):
+            if QMessageBox.question(self, "Import source", "Importing a source replaces the copy in the project and clears the supports, loads, mesh and "
+                                    "result of this simulation. Continue?") != QMessageBox.StandardButton.Yes:
+                return False
+        try:
+            fake = orig if orig else os.path.join(self.path, (name or "source") + (ext or ".gpd"))
+            m, missing = sim_project.import_source(self.path, orig_path=fake, text=text, name=name)
+            self.source = sim_source.open_source(sim_project.source_file(self.path, m))
+        except (sim_project.ProjectError, sim_source.SourceError) as ex:
+            QMessageBox.warning(self, "Import source", str(ex))
+            return False
+        if self.kind == "beam" and self.source.type == "asm":
+            QMessageBox.information(self, "Import source", "1D FEA works on a sketch of a part. An assembly can only be used for 2D, through a slice.")
+            self.source = None
+            return False
+        self.src = {"type": self.source.type, "path": orig, "name": m["source"]["name"]}
+        self.meta = {"sid": None, "slice": None}
+        self.pending = None
+        self.tab.picker.refresh()
+        self.show_source()
+        msg = f"Copied {m['source']['name']} into the project ({m['source']['file']})."
+        if missing:
+            msg += "  Not found, left out of the copy: " + ", ".join(sorted(set(missing))) + "."
+        self.say(msg + "  Choose a sketch or a slice and press Import.")
+        self.save()
+        return True
+
+    def save(self, as_new=False):
+        if as_new or not self.project_ok():
+            if not self.new_project():
+                return False
+        folder = self.path
+        m = sim_project.read(folder)
+        m["meta"] = self.meta
+        try:
+            sim_project.write(folder, m)
+            pstore.save(sim_project.state_path(folder), {"main": self.tab}, extras={"sim.json": json.dumps({"kind": self.kind, "meta": self.meta}).encode("utf-8")})
         except Exception as ex:
             import traceback
             QMessageBox.warning(self, "Save", f"Could not save: {ex}\n\n{traceback.format_exc()}")
             return False
-        self.path = path
         self.saved_sig = self.signature()
-        note = ""
-        src = self.live_source()
-        if src is not None:
-            import sim_links
-            if sim_links.add(src, path):
-                src.refresh_tree()
-                note = f"  - listed under Simulations of the {'assembly' if self.src['type'] == 'asm' else 'part'}; save it to keep the link"
-        self.status_lbl.setText(f"Saved {path}{note}")
+        self.say(f"Saved {folder}")
         return True
 
-    @staticmethod
-    def rel(path, target):
-        if not target:
-            return None
-        try:
-            return os.path.relpath(target, os.path.dirname(os.path.abspath(path)))
-        except ValueError:
-            return target
-
     @classmethod
-    def open_file(cls, shell, path):
-        b = pstore.open_bundle(path)
-        if b is None:
-            raise ValueError("not found")
-        meta = json.loads(b.read("sim.json").decode("utf-8"))
-        data = pstore.load(path) or {}
-        kind = meta["kind"]
-        sp = meta["source"].get("path")
-        src_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(path)), sp)) if sp and not os.path.isabs(sp) else sp
-        w = cls(kind, shell=shell, src_tab=None, path=path)
-        w.src = {"type": meta["source"].get("type", "part"), "path": src_path, "name": meta["source"].get("name", "")}
-        w.meta = meta.get("meta") or {"sid": None, "slice": None}
-        w.show_source()
-        st = data.get("main")
-        if st is not None:
-            note = ""
-            try:                                           # a file saved in other units opens converted to the program's units
-                st = pstore.to_current_units(kind, st, unitctl.system(), unitctl.speed())
-            except (ValueError, KeyError) as ex:
-                note = f"kept in its own units ({ex})"
-            w.units_note = note
-            w.host._restoring = True
+    def open_project(cls, shell, folder):
+        folder = os.path.abspath(folder.rstrip("/\\") or folder)
+        kind = sim_project.kind_of_folder(folder)
+        if kind is None:
+            raise ValueError("not a simulation project folder")
+        m = sim_project.read(folder)
+        w = cls(kind, shell=shell, src_tab=None, path=folder)
+        s = m.get("source") or {}
+        w.src = {"type": s.get("type", "part"), "path": s.get("orig"), "name": s.get("name", "")}
+        w.meta = m.get("meta") or {"sid": None, "slice": None}
+        note = ""
+        sf = sim_project.source_file(folder, m)
+        if sf:
             try:
-                w.tab.import_state(st)
-            finally:
-                w.host._restoring = False
+                w.source = sim_source.open_source(sf)
+            except sim_source.SourceError as ex:
+                note = str(ex)
+        w.show_source()
+        sp = sim_project.state_path(folder)
+        if os.path.isfile(sp):
+            data = pstore.load(sp) or {}
+            st = data.get("main")
+            if st is not None:
+                try:                                       # a file saved in other units opens converted to the program's units
+                    st = pstore.to_current_units(kind, st, unitctl.system(), unitctl.speed())
+                except (ValueError, KeyError) as ex:
+                    w.units_note = f"kept in its own units ({ex})"
+                w.host._restoring = True
+                try:
+                    w.tab.import_state(st)
+                finally:
+                    w.host._restoring = False
+        if note:
+            w.say(note)
+        w.tab.picker.refresh()
         w.saved_sig = w.signature()
         return w
 
@@ -244,68 +411,36 @@ class SimWindow(QWidget):
         self.status_lbl.setText(f"Units: {new_s}, speed in {new_v}." + ((" " + " ".join(msgs)) if msgs else ""))
 
     # ------------------------------------------------------------------ the source
-    def live_source(self):
-        """The open tab of the source part / assembly, or None (never opens anything)."""
-        w = self.src_tab
-        if w is None and self.shell is not None and self.src.get("path"):
-            i = self.shell.find_tab(self.src["path"])
-            w = self.shell.tabs.widget(i) if i is not None else None
-        if w is None:
-            return None
-        try:
-            w.title()
-            if self.shell is None or self.shell.tabs.indexOf(w) >= 0:
-                return w
-        except RuntimeError:
-            pass
-        return None
-
     def source_widget(self):
-        """The part / assembly tab this simulation belongs to (opened again when it was closed)."""
-        w = self.src_tab
-        if w is not None:
-            try:
-                w.title()
-                if self.shell is None or self.shell.tabs.indexOf(w) >= 0:
-                    return w
-            except RuntimeError:
-                pass
-        p = self.src.get("path")
-        if self.shell is None or not p or not os.path.exists(p):
-            return None
-        here = self.shell.tabs.indexOf(self)
-        w = self.shell.open_path(p)
-        if here >= 0:
-            self.shell.tabs.setCurrentIndex(self.shell.tabs.indexOf(self))
-        self.src_tab = w
-        return w
+        """What the solver tabs ask for the sketches, the planes and the solids: the Source loaded from the project's copy (None until imported)."""
+        return self.source
 
     def part_doc(self):
-        w = self.source_widget()
-        return getattr(w, "doc", None) if w is not None and self.src["type"] == "part" else None
+        s = self.source
+        return s.doc if s is not None and s.type == "part" else None
 
     def bodies(self):
-        """[(name, solid, material)] of the source (a part: itself; an assembly: its parts, placed)."""
-        w = self.source_widget()
-        if w is None:
+        """[(name, solid, material)] of the source copy (a part: itself; an assembly: its parts, placed)."""
+        s = self.source
+        if s is None:
             return []
-        if self.src["type"] == "part":
-            d = w.doc
+        if s.type == "part":
+            d = s.doc
             return [(self.src.get("name") or "part", d.solid, d.material)] if d is not None and d.solid is not None else []
         import asm_sub
-        return asm_sub.bodies_of(w, w.asm)
+        return asm_sub.bodies_of(s, s.asm)
 
     def planes(self):
-        w = self.source_widget()
+        w = self.source
         if w is None:
             return []
-        if self.src["type"] == "part":
+        if w.type == "part":
             return slice3d.part_plane_specs(w.doc) if w.doc is not None else []
         return slice3d.asm_plane_specs(w.asm)
 
     def visible_planes(self):
         """The planes the source viewport shows (hidden planes are left out of the slice window)."""
-        return sim_slice.visible_planes(self.source_widget(), self.src["type"])
+        return sim_slice.visible_planes(self.source, self.src["type"])
 
     def source_items(self):
         items = []
@@ -423,15 +558,68 @@ class SimWindow(QWidget):
                 self.status_lbl.setText("No elastic properties for: " + ", ".join(sorted(set(missing))) + ". These regions use the material boxes of the tab.")
         return mats
 
+    def original_text(self):
+        """(path, live text or None) of the original the project was imported from: an open tab of it (unsaved edits count), else the file."""
+        p = self.src.get("path")
+        if not p:
+            return None, None
+        if self.shell is not None:
+            i = self.shell.find_tab(p)
+            if i is not None:
+                w = self.shell.tabs.widget(i)
+                if hasattr(w, "asm"):
+                    return p, w.asm.to_json()
+                if getattr(w, "doc", None) is not None:
+                    return p, w.doc.to_json()
+        return p, None
+
     def refresh(self):
+        """Update from original: copy it into the project again, then take the same sketch or slice again."""
+        if self.source is None:
+            self.say("Nothing imported yet: press Import source...")
+            return
         sid = self.meta.get("sid")
-        if sid is None:
-            self.status_lbl.setText("Nothing imported yet: choose a sketch or a slice and press Import.")
+        p, text = self.original_text()
+        if text is None and (not p or not os.path.isfile(p)):
+            ok = QMessageBox.question(self, "Update from original", "The original file cannot be found any more (it was moved or deleted). The copy in the "
+                                      "project is kept and still works.\n\nChoose another file to copy instead?") == QMessageBox.StandardButton.Yes
+            if ok:
+                self.import_source()
             return
         if self.tab.result is not None or self.tab.mesh is not None:
-            if QMessageBox.question(self, "Refresh", "Taking the geometry again clears the supports, loads, mesh and result of this tab. Continue?") \
-                    != QMessageBox.StandardButton.Yes:
+            if QMessageBox.question(self, "Update from original", "Copying the original again clears the supports, loads, mesh and result of this "
+                                    "tab. Continue?") != QMessageBox.StandardButton.Yes:
                 return
+        try:
+            m, missing = sim_project.import_source(self.path, orig_path=p, text=text, name=self.src.get("name"))
+            self.source = sim_source.open_source(sim_project.source_file(self.path, m))
+        except (sim_project.ProjectError, sim_source.SourceError) as ex:
+            QMessageBox.warning(self, "Update from original", str(ex))
+            return
+        self.meta = {"sid": sid, "slice": self.meta.get("slice")}
         self.tab.picker.refresh()
+        if sid is None:
+            self.say("Copied the original again. Choose a sketch or a slice and press Import.")
+            return
         self.tab.picker.select(sid)
         self.tab.picker.go()
+        self.save()
+
+
+# ---------------------------------------------------------------------------------------------------------------- the document tabs of the manifest
+def _make(kind, host, path):
+    if path:
+        return SimWindow.open_project(host, path)
+    return SimWindow(kind, shell=host)
+
+
+def make_beam(host, path=None):
+    return _make("beam", host, path)
+
+
+def make_fea(host, path=None):
+    return _make("fea", host, path)
+
+
+def make_cfd(host, path=None):
+    return _make("cfd", host, path)

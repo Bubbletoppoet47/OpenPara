@@ -2,25 +2,58 @@
  "id": "simulation",
  "name": "Simulation (1D FEA, 2D FEA, 2D CFD)",
  "version": "0.8.5",
- "description": "Frames and trusses (1D FEA), plane stress / strain FEA (2D FEA) and 2D CFD of a sketch or a slice of a part or assembly, with animation export. Saves .gps files. Needs gmsh for meshing.",
+ "description": "Frames and trusses (1D FEA), plane stress / strain FEA (2D FEA) and 2D CFD of a sketch or a slice of a part or assembly, with animation export. Each simulation is a project folder (.gpb, .gpf, .gpc) with its own copy of the part. Needs gmsh for meshing.",
  "requires": [
   {
    "pip": "gmsh==4.15.2",
    "import": "gmsh"
   }
  ],
- "sim_kinds": [
+ "tabs": [
   {
    "kind": "beam",
-   "label": "1D FEA (frames and trusses)"
+   "label": "1D FEA",
+   "short": "1D FEA",
+   "module": "sim_tab",
+   "factory": "make_beam",
+   "args": [
+    "host",
+    "path"
+   ],
+   "project_folder": {
+    "marker": "simulation.json",
+    "format": "openpara-sim-beam"
+   }
   },
   {
    "kind": "fea",
-   "label": "2D FEA"
+   "label": "2D FEA",
+   "short": "2D FEA",
+   "module": "sim_tab",
+   "factory": "make_fea",
+   "args": [
+    "host",
+    "path"
+   ],
+   "project_folder": {
+    "marker": "simulation.json",
+    "format": "openpara-sim-fea"
+   }
   },
   {
    "kind": "cfd",
-   "label": "2D CFD"
+   "label": "2D CFD",
+   "short": "2D CFD",
+   "module": "sim_tab",
+   "factory": "make_cfd",
+   "args": [
+    "host",
+    "path"
+   ],
+   "project_folder": {
+    "marker": "simulation.json",
+    "format": "openpara-sim-cfd"
+   }
   }
  ]
 }

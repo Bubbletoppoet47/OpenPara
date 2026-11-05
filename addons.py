@@ -12,7 +12,7 @@ Where an add-on comes from:
     OPARA_ADDON_BASE overrides the release address (tests, mirrors; a file:// address works).
   * the program folder: a  addons_src/<id>/  folder next to this file (a source checkout) is used first and, at start, installed or upgraded
     by startup(), so a developer's copy keeps working without a network.
-Your own files (.gps, .gpr, the material library) are never touched by installing or uninstalling.
+Your own files (simulation project folders, .gpr, the material library) are never touched by installing or uninstalling.
 """
 import hashlib
 import importlib
@@ -50,7 +50,9 @@ CATALOG = {
                                  "with its dataset inside."},
     "simulation": {"name": "Simulation (1D FEA, 2D FEA, 2D CFD)",
                    "description": "Frames and trusses (1D FEA), plane stress / strain FEA (2D FEA) and 2D CFD of a sketch or a slice of a part or "
-                                  "assembly, with animation export. Saves .gps files. Needs gmsh for meshing."},
+                                  "assembly, with animation export. Each simulation is a project folder (.gpb, .gpf, .gpc) with its own copy of the part. "
+                                  "Needs gmsh for meshing.",
+                   "project_marker": {"marker": "simulation.json"}},
     "annotator_gimble": {"name": "Gimble sessions for the Annotator",
                          "description": "Adds File > Import Gimble Session... to the Annotator: sessions recorded by the Gimble rig (camera + LiDAR) "
                                         "become sets of photos with their depth. Needs the Annotator add-on."},
@@ -64,7 +66,7 @@ CATALOG = {
 
 
 # files the program opens through an add-on although the add-on has no document tab of its own: extension -> (add-on id, name in the Open dialog)
-OPENABLE = {".gps": ("simulation", "Simulation"), ".gpr": ("render", "Render")}
+OPENABLE = {".gpr": ("render", "Render")}
 
 
 class AddonError(Exception):

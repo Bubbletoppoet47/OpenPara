@@ -1,9 +1,9 @@
 """
-sim_links.py - the link between a part / assembly and its simulations.
+sim_links.py - the links between a part / assembly and the files made from it.
 
-The simulations stay separate .gps files.  The part (.gpd) / assembly (.gpa) file keeps a list "sims" of their paths (relative to the file when
-possible), shown in its project tree under "Simulations".  Double-clicking one opens it (nothing opens by itself when the part opens), and
-saving the part / assembly also saves the linked simulations that are open and have changes.
+RENDER projects (.gpr) are still linked: the part / assembly file keeps a list "renders" of their paths (relative to the file when possible),
+shown in its project tree.  SIMULATIONS are no longer linked: each is a project folder (.gpb / .gpf / .gpc, see addons_src/simulation/
+sim_project.py) holding its own COPY of the part, so a part lists no simulations (an old "sims" list stays in the file, unused).
 """
 import os
 
@@ -14,7 +14,7 @@ def holder(w):
 
 
 def links(w, attr="sims"):
-    """The list of linked files of a part / assembly: attr = "sims" (simulations, .gps) or "renders" (render projects, .gpr)."""
+    """The list of linked files of a part / assembly: attr = "sims" (old simulation links, unused) or "renders" (render projects, .gpr)."""
     h = holder(w)
     if h is None:
         return []
@@ -24,7 +24,8 @@ def links(w, attr="sims"):
 
 
 def sims(w):
-    return links(w, "sims")
+    """Simulations are project folders with their own copy of the source, not links of the part: a part lists none (old files keep the list)."""
+    return []
 
 
 def renders(w):

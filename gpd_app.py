@@ -470,8 +470,12 @@ class AppShell(QMainWindow):
             return None
         import sim_tab
         src = self.cur()
-        if isinstance(src, sim_tab.SimWindow):                # from a simulation: another one for the same part / assembly
-            src = src.source_widget()
+        if isinstance(src, sim_tab.SimWindow):                # from a simulation: another new one, offering the same original when it is open
+            p = src.src.get("path")
+            i = self.find_tab(p) if p else None
+            src = self.tabs.widget(i) if i is not None else None
+            if src is None:
+                return self.add_tab(sim_tab.SimWindow(kind, shell=self))
         is_asm = src is not None and hasattr(src, "asm")
         is_part = isinstance(src, pm_app.MainWindow)
         if not (is_asm or is_part):
@@ -490,8 +494,6 @@ class AppShell(QMainWindow):
         src = self.cur()
         if isinstance(src, render_studio.RenderStudio):
             src = src.source_widget()
-        elif hasattr(src, "source_widget") and not hasattr(src, "doc") and not hasattr(src, "asm"):
-            src = src.source_widget()                              # a simulation tab
         is_asm = src is not None and hasattr(src, "asm")
         is_part = isinstance(src, pm_app.MainWindow)
         if not (is_asm or is_part):
@@ -604,7 +606,7 @@ class AppShell(QMainWindow):
 
     def open_filter(self):
         """The file-type filter of File > Open: parts, assemblies, what the active add-ons open themselves, and the files of add-ons the program
-        opens through them (.gps simulation files, .gpr render files) whenever that add-on is available (installed, or one click away)."""
+        opens through them (.gpr render files; simulation projects are folders, opened with File > Open Project Folder) whenever that add-on is available (installed, or one click away)."""
         extra = sorted({t for sp in addons.tab_kinds().values() for t in sp.get("file_types", [])})
         own = [(ext, label) for ext, (aid, label) in addons.OPENABLE.items() if aid in addons.known() and ext not in extra]
         every = ["*.gpd", "*.gpa"] + ["*" + t for t in extra] + ["*" + e for e, _ in own]
@@ -653,16 +655,9 @@ class AppShell(QMainWindow):
         spec = next((sp for sp in addons.tab_kinds().values() if path.lower().endswith(tuple(sp.get("file_types", [])) or ("\0",))), None)
         if spec is not None:
             return self.new_addon_tab(next(k for k, v in addons.tab_kinds().items() if v is spec or v == spec), path)
-        if path.lower().endswith(".gps"):
-            if not self.need_addon("simulation", "This simulation file (.gps)"):
-                return None
-            import sim_tab
-            try:
-                w = sim_tab.SimWindow.open_file(self, path)
-            except Exception as ex:
-                QMessageBox.warning(self, "Open", f"Could not open {os.path.basename(path)}: {ex}")
-                return None
-        elif path.lower().endswith(".gpr"):
+        if os.path.isdir(path):
+            return self.open_project_folder(path)
+        if path.lower().endswith(".gpr"):
             if not self.need_addon("render", "This render file (.gpr)"):
                 return None
             import render_studio
