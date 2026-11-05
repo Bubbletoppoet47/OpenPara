@@ -243,6 +243,7 @@ HINTS = {
     "pick3d_px": "Distance from an edge or corner at which a click picks it.",
     "snap_px": "Distance at which a new sketch point snaps.",
     "pick_px": "Distance at which a click selects a sketch item.",
+    "zoom_pct": "How much one notch of the mouse wheel zooms, in every view. Lower is gentler.",
     "label_px": "Click area around a dimension label.",
     "dim_line_px": "Thickness of the dimension line and arrowheads.",
     "dim_line_style": "Pattern of the dimension line.",
@@ -257,7 +258,7 @@ HINTS = {
     "dim_sel_color": "Colour of a selected dimension.",
     "dim_driven_color": "Colour of a driven dimension (it measures; label in brackets).",
 }
-UNITS = {"line_px": "px", "pull_px": "px", "pick3d_px": "px", "snap_px": "px", "pick_px": "px", "label_px": "px", "dim_line_px": "px",
+UNITS = {"zoom_pct": "%", "line_px": "px", "pull_px": "px", "pick3d_px": "px", "snap_px": "px", "pick_px": "px", "label_px": "px", "dim_line_px": "px",
          "ext_line_px": "px", "ext_gap_pct": "%", "ext_over_pct": "%", "arrow_pct": "%", "text_pt": "pt"}
 LENGTHY = ("edge_gap", "surf_gap")
 

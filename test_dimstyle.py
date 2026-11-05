@@ -87,8 +87,8 @@ settings.reset()
 
 # ---- the settings window
 dlg = settings_dialog.SettingsDialog()
-assert dlg.sections.count() == 4 and [dlg.sections.item(i).text() for i in range(4)] == ["Curves & Surfaces", "Outlines", "Dimensions", "Picking & Snapping"]
-assert dlg.pages.count() == 4
+assert dlg.sections.count() == 5 and [dlg.sections.item(i).text() for i in range(5)] == ["Curves & Surfaces", "Outlines", "Dimensions", "Picking & Snapping", "Navigation"]
+assert dlg.pages.count() == 5
 imgs = {}
 for st in settings.ARROW_STYLES:
     dlg.fields["arrow_style"].set_value(st)
