@@ -25,6 +25,11 @@ def colours(t):
 
 
 class BeamCanvas(QWidget):
+    export_bg = None                      # None = the normal white; 0 / 255 while the animation export draws a frame on black / white
+
+    def bg_color(self):
+        return QColor("white") if self.export_bg is None else QColor(self.export_bg, self.export_bg, self.export_bg)
+
     def __init__(self, tab):
         super().__init__()
         self.tab = tab
@@ -168,7 +173,7 @@ class BeamCanvas(QWidget):
     # --- drawing
     def paintEvent(self, ev):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor("white"))
+        p.fillRect(self.rect(), self.bg_color())
         tab = self.tab
         if tab.model is None or not tab.members:
             p.setPen(QColor("#666666"))

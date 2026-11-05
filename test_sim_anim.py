@@ -27,7 +27,7 @@ def pics(n, w=64, h=40):
         im = QImage(w, h, QImage.Format.Format_RGB32); im.fill(QColor(255 - 20 * k, 40 * k % 255, 100))
         out.append(im)
     return out
-assert ax.formats()[0] == "gif" and ax.formats()[-1] == "png" and ("mp4" in ax.formats()) == ax.mp4_available()
+assert ax.formats()[:4] == ["webp", "apng", "pngt", "gif"] and ax.formats()[-1] == "png" and ("mp4" in ax.formats()) == ax.mp4_available()
 assert len(ax.ordered(list(range(5)), 2)) == 8 and ax.ordered(list(range(5)), 2)[:8] == [0, 1, 2, 3, 4, 3, 2, 1] and ax.ordered(list(range(5)), 1) == list(range(5))
 g = ax.write(pics(6), os.path.join(OUT, "a"), "gif", 10, 1)                      # the extension is added
 assert g.endswith(".gif") and os.path.getsize(g) > 0
@@ -115,5 +115,44 @@ b.anim_stop()
 if ax.mp4_available():
     out = b.export_animation(path_fmt=(os.path.join(OUT, "fea1d.mp4"), "mp4"))
     assert out and os.path.getsize(out) > 0
+# ---------------- transparent background: animated WebP / APNG / PNG pictures keep only what is drawn
+def check_alpha(im):
+    a = np.array(im.convert("RGBA"))
+    assert a[0, 0, 3] == 0 and a[-1, -1, 3] == 0, "the corners (background) are transparent"
+    assert (a[:, :, 3] == 255).sum() > 200, "the drawing itself stays opaque"
+    return a
+# the matte itself: a red square on a white / black background, one half-covered pixel column
+from PyQt6.QtGui import QPainter
+def draw(bg):
+    q = QImage(30, 20, QImage.Format.Format_RGB32); q.fill(QColor(bg, bg, bg))
+    p = QPainter(q); p.fillRect(5, 5, 10, 10, QColor(200, 30, 30)); p.setOpacity(0.5); p.fillRect(20, 5, 5, 10, QColor(0, 0, 255)); p.end()
+    return q
+mt = ax.matte(draw(255), draw(0))
+px = lambda x, y: (mt.pixelColor(x, y).red(), mt.pixelColor(x, y).green(), mt.pixelColor(x, y).blue(), mt.pixelColor(x, y).alpha())
+assert px(0, 0)[3] == 0 and px(8, 8) == (200, 30, 30, 255) and abs(px(22, 8)[3] - 128) <= 2 and px(22, 8)[2] > 250, (px(8, 8), px(22, 8))
+# 2D FEA
+t.e_frames.setText("4"); t.loop_combo.setCurrentIndex(1)
+w1 = t.export_animation(path_fmt=(os.path.join(OUT, "t2d.webp"), "webp"))
+iw = Image.open(w1); assert iw.n_frames == 4 and iw.format == "WEBP"
+iw.seek(0); check_alpha(iw); iw.seek(3); a3 = check_alpha(iw)
+w2 = t.export_animation(path_fmt=(os.path.join(OUT, "t2d_a.png"), "apng"))
+ia = Image.open(w2); assert ia.n_frames == 4 and ia.format == "PNG"; check_alpha(ia)
+w3 = t.export_animation(path_fmt=(os.path.join(OUT, "t2d_png"), "pngt"))
+fs = sorted(os.listdir(w3)); assert len(fs) == 4; check_alpha(Image.open(os.path.join(w3, fs[0])))
+assert t.canvas.export_bg is None and t.canvas.bg_color().name() == "#ffffff", "the window is back to normal"
+# the opaque export still has a white background
+og = t.export_animation(path_fmt=(os.path.join(OUT, "opaque.gif"), "gif"))
+assert np.array(Image.open(og).convert("RGB"))[0, 0].tolist() == [255, 255, 255]
+# 1D FEA
+b.e_frames.setText("4"); b.loop_combo.setCurrentIndex(0)
+o1 = b.export_animation(path_fmt=(os.path.join(OUT, "t1d.webp"), "webp"))
+i1 = Image.open(o1); assert i1.n_frames == 4; i1.seek(3); check_alpha(i1)
+assert b.canvas.export_bg is None
+# CFD
+c.slider.setRange(0, 2)
+o3 = c.export_animation(path_fmt=(os.path.join(OUT, "tcfd.webp"), "webp"))
+i3 = Image.open(o3); assert i3.n_frames >= 1 and i3.format == "WEBP"   # identical pictures may be merged by the encoder
+a = np.array(i3.convert("RGBA")); assert a[0, 0, 3] == 0
+assert c.canvas.export_bg is None
 print("OK sim anim")
 os._exit(0)

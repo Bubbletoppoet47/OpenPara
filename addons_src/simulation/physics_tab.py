@@ -219,6 +219,11 @@ def field_values(result, key):
 # the drawing
 # ----------------------------------------------------------------------------------------------
 class PhysCanvas(QWidget):
+    export_bg = None                      # None = the normal white; 0 / 255 while the animation export draws a frame on black / white
+
+    def bg_color(self):
+        return QColor("white") if self.export_bg is None else QColor(self.export_bg, self.export_bg, self.export_bg)
+
     def __init__(self, tab):
         super().__init__()
         self.tab = tab
@@ -442,7 +447,7 @@ class PhysCanvas(QWidget):
 
     def paintEvent(self, ev):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor("white"))
+        p.fillRect(self.rect(), self.bg_color())
         tab = self.tab
         if tab.geom is None:
             p.setPen(QColor("#666666"))
@@ -457,7 +462,7 @@ class PhysCanvas(QWidget):
         if want_field or mesh_only:
             key = (self.field if want_field else "mesh", self.show_mesh, self.show_deformed, round(self.def_scale, 9),
                    round(self.scale, 6), round(self.org.x(), 3), round(self.org.y(), 3), self.width(), self.height(),
-                   id(tab.result), id(tab.mesh))
+                   id(tab.result), id(tab.mesh), self.export_bg)
             if self.anim_frames is not None and want_field:
                 p.drawPixmap(0, 0, self.anim_frames[min(self.anim_idx, len(self.anim_frames) - 1)])
             else:
@@ -1078,7 +1083,7 @@ class PhysicsTab(QWidget):
         arow.addWidget(self.b_stop)
         al.addRow(arow)
         self.b_export = QPushButton("Export animation...")
-        self.b_export.setToolTip("Saves the animation as an animated GIF" + (", an MP4 video" if anim_export.mp4_available() else
+        self.b_export.setToolTip("Saves the animation as a transparent animated WebP or PNG (only what is drawn is kept), an animated GIF" + (", an MP4 video" if anim_export.mp4_available() else
                                  " (an MP4 video too when OpenCV or imageio-ffmpeg is installed)") + " or a folder of PNG pictures. "
                                  "It uses the Frames, Duration and Playback above.")
         self.b_export.clicked.connect(lambda: self.export_animation())
@@ -2429,9 +2434,25 @@ class PhysicsTab(QWidget):
             cv.anim_idx = k
             cv.repaint()
             return cv.grab().toImage()
+        store = {255: cv.anim_frames}                               # the pictures drawn on white; those on black are drawn when needed
+
+        def set_bg(level):
+            import meshdraw as md
+            lv = 255 if level is None else level
+            md.set_background(lv)
+            cv.export_bg = level
+            if lv not in store:
+                store[lv] = [cv.render_picture(True, k / (n - 1)) for k in range(n)]
+            cv.anim_frames = store[lv]
+            cv.repaint()
         try:
-            return anim_export.export(self, "2D FEA", n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=ask)
+            return anim_export.export(self, "2D FEA", n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=ask,
+                                      set_bg=set_bg)
         finally:
+            import meshdraw as md
+            md.set_background(255)
+            cv.export_bg = None
+            cv.anim_frames = store[255]
             cv.anim_idx = keep
             cv.update()
 

@@ -412,7 +412,7 @@ class CFDCanvas(pt.PhysCanvas):
 
     def paintEvent(self, ev):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor("white"))
+        p.fillRect(self.rect(), self.bg_color())
         tab = self.tab
         if tab.geom is None:
             p.setPen(QColor("#666666"))
@@ -741,7 +741,7 @@ class CFDTab(QWidget):
         self.b_play.clicked.connect(self.play_frames)
         row.addWidget(self.b_play)
         self.b_export = QPushButton("Export animation...")
-        self.b_export.setToolTip("Saves the time frames as an animated GIF" + (", an MP4 video" if anim_export.mp4_available() else
+        self.b_export.setToolTip("Saves the time frames as a transparent animated WebP or PNG, an animated GIF" + (", an MP4 video" if anim_export.mp4_available() else
                                  " (an MP4 video too when OpenCV or imageio-ffmpeg is installed)") + " or a folder of PNG pictures.")
         self.b_export.clicked.connect(lambda: self.export_animation())
         row.addWidget(self.b_export)
@@ -1600,9 +1600,21 @@ class CFDTab(QWidget):
             self.slider.setValue(k)
             self.canvas.repaint()
             return self.canvas.grab().toImage()
+        cv = self.canvas
+
+        def set_bg(level):
+            import meshdraw as md
+            md.set_background(255 if level is None else level)
+            cv.export_bg = level
+            cv.base = None                                      # the field picture starts from the new background
+            cv.repaint()
         try:
-            return anim_export.export(self, "CFD", n, grab, 12.0, 0, say=self.status, path_fmt=path_fmt)
+            return anim_export.export(self, "CFD", n, grab, 12.0, 0, say=self.status, path_fmt=path_fmt, set_bg=set_bg)
         finally:
+            import meshdraw as md
+            md.set_background(255)
+            cv.export_bg = None
+            cv.base = None
             self.slider.setValue(keep)
 
     def play_step(self):

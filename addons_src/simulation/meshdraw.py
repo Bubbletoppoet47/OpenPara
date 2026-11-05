@@ -258,7 +258,7 @@ def _gpu_render(W, H, sx, sy, tris, nodal, tval, edges, edge_alpha):
         funcs.glViewport(0, 0, W, H)
         funcs.glDisable(0x0B71)                                     # depth test
         funcs.glDisable(0x0B44)                                     # cull face
-        funcs.glClearColor(1.0, 1.0, 1.0, 1.0)
+        funcs.glClearColor(_bg['v'] / 255.0, _bg['v'] / 255.0, _bg['v'] / 255.0, 1.0)
         funcs.glClear(GL_COLOR_BUFFER_BIT)
         prog.bind()
         prog.setUniformValue("size", float(W), float(H))
@@ -384,7 +384,7 @@ def raster(W, H, sx, sy, tris):
 def colour_raster(W, H, R, nodal, tris, tri_vals):
     """A QImage from a raster() result and values already scaled to 0..1."""
     P, Tn, L = R
-    out = np.full(W * H, 0xFFFFFFFF, dtype=np.uint32)
+    out = np.full(W * H, 0xFF000000 | (_bg['v'] * 0x010101), dtype=np.uint32)
     if len(P):
         if nodal is not None:
             v = (L * nodal[tris[Tn]]).sum(axis=1) / np.maximum(L.sum(axis=1), 1e-12)
@@ -425,8 +425,17 @@ def _unique_edges(tris):
     return np.unique(np.sort(e, axis=1), axis=0)
 
 
+_bg = {"v": 255}
+
+
+def set_background(level):
+    """The grey level (0 = black, 255 = white, the normal one) the field pictures start from.  The animation export draws every frame on white and
+    on black to find out which pixels are really covered (so the background can be made transparent)."""
+    _bg["v"] = int(level)
+
+
 def render(W, H, sx, sy, tris, nodal=None, tri_vals=None, lo=0.0, hi=1.0, edges=None, edge_alpha=0.35):
-    """Return a QImage (RGB32, white background) of the triangles coloured by value.
+    """Return a QImage (RGB32, white background unless set_background says otherwise) of the triangles coloured by value.
 
     sx, sy: screen positions of the nodes (pixels, y down).  Give `nodal` (one value per node, smooth) or
     `tri_vals` (one per triangle, flat).  Values are mapped lo..hi onto the colour ramp.

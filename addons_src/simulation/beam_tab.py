@@ -313,7 +313,7 @@ class BeamTab(QWidget):
         arow.addWidget(self.b_stop)
         al.addRow(arow)
         self.b_export = QPushButton("Export animation...")
-        self.b_export.setToolTip("Saves the animation as an animated GIF" + (", an MP4 video" if anim_export.mp4_available() else
+        self.b_export.setToolTip("Saves the animation as a transparent animated WebP or PNG (only what is drawn is kept), an animated GIF" + (", an MP4 video" if anim_export.mp4_available() else
                                  " (an MP4 video too when OpenCV or imageio-ffmpeg is installed)") + " or a folder of PNG pictures. "
                                  "It uses the Frames, Duration and Playback above.")
         self.b_export.clicked.connect(lambda: self.export_animation())
@@ -1035,9 +1035,14 @@ class BeamTab(QWidget):
             cv.ramp = k / (n - 1)
             cv.repaint()
             return cv.grab().toImage()
+        def set_bg(level):
+            cv.export_bg = level
+            cv.repaint()
         try:
-            return anim_export.export(self, "1D FEA", n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=path_fmt)
+            return anim_export.export(self, "1D FEA", n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=path_fmt,
+                                      set_bg=set_bg)
         finally:
+            cv.export_bg = None
             cv.ramp = 1.0
             cv.update()
 
