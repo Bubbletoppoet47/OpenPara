@@ -172,14 +172,23 @@ class SimWindow(QWidget):
             return
         have = bool(self.path) and os.path.isfile(os.path.join(self.path, sim_project.STUDY_DIR, "study.json"))
         self.b_study.setText("Open parametric study" if have else "Create parametric study")
-        self.b_study.setEnabled(self.source is not None and getattr(self.tab, "model", None) is not None)
+        self.b_study.setEnabled(True)                  # a click that cannot work says why (open_study), instead of a grey button that says nothing
 
     def open_study(self):
         """Saves the simulation (the study lives in its project folder) and opens its parametric study tab."""
         fns = ext.hooks("sim_study")
         if not fns:
+            QMessageBox.information(self, "Parametric study", "The Parametric Studies add-on is not loaded. Install or enable it, then restart.")
             return None
-        if not self.project_ok() or self.is_dirty():
+        if not self.project_ok():
+            QMessageBox.information(self, "Parametric study", "This simulation has no project folder yet. Press 'New project...', import a part, "
+                                    "choose a sketch or a slice and press Import. The study is saved in that project.")
+            return None
+        if self.source is None or getattr(self.tab, "model", None) is None:
+            QMessageBox.information(self, "Parametric study", "Import a part and choose its sketch (or a slice) in this simulation first: a study "
+                                    "varies the inputs of the simulation that is set up here.")
+            return None
+        if self.is_dirty():
             if not self.save():
                 return None
         return fns[0](self)

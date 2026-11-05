@@ -1044,13 +1044,17 @@ class SolidWindow(QWidget):
             return
         have = bool(self.path) and os.path.isfile(os.path.join(self.path, sim_project.STUDY_DIR, "study.json"))
         self.b_study.setText("Open parametric study" if have else "Create parametric study")
-        self.b_study.setEnabled(self.geom is not None and self.job is None)
+        self.b_study.setEnabled(self.job is None)
 
     def open_study(self):
         fns = ext.hooks("sim_study")
         if not fns:
+            QMessageBox.information(self, "Parametric study", "The Parametric Studies add-on is not loaded. Install or enable it, then restart.")
             return None
-        if not self.project_ok() or self.is_dirty():
+        if not self.project_ok() or self.geom is None:
+            QMessageBox.information(self, "Parametric study", "Press 'New project...' and import a part first: the study is saved in the project.")
+            return None
+        if self.is_dirty():
             if not self.save():
                 return None
         return fns[0](self)

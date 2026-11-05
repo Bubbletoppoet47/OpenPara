@@ -41,7 +41,7 @@ w.refresh_study_button()
 assert not w.tab.study_box.isHidden() and w.b_study.text() == "Create parametric study"
 n0 = sh.tabs.count()
 t.run_task = getattr(t, "run_task", None) or None
-tab = w.open_study()
+w.b_study.click(); tab = sh.tabs.currentWidget()
 assert tab is not None and sh.tabs.count() == n0 + 1 and sh.tabs.currentWidget() is tab, "the study opens as a tab"
 assert w.b_study.text() == "Open parametric study" and os.path.isfile(os.path.join(w.path, "study", "study.json"))
 assert tab.title().startswith("Study - b1")
