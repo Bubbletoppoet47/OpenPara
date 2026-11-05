@@ -1266,7 +1266,9 @@ class SketchEditor:
 
     def cancel(self):
         """Esc: drop the shape / relation being made; else go back to the select tool; else leave the sketch."""
-        if self.pending or self.picks or self.axis_wait:
+        if self.tool == "spline" and len(self.pending) >= 2:
+            self.finish_spline()                                  # Esc ends a spline that has points (like ending a line chain), it does not throw it away
+        elif self.pending or self.picks or self.axis_wait:
             self.pending, self.picks, self.host, self.axis_wait = [], [], None, False
             self.prune_ext()
             self.redraw()
@@ -1854,6 +1856,8 @@ class SketchEditor:
             free = i in rep.free_circles or m.cis[i]["c"] in rep.free_pts
         elif k == "ln":
             free = any(p in rep.free_pts for p in m.lns[i])
+        elif k == "sp":
+            free = any(p in rep.free_pts for p in m.sps[i]["pts"])
         else:
             a = m.ars[i]
             free = any(p in rep.free_pts for p in (a["c"], a["s"], a["e"]))
@@ -2071,7 +2075,7 @@ class SketchEditor:
                 self.polyline(np.array([self.coords(self.pending[-1]), c]), COL_PREVIEW, 2.0)
                 return
             if t == "spline":
-                pts = [self.coords(s) for s in self.pending] + ([c] if c != self.coords(self.pending[-1]) else [])
+                pts = [tuple(self.coords(s)) for s in self.pending] + ([tuple(c)] if tuple(c) != tuple(self.coords(self.pending[-1])) else [])
                 if len(pts) >= 2:
                     self.polyline(sc.spline_curve(pts, 10), COL_PREVIEW, 2.0)
                 return

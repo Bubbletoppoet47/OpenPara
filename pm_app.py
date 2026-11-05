@@ -356,6 +356,9 @@ class MainWindow(QMainWindow):
         from PyQt6.QtGui import QShortcut
         QShortcut(QKeySequence(Qt.Key.Key_F2), self.tree, activated=lambda: self.rename_feature(), context=Qt.ShortcutContext.WidgetShortcut)
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=lambda: self.ed.cancel() if self.ed is not None and self.ed.active else None)
+        for key_ in (Qt.Key.Key_Return, Qt.Key.Key_Enter):               # Enter finishes the spline being drawn
+            QShortcut(QKeySequence(key_), self, activated=lambda: self.ed.finish_spline() if (self.ed is not None and self.ed.active
+                                                                                              and self.ed.tool == "spline") else None)
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.delete_key)
 
     def add_sim(self, kind):

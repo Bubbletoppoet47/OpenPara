@@ -105,6 +105,33 @@ click(-40, -60); click(0, -60); click(0, -100); click(-40, -100); click(-40, -60
 assert len(ed.m.sps) == 2
 cl = [v for v in ed.m.sps.values() if len(v["pts"]) == 5]
 assert cl and cl[0]["pts"][0] == cl[0]["pts"][-1], "clicking the first point closes the spline"
+# the solver report exists after the first solve: the curve must still get a colour (this used to raise and hide the spline)
+ed.reset_tool("select"); ed.sel = []
+assert ed.rep is not None, "the report is there after drawing"
+for key in sk.all_keys(ed.m):
+    col, wd = ed.entity_color(key)                 # no KeyError for a spline
+assert ed.entity_color(("sp", next(iter(ed.m.sps)))) is not None
+ed.redraw()
+# Escape ends a spline that has points (it is not thrown away); with fewer than two points it just cancels
+w.set_tool("spline")
+n0 = len(ed.m.sps)
+click(60, 40); click(80, 70); click(100, 40)
+assert len(ed.pending) == 3
+ed.cancel()
+assert len(ed.m.sps) == n0 + 1 and ed.pending == [], "Esc finishes the spline"
+click(60, -40); ed.cancel()
+assert len(ed.m.sps) == n0 + 1 and ed.pending == [], "one point and Esc: nothing made"
+# Enter finishes too
+w.set_tool("spline"); click(-90, 40); click(-70, 70); click(-50, 40)
+ed.finish_spline(); assert len(ed.m.sps) == n0 + 2
+# a fit point can be dragged: the curve follows
+ed.reset_tool("select"); ed.sel = []
+sp_id = max(ed.m.sps); fp = ed.m.sps[sp_id]["pts"][1]
+before = np.array(sk.polyline(ed.m, ("sp", sp_id), 48)).copy()
+u0, v0 = ed.m.pts[fp]
+ed.press(*px(u0, v0)); ed.move(*px(u0, v0)); ed.move(*px(u0 + 5, v0 + 30)); ed.move(*px(u0 + 10, v0 + 60)); ed.release(*px(u0 + 10, v0 + 60))
+after = np.array(sk.polyline(ed.m, ("sp", sp_id), 48))
+assert ed.m.pts[fp][1] > v0 + 20 and not np.allclose(before, after), "dragging a fit point reshapes the spline"
 # select it by clicking on the curve
 ed.reset_tool("select"); ed.sel = []
 mid = sk.polyline(ed.m, ("sp", next(iter(ed.m.sps))), 48); q = mid[len(mid) // 2]
