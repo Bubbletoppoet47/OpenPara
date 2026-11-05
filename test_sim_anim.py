@@ -70,13 +70,23 @@ assert t.canvas.anim_idx == 0 or True
 
 # ---------------- 2D CFD: the saved time frames
 c = cfd_tab.CFDTab(Win()); c.resize(900, 600); c.show(); app.processEvents()
-c.slider.setRange(0, 4); c.slider.setValue(2)
+assert c.e_dur.text() == "3" and [c.loop_combo.itemText(i) for i in range(3)] == ["Once", "Loop", "Back and forth"] and c.anim_box.isVisibleTo(c)
+c.slider.setRange(0, 4); c.slider.setValue(2); c.e_dur.setText("1")
 out = c.export_animation(path_fmt=(os.path.join(OUT, "cfd.gif"), "gif"))
 gi = Image.open(out)
 total = 0
 for k in range(gi.n_frames):
     gi.seek(k); total += gi.info["duration"]
-assert out and abs(total - 5 * 83) <= 25 and c.slider.value() == 2, (total, c.slider.value())      # identical pictures are merged by the GIF writer, the time is kept
+assert out and abs(total - 1000) <= 40 and c.slider.value() == 2, (total, c.slider.value())      # identical pictures are merged by the GIF writer, the time is kept
+# playback modes step the slider: Once stops at the end, Loop wraps, Back and forth reverses
+c.frames = [None] * 5
+c.loop_combo.setCurrentIndex(0); c.slider.setValue(3); c.play_dir = 1; c.play_timer.start(1000)
+c.play_step(); assert c.slider.value() == 4
+c.play_step(); assert not c.play_timer.isActive() and c.slider.value() == 4
+c.loop_combo.setCurrentIndex(1); c.play_step(); assert c.slider.value() == 0
+c.loop_combo.setCurrentIndex(2); c.slider.setValue(4); c.play_dir = 1; c.play_step(); assert c.slider.value() == 3 and c.play_dir == -1
+c.slider.setValue(0); c.play_step(); assert c.slider.value() == 1 and c.play_dir == 1
+c.frames = []; c.e_dur.setText("1"); c.loop_combo.setCurrentIndex(0)
 c.slider.setRange(0, 0)
 assert c.b_export.text() == "Export animation..."
 

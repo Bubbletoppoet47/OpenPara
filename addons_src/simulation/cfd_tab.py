@@ -728,16 +728,34 @@ class CFDTab(QWidget):
         lay.addWidget(with_help(self.slider, HELP["slider"]))
         self.frame_lbl = self.note("no frames yet")
         lay.addWidget(self.frame_lbl)
-        row = QHBoxLayout()
-        self.b_play = QPushButton("Play frames")
+        lay.addWidget(QLabel("Animate"))
+        self.anim_box = QWidget()
+        al = QFormLayout(self.anim_box)
+        al.setContentsMargins(14, 0, 0, 0)
+        self.e_dur = QLineEdit("3")
+        self.loop_combo = QComboBox()
+        self.loop_combo.addItems(["Once", "Loop", "Back and forth"])
+        self.lbl_frames = self.note("Frames: none yet")
+        al.addRow(self.lbl_frames)
+        al.addRow("Duration (s)", self.e_dur)
+        al.addRow("Playback", self.loop_combo)
+        arow = QHBoxLayout()
+        self.b_play = QPushButton("Play")
         self.b_play.clicked.connect(self.play_frames)
-        row.addWidget(self.b_play)
+        self.b_stop = QPushButton("Stop")
+        self.b_stop.clicked.connect(self.stop_motion)
+        arow.addWidget(self.b_play)
+        arow.addWidget(self.b_stop)
+        al.addRow(arow)
         self.b_export = QPushButton("Export animation...")
-        self.b_export.setToolTip("Saves the time frames as a transparent animated WebP or PNG, an animated GIF" + (", an MP4 video" if anim_export.mp4_available() else
-                                 " (an MP4 video too when OpenCV or imageio-ffmpeg is installed)") + " or a folder of PNG pictures.")
+        self.b_export.setToolTip("Saves the time frames as a transparent animated WebP or PNG (only what is drawn is kept), an animated GIF" + (", an MP4 video" if anim_export.mp4_available() else
+                                 " (an MP4 video too when OpenCV or imageio-ffmpeg is installed)") + " or a folder of PNG pictures. "
+                                 "It uses the Duration and Playback above.")
         self.b_export.clicked.connect(lambda: self.export_animation())
-        row.addWidget(self.b_export)
-        lay.addLayout(row)
+        al.addRow(self.b_export)
+        al.addRow(self.note("The frames are the time steps saved while solving (Frame every (steps) sets how many). Duration is the length of the whole clip."))
+        lay.addWidget(self.anim_box)
+        self.play_dir = 1
         self.play_timer = QTimer(self)
         self.play_timer.timeout.connect(self.play_step)
         self.cb_tracers = QCheckBox("Moving tracer particles (on the final flow)")
@@ -1098,6 +1116,7 @@ class CFDTab(QWidget):
         self.prog_lbl.setText("")
         self.bar.setValue(0)
         self.frame_lbl.setText("no frames yet")
+        self.lbl_frames.setText("Frames: none yet")
         self.canvas.fit()
         self.update_dt_note()
         self.update_bl_note()
@@ -1191,6 +1210,7 @@ class CFDTab(QWidget):
                     f"smallest angle {s['angle_min']:.1f} deg, worst aspect ratio {s['aspect_max']:.2f}."
                     + ("  NOTE: " + "; ".join(s["relaxed"]) + "." if s.get("relaxed") else ""))
         self.frame_lbl.setText("no frames yet")
+        self.lbl_frames.setText("Frames: none yet")
         self.res_lbl.setText("")
         self.canvas.fit()
         self.enable_buttons()
@@ -1282,6 +1302,7 @@ class CFDTab(QWidget):
         self.canvas.raster = self.canvas.base = self.canvas.mesh_pix = None
         self.canvas.particles = None
         self.frame_lbl.setText("no frames yet")
+        self.lbl_frames.setText("Frames: none yet")
         s_ = mesh["stats"]
         self.status(f"Auto-refine pass {k}: new mesh with {s_['n_tris']:,} triangles, solving again...")
         self.canvas.update()
@@ -1528,6 +1549,7 @@ class CFDTab(QWidget):
         self.prog_lbl.setText("")
         self.bar.setValue(0)
         self.frame_lbl.setText("no frames yet")
+        self.lbl_frames.setText("Frames: none yet")
         self.enable_buttons()
         self.canvas.update()
 
@@ -1552,6 +1574,7 @@ class CFDTab(QWidget):
         vals = vals.astype(float)
         step_txt = f"step {fr['step']}, t = {fr['t']:.4g} s, change {fr['change']:.2e}"
         self.frame_lbl.setText(f"frame {i + 1} of {len(self.frames)}:  {step_txt}")
+        self.lbl_frames.setText(f"Frames: {len(self.frames)}")
         if div != 1.0:
             vals = vals / div
         return {"values": vals, "kind": kind, "name": name, "unit": unit, "stamp": (id(fr), key, unit)}
@@ -1570,19 +1593,35 @@ class CFDTab(QWidget):
         return (fr["uy"][tris] * self.field_cache["gx"]).sum(axis=1) - (fr["ux"][tris] * self.field_cache["gy"]).sum(axis=1)
 
     # --- frames and tracers
+    def anim_duration(self):
+        try:
+            d = float(self.e_dur.text())
+        except ValueError:
+            d = 0.0
+        if d <= 0:
+            QMessageBox.warning(self, "Animate", "Duration must be a positive number of seconds.")
+            return None
+        return d
+
     def play_frames(self):
-        if self.play_timer.isActive():
-            self.stop_motion()
+        n = len(self.frames)
+        if n < 2:
+            QMessageBox.information(self, "Animate", "There are no time frames yet. Solve first (Frame every (steps) sets how many are saved).")
             return
-        if len(self.frames) < 2:
+        dur = self.anim_duration()
+        if dur is None:
             return
+        self.play_timer.stop()
         self.slider.setValue(0)
-        self.play_timer.start(80)
-        self.b_play.setText("Stop playing")
+        self.play_dir = 1
+        self.play_timer.start(max(10, int(dur * 1000 / n)))
 
     def export_animation(self, path_fmt=None):
         """Saves the saved time frames (the slider's positions) as GIF / MP4 / PNG pictures.  -> the path written or None."""
         n = self.slider.maximum() + 1
+        dur = self.anim_duration() if n >= 2 else 3.0
+        if dur is None:
+            return None
         if n < 2:
             QMessageBox.information(self, "Export animation", "There are no time frames yet. Solve first (Frame every (steps) sets how many are saved).")
             return None
@@ -1602,7 +1641,7 @@ class CFDTab(QWidget):
             cv.base = None                                      # the field picture starts from the new background
             cv.repaint()
         try:
-            return anim_export.export(self, "CFD", n, grab, 12.0, 0, say=self.status, path_fmt=path_fmt, set_bg=set_bg)
+            return anim_export.export(self, "CFD", n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=path_fmt, set_bg=set_bg)
         finally:
             import meshdraw as md
             md.set_background(255)
@@ -1611,16 +1650,25 @@ class CFDTab(QWidget):
             self.slider.setValue(keep)
 
     def play_step(self):
-        v = self.slider.value() + 1
-        if v > self.slider.maximum():
-            self.play_timer.stop()
-            self.b_play.setText("Play frames")
-            return
+        n = self.slider.maximum() + 1
+        mode = self.loop_combo.currentIndex()
+        v = self.slider.value() + self.play_dir
+        if v >= n:
+            if mode == 0:
+                self.stop_motion()
+                return
+            if mode == 1:
+                v = 0
+            else:
+                self.play_dir = -1
+                v = max(0, n - 2)
+        elif v < 0:
+            self.play_dir = 1
+            v = min(1, n - 1)
         self.slider.setValue(v)
 
     def stop_motion(self):
         self.play_timer.stop()
-        self.b_play.setText("Play frames")
 
     def tracers_toggled(self, on):
         if not on:

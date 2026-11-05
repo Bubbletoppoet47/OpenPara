@@ -82,3 +82,7 @@ follows the newest `dev-<version>` pre-release instead of the newest release.
   `dev-` pre-releases.
 - What makes a build a Playground build is `channel.json` next to `channel.py` (written by the workflow); `OPARA_CHANNEL=playground` does the
   same for a source checkout.
+
+
+## For contributors
+See [docs/DESIGN_PRINCIPLES.md](docs/DESIGN_PRINCIPLES.md) for the design conventions (side panels, results, animations, tables, sketching). Read it before changing how something looks.
