@@ -176,6 +176,7 @@ class SolidWindow(QWidget):
         rl.addWidget(self.status_lbl)
         split.addWidget(right)
         split.setStretchFactor(1, 1)
+        split.setSizes([400, 1000])                  # the panel starts about 400 wide; drag the divider for more (not remembered)
         lay.addWidget(split, 1)
         self.build_panel()
         self.show_source()
@@ -230,16 +231,13 @@ class SolidWindow(QWidget):
         self.put_material(self.setup["material"])
         # --- 3 supports
         v = self.sec(3, "Supports", True, summary=lambda: f"{len(self.setup['supports'])} support(s)")
-        v.addWidget(QLabel("Select the face(s) first, then add."))
-        row = QHBoxLayout()
-        self.cb_mode = QComboBox()
-        for k, lab in sm.MODES.items():
-            self.cb_mode.addItem(lab, k)
-        row.addWidget(self.cb_mode, 1)
-        b = QPushButton("Add support")
-        b.clicked.connect(lambda: self.add_support())
-        row.addWidget(b)
-        v.addLayout(row)
+        v.addWidget(QLabel("Select the face(s) first (click them in the view), then press a button."))
+        for mode, icn, tip in (("fixed", "fixed", "Holds the selected faces in every direction."),
+                               ("slide", "ux", "Holds the selected faces only in the direction normal to them; they slide freely along it."),
+                               ("bolt", "bolt", "A bolt or pin hole: the selected hole surface is held fixed.")):
+            b = sim_ui.icon_button({"fixed": "Fixed", "slide": "One direction (normal)", "bolt": "Bolt / pin hole"}[mode], icn, tip)
+            b.clicked.connect(lambda _c=False, m_=mode: self.add_support(m_))
+            v.addWidget(b)
         self.sup_list = QListWidget()
         self.sup_list.setMaximumHeight(90)
         v.addWidget(self.sup_list)
@@ -248,12 +246,13 @@ class SolidWindow(QWidget):
         v.addWidget(b)
         # --- 4 loads
         v = self.sec(4, "Loads", True, summary=lambda: f"{len(self.setup['loads'])} load(s)")
-        row = QHBoxLayout()
-        for text, kind in (("Force on face(s)", "force"), ("Pressure on face(s)", "pressure"), ("Force at vertex", "point"), ("Gravity", "gravity")):
-            b = QPushButton(text)
+        for text, icn, kind, tip in (("Force on face(s)...", "force", "force", "A total force spread over the selected faces."),
+                                     ("Pressure on face(s)...", "pressure", "pressure", "Pressure on the selected faces; positive pushes into the part."),
+                                     ("Force at vertex...", "force", "point", "A force at the selected vertex (a click on a face picks its nearest vertex)."),
+                                     ("Gravity...", "line_load", "gravity", "The weight of the part (body load).")):
+            b = sim_ui.icon_button(text, icn, tip)
             b.clicked.connect(lambda _c=False, k=kind: self.add_load(k))
-            row.addWidget(b)
-        v.addLayout(row)
+            v.addWidget(b)
         self.load_list = QListWidget()
         self.load_list.setMaximumHeight(100)
         self.load_list.itemDoubleClicked.connect(lambda it: self.edit_load(self.load_list.row(it)))
@@ -820,7 +819,7 @@ class SolidWindow(QWidget):
         if self.geom is None or not fids:
             self.say("Select the face(s) of the support first.")
             return False
-        mode = mode or self.cb_mode.currentData()
+        mode = mode or "fixed"
         n = sum(1 for s in self.setup["supports"] if s["mode"] == mode) + 1
         self.setup["supports"].append({"mode": mode, "faces": [sg.face_sig(self.geom, f) for f in fids], "name": f"{mode.capitalize()} support {n}"})
         self.after_edit()

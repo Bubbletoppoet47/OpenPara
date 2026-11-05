@@ -113,6 +113,40 @@ def fix_inst(v):
     return v
 
 
+def spline_curve(P, per_span=12):
+    """Points (N, 2) of the smooth curve through the fit points P [(x, y), ...]: a centripetal Catmull-Rom spline (no loops or overshoot
+    between uneven points), passing exactly through every fit point.  The first point again at the end makes a closed curve.
+    per_span = samples per piece between two fit points (the fit points themselves are always included)."""
+    P = np.asarray(P, float).reshape(-1, 2)
+    n = len(P)
+    if n < 2:
+        return P.copy()
+    if n == 2:
+        t = np.linspace(0.0, 1.0, per_span + 1)[:, None]
+        return P[0] + (P[1] - P[0]) * t
+    closed = float(np.hypot(*(P[0] - P[-1]))) < 1e-9 and n > 3
+    if closed:
+        ext = np.vstack([P[-2], P, P[1]])
+    else:
+        ext = np.vstack([2 * P[0] - P[1], P, 2 * P[-1] - P[-2]])
+    out = [P[0]]
+    for i in range(1, len(ext) - 2):
+        p0, p1, p2, p3 = ext[i - 1], ext[i], ext[i + 1], ext[i + 2]
+        d1 = max(float(np.hypot(*(p1 - p0))) ** 0.5, 1e-9)
+        d2 = max(float(np.hypot(*(p2 - p1))) ** 0.5, 1e-9)
+        d3 = max(float(np.hypot(*(p3 - p2))) ** 0.5, 1e-9)
+        t0, t1, t2, t3 = 0.0, d1, d1 + d2, d1 + d2 + d3
+        for k in range(1, per_span + 1):
+            t = t1 + (t2 - t1) * k / per_span
+            a1 = (t1 - t) / (t1 - t0) * p0 + (t - t0) / (t1 - t0) * p1
+            a2 = (t2 - t) / (t2 - t1) * p1 + (t - t1) / (t2 - t1) * p2
+            a3 = (t3 - t) / (t3 - t2) * p2 + (t - t2) / (t3 - t2) * p3
+            b1 = (t2 - t) / (t2 - t0) * a1 + (t - t0) / (t2 - t0) * a2
+            b2 = (t3 - t) / (t3 - t1) * a2 + (t - t1) / (t3 - t1) * a3
+            out.append((t2 - t) / (t2 - t1) * b1 + (t - t1) / (t2 - t1) * b2)
+    return np.array(out)
+
+
 class Cancelled(Exception):
     """Raised inside a solve when the user pressed Cancel."""
 
@@ -128,6 +162,7 @@ class Model:
         self.lns = {}      # id -> [pid_a, pid_b]
         self.cis = {}      # id -> {"c": pid, "r": radius}
         self.ars = {}      # id -> {"c": pid, "s": pid, "e": pid}
+        self.sps = {}      # id -> {"pts": [pid, ...]}  a spline through its fit points (the points are ordinary sketch points)
         self.lock_pts = {}   # point id -> [x, y]  frozen position (locked geometry)
         self.lock_cis = {}   # circle id -> radius frozen
         self.ext = []        # references to geometry of earlier sketches (see sketch_ext.py): [{"kind","sketch","ent","pt"|"pts","ln"}]
@@ -184,6 +219,12 @@ class Model:
     def add_arc(self, c, s, e):
         i = self._id()
         self.ars[i] = {"c": c, "s": s, "e": e}
+        return i
+
+    def add_spline(self, pids):
+        """A smooth curve through the points `pids` (in order; the first point again at the end closes it)."""
+        i = self._id()
+        self.sps[i] = {"pts": list(pids)}
         return i
 
     def add_con(self, typ, refs, **kw):
@@ -367,6 +408,10 @@ class Model:
                 if ("pt", a["c"]) in dead or ("pt", a["s"]) in dead or ("pt", a["e"]) in dead:
                     changed |= ("ar", aid) not in dead
                     dead.add(("ar", aid))
+            for sid, sp in list(self.sps.items()):
+                if any(("pt", p) in dead for p in sp["pts"]):
+                    changed |= ("sp", sid) not in dead
+                    dead.add(("sp", sid))
         if orphans:                                           # the endpoints / centres that nothing else uses go with the line, arc or circle
             used = set()
             for lid, (p, q) in self.lns.items():
@@ -378,6 +423,9 @@ class Model:
             for aid, ar in self.ars.items():
                 if ("ar", aid) not in dead:
                     used |= {ar["c"], ar["s"], ar["e"]}
+            for sid, sp in self.sps.items():
+                if ("sp", sid) not in dead:
+                    used |= set(sp["pts"])
             keep = {0}
             for r in self.ext:                                # points that follow geometry of earlier sketches
                 keep |= {r.get("pt")} | set(r.get("pts") or [])
@@ -388,6 +436,8 @@ class Model:
                     cand = {self.cis[i]["c"]}
                 elif k == "ar":
                     cand = {self.ars[i]["c"], self.ars[i]["s"], self.ars[i]["e"]}
+                elif k == "sp":
+                    cand = set(self.sps[i]["pts"])
                 else:
                     continue
                 for p in cand:
@@ -400,6 +450,8 @@ class Model:
                 self.cis.pop(i, None)
             elif k == "ar":
                 self.ars.pop(i, None)
+            elif k == "sp":
+                self.sps.pop(i, None)
         for k, i in dead:
             if k == "pt":
                 self.pts.pop(i, None)
@@ -505,6 +557,13 @@ class Model:
         for a in self.ars.values():
             for k in ("c", "s", "e"):
                 a[k] = remap.get(a[k], a[k])
+        for sp in self.sps.values():
+            out_ = []
+            for p in sp["pts"]:
+                p = remap.get(p, p)
+                if not out_ or out_[-1] != p:
+                    out_.append(p)
+            sp["pts"] = out_
         for n, k in remap.items():
             self.pts.pop(n, None)
             if n in self.lock_pts and k not in self.lock_pts:
@@ -538,7 +597,7 @@ class Model:
             else:
                 seen[key] = aid
         for k, i in dead:
-            {"ln": self.lns, "ci": self.cis, "ar": self.ars}[k].pop(i, None)
+            {"ln": self.lns, "ci": self.cis, "ar": self.ars, "sp": self.sps}[k].pop(i, None)
             self.lock_cis.pop(i, None) if k == "ci" else None
         self.constr -= dead
         symmetric = {"parallel", "perpendicular", "equal", "coincident", "collinear", "concentric", "tangent"}
@@ -630,7 +689,7 @@ class Model:
         return out
 
     def to_json(self):
-        return json.dumps({"pts": self.pts, "lns": self.lns, "cis": self.cis, "ars": self.ars, "cons": self.cons,
+        return json.dumps({"pts": self.pts, "lns": self.lns, "cis": self.cis, "ars": self.ars, "sps": self.sps, "cons": self.cons,
                            "nid": self.nid, "ncon": self.ncon, "ndim": self.ndim, "params": self.params,
                            "configs": self.configs, "active": self.active,
                            "constr": sorted(self.constr),
@@ -643,6 +702,7 @@ class Model:
         self.lns = {int(k): v for k, v in d["lns"].items()}
         self.cis = {int(k): v for k, v in d["cis"].items()}
         self.ars = {int(k): v for k, v in d["ars"].items()}
+        self.sps = {int(k): v for k, v in (d.get("sps") or {}).items()}
         self.cons = d["cons"]
         for c in self.cons:
             c["refs"] = [tuple(r) for r in c["refs"]]
@@ -1468,12 +1528,14 @@ class Model:
     def construction_only(self):
         """(points, circles) that exist only as part of construction geometry.  Their freedom is not counted."""
         normal_pts, con_pts, con_cis = set(), set(), set()
-        for k, tab in (("ln", self.lns), ("ci", self.cis), ("ar", self.ars)):
+        for k, tab in (("ln", self.lns), ("ci", self.cis), ("ar", self.ars), ("sp", self.sps)):
             for i in tab:
                 if k == "ln":
                     ps = list(self.lns[i])
                 elif k == "ci":
                     ps = [self.cis[i]["c"]]
+                elif k == "sp":
+                    ps = list(self.sps[i]["pts"])
                 else:
                     ps = [self.ars[i]["c"], self.ars[i]["s"], self.ars[i]["e"]]
                 if (k, i) in self.constr:

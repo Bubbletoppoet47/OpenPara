@@ -270,7 +270,7 @@ DRAW = {                                   # name: (clicks, builder(model, specs
 }
 CHAIN = {"line": False, "centerline": True}
 EDIT = ("trim", "fillet", "mirror", "convert")
-ALL_TOOLS = ("select", "box_select") + tuple(CHAIN) + tuple(DRAW) + EDIT + CONSTRAINTS + DIMS
+ALL_TOOLS = ("select", "box_select") + tuple(CHAIN) + tuple(DRAW) + ("spline",) + EDIT + CONSTRAINTS + DIMS
 
 
 def wrap_pi(a):
@@ -603,7 +603,7 @@ class SketchEditor:
                 self.box = {"start": (px, py), "end": (px, py), "shift": shift, "active": False}
                 return True
             return self.select_click(px, py, shift, key)
-        if t in DRAW or t in CHAIN:
+        if t in DRAW or t in CHAIN or t == "spline":
             hit = self.point_at(px, py)
             if hit is None:
                 return True
@@ -724,7 +724,7 @@ class SketchEditor:
             return False
         moved = math.hypot(px - self.press_px[0], py - self.press_px[1]) > 6 * self.pl.devicePixelRatioF()
         self.press_px = None
-        if moved and self.press_first and self.pending and (self.tool in DRAW or self.tool in CHAIN):
+        if moved and self.press_first and self.pending and (self.tool in DRAW or self.tool in CHAIN or self.tool == "spline"):
             hit = self.point_at(px, py)
             if hit is not None:
                 self.click(hit[0], hit[1])
@@ -854,8 +854,28 @@ class SketchEditor:
             return
         self.select_click(b["start"][0], b["start"][1], b["shift"])
 
+    def finish_spline(self, closed=False):
+        """Makes the spline through the points clicked so far (Enter / double-click, or a click on the first point to close it)."""
+        specs, self.pending = self.pending, []
+        if len(specs) < 2:
+            self.app.say("A spline needs at least two points: click them in order, double-click the last one.")
+            self.redraw()
+            return
+
+        def build(m):
+            rs = [self.resolve(m, s) for s in specs]
+            if closed:
+                rs[0] = ("pt", sk.pid(m, rs[0]))
+                rs.append(rs[0])
+            sk.add_spline(m, rs)
+        self.commit(build)
+        self.redraw()
+        self.say_prompt()
+
     def double_click(self, px=None, py=None):
-        if self.tool in CHAIN:
+        if self.tool == "spline":
+            self.finish_spline()
+        elif self.tool in CHAIN:
             self.pending = []
             self.redraw()
         elif self.tool in ("select", "box_select"):
@@ -888,6 +908,14 @@ class SketchEditor:
                     if closed:
                         self.chain_start = None
                     self.app.update_all(keep_props=False, light=True)
+        elif t == "spline":
+            if p and self.coords(p[-1]) == xy:
+                return                                          # the second click of a double-click, or the same spot twice
+            if len(p) >= 3 and self.coords(p[0]) == xy:         # back on the first point: a closed spline
+                self.pending = p
+                self.finish_spline(closed=True)
+                return
+            self.pending = p + [spec]
         elif t == "arc_tangent":
             if not p:
                 if not sk.is_ref(spec):
@@ -936,6 +964,9 @@ class SketchEditor:
             self.app.say(pr[min(len(self.pending), len(pr) - 1)])
         elif t in CHAIN:
             self.app.say("Click the next point (double-click or Esc ends the chain)." if self.pending else "Click the start point.")
+        elif t == "spline":
+            self.app.say("Click the next point on the spline (double-click the last one to finish; click the first point again to close it)."
+                         if self.pending else "Click the first point of the spline.")
         elif t == "arc_tangent":
             self.app.say(DRAW[t][2][min(len(self.pending), 1)])
         elif t == "pierce":
@@ -2038,6 +2069,11 @@ class SketchEditor:
         try:
             if t in CHAIN:
                 self.polyline(np.array([self.coords(self.pending[-1]), c]), COL_PREVIEW, 2.0)
+                return
+            if t == "spline":
+                pts = [self.coords(s) for s in self.pending] + ([c] if c != self.coords(self.pending[-1]) else [])
+                if len(pts) >= 2:
+                    self.polyline(sc.spline_curve(pts, 10), COL_PREVIEW, 2.0)
                 return
             if t == "arc_tangent":
                 sm = copy.deepcopy(m)

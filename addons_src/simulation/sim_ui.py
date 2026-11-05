@@ -180,13 +180,15 @@ def study_slot():
     return box
 
 
-def make_panel(content, pinned_widgets, min_w=340, max_w=400):
+def make_panel(content, pinned_widgets, min_w=340, max_w=None):
     """`content`: the widget holding the Sections (it is scrolled).  `pinned_widgets`: widgets (or layouts) that stay visible below the scroll
-    area.  Returns the panel widget for the splitter."""
+    area.  Returns the panel widget for the splitter.  There is no maximum width: the user drags the divider to make the panel as wide as they like
+    (it starts about `panel.default_w` wide; the width is not remembered).  A horizontal scroll bar appears if the panel is made narrower than
+    its content.  `max_w` is only for a caller that really wants a cap."""
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.Shape.NoFrame)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     scroll.setWidget(content)
     content.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
     panel = QWidget()
@@ -197,7 +199,8 @@ def make_panel(content, pinned_widgets, min_w=340, max_w=400):
     panel.bar = None
     if not pinned_widgets:
         panel.setMinimumWidth(min_w)
-        panel.setMaximumWidth(max_w)
+        panel.setMaximumWidth(max_w if max_w else 16777215)
+        panel.default_w = 400
         panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         panel.scroll = scroll
         return panel
@@ -211,7 +214,7 @@ def make_panel(content, pinned_widgets, min_w=340, max_w=400):
         bl.addWidget(w, 1)
     pl.addWidget(bar)
     panel.setMinimumWidth(min_w)
-    panel.setMaximumWidth(max_w)
+    panel.setMaximumWidth(max_w if max_w else 16777215)
     panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
     panel.scroll = scroll
     panel.bar = bar

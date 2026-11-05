@@ -1,5 +1,5 @@
 """The window: a tiny GPU widget is part of it from the start (no close-and-reopen at the first 3D tab); a small 'Opening ...' card shows while a
-part / assembly / add-on tab / file is built and always goes away; the right-click menu on a plane offers only Sketch on this plane."""
+part / assembly / add-on tab / file is built and always goes away; the right-click menu on a plane offers only Sketch."""
 import os, sys, json, tempfile
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) if os.path.basename(os.path.dirname(os.path.abspath(__file__))) == "tests" else os.path.dirname(os.path.abspath(__file__))
 CORE = os.path.join(HERE, "core") if os.path.isdir(os.path.join(HERE, "core")) else HERE
@@ -72,8 +72,8 @@ def ctx(setup):
 def plane(): part.sel_plane = "Top"
 def face(): part.sel_face = {"ref": None, "index": 0}
 def edges(): part.sel_edges = [("e", 1)]
-assert ctx(plane) == ["Sketch on this plane"], got[-1]
-assert ctx(face) == ["Sketch on this face"], got[-1]
+assert ctx(plane) == ["Sketch"], got[-1]
+assert ctx(face) == ["Sketch"], got[-1]
 assert ctx(edges) == ["Fillet", "Chamfer"], got[-1]
 assert ctx(lambda: None) == ["Sketch"], got[-1]
 print("OK shell polish")

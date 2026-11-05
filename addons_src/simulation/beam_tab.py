@@ -343,7 +343,7 @@ class BeamTab(QWidget):
                 lay0.addWidget(self.study_box)
             lay0.addWidget(s_)
         lay0.addStretch(1)
-        scroll = sim_ui.make_panel(left, [], 340, 420)
+        scroll = sim_ui.make_panel(left, [], 340)
 
         self.mem_table = QTableWidget(0, len(HEADERS))
         self.mem_table.setHorizontalHeaderLabels(HEADERS)
@@ -380,6 +380,7 @@ class BeamTab(QWidget):
         split.addWidget(right)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
+        split.setSizes([400, 1000])                 # the panel starts about 400 wide; drag the divider for more (not remembered)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)

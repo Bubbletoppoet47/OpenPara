@@ -14,6 +14,7 @@ Each region can be switched on / off by the user before meshing.
 import math
 
 import numpy as np
+import sketcher_core as sc
 
 
 class Cancelled(Exception):
@@ -37,6 +38,10 @@ def build_edges(m):
         if ("ar", aid) in m.constr:
             continue
         edges.append({"src": ("ar", aid), "kind": "ar", "a": ar["s"], "b": ar["e"], "c": ar["c"]})
+    for sid, sp in sorted(m.sps.items()):
+        if ("sp", sid) in m.constr or len(sp["pts"]) < 2:
+            continue
+        edges.append({"src": ("sp", sid), "kind": "sp", "a": sp["pts"][0], "b": sp["pts"][-1], "pts": list(sp["pts"])})
     for cid, c in sorted(m.cis.items()):
         if ("ci", cid) in m.constr or c["r"] <= 1e-12:
             continue
@@ -65,6 +70,8 @@ def edge_pts(m, e, n=180):
                for i in range(k + 1)]
         pts[0], pts[-1] = tuple(m.pts[e["a"]]), tuple(m.pts[e["b"]])
         return pts
+    if e["kind"] == "sp":
+        return [tuple(q) for q in sc.spline_curve([m.pts[p] for p in e["pts"]], max(6, int(n // max(len(e["pts"]) - 1, 1))))]
     c = m.pts[e["c"]]
     return [(c[0] + e["r"] * math.cos(2 * math.pi * i / n), c[1] + e["r"] * math.sin(2 * math.pi * i / n))
             for i in range(n)]
@@ -145,7 +152,7 @@ def find_gaps(m, edges, polys=None, rel=0.01):
     """Near misses: a free end of a line / arc (it belongs to only one edge) that lies within rel x (sketch size) of another
     free end or of another edge without being joined to it.  -> [{"kind", "a", "b", "dist", "at"}] nearest first.
     These are reported, never repaired."""
-    names = {"ln": "Line", "ar": "Arc", "ci": "Circle"}
+    names = {"ln": "Line", "ar": "Arc", "ci": "Circle", "sp": "Spline"}
     open_edges = [k for k, e in enumerate(edges) if e["kind"] != "ci"]
     if not open_edges:
         return []
@@ -447,6 +454,13 @@ def mesh_faces(m, geom, included, h, progress=None, cancel=None, algorithm=6, re
                 ids.append(gpoint(*m.pts[e["b"]], e["b"]))
                 cc = gpoint(c[0], c[1], e["c"])
                 curve_tag[k] = [gcurve(gmsh.model.geo.addCircleArc, ids[i], cc, ids[i + 1]) for i in range(n)]
+            elif e["kind"] == "sp":
+                dense = sc.spline_curve([m.pts[p] for p in e["pts"]], 6)
+                ids = [gpoint(*m.pts[e["a"]], e["a"])]
+                for q in dense[1:-1]:
+                    ids.append(gpoint(q[0], q[1]))
+                ids.append(gpoint(*m.pts[e["b"]], e["b"]))
+                curve_tag[k] = [gcurve(gmsh.model.geo.addSpline, ids)]
             else:
                 c, r = m.pts[e["c"]], e["r"]
                 cc = gpoint(c[0], c[1], e["c"])

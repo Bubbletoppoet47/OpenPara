@@ -1176,6 +1176,12 @@ class Document:
             a, b = m.lns[i]
             a, b = (a, b) if fwd else (b, a)
             return Edge.make_line(w3(P[a]), w3(P[b]))
+        if kind == "sp":
+            pts = [m.pts[p] for p in m.sps[i]["pts"]]
+            if not fwd:
+                pts = pts[::-1]
+            dense = sk.sc.spline_curve(pts, 8)                  # the same curve the sketch draws, through enough points for one smooth edge
+            return Edge.make_spline([w3(q) for q in dense])
         c, r, t0, sw = sk.arc_span(m, i)
         ar = m.ars[i]
         mid = (c[0] + r * math.cos(t0 + sw / 2), c[1] + r * math.sin(t0 + sw / 2))
@@ -1222,6 +1228,7 @@ class Document:
         find = self.sketch_unions(m)
         segs = [(("ln", i), find(a), find(b)) for i, (a, b) in m.lns.items() if ("ln", i) not in m.constr]
         segs += [(("ar", i), find(a["s"]), find(a["e"])) for i, a in m.ars.items() if ("ar", i) not in m.constr]
+        segs += [(("sp", i), find(a["pts"][0]), find(a["pts"][-1])) for i, a in m.sps.items() if ("sp", i) not in m.constr]
         circles = [i for i in m.cis if ("ci", i) not in m.constr]
         if not segs and len(circles) == 1:
             return self.loop_wire(m, plane, [("ci", circles[0])], reverse)

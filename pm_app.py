@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
             ("menu", "⌒", "Arc", "Arcs", [("Centerpoint Arc", "arc_center"), ("Tangent Arc", "arc_tangent"), ("3 Point Arc", "arc_3pt")]),
             ("menu", "⬭", "Slot", "Slots", [("Straight Slot", "slot_straight"), ("Centerpoint Straight Slot", "slot_center"),
                                          ("Centerpoint Arc Slot", "slot_arc_center"), ("3 Point Arc Slot", "slot_arc_3pt")]),
+            ("tool_spline", "∿", "Spline", "Click points the curve passes through; double-click the last one to finish (click the first point again to close it)", T("spline")),
             ("tool_polygon", "⬡", "Polygon", "Click the centre, then a corner (asks for the number of sides)", T("polygon")),
             ("tool_point", "•", "Point", "Click to place a point", T("point")),
             "|",
@@ -2123,9 +2124,9 @@ class MainWindow(QMainWindow):
             if self.sel_edges:
                 acts += [("Fillet", lambda: self.command("fillet")), ("Chamfer", lambda: self.command("chamfer"))]
             if self.sel_face is not None:
-                acts += [("Sketch on this face", lambda: self.command("sketch"))]
+                acts += [("Sketch", lambda: self.command("sketch"))]
             elif self.sel_plane is not None and not self.sel_edges:
-                acts += [("Sketch on this plane", lambda: self.command("sketch"))]
+                acts += [("Sketch", lambda: self.command("sketch"))]
             if not acts:
                 acts = [("Sketch", lambda: self.command("sketch"))]
         for label, fn in acts:

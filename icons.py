@@ -90,6 +90,19 @@ def draw(name, g):
         dot(g, 6.6, 20.8)
         dot(g, 33.4, 20.8)
         dot(g, 20, 24, ACC2, 2.2)
+    elif n == "spline":
+        pts = [(6, 29), (15, 11), (26, 27), (34, 11)]
+        path = QPainterPath(QPointF(*pts[0]))
+        P = [pts[0]] + pts + [pts[-1]]
+        for k in range(1, len(P) - 2):
+            p0, p1, p2, p3 = P[k - 1], P[k], P[k + 1], P[k + 2]
+            path.cubicTo(QPointF(p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6),
+                         QPointF(p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6), QPointF(*p2))
+        g.setPen(pen(INK, 2.6))
+        g.setBrush(Qt.BrushStyle.NoBrush)
+        g.drawPath(path)
+        for k, (x, y) in enumerate(pts):
+            dot(g, x, y, ACC if k in (0, 3) else ACC2, 2.6 if k in (0, 3) else 2.2)
     elif n == "slot":
         g.setBrush(QBrush(FILL))
         p = QPainterPath()

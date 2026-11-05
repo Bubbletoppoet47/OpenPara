@@ -15,6 +15,7 @@ One .skt file holds everything: geometry, constraints, dimensions, the symbol ta
     LINE, 5, 1, 2                         ! id, point, point
     CIRCLE, 7, 3, 2.5                     ! id, centre point, radius
     ARC,  8, 3, 4, 5                      ! id, centre, start, end (counter-clockwise)
+    SPLINE, 9, 1, 2, 3, 4                 ! id, then the fit points in order (the same point first and last = closed)
     CON, 1, horizontal, ln5
     CON, 2, fixed, pt1, xy=0:0
     DIM, 3, dim_h, ln5, expr=l12, value=60, sign=1, name=H1
@@ -59,6 +60,8 @@ def to_script(m, title="Sketcher script"):
         L.append(f"CIRCLE, {cid}, {c['c']}, {_num(c['r'])}")
     for aid, a in m.ars.items():
         L.append(f"ARC, {aid}, {a['c']}, {a['s']}, {a['e']}")
+    for sid, sp in m.sps.items():
+        L.append(f"SPLINE, {sid}, " + ", ".join(str(q) for q in sp["pts"]))
     L.append("")
     locks = [f"pt{i}" for i in sorted(m.lock_pts)] + [f"ci{i}" for i in sorted(m.lock_cis)]
     if locks:
@@ -171,6 +174,8 @@ def from_script(m, text):
                 m.cis[int(args[0])] = {"c": int(args[1]), "r": float(args[2])}
             elif cmd == "ARC":
                 m.ars[int(args[0])] = {"c": int(args[1]), "s": int(args[2]), "e": int(args[3])}
+            elif cmd == "SPLINE":
+                m.sps[int(args[0])] = {"pts": [int(q) for q in args[1:]]}
             elif cmd in ("CON", "DIM"):
                 cid, typ = int(args[0]), args[1].lower()
                 if typ not in sc.GEOMETRIC and typ not in sc.DIMENSIONS:
@@ -262,14 +267,14 @@ def from_script(m, text):
         except (IndexError, ValueError) as ex:
             raise ScriptError(f"line {n}: PARAM {a}: {ex}")
     # validate references and rebuild counters
-    tables = {"ln": m.lns, "ci": m.cis, "ar": m.ars}
+    tables = {"ln": m.lns, "ci": m.cis, "ar": m.ars, "sp": m.sps}
     m.constr = {r for r in m.constr if r[1] in tables[r[0]]}
     for c in m.cons:
         for k, i in c["refs"]:
-            table = {"pt": m.pts, "ln": m.lns, "ci": m.cis, "ar": m.ars}[k]
+            table = {"pt": m.pts, "ln": m.lns, "ci": m.cis, "ar": m.ars, "sp": m.sps}[k]
             if i not in table:
                 raise ScriptError(f"constraint {c['id']} refers to missing {k}{i}")
-    ids = list(m.pts) + list(m.lns) + list(m.cis) + list(m.ars)
+    ids = list(m.pts) + list(m.lns) + list(m.cis) + list(m.ars) + list(m.sps)
     for k, i in lock_refs:
         if k == "pt" and i in m.pts and i:
             m.lock_pts[i] = list(m.pts[i])

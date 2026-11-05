@@ -445,11 +445,29 @@ def polyline(m, key, n=48):
         c, r, t0, sw = arc_span(m, i)
         t = t0 + np.linspace(0, sw, max(4, int(n * sw / TWO_PI) + 2))
         return np.column_stack([c[0] + r * np.cos(t), c[1] + r * np.sin(t)])
+    if k == "sp":
+        return sc.spline_curve([m.pts[p] for p in m.sps[i]["pts"]], max(4, n // 4))
     return np.array([m.pts[i]], float)
 
 
 def all_keys(m):
-    return [("ln", i) for i in m.lns] + [("ci", i) for i in m.cis] + [("ar", i) for i in m.ars]
+    return [("ln", i) for i in m.lns] + [("ci", i) for i in m.cis] + [("ar", i) for i in m.ars] + [("sp", i) for i in m.sps]
+
+
+def add_spline(m, specs, construction=False):
+    """A spline through the clicked points (specs as for the other tools).  The same point twice in a row is ignored; the first point again at
+    the end closes the curve.  -> the spline id."""
+    ids = []
+    for sp_ in specs:
+        p = pid(m, sp_)
+        if not ids or ids[-1] != p:
+            ids.append(p)
+    if len(ids) < 2:
+        raise ValueError("A spline needs at least two points.")
+    i = m.add_spline(ids)
+    if construction:
+        m.constr.add(("sp", i))
+    return i
 
 
 def regions(m):
@@ -475,6 +493,9 @@ def regions(m):
     for i, a in m.ars.items():
         if ("ar", i) not in m.constr:
             segs.append((("ar", i), find(a["s"]), find(a["e"])))
+    for i, a in m.sps.items():
+        if ("sp", i) not in m.constr and len(a["pts"]) >= 2:
+            segs.append((("sp", i), find(a["pts"][0]), find(a["pts"][-1])))
     adj = {}
     for s in segs:
         adj.setdefault(s[1], []).append(s)
@@ -501,7 +522,7 @@ def regions(m):
             if cur[0] in used:
                 ok = False
                 break
-        if ok and len(chain) >= 2:
+        if ok and (len(chain) >= 2 or chain[0][0] == "sp"):                # a closed spline is a loop by itself
             loops.append(chain)
     for i in m.cis:
         if ("ci", i) not in m.constr:

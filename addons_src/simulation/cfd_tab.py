@@ -783,7 +783,7 @@ class CFDTab(QWidget):
             lay0.addWidget(s_)
         lay0.addStretch(1)
 
-        scroll = sim_ui.make_panel(left, [], 340, 420)
+        scroll = sim_ui.make_panel(left, [], 340)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
@@ -791,6 +791,7 @@ class CFDTab(QWidget):
         split.addWidget(self.canvas)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
+        split.setSizes([400, 1000])                 # the panel starts about 400 wide; drag the divider for more (not remembered)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)

@@ -77,4 +77,10 @@ unitctl.set_units("mm" if units.valid("mm") else units.DEFAULT, persist=False)
 # click probe
 p = w.result["nodes"][i]
 assert w.probe_at(tuple(p)) is not None and w.last_probe["i"] == i
+# the side panel has no maximum width (drag the divider), and loads / supports are full-width icon buttons like 2D FEA
+assert w.panel.maximumWidth() >= 16000 and w.panel.minimumWidth() <= 400
+from PyQt6.QtWidgets import QPushButton
+texts = [b_.text().strip() for b_ in w.findChildren(QPushButton)]
+for want in ("Force on face(s)...", "Pressure on face(s)...", "Force at vertex...", "Gravity...", "Fixed", "One direction (normal)", "Bolt / pin hole"):
+    assert want in texts, want
 print("OK solid layout")
