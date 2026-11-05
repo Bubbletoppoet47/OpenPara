@@ -27,6 +27,14 @@ def colours(t):
     return result_style.colours(t)
 
 
+def _wheel_step():
+    try:
+        import settings
+        return settings.zoom_factor()
+    except Exception:
+        return 1.08
+
+
 class BeamCanvas(QWidget):
     export_bg = None                      # None = the normal white; 0 / 255 while the animation export draws a frame on black / white
 
@@ -158,7 +166,7 @@ class BeamCanvas(QWidget):
             self.update()
 
     def wheelEvent(self, ev):
-        f = 1.15 if ev.angleDelta().y() > 0 else 1 / 1.15
+        f = _wheel_step() ** (ev.angleDelta().y() / 120.0)
         pos = ev.position()
         wx, wy = self.s2w(pos)
         self.scale *= f

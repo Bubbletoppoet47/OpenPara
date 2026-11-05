@@ -43,12 +43,14 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 ## 6. Sketching
 - The context menu on a plane says just **Sketch**.
 - Exactly one ribbon tool button is lit at a time (plain buttons and drop-downs alike).
+- Mates that hold a part (planes, locks, distances) stay exact; a concentric mate yields to them and is the one reported when they disagree.
 - Assembly mates can use the assembly's own planes and origin, even with a single component.
 - Tools finish with **Enter, Esc or a double-click**; Esc never throws away finished work.
 - Everything drawn stays editable: points can be dragged, including a spline's fit points.
 - Curves that need no solver equations (splines) are still ordinary sketch geometry: they take part in regions, extrudes, 2D FEA and the .skt file.
 
 ## 7. Wording and appearance
+- The wheel zoom strength is a setting (File > Settings > Navigation); every view that zooms with the wheel reads it. The start-up card never stays on top of other windows.
 - Button and menu labels are short and sentence case ("Export animation...", "Play", "Stop").
 - Anything that can be cut off, clipped or overlap in a narrow window is a bug: measure text, wrap or elide, and test at several widths.
 - Prefer one shared helper over three copies. If two tabs draw the same thing, it lives in one module.

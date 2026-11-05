@@ -24,7 +24,7 @@ try:
 except Exception:                                        # no VTK: nothing here is used
     pv = None
 
-WHEEL_STEP = 1.18
+WHEEL_STEP = 1.08
 
 FACES = [("Right", (1, 0, 0)), ("Left", (-1, 0, 0)), ("Back", (0, 1, 0)), ("Front", (0, -1, 0)), ("Top", (0, 0, 1)), ("Bottom", (0, 0, -1))]
 BASE = {"Right": (0.80, 0.84, 0.90), "Left": (0.80, 0.84, 0.90), "Back": (0.78, 0.82, 0.88), "Front": (0.86, 0.89, 0.94),
@@ -384,6 +384,15 @@ class NavHook(QObject):
         self.lock = bool(on)
         QSettings("GenParametricDesigner", "Modeller").setValue("lock_view", "1" if on else "0")
 
+    @staticmethod
+    def wheel_step():
+        """Zoom per wheel notch: the Zoom setting (File > Settings), or the built-in step if settings are not available."""
+        try:
+            import settings
+            return settings.zoom_factor()
+        except Exception:
+            return WHEEL_STEP
+
     def flip_zoom(self, flipped):
         self.wheel_sign = -1 if flipped else 1
         QSettings("GenParametricDesigner", "Modeller").setValue("flip_zoom", "1" if flipped else "0")
@@ -458,7 +467,7 @@ class NavHook(QObject):
                 px, py = self.xy(obj, ev)
                 steps = ev.angleDelta().y() / 120.0
                 if steps:
-                    self.zoom(WHEEL_STEP ** (-steps * self.wheel_sign), px, py)
+                    self.zoom(self.wheel_step() ** (-steps * self.wheel_sign), px, py)
                 return True
             if t == QEvent.Type.MouseButtonPress:
                 px, py = self.xy(obj, ev)

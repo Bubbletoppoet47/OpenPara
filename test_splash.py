@@ -19,5 +19,9 @@ img.fill(0)
 sp.render(img)
 assert img.pixelColor(440, 200).alpha() > 0 and img.pixelColor(0, 0).alpha() == 0       # card drawn, corners rounded away
 assert 0.0 <= sp.frac <= 1.0
+from PyQt6.QtCore import Qt
+fl = sp.windowFlags()
+assert not (fl & Qt.WindowType.WindowStaysOnTopHint), "the card must not stay above other windows"
+assert sp.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 sp.finish()
 print("splash ok", sp.version)

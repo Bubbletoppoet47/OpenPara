@@ -41,6 +41,14 @@ def to_poly(shape, tol=0.4):
     return pv.PolyData(pts, np.hstack([np.full((len(t), 1), 3), np.array(t, np.int64)]).ravel())
 
 
+def _wheel_step():
+    try:
+        import settings
+        return settings.zoom_factor()
+    except Exception:
+        return 1.08
+
+
 class View3D(QWidget):
     """A small 3D view (pyvista); if it cannot start, a label says so and the rest keeps working."""
 
@@ -199,7 +207,7 @@ class SketchCanvas(QWidget):
     def wheelEvent(self, ev):
         if not self.lines:
             return
-        f = 1.25 ** (ev.angleDelta().y() / 120.0)
+        f = _wheel_step() ** (ev.angleDelta().y() / 120.0)
         z = min(max(self.zoom * f, 0.2), 200.0)
         f = z / self.zoom
         c = ev.position()

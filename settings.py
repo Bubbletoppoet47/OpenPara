@@ -32,6 +32,7 @@ SPEC = {
     "pick_px": (9.0, 3.0, 30.0, "Sketch pick distance"),
     "label_px": (16.0, 6.0, 40.0, "Dimension label click area"),
     "hover": (True, False, True, "Highlight what is under the cursor"),
+    "zoom_pct": (8.0, 1.0, 30.0, "Zoom per wheel notch (%)"),
     "dim_line_px": (1.1, 0.5, 4.0, "Dimension line thickness"),
     "dim_line_style": ("solid", None, LINE_STYLES, "Dimension line style"),
     "ext_line_px": (1.0, 0.5, 4.0, "Extension line thickness"),
@@ -69,6 +70,14 @@ def clamp(key, val):
     if v != v:
         return d
     return min(hi, max(lo, v))
+
+
+def zoom_factor():
+    """How much one wheel notch zooms (1.08 = 8 %): used by every view that zooms with the wheel."""
+    try:
+        return 1.0 + float(get("zoom_pct")) / 100.0
+    except Exception:
+        return 1.08
 
 
 def path():

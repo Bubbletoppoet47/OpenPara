@@ -406,6 +406,7 @@ class SettingsDialog(QDialog):
         self.hover = QCheckBox("Highlight the face, edge or point under the cursor while picking")
         self.hover.setChecked(bool(settings.get("hover")))
         self.section("Picking && Snapping", [("pick3d_px", None), ("snap_px", None), ("pick_px", None), ("label_px", None)], extra=self.hover)
+        self.section("Navigation", [("zoom_pct", None)])
         self.sections.setCurrentRow(0)
 
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Apply | QDialogButtonBox.StandardButton.Cancel)

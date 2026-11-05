@@ -117,6 +117,14 @@ HELP = {
 }
 
 
+def _wheel_step():
+    try:
+        import settings
+        return settings.zoom_factor()
+    except Exception:
+        return 1.08
+
+
 class HelpLabel(QLabel):
     """A form label that explains the input: click it for a note that stays until you click elsewhere (no hover popup)."""
 
@@ -350,7 +358,7 @@ class CFDCanvas(pt.PhysCanvas):
         self.update()
 
     def wheelEvent(self, ev):
-        f = 1.15 if ev.angleDelta().y() > 0 else 1 / 1.15
+        f = _wheel_step() ** (ev.angleDelta().y() / 120.0)
         pos = ev.position()
         wx, wy = self.s2w(pos)
         self.scale *= f

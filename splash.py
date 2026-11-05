@@ -47,8 +47,9 @@ def version_text():
 
 class Splash(QWidget):
     def __init__(self, scale=1.0):
-        super().__init__(None, Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        super().__init__(None, Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint)     # not always-on-top: other windows can cover it
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.scale = scale
         self.setFixedSize(int(W * scale), int(H * scale))
         self.status, self.frac = "Starting...", 0.0

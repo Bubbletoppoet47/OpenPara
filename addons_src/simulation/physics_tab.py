@@ -57,6 +57,14 @@ def dependency_status():
 # ----------------------------------------------------------------------------------------------
 # background tasks with a progress bar
 # ----------------------------------------------------------------------------------------------
+def _wheel_step():
+    try:
+        import settings
+        return settings.zoom_factor()
+    except Exception:
+        return 1.08
+
+
 class TaskWorker(QThread):
     progress = pyqtSignal(str, int)
     finished_ok = pyqtSignal(object)
@@ -415,7 +423,7 @@ class PhysCanvas(QWidget):
             self.invalidate()
 
     def wheelEvent(self, ev):
-        f = 1.15 if ev.angleDelta().y() > 0 else 1 / 1.15
+        f = _wheel_step() ** (ev.angleDelta().y() / 120.0)
         pos = ev.position()
         wx, wy = self.s2w(pos)
         self.scale *= f
