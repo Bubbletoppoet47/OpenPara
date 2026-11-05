@@ -54,7 +54,7 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 - Prefer one shared helper over three copies. If two tabs draw the same thing, it lives in one module.
 
 ## 8. Known gaps (so they are not rediscovered)
-- Splines: no tangent end conditions, no point-on-spline constraint, no trim / fillet / offset.
+- Splines: a spline END can be made tangent to a line, an arc or another spline (Tangent tool; the end point must be shared, so add Coincident too). No tangent at interior fit points, no point-on-spline constraint, no trim / fillet / offset.
 - 3D FEA: no transparent animation export; results are not saved in the project.
 - Colour-scale text in transparent animations is black.
 - "Update from original" clears supports and loads in 1D / 2D.

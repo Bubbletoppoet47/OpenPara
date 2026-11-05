@@ -221,7 +221,9 @@ def make_constraint(tool, picks):
         return picks if k[1] in ("ci", "ar") and picks[0] != picks[1] else None
     if tool == "tangent":
         if len(k) == 1:
-            return "more" if k[0] in ("ln", "ci", "ar") else None
+            return "more" if k[0] in ("ln", "ci", "ar", "sp") else None
+        if "sp" in k:                                     # a spline end with a line, an arc or another spline
+            return picks if all(x in ("sp", "ln", "ar") for x in k) and picks[0] != picks[1] else None
         return picks if sorted(["ln" if x == "ln" else "c" for x in k]) == ["c", "ln"] else None
     if tool == "coincident":
         if len(k) == 1:
@@ -637,7 +639,7 @@ class SketchEditor:
             self.app.sync_tool()
             return True
         if t in CONSTRAINTS or t in DIMS or t == "pierce":
-            key = self.pick_any(px, py, kinds=("pt", "ln", "ci", "ar"))
+            key = self.pick_any(px, py, kinds=("pt", "ln", "ci", "ar") + (("sp",) if t == "tangent" else ()))
             if key is None:
                 return True
             self.picks.append(key)
@@ -1155,6 +1157,9 @@ class SketchEditor:
         if tool in SCALE_DIMS and not make_driven:
             self.set_part_scale(cur, kw.get("value"))
 
+        if tool == "tangent" and any(r[0] == "sp" for r in refs):
+            kw.update(sk.tangent_ends(m, refs))
+
         def build(mm):
             c = mm.add_con(tool, refs, **kw)
             self.last_con = c["id"]
@@ -1280,7 +1285,7 @@ class SketchEditor:
     def start_relation(self, name):
         """Add Relation / Dimension from the ribbon: entities that are already selected are used at once."""
         self.reset_tool(name)
-        self.picks = [k for k in self.sel if k[0] in ("pt", "ln", "ci", "ar")]
+        self.picks = [k for k in self.sel if k[0] in ("pt", "ln", "ci", "ar") or (k[0] == "sp" and name == "tangent")]
         if name == "pierce":
             if len(self.picks) >= 2:
                 self.picks = self.picks[:2]
@@ -1558,7 +1563,7 @@ class SketchEditor:
         own = self.pick(px, py, kinds)
         if own is not None or self.m is None:
             return own
-        hit = self.other_hit(px, py, kinds)
+        hit = self.other_hit(px, py, tuple(x for x in kinds if x != "sp") if kinds else kinds)
         if hit is None:
             return None
         _d, f, key, near = hit

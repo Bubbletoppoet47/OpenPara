@@ -69,6 +69,29 @@ def add_line(m, a, b, construction=False, auto=True):
     return lid
 
 
+def tangent_ends(m, refs):
+    """Where a tangent between a spline and a line / arc / spline is: the end of each spline and the end of an arc that lie closest to each other.
+    -> {"se": [end of refs[0] or None, end of refs[1] or None], "ae": "s" / "e"} (the end of the arc, when there is one)."""
+    def cands(r):
+        kind, i = r
+        if kind == "sp":
+            p = m.sps[i]["pts"]
+            return [(m.pts[p[0]], 0), (m.pts[p[-1]], 1)]
+        if kind == "ln":
+            a, b = m.lns[i]
+            return [(m.pts[a], None), (m.pts[b], None)]
+        a = m.ars[i]
+        return [(m.pts[a["s"]], "s"), (m.pts[a["e"]], "e")]
+    A, B = cands(refs[0]), cands(refs[1])
+    best = min(((math.dist(pa, pb), ia, ib) for pa, ia in A for pb, ib in B), key=lambda t: t[0])
+    tags = (best[1], best[2])
+    out = {"se": [tags[n] if refs[n][0] == "sp" else 0 for n in range(2)]}
+    ae = next((tags[n] for n in range(2) if refs[n][0] == "ar"), None)
+    if ae:
+        out["ae"] = ae
+    return out
+
+
 def tangent_join(m, lid, aid, p):
     """Line `lid` meets arc `aid` tangentially at their shared end point `p`: a construction radius from the arc's centre to `p` is
     perpendicular to the line.  (A plain 'tangent' row together with the end point sitting on the arc is degenerate to first order, which

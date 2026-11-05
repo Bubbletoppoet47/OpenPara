@@ -1749,6 +1749,24 @@ class Solver:
         L = math.hypot(dx, dy) + 1e-12
         return ((p[0] - ax) * dy - (p[1] - ay) * dx) / L
 
+    def tan_dir(self, x, c, n):
+        """Unit direction of the n-th entity of a tangent that involves a spline: a spline's end leaves along the chord of its first (or last) span
+        (that is what the curve does there), a line along itself, an arc at its chosen end square to its radius."""
+        k, i = c["refs"][n]
+        if k == "sp":
+            fp = self.m.sps[i]["pts"]
+            a, b = (fp[0], fp[1]) if (c.get("se") or [0, 0])[n] == 0 else (fp[-2], fp[-1])
+            (ax, ay), (bx, by) = self.pt(x, a), self.pt(x, b)
+            dx, dy = bx - ax, by - ay
+        elif k == "ln":
+            return self.unit(x, i)
+        else:                                                  # an arc: the tangent at its start or end point
+            a = self.m.ars[i]
+            (cx, cy), (qx, qy) = self.pt(x, a["c"]), self.pt(x, a["s"] if (c.get("ae") or "s") == "s" else a["e"])
+            dx, dy = -(qy - cy), qx - cx
+        L = math.hypot(dx, dy) + 1e-12
+        return dx / L, dy / L
+
     def two_pts(self, x, refs):
         if refs[0][0] == "ln":
             return self.ln(x, refs[0][1])
@@ -1794,6 +1812,9 @@ class Solver:
         if t == "concentric":
             a, b = self.cen(x, *refs[0]), self.cen(x, *refs[1])
             return [a[0] - b[0], a[1] - b[1]]
+        if t == "tangent" and any(k == "sp" for k, _ in refs):
+            d = [self.tan_dir(x, c, n) for n in range(2)]
+            return [d[0][0] * d[1][1] - d[0][1] * d[1][0]]
         if t == "tangent":
             ln_ref = refs[0] if refs[0][0] == "ln" else refs[1]
             ci_ref = refs[1] if refs[0][0] == "ln" else refs[0]
@@ -1901,9 +1922,12 @@ class Solver:
         """Variable indices a constraint depends on (keeps the Jacobian cheap)."""
         vi = []
         pids = set()
-        for k, i in c["refs"]:
+        for n, (k, i) in enumerate(c["refs"]):
             if k == "pt":
                 pids.add(i)
+            elif k == "sp":                                    # only the two fit points that decide the tangent at the chosen end
+                fp = self.m.sps[i]["pts"]
+                pids |= set(fp[:2] if (c.get("se") or [0, 0])[n] == 0 else fp[-2:])
             elif k == "ln":
                 pids |= set(self.m.lns[i])
             elif k == "ci":
