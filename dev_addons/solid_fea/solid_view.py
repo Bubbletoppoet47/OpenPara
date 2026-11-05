@@ -9,6 +9,13 @@ except Exception:                                   # pragma: no cover
 
 
 
+def _bar(title):
+    """a horizontal colour bar centred in the window, 80 % of its width, small fonts and a title kept short, so it stays inside at any size"""
+    t = title if len(title) <= 36 else title[:17] + "..." + title[-16:]
+    return {"title": t, "vertical": False, "width": 0.8, "height": 0.07, "position_x": 0.1, "position_y": 0.02,
+            "title_font_size": 12, "label_font_size": 11, "fmt": "%.4g", "n_labels": 4}
+
+
 def _surface(g):
     try:
         return g.extract_surface(algorithm="dataset_surface")
@@ -150,7 +157,7 @@ class SolidView:
         g.point_data[title] = values
         surf = _surface(g)
         self.result_actor = self.plotter.add_mesh(surf, scalars=title, cmap="turbo", show_edges=edges, reset_camera=False,
-                                                  scalar_bar_args={"title": title, "vertical": False})
+                                                  scalar_bar_args=_bar(title))
         if self.actor is not None:
             self.actor.SetVisibility(False)
         self.plotter.render()
@@ -189,7 +196,7 @@ class SolidView:
                 pl.clear()
                 pl.set_background("white")
                 pl.add_mesh(_surface(g), scalars=title, cmap="turbo", clim=[lo, hi], show_edges=edges,
-                            scalar_bar_args={"title": title, "vertical": False})
+                            scalar_bar_args=_bar(title))
                 if k == 0:
                     pl.reset_camera()
                 out.append(np.asarray(pl.screenshot(return_img=True))[:, :, :3].copy())

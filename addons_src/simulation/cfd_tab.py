@@ -30,6 +30,7 @@ import physics_store as pstore
 import physics_geom as pg
 import physics_tab as pt
 import sim_ui
+import legend_draw
 import anim_export
 import sketcher_core as sc
 from sketch_pick import SketchPicker
@@ -509,18 +510,9 @@ class CFDCanvas(pt.PhysCanvas):
         return path
 
     def paint_legend2(self, p, name, lo, hi, unit):
-        x0, y0, w, h = self.width() - 100, 40, 16, 180
-        for k in range(h):
-            c = pt.colours(1 - k / (h - 1))
-            p.fillRect(int(x0), int(y0 + k), w, 2, QColor(int(c[0]), int(c[1]), int(c[2])))
-        p.setPen(QColor("black"))
-        p.setFont(QFont("Arial", 8))
-        p.drawRect(int(x0), int(y0), w, h)
-        for k in range(6):
-            t = k / 5
-            p.drawText(int(x0 + w + 4), int(y0 + t * h + 4), f"{hi - t * (hi - lo):.4g}")
-        p.drawText(int(x0 - 60), int(y0 - 22), f"{name.split('(')[0].strip()}  [{unit}]")
-        p.drawText(int(x0 - 60), int(y0 - 10), "(range of the frame shown)")
+        labels = [(k / 5, f"{hi - (k / 5) * (hi - lo):.4g}") for k in range(6)]
+        legend_draw.draw_legend(p, self.width(), self.height(), f"{name.split('(')[0].strip()}  [{unit}]", labels, pt.colours,
+                                subtitle="(range of the frame shown)")
 
 
 # ----------------------------------------------------------------------------------------------

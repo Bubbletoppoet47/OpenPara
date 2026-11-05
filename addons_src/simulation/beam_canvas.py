@@ -19,6 +19,9 @@ DIAGRAM_MODES = ("N", "V", "M")
 FOS_LOW, FOS_HIGH = 0.5, 3.0              # the factor-of-safety colours: red at or below FOS_LOW, blue at or above FOS_HIGH
 
 
+import legend_draw
+
+
 def colours(t):
     """0..1 -> RGB ints: the colour scheme shared by all result pictures (result_style.py)."""
     return result_style.colours(t)
@@ -477,9 +480,13 @@ class BeamCanvas(QWidget):
         if mode in DIAGRAM_MODES:
             title = {"N": f"Axial force N ({u['F']}), tension +", "V": f"Shear force V ({u['F']})",
                      "M": f"Bending moment M ({u['F']} {u['L']}), drawn on the tension side"}[mode]
-            p.drawText(QPointF(10, 18), title)
             peak = res[mode + "_peak"]
-            p.drawText(QPointF(10, 34), f"Largest: {peak:.5g} in {res[mode + '_member']}   (red = positive, blue = negative)")
+            fm = p.fontMetrics()
+            y = 18
+            for text in (title, f"Largest: {peak:.5g} in {res[mode + '_member']}   (red = positive, blue = negative)"):
+                for line in legend_draw.wrap(text, max(self.width() - 20, 30), fm):
+                    p.drawText(QPointF(10, y), line)
+                    y += fm.height()
             return
         if mode not in COLOUR_MODES:
             return
@@ -487,14 +494,7 @@ class BeamCanvas(QWidget):
         mode_k = {"sigma": "vm", "disp": "umag"}.get(mode, mode)
         unit = u["L"] if mode_k in ("umag", "ux", "uy") else u["S"]
         title = MODE_TITLE[mode_k] + ("" if mode_k == "fos" else f"  [{unit}]")
-        x0, y0, h = W - 70, 36, 160
-        p.drawText(QPointF(max(10, W - 230), 18), title)
-        for i in range(h):
-            t = 1.0 - i / (h - 1)
-            c = colours(t)
-            p.fillRect(QRectF(x0, y0 + i, 16, 1.5), QColor(int(c[0]), int(c[1]), int(c[2])))
         top, bottom = (f"{FOS_LOW:g} or less", f"{FOS_HIGH:g} or more") if mode == "fos" else (f"{hi:.4g}", f"{lo:.4g}")
-        p.drawText(QPointF(x0 + 20, y0 + 10), top)
-        p.drawText(QPointF(x0 + 20, y0 + h), bottom)
-        if mode == "fos":
-            p.drawText(QPointF(x0 - 50, y0 + h + 16), "grey = no yield strength")
+        labels = [(0.0, top), (0.5, f"{(hi + lo) / 2:.4g}"), (1.0, bottom)] if mode != "fos" else [(0.0, top), (1.0, bottom)]
+        legend_draw.draw_legend(p, W, self.height(), title, labels, colours, subtitle="grey = no yield strength" if mode == "fos" else None,
+                                desired_h=160, font_pt=9)

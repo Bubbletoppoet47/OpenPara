@@ -37,6 +37,7 @@ import sketcher_script as scr
 import sim_icons
 import sim_ui
 import sim_report
+import legend_draw
 
 KIND_NAME = {"pt": "Point", "ln": "Line", "ar": "Arc", "ci": "Circle"}
 
@@ -708,19 +709,11 @@ class PhysCanvas(QWidget):
         key = self.field
         vals = field_values(r, key)
         lo, hi = float(np.min(vals)), float(np.max(vals))
-        x0, y0, w, h = self.width() - 90, 40, 16, 180
-        for k in range(h):
-            c = colours(1 - k / (h - 1))
-            p.fillRect(int(x0), int(y0 + k), w, 2, QColor(int(c[0]), int(c[1]), int(c[2])))
-        p.setPen(QColor("black"))
-        p.setFont(QFont("Arial", 8))
-        p.drawRect(int(x0), int(y0), w, h)
-        for k in range(6):
-            t = k / 5
-            p.drawText(int(x0 + w + 4), int(y0 + t * h + 4), f"{hi - t * (hi - lo):.4g}")
         name = next(n for n, k, _ in FIELDS if k == key)
         u = units.get(self.tab.unit_name())
-        p.drawText(int(x0 - 40), int(y0 - 12), f"{name}  [{u['L'] if key in ('umag', 'ux', 'uy') else u['S']}]")
+        unit = u['L'] if key in ('umag', 'ux', 'uy') else u['S']
+        labels = [(k / 5, f"{hi - (k / 5) * (hi - lo):.4g}") for k in range(6)]
+        legend_draw.draw_legend(p, self.width(), self.height(), f"{name}  [{unit}]", labels, colours)
 
     def render_picture(self, want_field, ramp=1.0):
         tab = self.tab
