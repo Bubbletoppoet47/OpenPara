@@ -1871,8 +1871,8 @@ class AssemblyWindow(QMainWindow):
 
     # ------------------------------------------------------------------ mates
     def mate_start(self):
-        if len(self.asm.components) < 2:
-            self.say("Insert at least two components first.")
+        if len(self.asm.components) < 1:
+            self.say("Insert a component first.")
             return
         self.set_mode(None, quiet=True)
         self.mode = "mate"
@@ -1881,7 +1881,8 @@ class AssemblyWindow(QMainWindow):
         self.draw_highlights()
         self.show_mate_panel()
         self.left.setCurrentIndex(1)
-        self.say("Mate: click two items (faces, edges, points - or a component's planes in the tree).")
+        self.say("Mate: click two items (faces, edges, points - or a component's planes, or the assembly's own planes and origin, in the tree)."
+                 + (" The first component is fixed: unfix it (right-click it) to see it move." if len(self.asm.components) == 1 and self.asm.components[0].get("fixed") else ""))
 
     def sel_item_from_ref(self, ref):
         """The pick-list entry (with what the highlight needs) for a stored mate reference."""
@@ -2167,7 +2168,11 @@ class AssemblyWindow(QMainWindow):
             self.asm.set_expr(f"val:{m['id']}", self.mate_opts.get("expr"))      # a formula / global keeps driving the value
         self.solve_all()
         self.finish_mate()
-        self.say(f"{MATE_NAMES[m['type']]} mate {'updated' if ed else 'added'}.")
+        msg = f"{MATE_NAMES[m['type']]} mate {'updated' if ed else 'added'}."
+        comps = [self.asm.comp(r["c"]) for r in m["refs"] if r["c"] != "@"]
+        if comps and all(c and c.get("fixed") for c in comps):
+            msg += " Every component in it is fixed, so nothing moves: un-fix one (right-click it) to let the mate position it."
+        self.say(msg)
 
     def finish_mate(self):
         self.mode, self.mate_sel, self.mate_pre, self.mate_type, self.mate_opts = None, [], None, None, {}

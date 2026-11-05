@@ -6,7 +6,7 @@ import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-                             QListWidgetItem, QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+                             QListWidgetItem, QMessageBox, QPushButton, QToolButton, QMenu, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
 import truss_core as tc
 import unitctl
@@ -125,13 +125,24 @@ class View3D(QWidget):
             return
         try:
             self.plotter.clear()
-            for shape, color, op in items:
-                m = to_poly(shape)
+            cache, keep = getattr(self, "_mesh_cache", {}), {}
+            self._mesh_cache = keep
+            for it in items:
+                shape, color, op = it[:3]
+                key = it[3] if len(it) > 3 else None
+                hit = cache.get(key) if key is not None else None
+                if hit is None:                                  # tessellating is the slow part: a member that did not change keeps its meshes
+                    hit = {"shape": shape, "poly": to_poly(shape), "edges": None, "edges_done": False}
+                if key is not None:
+                    keep[key] = hit
+                m = hit["poly"]
                 if m.n_points:
                     self.plotter.add_mesh(m, color=color, opacity=op, smooth_shading=False, show_edges=False, pickable=True, reset_camera=False)
                     try:
                         import settings
-                        ml = self.edge_mesh(shape)
+                        if not hit["edges_done"]:
+                            hit["edges"], hit["edges_done"] = self.edge_mesh(shape), True
+                        ml = hit["edges"]
                         if ml is not None:
                             self.plotter.add_mesh(ml, color=(0.13, 0.15, 0.20), line_width=settings.get("line_px"), pickable=False, reset_camera=False)
                     except Exception:
@@ -445,19 +456,13 @@ class TrussTab(QWidget):
         self.busy = False
         root = QVBoxLayout(self)
         bar = QHBoxLayout()
-        self.btn_import = QPushButton("Import sketch…")
+        self.btn_new = QPushButton("New project…")
+        self.btn_new.setToolTip("Make the truss's own .truss folder first; then Import source… copies a sketch into it from a tab that is already open or from a part file.")
+        self.btn_new.clicked.connect(self.new_project)
+        self.btn_import = QPushButton("Import source…")
         self.btn_import.setToolTip("Copy a sketch (with its configurations) into this truss from any open part tab or from a part file. The truss is saved to its .truss folder first; the copy there (sketch.gpd) is the sketch from then on, and importing again replaces it and clears the members.")
         self.btn_import.clicked.connect(self.import_menu)
-        self.btn_open = QPushButton("Open project…")
-        self.btn_open.setToolTip("Open a project folder (File > Open Project Folder)")
-        self.btn_open.clicked.connect(lambda: getattr(self.host, "open_project_folder_dialog", lambda: None)())
-        self.btn_edit = QPushButton("Open sketch for editing")
-        self.btn_edit.setToolTip("Open this project's own sketch.gpd in a Sketch/Part tab: add lines or configurations there, save it, then press Refresh from sketch.")
-        self.btn_edit.clicked.connect(self.open_sketch_for_editing)
-        self.btn_clear = QPushButton("Clear sketch")
-        self.btn_clear.setToolTip("Remove this truss's sketch and all its members, to start again from a clean slate")
-        self.btn_clear.clicked.connect(self.clear_sketch)
-        self.btn_refresh = QPushButton("Refresh from sketch")
+        self.btn_refresh = QPushButton("Update from original")
         self.btn_refresh.setToolTip("Read the project's sketch.gpd again after you saved it. Members, joints and profiles stay; new configurations are built.")
         self.btn_refresh.clicked.connect(self.refresh_from_sketch)
         self.lbl_sketch = QLabel("No sketch yet")
@@ -467,13 +472,17 @@ class TrussTab(QWidget):
         self.name_edit = QLineEdit(self.p["name"])
         self.name_edit.setMaximumWidth(180)
         self.name_edit.editingFinished.connect(self.rename_project)
-        self.btn_export = QPushButton("Export assembly…")
-        self.btn_export.setToolTip("Writes ONE configurable assembly file (every sketch configuration in it), the part files, one cut list, and STEP / STL per configuration")
-        self.btn_export.clicked.connect(lambda _=False: self.export_dialog())
-        for w_ in (QLabel("Project"), self.name_edit, self.btn_open, self.btn_import, self.btn_edit, self.btn_refresh, self.btn_clear, self.lbl_sketch, QLabel("Configuration"), self.cfg):
+        self.btn_sketch = QToolButton()
+        self.btn_sketch.setText("Sketch ▾")
+        self.btn_sketch.setToolTip("Open this project's sketch for editing, or clear it")
+        self.btn_sketch.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        sk_menu = QMenu(self.btn_sketch)
+        sk_menu.addAction("Open sketch for editing").triggered.connect(lambda _=False: self.open_sketch_for_editing())
+        sk_menu.addAction("Clear sketch").triggered.connect(lambda _=False: self.clear_sketch())
+        self.btn_sketch.setMenu(sk_menu)
+        for w_ in (QLabel("Project"), self.name_edit, self.btn_new, self.btn_import, self.btn_refresh, self.btn_sketch, self.lbl_sketch, QLabel("Configuration"), self.cfg):
             bar.addWidget(w_)
         bar.addStretch(1)
-        bar.addWidget(self.btn_export)
         root.addLayout(bar)
         self.pages = QTabWidget()
         root.addWidget(self.pages, 1)
@@ -610,6 +619,36 @@ class TrussTab(QWidget):
             self.touch()
             self.refresh_all()
 
+    def new_project(self):
+        """New project...: choose the truss's .truss folder first (a folder that already holds a truss is opened); the sketch is imported after."""
+        if self.dirty and (self.p["members"] or self.p.get("sketch")):
+            ans = QMessageBox.question(self, "New project", "The current truss has changes that are not saved. Save them first?",
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel)
+            if ans == QMessageBox.StandardButton.Cancel:
+                return
+            if ans == QMessageBox.StandardButton.Yes and not self.save():
+                return
+        start = os.path.join(os.path.dirname(self.path) if self.path else "", "Truss.truss")
+        path, _ = QFileDialog.getSaveFileName(self, "New truss project (a folder)", start, "Truss project (*.truss)")
+        if not path:
+            return
+        if not path.lower().endswith(".truss"):
+            path += ".truss"
+        if os.path.isfile(os.path.join(path, "project.json")):
+            self.open_path(path)
+            self.refresh_all()
+            self.say("That folder already holds a truss: it is open.")
+            return
+        self.p = tc.new_project(os.path.splitext(os.path.basename(path.rstrip("/\\")))[0] or "Truss")
+        self.src, self.config, self.sel_member, self.sel_line, self.built = None, None, None, None, None
+        self.name_edit.setText(self.p["name"])
+        tc.save(self.p, path)
+        self.path = path
+        self.dirty = False
+        self.load_source()
+        self.refresh_all()
+        self.say("New truss. Press Import source… to copy a sketch into it.")
+
     def save(self, as_new=False):
         path = self.path
         if as_new or not path:
@@ -736,9 +775,9 @@ class TrussTab(QWidget):
         tc.save(self.p, self.path)
         f = os.path.join(self.path, tc.SKETCH_FILE)
         if hasattr(self.host, "open_path") and self.host.open_path(f) is not None:
-            self.say("The project's sketch is open. Edit it, save it (Ctrl+S), then come back and press Refresh from sketch.")
+            self.say("The project's sketch is open. Edit it, save it (Ctrl+S), then come back and press Update from original.")
         else:
-            self.say(f"Open {f} in OpenPara, edit and save it, then press Refresh from sketch.")
+            self.say(f"Open {f} in OpenPara, edit and save it, then press Update from original.")
 
     def refresh_from_sketch(self):
         if not self.path or not self.p.get("sketch"):
@@ -747,7 +786,7 @@ class TrussTab(QWidget):
             i = self.host.find_tab(os.path.join(self.path, tc.SKETCH_FILE)) if hasattr(self.host, "find_tab") else None
             w = self.host.tabs.widget(i) if i is not None else None
             if w is not None and hasattr(w, "doc") and getattr(w, "saved_json", None) not in (None, w.doc.to_json()):
-                return self.say("The sketch tab has changes that are not saved. Save it (Ctrl+S) and press Refresh from sketch again.")
+                return self.say("The sketch tab has changes that are not saved. Save it (Ctrl+S) and press Update from original again.")
         except Exception:
             pass
         try:
@@ -799,7 +838,8 @@ class TrussTab(QWidget):
             return {}
 
     def rebuild(self):
-        self.built = tc.Built(self.p, self.src, self.config) if self.src and self.config else None
+        self.built = tc.Built(self.p, self.src, self.config, cache=getattr(self, "_build_cache", None)) if self.src and self.config else None
+        self._build_cache = self.built.cache_out if self.built else None
         if self.built and self.built.errors:
             names = {m["id"]: m["name"] for m in self.p["members"]}
             self.say("; ".join(f"{names.get(k, k)}: {v}" for k, v in self.built.errors.items()))
@@ -861,7 +901,7 @@ class TrussTab(QWidget):
             if only and mid != sel:
                 continue
             try:
-                items.append((b.placed(mid), self.SELECTED if mid == sel or only else self.OTHERS, 1.0))
+                items.append((b.placed(mid), self.SELECTED if mid == sel or only else self.OTHERS, 1.0, b.shape_key(mid)))
             except Exception:
                 pass
         key = (self.config, tuple(b.members), only, sel if only else None)
@@ -967,7 +1007,7 @@ class TrussTab(QWidget):
             palette = [(0.45, 0.55, 0.75), (0.8, 0.5, 0.3), (0.45, 0.7, 0.5), (0.7, 0.45, 0.65), (0.6, 0.6, 0.35)]
             for i, mid in enumerate(b.members):
                 try:
-                    items.append((b.placed(mid), palette[i % len(palette)], 1.0))
+                    items.append((b.placed(mid), palette[i % len(palette)], 1.0, b.shape_key(mid)))
                 except Exception:
                     pass
             akey = (self.config, tuple(b.members))

@@ -48,6 +48,19 @@ def inspect(shell, out):
     got = shell.open_sketches()
     assert len(got) == 1 and len(got[0]["sketches"]) == 1 and got[0]["doc"], got
     t = shell.new_addon_tab("truss")
+    # the top bar: New project / Import source / Update from original / Sketch menu, Project and Configuration; no Export here (it is on the Assembly page)
+    bar_texts = [t.btn_new.text(), t.btn_import.text(), t.btn_refresh.text(), t.btn_sketch.text()]
+    assert bar_texts == ["New project…", "Import source…", "Update from original", "Sketch ▾"], bar_texts
+    assert [a.text() for a in t.btn_sketch.menu().actions()] == ["Open sketch for editing", "Clear sketch"]
+    assert not hasattr(t, "btn_export") and not hasattr(t, "btn_open")
+    # New project... makes the folder first (cancel does nothing), an empty truss with no sketch
+    SAVE["path"] = ""
+    t.new_project(); assert not t.path
+    SAVE["path"] = os.path.join(TMP, "Fresh.truss")
+    t.new_project()
+    assert t.path and os.path.isfile(os.path.join(t.path, "project.json")) and t.p["name"] == "Fresh" and not t.p["members"] and t.lbl_sketch.text() == "No sketch yet"
+    t.path, t.p = None, tc.new_project("Truss"); t.name_edit.setText("Truss"); t.refresh_all()
+    SAVE["path"] = os.path.join(TMP, "T.truss")
 
     # unsaved truss: editing and refreshing ask to save first, nothing is written
     n = len(INFO)

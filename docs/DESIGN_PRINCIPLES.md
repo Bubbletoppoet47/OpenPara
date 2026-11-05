@@ -18,6 +18,11 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 - Inputs use the **global unit system**; values are shown in it and converted on entry.
 - The note text under a control is short, plain, and says what the control does, not how it is coded.
 
+## 2b. Project bars (Truss Generator, simulation tabs)
+- A project tab's top bar is short: **New project…** (makes the folder first), **Import source…** (copies a sketch, part or assembly in), **Update from original**. Project name and Configuration sit beside them.
+- Less-used commands (Open sketch for editing, Clear sketch) live in a small menu, not on the bar. Export lives on the page it belongs to (Assembly), not on the bar.
+- Heavy rebuilds are incremental: an edit rebuilds only what it touches, the rest (and its meshes) is reused; the Assembly page is built when it is opened.
+
 ## 3. Results
 - Result text comes from the **one shared formatter** (`sim_report`), so 1D, 2D and 3D read the same: heading, chips, key/value tables, summary, solver block.
 - Numbers are shown to **5 significant figures**; units always follow the global system.
@@ -37,6 +42,8 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 
 ## 6. Sketching
 - The context menu on a plane says just **Sketch**.
+- Exactly one ribbon tool button is lit at a time (plain buttons and drop-downs alike).
+- Assembly mates can use the assembly's own planes and origin, even with a single component.
 - Tools finish with **Enter, Esc or a double-click**; Esc never throws away finished work.
 - Everything drawn stays editable: points can be dragged, including a spline's fit points.
 - Curves that need no solver equations (splines) are still ordinary sketch geometry: they take part in regions, extrudes, 2D FEA and the .skt file.

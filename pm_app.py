@@ -516,16 +516,17 @@ class MainWindow(QMainWindow):
         self.sync_tool()
 
     def sync_tool(self):
+        """Exactly one tool button is lit: the plain buttons (Spline, Point...) and the drop-down ones (Select, Line...) are not in one exclusive
+        group, so every other one is unchecked by hand."""
         t = self.ed.tool if self.ed is not None else "select"
-        b = self.act.get("tool_" + t)
-        if b is not None:
-            b.setChecked(True)
-        else:
-            sel = self.act.get("tool_select")
-            if sel is not None and t != "select":
-                sel.setAutoExclusive(False)
-                sel.setChecked(False)
-                sel.setAutoExclusive(True)
+        mine = self.act.get("tool_" + t)
+        for k, b in self.act.items():
+            if k.startswith("tool_") and b is not mine and b.isCheckable() and b.isChecked():
+                b.setAutoExclusive(False)
+                b.setChecked(False)
+                b.setAutoExclusive(True)
+        if mine is not None:
+            mine.setChecked(True)
         for mb, names in self.menu_btns.items():
             if mb.isCheckable():
                 mb.setChecked(t in names)

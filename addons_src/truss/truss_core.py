@@ -628,9 +628,12 @@ class Member:
 class Built:
     """Every member of one configuration: solids, placed solids, the joints as they were resolved, the cut list, and the problems met."""
 
-    def __init__(self, project, source, config):
+    def __init__(self, project, source, config, cache=None):
+        """cache: the cache_out of the previous Built of this truss; a member whose own data, resolved joints and joint partners are unchanged is reused
+        instead of being cut again (the booleans are what take the time)."""
         self.project, self.source, self.config = project, source, config
         self.members, self.errors, self.resolved, self.warnings = {}, {}, {}, {}
+        self.cache_out, self.reused, self.rebuilt = {}, 0, 0
         lines = source.lines(config)
         names = source.names(config)
         self.names = set_config_names(project, config)
@@ -654,14 +657,36 @@ class Built:
                 ends[e] = resolve_end(project, lines, m, e, names) if j["kind"] == "auto" else dict(j)
             self.resolved[m["id"]] = {e: dict(j, auto=(m["ends"].get(e) or {"kind": "auto"})["kind"] == "auto") for e, j in ends.items()}
             try:
-                mb = Member(project, g, ends, geos)
-                mb.build()
+                key = self.member_key(g, self.resolved[m["id"]], geos)
+                mb = (cache or {}).get(key)
+                if mb is None:
+                    mb = Member(project, g, ends, geos)
+                    mb.build()
+                    self.rebuilt += 1
+                else:
+                    self.reused += 1
+                    mb.m, mb.g, mb.geos = g.m, g, geos
+                self.cache_out[key] = mb
                 self.members[m["id"]] = mb
             except TrussError as ex:
                 self.errors[m["id"]] = str(ex)
             except Exception as ex:                          # a boolean that fails on odd geometry
                 self.errors[m["id"]] = f"could not build: {ex}"
         self.check_joints()
+
+    @staticmethod
+    def geo_key(g):
+        return json.dumps([g.m, g.prof, g.names, g.line], sort_keys=True, default=str)
+
+    def member_key(self, g, resolved, geos):
+        """Everything that decides what this member's solid is: its own geometry, how its two ends were resolved, and the geometry of the members it joins."""
+        partners = sorted({j.get(k) for j in resolved.values() for k in ("to", "with") if j.get(k) is not None})
+        return json.dumps([self.geo_key(g), resolved, [self.geo_key(geos[p]) for p in partners if p in geos]], sort_keys=True, default=str)
+
+    def shape_key(self, mid):
+        mb = self.members[mid]
+        pl = self.project["place"].get(self.config, {}).get(mid)
+        return (id(mb.solid), tuple(sorted(pl.items())) if pl else None)
 
     def check_joints(self):
         """Things that build but will not fit well: a hand-made miter of two different sections (the pieces do not touch), and a flat Butt Connect
