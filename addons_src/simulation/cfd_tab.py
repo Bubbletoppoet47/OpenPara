@@ -648,7 +648,9 @@ class CFDTab(QWidget):
         self.bl_lbl = self.note("")
         lay.addWidget(self.bl_lbl)
         self.b_mesh = QPushButton("Mesh")
+        self.b_mesh.setMinimumHeight(30)
         self.b_mesh.clicked.connect(self.run_mesh)
+        lay.addWidget(self.b_mesh)
 
         lay = sec(5, "Solver", True, help_text="Time marching to a steady state. Change per step = relative change of the velocity (and pressure) "
                   "between two time steps. The converged state is the last time step - nothing is averaged.",
@@ -690,13 +692,17 @@ class CFDTab(QWidget):
         lay.addWidget(self.auto_box)
         self.dt_lbl = self.note("")
         lay.addWidget(self.dt_lbl)
-        self.b_solve = QPushButton("Solve")
+        self.b_solve = sim_ui.solve_button()
         self.b_solve.clicked.connect(self.run_solve)
         self.b_stop = QPushButton("Stop")
         self.b_stop.clicked.connect(self.stop_solve)
         self.b_stop.setEnabled(False)
-        for b_ in (self.b_mesh, self.b_solve, self.b_stop):
-            b_.setMinimumHeight(32)
+        self.b_stop.setMinimumHeight(46)
+        self.solve_row = QWidget()
+        sr = QHBoxLayout(self.solve_row)
+        sr.setContentsMargins(0, 0, 0, 0)
+        sr.addWidget(self.b_solve, 1)
+        sr.addWidget(self.b_stop)
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
         lay.addWidget(self.bar)
@@ -770,10 +776,12 @@ class CFDTab(QWidget):
         b.clicked.connect(self.canvas.fit)
         lay.addWidget(b)
         for s_ in sorted(self.sections, key=lambda x: x.number):
+            if s_.number == 6:
+                lay0.addWidget(self.solve_row)        # the one big Solve button (with Stop) sits between the setup sections and the Results
             lay0.addWidget(s_)
         lay0.addStretch(1)
 
-        scroll = sim_ui.make_panel(left, [self.b_mesh, self.b_solve, self.b_stop], 340, 420)
+        scroll = sim_ui.make_panel(left, [], 340, 420)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)

@@ -261,8 +261,7 @@ class BeamTab(QWidget):
         self.cb_auto.setChecked(True)
         self.cb_auto.setToolTip("A frame solves in a fraction of a second, so this is on by default.")
         lay.addWidget(self.cb_auto)
-        self.b_solve = QPushButton("Solve")
-        self.b_solve.setMinimumHeight(32)
+        self.b_solve = sim_ui.solve_button()
         self.b_solve.clicked.connect(lambda: self.solve(auto=False))
         self.view_combo = QComboBox()
         for text, key in VIEWS:
@@ -337,9 +336,11 @@ class BeamTab(QWidget):
         lay.addWidget(b)
 
         for s_ in sorted(self.sections, key=lambda x: x.number):
+            if s_.number == 7:
+                lay0.addWidget(self.b_solve)          # the one big Solve button sits between the setup sections and the Results
             lay0.addWidget(s_)
         lay0.addStretch(1)
-        scroll = sim_ui.make_panel(left, [self.b_solve], 340, 420)
+        scroll = sim_ui.make_panel(left, [], 340, 420)
 
         self.mem_table = QTableWidget(0, len(HEADERS))
         self.mem_table.setHorizontalHeaderLabels(HEADERS)

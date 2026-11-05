@@ -161,6 +161,15 @@ class Section(QWidget):
         self.sum_lbl.setVisible(bool(txt))
 
 
+def solve_button(text="Solve"):
+    """The one big full-width Solve button that sits between the setup sections and the Results."""
+    b = QPushButton(text)
+    b.setMinimumHeight(46)
+    b.setStyleSheet("QPushButton { background:#0e7f86; color:white; font-size:15px; font-weight:bold; border:none; border-radius:8px; margin:6px 4px; }"
+                    "QPushButton:hover { background:#12949c; } QPushButton:disabled { background:#b9c4cc; color:#eef2f4; }")
+    return b
+
+
 def make_panel(content, pinned_widgets, min_w=340, max_w=400):
     """`content`: the widget holding the Sections (it is scrolled).  `pinned_widgets`: widgets (or layouts) that stay visible below the scroll
     area.  Returns the panel widget for the splitter."""
@@ -175,6 +184,13 @@ def make_panel(content, pinned_widgets, min_w=340, max_w=400):
     pl.setContentsMargins(0, 0, 0, 0)
     pl.setSpacing(0)
     pl.addWidget(scroll, 1)
+    panel.bar = None
+    if not pinned_widgets:
+        panel.setMinimumWidth(min_w)
+        panel.setMaximumWidth(max_w)
+        panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        panel.scroll = scroll
+        return panel
     bar = QFrame()
     bar.setFrameShape(QFrame.Shape.NoFrame)
     bar.setStyleSheet("QFrame#pinned { border-top:1px solid #cfd6e0; background:#f6f8fa; }")

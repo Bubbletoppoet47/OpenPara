@@ -30,7 +30,7 @@ for n in sim_icons.NAMES:
 
 # --- sections
 tabs = {"2D FEA": physics_tab.PhysicsTab(Win()), "1D FEA": beam_tab.BeamTab(Win()), "2D CFD": cfd_tab.CFDTab(Win())}
-want = {"2D FEA": ["Geometry", "Material and analysis", "Supports", "Loads", "Mesh and solve", "Probe regions", "Results"],
+want = {"2D FEA": ["Geometry", "Material and analysis", "Supports", "Loads", "Mesh", "Probe regions", "Results"],
         "1D FEA": ["Geometry", "Material", "Joints", "Supports", "Loads", "Ties", "Results"],
         "2D CFD": ["Geometry", "Fluid and flow", "Domain", "Mesh", "Solver", "Results"]}
 for name, t in tabs.items():
@@ -57,7 +57,7 @@ sim_ui._state = None
 again = physics_tab.PhysicsTab(Win())
 assert [s for s in again.sections if s.title == "Material and analysis"][0].is_open()
 
-# --- buttons: stacked supports / loads with icons, pinned Mesh and Solve
+# --- buttons: stacked supports / loads with icons, the big Solve row
 def texts(t, title):
     s = [x for x in t.sections if x.title == title][0]
     return [b.text().strip() for b in s.frame.findChildren(QPushButton)]
@@ -69,9 +69,20 @@ assert texts(beam, "Supports") == ["Fixed", "Pinned", "ux = 0", "uy = 0"]
 assert texts(beam, "Loads")[:5] == ["Force...", "Moment...", "Line load...", "Wind...", "Snow..."]
 assert texts(beam, "Joints") == ["Rigid joint", "Pinned joint"]
 for t in tabs.values():
-    pinned = {b.text() for b in t.findChildren(QPushButton) if b.parent() is not None and b.parent().objectName() == "pinned"}
-    assert {"Solve"} <= pinned or {"Mesh", "Solve"} <= pinned, pinned
-assert {"Mesh", "Solve"} <= {b.text() for b in fea.findChildren(QPushButton) if b.parent().objectName() == "pinned"}
+    assert not [b for b in t.findChildren(QPushButton) if b.parent() is not None and b.parent().objectName() == "pinned"], "no pinned bar any more"
+    assert t.b_solve.text() == "Solve" and t.b_solve.minimumHeight() >= 40
+    col = t.sections[0].parent()
+    holder = t.b_solve if t.b_solve.parent() is col else t.b_solve.parent()          # the Solve button, or the row holding it (CFD: Solve + Stop)
+    lay = col.layout()
+    i = lay.indexOf(holder)
+    assert i >= 0, "Solve sits in the scrolled column"
+    assert lay.itemAt(i + 1).widget() is [x for x in t.sections if x.title == "Results"][0], "Solve is directly above the Results"
+mesh_sec = [x for x in fea.sections if x.title == "Mesh"][0]
+assert "Mesh" in texts(fea, "Mesh") and fea.e_h.parent() is not None
+assert mesh_sec.isAncestorOf(fea.e_h) and mesh_sec.isAncestorOf(fea.order_combo) and mesh_sec.isAncestorOf(fea.cb_auto)
+mat_sec = [x for x in fea.sections if x.title == "Material and analysis"][0]
+assert not mat_sec.isAncestorOf(fea.e_h) and not mat_sec.isAncestorOf(fea.order_combo) and mat_sec.isAncestorOf(fea.cb_nl)
+assert [x for x in tabs["2D CFD"].sections if x.title == "Mesh"][0].isAncestorOf(tabs["2D CFD"].b_mesh)
 for b in [x for x in fea.findChildren(QPushButton) if x.text().strip() in ("Fixed", "Bolt...", "Contact")]:
     assert not b.icon().isNull()
 assert "(" not in "".join(texts(fea, "Supports") + texts(fea, "Loads") + texts(beam, "Supports") + texts(beam, "Loads")), "no hotkey hints on buttons"

@@ -869,7 +869,6 @@ class PhysicsTab(QWidget):
         form.addRow(self.lbl_E, self.e_E)
         form.addRow("Poisson's ratio", self.e_nu)
         form.addRow(self.lbl_t, self.e_t)
-        form.addRow(self.lbl_h, self.e_h)
         form.addRow(self.lbl_sy, self.e_sy)
         form.addRow(self.lbl_su, self.e_su)
         form.addRow("Plastic strain at ultimate (%)", self.e_eu)
@@ -909,7 +908,6 @@ class PhysicsTab(QWidget):
         self.order_combo.addItems(["Quadratic (6-node triangles)", "Linear (3-node triangles)"])
         self.order_combo.setToolTip("Quadratic elements have a node in the middle of every edge. They bend far more accurately than linear "
                                     "ones for the same mesh (linear triangles are far too stiff in bending). The mesh and its size do not change.")
-        form.addRow("Elements", self.order_combo)
         self.library = []
         self.fill_materials(select="Structural steel (A36)")
         self.material_picked()
@@ -923,13 +921,19 @@ class PhysicsTab(QWidget):
         self.e_su.textEdited.connect(self.set_custom)
 
         self.b_mesh = QPushButton("Mesh")
+        self.b_mesh.setMinimumHeight(30)
         self.b_mesh.clicked.connect(self.run_mesh)
-        self.b_solve = QPushButton("Solve")
+        self.b_solve = sim_ui.solve_button()
         self.b_solve.clicked.connect(self.run_solve)
-        for b_ in (self.b_mesh, self.b_solve):
-            b_.setMinimumHeight(32)
-        lay = sec(5, "Mesh and solve", False, summary=lambda: ("Auto-refine on" if self.cb_auto.isChecked() else "Single mesh"))
-        lay.addWidget(self.note("Mesh and Solve are at the bottom of this panel."))
+        lay = sec(5, "Mesh", True, help_text="Choose the element size and the element type, then press Mesh. Auto-refine is optional: it starts "
+                  "from this mesh when you press Solve and refines it where the stress changes fastest.",
+                  summary=lambda: f"size {self.e_h.text()}, {'quadratic' if self.order_combo.currentIndex() == 0 else 'linear'}"
+                                  + (", auto-refine" if self.cb_auto.isChecked() else ""))
+        mf = QFormLayout()
+        mf.addRow(self.lbl_h, self.e_h)
+        mf.addRow("Elements", self.order_combo)
+        lay.addLayout(mf)
+        lay.addWidget(self.b_mesh)
         self.cb_auto = QCheckBox("Auto-refine the mesh until the result converges")
         self.cb_auto.setToolTip("Solve, then refine the mesh where the stress changes fastest and solve again, until the strain energy "
                                 "and the largest displacement change by less than 1 % between two meshes, or a limit below is reached. "
@@ -942,7 +946,7 @@ class PhysicsTab(QWidget):
         self.e_maxtris = QLineEdit("100000")
         af.addRow("Maximum refinement passes", self.e_passes)
         af.addRow("Maximum triangles", self.e_maxtris)
-        af.addRow(self.note("Press Solve. Convergence is judged on the strain energy and the largest displacement. The largest stress is "
+        af.addRow(self.note("Press Solve (it refines from the mesh above). Convergence is judged on the strain energy and the largest displacement. The largest stress is "
                             "listed for each pass but not used: at a sharp corner or a point load it never converges."))
         self.auto_box.setVisible(False)
         self.cb_auto.toggled.connect(self.auto_box.setVisible)
@@ -1106,9 +1110,11 @@ class PhysicsTab(QWidget):
         lay.addStretch(1)
 
         for s_ in sorted(self.sections, key=lambda x: x.number):
+            if s_.number == 7:
+                lay0.addWidget(self.b_solve)          # the one big Solve button sits between the setup sections and the Results
             lay0.addWidget(s_)
         lay0.addStretch(1)
-        panel = sim_ui.make_panel(left, [self.b_mesh, self.b_solve])
+        panel = sim_ui.make_panel(left, [])
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
