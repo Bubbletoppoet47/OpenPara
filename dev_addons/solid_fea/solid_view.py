@@ -33,6 +33,9 @@ class SolidView:
         self.poly = None
         self.result_actor = None
         self._down = None
+        self.probe_mode = False
+        self.on_probe = None                       # fn((x, y, z)) while probe_mode is on
+        self.mesh_actor = None
         if QtInteractor is None:
             return
         try:
@@ -96,6 +99,19 @@ class SolidView:
         import vtk
         pk = vtk.vtkCellPicker()
         pk.SetTolerance(0.0005)
+        if self.probe_mode:                                      # a probe reads the result surface on screen, not a face of the part
+            shown = self.result_actor if self.result_actor is not None else self.mesh_actor
+            if shown is None:
+                if self.on_probe:
+                    self.on_probe(None)
+                return None
+            pk.AddPickList(shown)
+            pk.PickFromListOn()
+            if not pk.Pick(x, y, 0, self.plotter.renderer):
+                return None
+            if self.on_probe and self.result_actor is not None:
+                self.on_probe(tuple(pk.GetPickPosition()))
+            return -1
         pk.AddPickList(self.actor)
         pk.PickFromListOn()
         if not pk.Pick(x, y, 0, self.plotter.renderer):
@@ -117,6 +133,9 @@ class SolidView:
             except Exception:
                 pass                                         # no bar yet
         self.result_actor = None
+        if self.plotter is not None and self.mesh_actor is not None:
+            self.plotter.remove_actor(self.mesh_actor)
+        self.mesh_actor = None
         if self.actor is not None:
             self.actor.SetVisibility(True)
 
@@ -132,6 +151,19 @@ class SolidView:
         surf = _surface(g)
         self.result_actor = self.plotter.add_mesh(surf, scalars=title, cmap="turbo", show_edges=edges, reset_camera=False,
                                                   scalar_bar_args={"title": title, "vertical": False})
+        if self.actor is not None:
+            self.actor.SetVisibility(False)
+        self.plotter.render()
+        return True
+
+    def show_mesh(self, nodes, conn):
+        """The meshed part before any result: a plain light-grey surface with the mesh edges and no colour bar."""
+        if self.plotter is None:
+            return False
+        self.clear_result()
+        cells = np.hstack([np.full((len(conn), 1), 4), conn[:, :4]]).ravel().astype(np.int64)
+        g = pv.UnstructuredGrid(cells, np.full(len(conn), pv.CellType.TETRA, np.uint8), nodes)
+        self.mesh_actor = self.plotter.add_mesh(_surface(g), color=GREY, show_edges=True, edge_color=(0.35, 0.38, 0.42), reset_camera=False)
         if self.actor is not None:
             self.actor.SetVisibility(False)
         self.plotter.render()

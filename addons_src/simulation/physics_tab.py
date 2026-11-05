@@ -36,6 +36,7 @@ from sketch_pick import SketchPicker
 import sketcher_script as scr
 import sim_icons
 import sim_ui
+import sim_report
 
 KIND_NAME = {"pt": "Point", "ln": "Line", "ar": "Arc", "ci": "Circle"}
 
@@ -2145,15 +2146,16 @@ class PhysicsTab(QWidget):
             return
         uu = units.get(self.unit_name())
         L, S = uu["L"], uu["S"]
-        lines = [f"<b>Node {nr['index']}</b> at ({nr['x']:.5g}, {nr['y']:.5g}) {L}  (original geometry)",
-                 f"displacement: ux = {nr['ux']:.5g}, uy = {nr['uy']:.5g}, |u| = {nr['umag']:.5g} {L}"]
+        R = sim_report
+        d = [("ux", R.num(nr["ux"]), None), ("uy", R.num(nr["uy"]), None), ("Total |u|", R.num(nr["umag"]), None)]
+        st = []
         if "sx" in nr:
-            lines.append(f"stress: sx = {nr['sx']:.5g}, sy = {nr['sy']:.5g}, txy = {nr['txy']:.5g} {S}")
-            lines.append(f"von Mises = {nr['vm']:.5g}, principal = {nr['s1']:.5g} / {nr['s2']:.5g}, max shear = {nr['tmax']:.5g} {S}")
-        if "peeq" in nr:
-            lines.append(f"plastic strain = {nr['peeq'] * 100:.4g} %")
-        lines.append(f"<span style='color:#666666'>stresses: average of the {nr['n_elems']} element(s) around the node</span>")
-        self.node_lbl.setText("<br>".join(lines))
+            st = [("sx", R.num(nr["sx"]), None), ("sy", R.num(nr["sy"]), None), ("txy", R.num(nr["txy"]), None),
+                  ("von Mises", R.num(nr["vm"]), None), ("Principal 1", R.num(nr["s1"]), None), ("Principal 2", R.num(nr["s2"]), None),
+                  ("Max shear", R.num(nr["tmax"]), None)]
+        extra = [("Plastic strain", R.num(nr["peeq"] * 100, 4), "%")] if "peeq" in nr else None
+        self.node_lbl.setText(R.probe_block(f"Node {nr['index']}", f"at ({R.num(nr['x'])}, {R.num(nr['y'])}) {L}, original geometry",
+                                            d, st, L, S, f"Stresses: average of the {nr['n_elems']} element(s) around the node.", extra))
         self.last_node = nr
 
     # --- material library and units
@@ -2584,6 +2586,61 @@ class PhysicsTab(QWidget):
         self.show_solution(result, restored=True)
         self.enable_buttons()
 
+    def report_html(self, data):
+        """The result text in the shared layout (sim_report), in the global units."""
+        R = sim_report
+        eq = data["equilibrium"]
+        uu = units.get(self.unit_name())
+        L, S, F = uu["L"], uu["S"], uu["F"]
+        umax = float(np.max(np.hypot(data["u"][:, 0], data["u"][:, 1])))
+        rows = [("Largest von Mises stress", R.num(float(np.max(data["vm"]))), S), ("Largest displacement", R.num(umax), L)]
+        nl = data.get("nl") or {}
+        if data.get("solver") == "nonlinear":
+            rows.append(("Largest plastic strain", R.num(float(np.max(data["peeq"])) * 100, 4), "%"))
+        html = R.summary(data.get("fos_yield"), data.get("fos_ult"), rows)
+        if data.get("fos_probe") and data.get("fos_yield_peak") is not None:
+            html += R.note(f"Safety factor from the peak stress in the probe region: yield {R.num(data['fos_yield_peak'], 4)}")
+        pr_ = data.get("probes") or []
+        if pr_:
+            html += R.heading("Probe regions")
+            for q in pr_:
+                feeds = " (feeds the safety factors)" if q["name"] == data.get("fos_probe") else ""
+                if q["avg_vm"] is None:
+                    html += R.subhead(q["name"] + feeds) + R.note("no element inside")
+                else:
+                    html += R.subhead(q["name"] + feeds, S) + R.kv([("Average von Mises", R.num(q["avg_vm"]), None),
+                                                                    ("Peak von Mises", R.num(q["max_vm"]), None)])
+        fz = data.get("fasteners") or []
+        if fz:
+            frows = []
+            for x in fz:
+                nm = {"bolt": "Bolt", "screw": "Screw", "contact": "Contact"}[x["mode"]]
+                frows.append([f"{nm} {x['label']}", R.num(x["axial"], 4), R.num(x["shear"], 4)])
+            html += R.heading("Fasteners / contact", f"force per slice of depth {data['mat']['t']:g}")
+            html += R.grid(["", f"Axial ({F})", f"Shear ({F})"], frows)
+        rf = data.get("refine")
+        if rf:
+            ent = [{"pass": e["pass"], "n": e["n_tris"], "umax": e.get("umax"), "vmax": e.get("vmax"), "change": e.get("change"),
+                    "skipped": e.get("skipped")} for e in rf["log"]]
+            _lines, why = prefine.summary_lines(rf["log"], rf["reason"], "fea")
+            html += R.refine_block(ent, why, rf["reason"] == "converged", L, S)
+        scale = max(abs(eq.get("applied", {}).get("fx", 0.0)), abs(eq.get("applied", {}).get("fy", 0.0)), 1e-300)
+        ok = not (data["residual"] > 1e-6 or max(abs(eq["sum_fx"]), abs(eq["sum_fy"])) > 1e-6 * scale)
+        extra = []
+        if data.get("solver") == "nonlinear":
+            conv = nl.get("converged", True)
+            extra.append(f"Nonlinear solution ({data.get('trigger', '')}). Large displacements: the force balance is taken on the "
+                         "undeformed shape, so sum Mz need not be zero.")
+            if not conv:
+                extra.append(f"Did not fully converge: only {100 * nl.get('load_fraction', 0):.1f} % of the load was reached. "
+                             "Treat this result with care.")
+        if data.get("cfd_unconverged"):
+            extra.append("The CFD pressure used for this solution came from a CFD run that was NOT converged (its last time step). "
+                         "Treat the result accordingly.")
+        sums = f"Sums: Fx {eq['sum_fx']:.2e}, Fy {eq['sum_fy']:.2e}, Mz {eq['sum_mz']:.2e}"
+        html += R.solver_block("nonlinear" if data.get("solver") == "nonlinear" else "linear", data["residual"], ok, sums, extra)
+        return html
+
     def show_solution(self, data, restored=False):
         """Makes a (new or restored) result the one on screen."""
         self.result = data
@@ -2596,61 +2653,7 @@ class PhysicsTab(QWidget):
         self.field.setCurrentIndex(idx)
         self.field.blockSignals(False)
         self.view_changed()
-        eq = data["equilibrium"]
-        uu = units.get(self.unit_name())
-        self.res_lbl.setText(f"max |u| = {umax:.5g} {uu['L']}<br>max von Mises = {float(np.max(data['vm'])):.5g} {uu['S']}<br>"
-                             f"solve residual = {data['residual']:.2e}<br>"
-                             f"equilibrium: sum Fx = {eq['sum_fx']:.3e}, sum Fy = {eq['sum_fy']:.3e}, sum Mz = {eq['sum_mz']:.3e}")
-        if data.get("solver") == "nonlinear":
-            nl = data.get("nl") or {}
-            ok = nl.get("converged", True)
-            col = "#1a7a1a" if ok else "#b00020"
-            self.res_lbl.setText(self.res_lbl.text() + "<br>(large displacements: the force balance above is taken on the undeformed "
-                                 "shape, so sum Mz need not be zero)")
-            self.res_lbl.setText(self.res_lbl.text() + f"<br><b style='color:{col}'>Solver: NONLINEAR</b> ({data.get('trigger', '')})<br>"
-                                 f"max plastic strain = {float(np.max(data['peeq'])) * 100:.4g} %"
-                                 + ("" if ok else f"<br><b style='color:#b00020'>Did not fully converge: only {100 * nl.get('load_fraction', 0):.1f} % "
-                                    "of the load was reached. Treat this result with care.</b>"))
-        elif data.get("solver"):
-            self.res_lbl.setText(self.res_lbl.text() + "<br>Solver: linear")
-        fy_, fu_ = data.get("fos_yield"), data.get("fos_ult")
-        if fy_ is not None or fu_ is not None:
-            self.res_lbl.setText(self.res_lbl.text() + "<br><b>Factor of safety</b>: yield = " +
-                                 (f"{fy_:.4g}" if fy_ is not None else "n/a") + ", ultimate = " + (f"{fu_:.4g}" if fu_ is not None else "n/a"))
-        pr_ = data.get("probes") or []
-        if pr_:
-            rows = []
-            for q in pr_:
-                mark = " (feeds the factors of safety)" if q["name"] == data.get("fos_probe") else ""
-                rows.append(f"{q['name']}: " + ("no element inside" if q["avg_vm"] is None else
-                                                 f"average von Mises {q['avg_vm']:.5g}, peak {q['max_vm']:.5g} {uu['S']}") + mark)
-            self.res_lbl.setText(self.res_lbl.text() + "<br><b>Probes</b><br>" + "<br>".join(rows))
-        if data.get("fos_probe") and data.get("fos_yield_peak") is not None:
-            self.res_lbl.setText(self.res_lbl.text() + f"<br>(peak-based factor of safety, yield = {data['fos_yield_peak']:.4g})")
-        fz = data.get("fasteners") or []
-        if fz:
-            fu = uu["F"]
-            rows = []
-            for x in fz:
-                nm = {"bolt": "Bolt", "screw": "Screw", "contact": "Contact"}[x["mode"]]
-                rows.append(f"{nm} {x['label']}: " + ("contact force" if x["mode"] == "contact" else "pull-off") +
-                            f" {x['axial']:.5g} {fu}, shear {x['shear']:.5g} {fu}")
-            self.res_lbl.setText(self.res_lbl.text() + "<br><br><b>Fasteners / contact</b> (force per slice of depth "
-                                 f"{data['mat']['t']:g})<br>" + "<br>".join(rows))
-        scale = max(abs(eq.get("applied", {}).get("fx", 0.0)), abs(eq.get("applied", {}).get("fy", 0.0)), 1e-300)
-        if data["residual"] > 1e-6 or max(abs(eq["sum_fx"]), abs(eq["sum_fy"])) > 1e-6 * scale:
-            self.res_lbl.setText(self.res_lbl.text() + "<br><b style='color:#b00020'>WARNING: the residual or the force balance is "
-                                 "too large, so this result cannot be trusted. Check that the supports stop all rigid-body "
-                                 "motion.</b>")
-        if data.get("cfd_unconverged"):
-            self.res_lbl.setText(self.res_lbl.text() + "<br><b style='color:#b00020'>The CFD pressure used for this solution came from a CFD "
-                                 "run that was NOT converged (its last time step). Treat the result accordingly.</b>")
-        rf = data.get("refine")
-        if rf:
-            lines, why = prefine.summary_lines(rf["log"], rf["reason"], "fea")
-            col = "#1a7a1a" if rf["reason"] == "converged" else "#b36b00"
-            self.res_lbl.setText(self.res_lbl.text() + "<br><br><b>Auto-refinement</b><br>" + "<br>".join(lines) +
-                                 f"<br><b style='color:{col}'>{why}</b>")
+        self.res_lbl.setText(self.report_html(data))
         if not restored:
             self.status(f"Solved in {data['total_time']:.2f} s.  Deformation scale (auto) = {self.auto_def:.4g}.")
 

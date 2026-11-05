@@ -20,14 +20,56 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, Q
                              QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 import ext
+import physics_materials as pm
 import sim_project
+import sim_report as R
+import sim_ui
 import sim_source
 import solid_fem as fem
 import solid_geom as sg
 import solid_model as sm
 import solid_view as sv
+import unitctl
+import units
 
-FIELDS = ["Von Mises stress (MPa)", "Displacement (mm)", "Safety factor (yield)"]
+FIELDS = ["Von Mises stress", "Displacement", "Safety factor (yield)"]
+
+
+# --- the program's global units (File > Units).  The solver works in mm / N / MPa / kg per m3; these convert only what is shown or typed.
+def UD():
+    return units.get(unitctl.system())
+
+
+def l_out(mm):
+    return mm * 1e-3 / UD()["L_m"]
+
+
+def l_in(x):
+    return x * UD()["L_m"] * 1e3
+
+
+def s_out(mpa):
+    return mpa * 1e6 / UD()["S_Pa"]
+
+
+def s_in(x):
+    return x * UD()["S_Pa"] / 1e6
+
+
+def f_out(n):
+    return n / UD()["F_N"]
+
+
+def f_in(x):
+    return x * UD()["F_N"]
+
+
+def r_out(kgm3):
+    return kgm3 / UD()["rho_si"]
+
+
+def r_in(x):
+    return x * UD()["rho_si"]
 
 
 class Job(QThread):
@@ -113,17 +155,15 @@ class SolidWindow(QWidget):
 
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setMinimumWidth(380)
-        scroll.setMaximumWidth(520)
         col = QWidget()
         self.col = QVBoxLayout(col)
         self.col.setContentsMargins(6, 6, 6, 6)
-        scroll.setWidget(col)
-        split.addWidget(scroll)
+        self.col.setSpacing(4)
+        self.sections = []
+        self.last_probe = None
+        self.panel = sim_ui.make_panel(col, [])
+        split.addWidget(self.panel)
+        split.setStretchFactor(0, 0)
         self.view = sv.SolidView(self)
         self.view.on_pick = self.picked
         right = QWidget()
@@ -139,44 +179,57 @@ class SolidWindow(QWidget):
         lay.addWidget(split, 1)
         self.build_panel()
         self.show_source()
+        unitctl.on_change(self.units_changed)
 
     # ------------------------------------------------------------------ the panel
-    def box(self, title):
-        g = QGroupBox(title)
-        v = QVBoxLayout(g)
-        self.col.addWidget(g)
-        return v
+    def sec(self, n, title, open_=True, summary=None, help_text=None):
+        s_ = sim_ui.Section("solid", n, title, open_, help_text, summary)
+        self.sections.append(s_)
+        return s_.body
 
     def build_panel(self):
-        # --- geometry
-        v = self.box("1. Geometry (single part)")
+        # --- 1 geometry
+        v = self.sec(1, "Geometry", True, summary=lambda: self.geo_lbl.text().split("\n")[0][:90])
         self.geo_lbl = QLabel("No part yet: press Import source...")
         self.geo_lbl.setWordWrap(True)
         v.addWidget(self.geo_lbl)
         self.dims = QTableWidget(0, 2)
-        self.dims.setHorizontalHeaderLabels(["Part dimension", "Value"])
+        self.dims.setHorizontalHeaderLabels(["Part dimension", "Value (as stored)"])
         self.dims.horizontalHeader().setStretchLastSection(True)
         self.dims.setMaximumHeight(130)
         self.dims.itemChanged.connect(self.dim_edited)
         v.addWidget(self.dims)
-        v.addWidget(QLabel("Faces (click one in the view, or select here; Ctrl/Shift for several):"))
+        self.faces_lbl = QLabel("Faces (click one in the view, or select here; Ctrl/Shift for several):")
+        self.faces_lbl.setWordWrap(True)
+        v.addWidget(self.faces_lbl)
         self.faces = QListWidget()
         self.faces.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.faces.setMaximumHeight(130)
         self.faces.itemSelectionChanged.connect(self.faces_selected)
         v.addWidget(self.faces)
-        # --- material
-        v = self.box("2. Material (linear elastic)")
+        # --- 2 material and analysis
+        v = self.sec(2, "Material and analysis", True, summary=lambda: self.mat_combo.currentText().strip() or "custom material")
+        self.mat_combo = QComboBox()
+        self.mat_combo.activated.connect(self.material_picked)
+        v.addWidget(self.mat_combo)
+        self.mat_note = QLabel("")
+        self.mat_note.setWordWrap(True)
+        self.mat_note.setStyleSheet("color:#707070;")
+        v.addWidget(self.mat_note)
         f = QFormLayout()
         self.e_E, self.e_nu, self.e_rho, self.e_sy, self.e_su = (QLineEdit() for _ in range(5))
-        for e, lab in ((self.e_E, "Young's modulus E (MPa)"), (self.e_nu, "Poisson's ratio"), (self.e_rho, "Density (kg/m3)"),
-                       (self.e_sy, "Yield strength (MPa)"), (self.e_su, "Ultimate strength (MPa)")):
+        self.mat_labels = {}
+        for e, key in ((self.e_E, "E"), (self.e_nu, "nu"), (self.e_rho, "rho"), (self.e_sy, "sy"), (self.e_su, "su")):
+            lab = QLabel()
+            self.mat_labels[key] = lab
             f.addRow(lab, e)
             e.editingFinished.connect(self.inputs_changed)
         v.addLayout(f)
+        v.addWidget(QLabel("Analysis: linear elastic, small displacements, quadratic tetrahedra."))
+        self.fill_materials()
         self.put_material(self.setup["material"])
-        # --- supports
-        v = self.box("3. Supports")
+        # --- 3 supports
+        v = self.sec(3, "Supports", True, summary=lambda: f"{len(self.setup['supports'])} support(s)")
         v.addWidget(QLabel("Select the face(s) first, then add."))
         row = QHBoxLayout()
         self.cb_mode = QComboBox()
@@ -193,8 +246,8 @@ class SolidWindow(QWidget):
         b = QPushButton("Remove selected support")
         b.clicked.connect(lambda: self.remove_item("supports", self.sup_list))
         v.addWidget(b)
-        # --- loads
-        v = self.box("4. Loads")
+        # --- 4 loads
+        v = self.sec(4, "Loads", True, summary=lambda: f"{len(self.setup['loads'])} load(s)")
         row = QHBoxLayout()
         for text, kind in (("Force on face(s)", "force"), ("Pressure on face(s)", "pressure"), ("Force at vertex", "point"), ("Gravity", "gravity")):
             b = QPushButton(text)
@@ -213,13 +266,14 @@ class SolidWindow(QWidget):
         b.clicked.connect(lambda: self.remove_item("loads", self.load_list))
         row.addWidget(b)
         v.addLayout(row)
-        # --- mesh
-        v = self.box("5. Mesh (quadratic tetrahedra)")
+        # --- 5 mesh
+        v = self.sec(5, "Mesh", True, summary=lambda: self.mesh_lbl.text() or "not meshed")
         f = QFormLayout()
         self.e_h = QLineEdit()
         self.e_h.setPlaceholderText("auto")
         self.e_h.editingFinished.connect(self.inputs_changed)
-        f.addRow("Element size (mm, blank = auto)", self.e_h)
+        self.h_label = QLabel()
+        f.addRow(self.h_label, self.e_h)
         v.addLayout(f)
         self.b_mesh = QPushButton("Mesh")
         self.b_mesh.clicked.connect(self.run_mesh)
@@ -227,31 +281,30 @@ class SolidWindow(QWidget):
         self.mesh_lbl = QLabel("")
         self.mesh_lbl.setWordWrap(True)
         v.addWidget(self.mesh_lbl)
-        # --- solve (wide) and the study slot
+        # --- 6 probe
+        v = self.sec(6, "Probe", True, summary=lambda: "click a point on the result")
+        self.b_probe = QPushButton("Probe by clicking the surface")
+        self.b_probe.setCheckable(True)
+        self.b_probe.setToolTip("Switch this on, then click the solved part: the values of the node nearest to the click appear below. "
+                                "The view still turns with the mouse; only a click without moving is a probe.")
+        self.b_probe.toggled.connect(self.set_probe_mode)
+        v.addWidget(self.b_probe)
         row = QHBoxLayout()
-        self.b_solve = QPushButton("Solve")
-        self.b_solve.setMinimumHeight(44)
-        self.b_solve.clicked.connect(self.run_solve)
-        row.addWidget(self.b_solve, 1)
-        self.b_cancel = QPushButton("Cancel")
-        self.b_cancel.setMinimumHeight(44)
-        self.b_cancel.setEnabled(False)
-        self.b_cancel.clicked.connect(self.cancel)
-        row.addWidget(self.b_cancel)
-        self.col.addLayout(row)
-        self.study_box = QWidget()
-        sl = QVBoxLayout(self.study_box)
-        sl.setContentsMargins(0, 0, 0, 0)
-        self.b_study = QPushButton("Create parametric study")
-        self.b_study.setMinimumHeight(30)
-        self.b_study.clicked.connect(self.open_study)
-        sl.addWidget(self.b_study)
-        self.col.addWidget(self.study_box)
-        self.study_box.setVisible(False)
-        # --- results
-        v = self.box("6. Results")
+        self.e_probe = QLineEdit()
+        row.addWidget(self.e_probe, 1)
+        b = QPushButton("Probe nearest node")
+        b.clicked.connect(self.probe_node)
+        row.addWidget(b)
+        v.addLayout(row)
+        self.probe_lbl = QLabel("")
+        self.probe_lbl.setWordWrap(True)
+        self.probe_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        v.addWidget(self.probe_lbl)
+        # --- 7 results
+        v = self.sec(7, "Results", True)
         self.res_lbl = QLabel("No result yet.")
         self.res_lbl.setWordWrap(True)
+        self.res_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         v.addWidget(self.res_lbl)
         f = QFormLayout()
         self.cb_field = QComboBox()
@@ -266,22 +319,66 @@ class SolidWindow(QWidget):
         self.cb_edges = QCheckBox("Show mesh edges")
         self.cb_edges.toggled.connect(lambda _on: self.show_field())
         v.addWidget(self.cb_edges)
-        row = QHBoxLayout()
-        self.e_probe = QLineEdit()
-        self.e_probe.setPlaceholderText("x, y, z")
-        row.addWidget(self.e_probe, 1)
-        b = QPushButton("Probe nearest node")
-        b.clicked.connect(self.probe_node)
-        row.addWidget(b)
-        v.addLayout(row)
-        self.probe_lbl = QLabel("")
-        self.probe_lbl.setWordWrap(True)
-        v.addWidget(self.probe_lbl)
         self.b_anim = QPushButton("Export animation...")
         self.b_anim.clicked.connect(lambda: self.export_animation())
         v.addWidget(self.b_anim)
+        # --- the Solve button (wide), the study slot, then the Results
+        row = QHBoxLayout()
+        self.b_solve = sim_ui.solve_button()
+        self.b_solve.clicked.connect(self.run_solve)
+        row.addWidget(self.b_solve, 1)
+        self.b_cancel = QPushButton("Cancel")
+        self.b_cancel.setMinimumHeight(44)
+        self.b_cancel.setEnabled(False)
+        self.b_cancel.clicked.connect(self.cancel)
+        row.addWidget(self.b_cancel)
+        self.study_box = QWidget()
+        sl = QVBoxLayout(self.study_box)
+        sl.setContentsMargins(4, 0, 4, 4)
+        self.b_study = QPushButton("Create parametric study")
+        self.b_study.setMinimumHeight(30)
+        self.b_study.clicked.connect(self.open_study)
+        sl.addWidget(self.b_study)
+        for s_ in sorted(self.sections, key=lambda x: x.number):
+            if s_.number == 7:
+                self.col.addLayout(row)
+                self.col.addWidget(self.study_box)
+            self.col.addWidget(s_)
+        self.study_box.setVisible(False)
         self.col.addStretch(1)
+        self.refresh_labels()
         self.enable_buttons()
+
+    def refresh_labels(self):
+        """Every label that carries a unit, in the program's current units."""
+        D = UD()
+        for key, text in (("E", f"Young's modulus E ({D['S']})"), ("nu", "Poisson's ratio"), ("rho", f"Density ({D['rho']})"),
+                          ("sy", f"Yield strength ({D['S']})"), ("su", f"Ultimate strength ({D['S']})")):
+            self.mat_labels[key].setText(text)
+        self.h_label.setText(f"Element size ({D['L']}, blank = auto)")
+        self.e_probe.setPlaceholderText(f"x, y, z  ({D['L']})")
+        for i, base in enumerate(("Von Mises stress", "Displacement")):
+            self.cb_field.setItemText(i, f"{base} ({D['S'] if i == 0 else D['L']})")
+        self.update_mat_note()
+
+    def units_changed(self, *_a):
+        try:
+            self.refresh_labels()
+            self.put_material(self.setup["material"])
+            self.e_h.setText(format(l_out(self.setup["h"]), ".8g") if self.setup.get("h") else "")
+            if self.geom is not None:
+                self.fill_faces()
+                self.set_geo_text()
+            self.refresh_lists()
+            if self.result is not None:
+                self.describe()
+                self.show_field()
+            if self.last_probe is not None:
+                self.show_probe(self.last_probe)
+            for s_ in self.sections:
+                s_.refresh_summary()
+        except RuntimeError:
+            unitctl.off_change(self.units_changed)               # the window is gone
 
     def say(self, text):
         self.status_lbl.setText(text)
@@ -290,16 +387,65 @@ class SolidWindow(QWidget):
         self.say(text)
 
     # ------------------------------------------------------------------ material and inputs
+    def fill_materials(self, select=None):
+        self.library = pm.load()
+        builtin = {n for n, _, _ in pm.DEFAULTS}
+        self.mat_combo.blockSignals(True)
+        self.mat_combo.clear()
+        self.mat_combo.addItem("(custom values)", None)
+        for m_ in self.library:
+            self.mat_combo.addItem(m_["name"] + ("" if m_["name"] in builtin else "   (mine)"), m_["name"])
+        self.mat_combo.setCurrentIndex(0)
+        self.mat_combo.blockSignals(False)
+        self.select_material_name(select)
+
+    def select_material_name(self, name):
+        i = 0
+        for k in range(self.mat_combo.count()):
+            if name is not None and self.mat_combo.itemData(k) == name:
+                i = k
+        self.mat_combo.blockSignals(True)
+        self.mat_combo.setCurrentIndex(i)
+        self.mat_combo.blockSignals(False)
+        self.update_mat_note()
+
+    def library_entry(self, name):
+        return next((x for x in self.library if x["name"] == name), None)
+
+    def update_mat_note(self):
+        name = self.mat_combo.currentData()
+        txt = "Custom values." if name is None else "Typical value - check your source."
+        m_ = self.library_entry(name) if name is not None else None
+        if m_ is not None and (m_.get("Sy_MPa") is None or m_.get("Su_MPa") is None):
+            txt += "  No strengths are stored for this material: type the yield and ultimate strength below."
+        self.mat_note.setText(txt + "  The unit system is chosen in File > Units.")
+
+    def material_picked(self, *_a):
+        name = self.mat_combo.currentData()
+        m_ = self.library_entry(name) if name is not None else None
+        if m_ is not None:
+            cur = self.setup["material"]
+            self.put_material({"E": m_["E_MPa"], "nu": m_["nu"], "rho": m_.get("density") or cur.get("rho") or 7850.0,
+                               "sy": m_["Sy_MPa"] if m_.get("Sy_MPa") is not None else cur.get("sy", 0.0),
+                               "su": m_["Su_MPa"] if m_.get("Su_MPa") is not None else cur.get("su", 0.0)})
+            self.setup["mat_name"] = name
+        else:
+            self.setup.pop("mat_name", None)
+        self.update_mat_note()
+        self.inputs_changed()
+
     def put_material(self, m):
-        for e, k in ((self.e_E, "E"), (self.e_nu, "nu"), (self.e_rho, "rho"), (self.e_sy, "sy"), (self.e_su, "su")):
-            e.setText(format(float(m.get(k) or 0.0), ".10g"))
+        """m in the solver's units (MPa, kg per m3); the fields show the program's units."""
+        for e, k, fn in ((self.e_E, "E", s_out), (self.e_nu, "nu", float), (self.e_rho, "rho", r_out), (self.e_sy, "sy", s_out),
+                         (self.e_su, "su", s_out)):
+            e.setText(format(fn(float(m.get(k) or 0.0)), ".8g"))
 
     def read_inputs(self):
-        m = {"E": num(self.e_E, "E"), "nu": num(self.e_nu, "Poisson's ratio"), "rho": num(self.e_rho, "Density"),
-             "sy": num(self.e_sy, "Yield strength"), "su": num(self.e_su, "Ultimate strength")}
+        m = {"E": s_in(num(self.e_E, "E")), "nu": num(self.e_nu, "Poisson's ratio"), "rho": r_in(num(self.e_rho, "Density")),
+             "sy": s_in(num(self.e_sy, "Yield strength")), "su": s_in(num(self.e_su, "Ultimate strength"))}
         h = self.e_h.text().strip()
         self.setup["material"] = m
-        self.setup["h"] = num(self.e_h, "Element size") if h else 0.0
+        self.setup["h"] = l_in(num(self.e_h, "Element size")) if h else 0.0
         return self.setup
 
     def inputs_changed(self):
@@ -521,26 +667,39 @@ class SolidWindow(QWidget):
             if e:
                 self.put_material({"E": e, "nu": mat.get("nu") or 0.3, "rho": mat.get("density") or 7850.0, "sy": mat.get("Sy_MPa") or 0.0,
                                    "su": mat.get("Su_MPa") or 0.0})
+                nm = mat.get("name")
+                self.select_material_name(nm if nm and self.library_entry(nm) else None)
                 self.read_inputs()
+                if self.mat_combo.currentData() is not None:
+                    self.setup["mat_name"] = self.mat_combo.currentData()
         self.fill_faces()
         self.fill_dims()
         P, T, F = sg.display_mesh(g)
         self.view.set_geometry(P, T, F)
-        bb = g["bbox"]
-        self.geo_lbl.setText(f"{self.src.get('name') or 'part'}: {len(g['faces'])} faces, volume {g['volume']:.5g} mm3, size "
-                             f"{bb[1][0] - bb[0][0]:.4g} x {bb[1][1] - bb[0][1]:.4g} x {bb[1][2] - bb[0][2]:.4g} mm")
+        self.set_geo_text()
         self.refresh_lists()
         self.colour()
         self.enable_buttons()
         self.refresh_study_button()
         return True
 
+    def set_geo_text(self):
+        g = self.geom
+        if g is None:
+            return
+        bb = g["bbox"]
+        L = UD()["L"]
+        k = l_out(1.0)
+        self.geo_lbl.setText(f"{self.src.get('name') or 'part'}: {len(g['faces'])} faces, volume {g['volume'] * k ** 3:.5g} {L}3, size "
+                             f"{(bb[1][0] - bb[0][0]) * k:.4g} x {(bb[1][1] - bb[0][1]) * k:.4g} x {(bb[1][2] - bb[0][2]) * k:.4g} {L}")
+
     def fill_faces(self):
         self.faces.blockSignals(True)
         self.faces.clear()
         for f in self.geom["faces"]:
             n = f["normal"]
-            self.faces.addItem(f"Face {f['id'] + 1}: {f['kind']}, area {f['area']:.4g}, normal ({n[0]:.2f}, {n[1]:.2f}, {n[2]:.2f})")
+            self.faces.addItem(f"Face {f['id'] + 1}: {f['kind']}, area {f['area'] * l_out(1.0) ** 2:.4g} {UD()['L']}2, "
+                               f"normal ({n[0]:.2f}, {n[1]:.2f}, {n[2]:.2f})")
         self.faces.blockSignals(False)
 
     def fill_dims(self):
@@ -637,13 +796,15 @@ class SolidWindow(QWidget):
 
     @staticmethod
     def load_text(l):
+        D = UD()
         k = l["kind"]
         if k == "force":
-            return f"force {tuple(l['f'])} N on {len(l['faces'])} face(s)"
+            return f"force ({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']} on {len(l['faces'])} face(s)"
         if k == "pressure":
-            return f"pressure {l['p']:g} MPa on {len(l['faces'])} face(s)"
+            return f"pressure {s_out(l['p']):.5g} {D['S']} on {len(l['faces'])} face(s)"
         if k == "point":
-            return f"point force {tuple(l['f'])} N at {tuple(round(x, 3) for x in l['vertex']['point'])}"
+            return (f"point force ({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']} at "
+                    f"({', '.join(format(l_out(x), '.4g') for x in l['vertex']['point'])}) {D['L']}")
         return f"gravity {l['g']:g} m/s2 along {tuple(l['dir'])}"
 
     def remove_item(self, key, lst):
@@ -722,15 +883,15 @@ class SolidWindow(QWidget):
         if kind == "force" or kind == "point":
             fv = (cur or {}).get("f", [0.0, 0.0, 0.0])
             for i, a in enumerate("xyz"):
-                add("f" + a, f"F{a} (N)", fv[i])
+                add("f" + a, f"F{a} ({UD()['F']})", f_out(fv[i]))
         if kind == "point":
             vcombo = QComboBox()
             for i, p in enumerate(self.geom["verts"]):
-                vcombo.addItem(f"Vertex {i + 1}: ({p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f})")
+                vcombo.addItem(f"Vertex {i + 1}: ({l_out(p[0]):.4g}, {l_out(p[1]):.4g}, {l_out(p[2]):.4g}) {UD()['L']}")
             vcombo.setCurrentIndex(self.sel_vertex if self.sel_vertex is not None else 0)
             f.addRow("Vertex", vcombo)
         if kind == "pressure":
-            add("p", "Pressure (MPa, + pushes into the part)", (cur or {}).get("p", 1.0))
+            add("p", f"Pressure ({UD()['S']}, + pushes into the part)", s_out((cur or {}).get("p", 1.0)))
         if kind == "gravity":
             add("g", "g (m/s2)", (cur or {}).get("g", 9.81))
             d = (cur or {}).get("dir", [0.0, 0.0, -1.0])
@@ -748,10 +909,10 @@ class SolidWindow(QWidget):
             QMessageBox.warning(self, "Load", "Type numbers.")
             return None
         if kind == "pressure":
-            return {"p": v["p"]}
+            return {"p": s_in(v["p"])}
         if kind == "gravity":
             return {"g": v["g"], "dir": [v["dx"], v["dy"], v["dz"]]}
-        out = {"f": [v["fx"], v["fy"], v["fz"]]}
+        out = {"f": [f_in(v["fx"]), f_in(v["fy"]), f_in(v["fz"])]}
         if vcombo is not None:
             out["vertex_index"] = vcombo.currentIndex()
             self.sel_vertex = vcombo.currentIndex()
@@ -823,7 +984,7 @@ class SolidWindow(QWidget):
 
         def done(q):
             self.mesh_q = q
-            self.mesh_lbl.setText(f"{len(q['tets']):,} tetrahedra, {len(q['nodes']):,} nodes (quadratic), element size {h:.4g} mm")
+            self.mesh_lbl.setText(f"{len(q['tets']):,} tetrahedra, {len(q['nodes']):,} nodes (quadratic), element size {l_out(h):.4g} {UD()['L']}")
             self.say("Meshed.")
             self.show_field(mesh_only=True)
         return self.run_job(work, done, "Meshing")
@@ -846,7 +1007,7 @@ class SolidWindow(QWidget):
         def done(res):
             self.result = res
             self.mesh_q = self.cache.get(sm.mesh_key(g, res["h"]), self.mesh_q)
-            self.mesh_lbl.setText(f"{res['n_tets']:,} tetrahedra, {res['n_nodes']:,} nodes (quadratic), element size {res['h']:.4g} mm")
+            self.mesh_lbl.setText(f"{res['n_tets']:,} tetrahedra, {res['n_nodes']:,} nodes (quadratic), element size {l_out(res['h']):.4g} {UD()['L']}")
             self.describe()
             self.show_field()
             self.enable_buttons()
@@ -856,11 +1017,25 @@ class SolidWindow(QWidget):
         r = self.result
         if r is None:
             return
-        f = r["fos_y"]
-        self.res_lbl.setText(f"Largest displacement {r['umax']:.5g} mm.  Largest von Mises {r['vm_max']:.5g} MPa.  "
-                             f"Largest principal stress {r['s1_max']:.5g} MPa.  " + (f"Safety factor (yield) {f:.4g}.  " if f else "")
-                             + f"Mass {r['mass']:.5g} kg.  Reaction ({r['reaction'][0]:.5g}, {r['reaction'][1]:.5g}, {r['reaction'][2]:.5g}) N, "
-                             f"equilibrium error {r['equilibrium']:.1e}.")
+        D = UD()
+        mu = unitctl.mass_units()
+        rows = [("Largest von Mises stress", R.num(s_out(r["vm_max"])), D["S"]), ("Largest displacement", R.num(l_out(r["umax"])), D["L"]),
+                ("Largest principal stress", R.num(s_out(r["s1_max"])), D["S"]), ("Smallest principal stress", R.num(s_out(r["s3_min"])), D["S"]),
+                ("Mass", R.num(r["mass"] * mu[3]), mu[1])]
+        html = R.summary(r.get("fos_y"), r.get("fos_u"), rows)
+        if r.get("support_reactions"):
+            html += R.heading("Reactions", D["F"])
+            html += R.grid(["", "Fx", "Fy", "Fz"], [[n, *(R.num(f_out(x)) for x in v)] for n, v in r["support_reactions"]])
+        html += R.heading("Mesh") + R.kv([("Tetrahedra (quadratic)", f"{r['n_tets']:,}", None), ("Nodes", f"{r['n_nodes']:,}", None),
+                                           ("Element size", R.num(l_out(r["h"]), 4), D["L"])])
+        html += R.note("This window does not refine the mesh by itself: check by meshing finer and comparing, or run a parametric study "
+                       "over the element size.")
+        info = r.get("info") or {}
+        ok = r["equilibrium"] < 1e-6
+        sums = "Applied + reactions = (" + ", ".join(R.num(f_out(a + b), 3) for a, b in zip(r["applied"], r["reaction"])) + f") {D['F']}"
+        html += R.solver_block(info.get("solver", "?"), info.get("residual"), ok, sums,
+                               [f"Relative error of the force balance {r['equilibrium']:.1e}."] if not ok else None)
+        self.res_lbl.setText(html)
         self.say("Solved.")
 
     def scale_value(self):
@@ -875,38 +1050,80 @@ class SolidWindow(QWidget):
     def field_values(self):
         r = self.result
         i = self.cb_field.currentIndex()
+        D = UD()
         if i == 0:
-            return r["vm_node"], "von Mises (MPa)"
+            return s_out(r["vm_node"]), f"von Mises ({D['S']})"
         if i == 1:
-            return r["un"], "displacement (mm)"
+            return l_out(r["un"]), f"displacement ({D['L']})"
         sy = r["material"].get("sy") or 0.0
         return np.where(r["vm_node"] > 1e-12, sy / np.maximum(r["vm_node"], 1e-12), 100.0).clip(0, 100), "safety factor (yield)"
 
     def show_field(self, mesh_only=False):
         if self.result is None:
-            if mesh_only and self.mesh_q is not None:
+            if self.mesh_q is not None:
                 q = self.mesh_q
-                z = np.zeros((len(q["nodes"]), 3))
-                self.view.show_result(q["nodes"], q["tets"], z, np.zeros(len(q["nodes"])), "mesh", 0.0, edges=True)
+                self.view.show_mesh(q["nodes"], q["tets"])          # grey surface with the mesh edges: no result colours before Solve
             return
         r = self.result
         vals, title = self.field_values()
         self.view.show_result(r["nodes"], r["conn"], r["u"], vals, title, self.scale_value(), self.cb_edges.isChecked())
 
+    # ------------------------------------------------------------------ probes
+    def set_probe_mode(self, on):
+        self.view.probe_mode = bool(on)
+        self.view.on_probe = self.probe_at if on else None
+        self.say("Click the solved part to read the values there." if on else "Probe off: a click picks a face again.")
+
+    def probe_at(self, point):
+        """A click on the result surface: the node nearest to the clicked point (of the deformed shape that is on screen)."""
+        if self.result is None or point is None:
+            self.probe_lbl.setText("Solve first, then click the coloured part.")
+            return None
+        r = self.result
+        pts = r["nodes"] + self.scale_value() * r["u"]
+        i = int(np.argmin(np.linalg.norm(pts - np.asarray(point, float), axis=1)))
+        return self.probe_index(i, float(np.linalg.norm(pts[i] - np.asarray(point, float))))
+
     def probe_node(self):
         if self.result is None:
             self.probe_lbl.setText("Solve first.")
             return None
+        D = UD()
         try:
-            p = [float(x) for x in self.e_probe.text().replace(";", ",").split(",")]
+            p = [l_in(float(x)) for x in self.e_probe.text().replace(";", ",").split(",")]
             assert len(p) == 3
         except Exception:
-            self.probe_lbl.setText("Type the point as x, y, z (mm).")
+            self.probe_lbl.setText(f"Type the point as x, y, z ({D['L']}).")
             return None
         i, d, un, vm = sm.probe(self.result, p)
-        x = self.result["nodes"][i]
-        self.probe_lbl.setText(f"Node at ({x[0]:.4g}, {x[1]:.4g}, {x[2]:.4g}), {d:.3g} mm from the point: displacement {un:.5g} mm, von Mises {vm:.5g} MPa.")
+        self.probe_index(i, d)
         return i, d, un, vm
+
+    def probe_index(self, i, dist):
+        r = self.result
+        self.last_probe = {"i": int(i), "dist": float(dist)}
+        self.show_probe(self.last_probe)
+        return int(i), float(dist), float(r["un"][i]), float(r["vm_node"][i])
+
+    def show_probe(self, pr):
+        r = self.result
+        if r is None:
+            return
+        i = pr["i"]
+        D = UD()
+        x = r["nodes"][i]
+        u = r["u"][i]
+        vm = float(r["vm_node"][i])
+        sy = r["material"].get("sy") or 0.0
+        fos = (sy / vm) if vm > 1e-12 and sy else None
+        d = [("ux", R.num(l_out(u[0])), None), ("uy", R.num(l_out(u[1])), None), ("uz", R.num(l_out(u[2])), None),
+             ("Total |u|", R.num(l_out(float(r["un"][i]))), None)]
+        st = [("von Mises", R.num(s_out(vm)), None)]
+        if fos is not None:
+            st.append(("Safety factor, yield", R.num(fos, 4), None))
+        where = (f"node {i} at ({R.num(l_out(x[0]))}, {R.num(l_out(x[1]))}, {R.num(l_out(x[2]))}) {D['L']}, "
+                 f"{R.num(l_out(pr['dist']), 3)} {D['L']} from the point")
+        self.probe_lbl.setText(R.probe_block("Probe", where, d, st, D["L"], D["S"], "Stress: value at the node (average of the elements around it)."))
 
     def export_animation(self, path=None, frames=16):
         if self.result is None:
@@ -949,7 +1166,8 @@ class SolidWindow(QWidget):
         self.geom_case = False
         self.setup = json.loads(json.dumps(s))
         self.put_material(self.setup["material"])
-        self.e_h.setText(format(self.setup["h"], ".10g") if self.setup.get("h") else "")
+        self.select_material_name(self.setup.get("mat_name"))
+        self.e_h.setText(format(l_out(self.setup["h"]), ".8g") if self.setup.get("h") else "")
         if dims_changed and self.source is not None:
             self.load_geometry()
         self.result = st.get("result")
@@ -1017,7 +1235,8 @@ class SolidWindow(QWidget):
             except Exception:
                 pass
         w.put_material(w.setup["material"])
-        w.e_h.setText(format(w.setup["h"], ".10g") if w.setup.get("h") else "")
+        w.select_material_name(w.setup.get("mat_name"))
+        w.e_h.setText(format(l_out(w.setup["h"]), ".8g") if w.setup.get("h") else "")
         sf = sim_project.source_file(folder, m)
         if sf:
             try:
@@ -1060,6 +1279,7 @@ class SolidWindow(QWidget):
         return fns[0](self)
 
     def closeEvent(self, ev):
+        unitctl.off_change(self.units_changed)
         if self.job is not None:
             self.job.stop = True
             self.job.wait(5000)

@@ -19,6 +19,7 @@ from PyQt6.QtCore import QItemSelectionModel, Qt, QTimer
 from PyQt6.QtGui import QBrush, QColor, QFont, QGuiApplication, QKeySequence, QShortcut
 import sim_icons  # noqa: F401
 import sim_ui
+import sim_report
 import anim_export
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
                              QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplitter,
@@ -1620,32 +1621,37 @@ class BeamTab(QWidget):
     def show_summary(self):
         r = self.result
         u = self.U()
-        L = [f"<b>Solved</b>: {len(r['members'])} member(s), {len(r['nodes'])} joint(s)."]
-        L.append(f"Largest displacement: <b>{r['umax']:.5g} {u['L']}</b> ({r['umax_member']}).")
-        L.append(f"Largest fibre stress: <b>{r['sigma_max']:.5g} {u['S']}</b> ({r['sigma_member']}).")
+        R = sim_report
+        rows = [("Largest fibre stress", R.num(r["sigma_max"]), f"{u['S']}  ({r['sigma_member']})"),
+                ("Largest displacement", R.num(r["umax"]), f"{u['L']}  ({r['umax_member']})")]
+        html = R.heading("Solved", f"{len(r['members'])} member(s), {len(r['nodes'])} joint(s)")
+        html += R.summary(r.get("fos_y"), r.get("fos_u"), rows)
         for key, lab in (("fos_y", "yield"), ("fos_u", "ultimate")):
-            v = r.get(key)
-            if v is None:
-                L.append(f"Factor of safety, {lab}: not available (no {lab} strength).")
+            if r.get(key) is None:
+                html += R.note(f"No {lab} strength is set, so there is no {lab} safety factor.")
             else:
-                col = "#b00020" if v < 1 else "#1a7f37"
-                L.append(f"Lowest factor of safety, {lab}: <b style='color:{col}'>{v:.3g}</b> ({r[key + '_member']}).")
-        L.append(f"Peaks: N = {r['N_peak']:.5g} {u['F']} ({r['N_member']}), V = {r['V_peak']:.5g} {u['F']} ({r['V_member']}), "
-                 f"M = {r['M_peak']:.5g} {u['F']} {u['L']} ({r['M_member']}).")
+                html += R.note(f"Lowest {lab} safety factor is in {r[key + '_member']}.")
+        html += R.heading("Peaks")
+        html += R.kv([("Axial force N", R.num(r["N_peak"]), f"{u['F']}  ({r['N_member']})"),
+                      ("Shear force V", R.num(r["V_peak"]), f"{u['F']}  ({r['V_member']})"),
+                      ("Moment M", R.num(r["M_peak"]), f"{u['F']} {u['L']}  ({r['M_member']})")])
         if r["euler_max"] >= 1.0:
-            L.append("<b style='color:#b36b00'>A compressed member is at or beyond its Euler buckling load: this analysis does not include "
-                     "buckling.</b>")
+            html += R.note("A compressed member is at or beyond its Euler buckling load: this analysis does not include buckling.", R.AMBER)
         elif r["euler_max"] > 0:
-            L.append(f"Most compressed member: {100 * r['euler_max']:.1f} % of its Euler (pin-ended) buckling load.")
+            html += R.note(f"Most compressed member: {100 * r['euler_max']:.1f} % of its Euler (pin-ended) buckling load.")
         if r["reactions"]:
-            L.append("<b>Reactions</b> (" + f"{u['F']}, {u['F']} {u['L']}):")
+            html += R.heading("Reactions", f"{u['F']}, moments in {u['F']} {u['L']}")
+            rr = []
             for pid, (rx, ry, mz) in sorted(r["reactions"].items()):
-                L.append(f"Point {pid}: Rx = {rx:.5g}, Ry = {ry:.5g}" + (f", Mz = {mz:.5g}" if mz else ""))
+                rr.append([f"Point {pid}", R.num(rx), R.num(ry), R.num(mz) if mz else "-"])
+            html += R.grid(["", "Rx", "Ry", "Mz"], rr)
         eq = r["equilibrium"]
-        L.append(f"Equilibrium check: residual {eq['relative']:.1e} of the largest load or reaction.")
+        ok = eq["relative"] < 1e-6
+        html += R.heading("Solver check") + R.kv([("Force balance", R.chip("OK", "ok") if ok else R.chip("CHECK", "bad"), None)])
+        html += R.note(f"Residual {eq['relative']:.1e} of the largest load or reaction.")
         for n in r.get("notes", []):
-            L.append(f"<span style='color:#b36b00'>{n}</span>")
-        self.res_lbl.setText("<br>".join(L))
+            html += R.note(n, R.AMBER)
+        self.res_lbl.setText(html)
 
     def show_report(self):
         if self.result is None:
