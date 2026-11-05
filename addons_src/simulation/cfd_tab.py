@@ -698,6 +698,7 @@ class CFDTab(QWidget):
         self.b_stop.clicked.connect(self.stop_solve)
         self.b_stop.setEnabled(False)
         self.b_stop.setMinimumHeight(46)
+        self.study_box = sim_ui.study_slot()
         self.solve_row = QWidget()
         sr = QHBoxLayout(self.solve_row)
         sr.setContentsMargins(0, 0, 0, 0)
@@ -778,6 +779,7 @@ class CFDTab(QWidget):
         for s_ in sorted(self.sections, key=lambda x: x.number):
             if s_.number == 6:
                 lay0.addWidget(self.solve_row)        # the one big Solve button (with Stop) sits between the setup sections and the Results
+                lay0.addWidget(self.study_box)
             lay0.addWidget(s_)
         lay0.addStretch(1)
 
@@ -1362,6 +1364,11 @@ class CFDTab(QWidget):
         self.bar.setRange(0, 1000)
         self.bar.setValue(1000)
         self.show_result(res)
+
+    def study_adapter(self):
+        """What the Parametric Studies add-on talks to (study_iface.py)."""
+        import study_cfd
+        return study_cfd.CFDStudy(self)
 
     def load_case(self, mesh, res, frame, setup_used):
         """Shows a stored result (from the Parameterization tab): its mesh, its final flow state and its numbers."""

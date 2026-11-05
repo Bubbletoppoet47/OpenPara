@@ -170,6 +170,16 @@ def solve_button(text="Solve"):
     return b
 
 
+def study_slot():
+    """An empty box right under the Solve button.  The window around the tab puts the 'parametric study' button of that add-on in it (when it is
+    installed); while it is empty the box is hidden."""
+    box = QWidget()
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(4, 0, 4, 4)
+    box.hide()
+    return box
+
+
 def make_panel(content, pinned_widgets, min_w=340, max_w=400):
     """`content`: the widget holding the Sections (it is scrolled).  `pinned_widgets`: widgets (or layouts) that stay visible below the scroll
     area.  Returns the panel widget for the splitter."""

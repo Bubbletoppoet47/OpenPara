@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout
 
 import beam_tab
 import cfd_tab
+import ext
 import mat_lib
 import physics_materials as pmat
 import physics_store as pstore
@@ -129,6 +130,11 @@ class SimWindow(QWidget):
         self.tab.picker.on_import = self.on_imported
         lay.addWidget(self.tab, 1)
         lay.addWidget(self.status_lbl)
+        self.b_study = QPushButton("Create parametric study")
+        self.b_study.setToolTip("Opens a parametric study tab for this simulation: the inputs to vary, the cases to run and the results. The "
+                                "study is saved in the project folder (study/).")
+        self.b_study.clicked.connect(self.open_study)
+        self.tab.study_box.layout().addWidget(self.b_study)
         self.show_source()
         self.saved_sig = self.signature()
 
@@ -140,6 +146,7 @@ class SimWindow(QWidget):
 
     def show_source(self):
         have = self.project_ok()
+        self.refresh_study_button()
         self.b_new.setVisible(not have)
         self.b_import.setEnabled(have)
         self.b_refresh.setEnabled(self.source is not None)
@@ -155,6 +162,27 @@ class SimWindow(QWidget):
         rule = ("slice only (a plane through the parts; touching parts are bonded)" if kind == "assembly" else
                 ("sketch of the part" if self.kind == "beam" else "sketch of the part, or a slice"))
         self.src_lbl.setText(f"<b>{self.label}</b> of the {kind} <b>{self.src.get('name') or '?'}</b> (the copy in the project) - works on: {rule}")
+        self.refresh_study_button()
+
+    def refresh_study_button(self):
+        """The parametric-study button under Solve: only when the Parametric Studies add-on is installed."""
+        on = bool(ext.hooks("sim_study"))
+        self.tab.study_box.setVisible(on)
+        if not on:
+            return
+        have = bool(self.path) and os.path.isfile(os.path.join(self.path, sim_project.STUDY_DIR, "study.json"))
+        self.b_study.setText("Open parametric study" if have else "Create parametric study")
+        self.b_study.setEnabled(self.source is not None and getattr(self.tab, "model", None) is not None)
+
+    def open_study(self):
+        """Saves the simulation (the study lives in its project folder) and opens its parametric study tab."""
+        fns = ext.hooks("sim_study")
+        if not fns:
+            return None
+        if not self.project_ok() or self.is_dirty():
+            if not self.save():
+                return None
+        return fns[0](self)
 
     def project_ok(self):
         return bool(self.path) and sim_project.kind_of_folder(self.path) == self.kind
@@ -529,6 +557,7 @@ class SimWindow(QWidget):
                     notes.append("The part's material has no elastic properties: type E and Poisson's ratio (or choose another material in the part).")
         self.tab.picker.refresh()
         self.tab.picker.select(sid)
+        self.refresh_study_button()
         if notes:
             self.status_lbl.setText("  ".join(notes))
 

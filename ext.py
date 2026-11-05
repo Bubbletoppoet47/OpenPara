@@ -21,6 +21,7 @@ FEATURES = {}
 MENU_ITEMS = {}              # {menu name: [(text, fn(window))]}: items an add-on puts in the menu of another add-on's window, e.g. "annotator.file"
 MODEL_TRAINERS = {}          # {model type key: spec}: model types an add-on adds to the Trainer (see add_model_trainer)
 SHELL_MIXINS = []           # classes an add-on adds to the program window (gpd_app.AppShell) to give its tabs the helpers they use
+HOOKS = {}                  # {hook name: [fn]}: places where an add-on adds to a window of another add-on, e.g. "sim_study" (see add_hook)
 installer = None            # set by the shell: installer(addon_id, parent) offers to install / enable an add-on
 
 
@@ -34,6 +35,18 @@ def present(aid):
 
 def add_feature(kind, **spec):
     FEATURES[kind] = spec
+
+
+def add_hook(name, fn):
+    """An add-on offers `fn` to the hook `name` of another add-on's window.  The Simulation windows use "sim_study": fn(sim_window) -> opens
+    (or creates) the parametric study of that simulation project; the window then shows its 'parametric study' button."""
+    HOOKS.setdefault(name, [])
+    if fn not in HOOKS[name]:
+        HOOKS[name].append(fn)
+
+
+def hooks(name):
+    return list(HOOKS.get(name, []))
 
 
 def add_shell_mixin(cls):

@@ -262,6 +262,7 @@ class BeamTab(QWidget):
         self.cb_auto.setToolTip("A frame solves in a fraction of a second, so this is on by default.")
         lay.addWidget(self.cb_auto)
         self.b_solve = sim_ui.solve_button()
+        self.study_box = sim_ui.study_slot()
         self.b_solve.clicked.connect(lambda: self.solve(auto=False))
         self.view_combo = QComboBox()
         for text, key in VIEWS:
@@ -338,6 +339,7 @@ class BeamTab(QWidget):
         for s_ in sorted(self.sections, key=lambda x: x.number):
             if s_.number == 7:
                 lay0.addWidget(self.b_solve)          # the one big Solve button sits between the setup sections and the Results
+                lay0.addWidget(self.study_box)
             lay0.addWidget(s_)
         lay0.addStretch(1)
         scroll = sim_ui.make_panel(left, [], 340, 420)
@@ -1689,6 +1691,11 @@ class BeamTab(QWidget):
         if not sups:
             raise beam1d.BeamError("The 1D FEA tab has no supports.")
         return {"args": (nodes, copy.deepcopy(mems), sups, nodal), "notes": notes, "excluded": left_out}
+
+    def study_adapter(self):
+        """What the Parametric Studies add-on talks to (study_iface.py)."""
+        import study_beam
+        return study_beam.BeamStudy(self)
 
     def load_case(self, result):
         """Shows a result computed by the Parameterization tab."""

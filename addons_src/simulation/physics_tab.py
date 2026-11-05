@@ -924,6 +924,7 @@ class PhysicsTab(QWidget):
         self.b_mesh.setMinimumHeight(30)
         self.b_mesh.clicked.connect(self.run_mesh)
         self.b_solve = sim_ui.solve_button()
+        self.study_box = sim_ui.study_slot()
         self.b_solve.clicked.connect(self.run_solve)
         lay = sec(5, "Mesh", True, help_text="Choose the element size and the element type, then press Mesh. Auto-refine is optional: it starts "
                   "from this mesh when you press Solve and refines it where the stress changes fastest.",
@@ -1112,6 +1113,7 @@ class PhysicsTab(QWidget):
         for s_ in sorted(self.sections, key=lambda x: x.number):
             if s_.number == 7:
                 lay0.addWidget(self.b_solve)          # the one big Solve button sits between the setup sections and the Results
+                lay0.addWidget(self.study_box)
             lay0.addWidget(s_)
         lay0.addStretch(1)
         panel = sim_ui.make_panel(left, [])
@@ -2564,6 +2566,11 @@ class PhysicsTab(QWidget):
         self.status(f"Auto-refined to {s['n_tris']:,} triangles in {len(data['log'])} pass(es): "
                     f"{prefine.summary_lines(data['log'], data['reason'], 'fea')[1]}")
         self.enable_buttons()
+
+    def study_adapter(self):
+        """What the Parametric Studies add-on talks to (study_iface.py)."""
+        import study_fea
+        return study_fea.FEAStudy(self)
 
     def load_case(self, mesh, result):
         """Shows a stored result (from the Parameterization tab) on the canvas."""

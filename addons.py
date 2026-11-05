@@ -344,6 +344,7 @@ def register_extensions(ext):
     """Tell the core (ext.py) which add-ons are active and let those that extend the Part / Assembly windows register.  Safe to call again
     after an add-on was installed or removed."""
     ext.FEATURES.clear()
+    ext.HOOKS.clear()
     for aid in known():
         on = is_active(aid)
         ext.mark_present(aid, on)
