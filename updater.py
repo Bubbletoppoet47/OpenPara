@@ -67,6 +67,10 @@ def _open(req, timeout):
     return urllib.request.build_opener(_NoAuthOnRedirect).open(req, timeout=timeout)
 
 
+def _vkey(v):
+    return tuple(int(p) if p.isdigit() else 0 for p in str(v).replace("-", ".").split("."))
+
+
 def fetch_latest(url=None, tok=None, timeout=8):
     """The newest release as {'version','notes','page','app':asset|None,'setup':asset|None}, or None when there is none / no network."""
     tok = tok or token()
@@ -76,7 +80,9 @@ def fetch_latest(url=None, tok=None, timeout=8):
     except (urllib.error.URLError, OSError, ValueError):
         return None
     if isinstance(rel, list):                       # the playground feed is a list of releases, newest first: take the newest dev build
-        rel = next((x for x in rel if isinstance(x, dict) and not x.get("draft") and str(x.get("tag_name", "")).startswith(channel.DEV_PREFIX)), None)
+        devs = [x for x in rel if isinstance(x, dict) and not x.get("draft") and str(x.get("tag_name", "")).startswith(channel.DEV_PREFIX)]
+        # GitHub does not list the releases in version order (0.8.5.9 came before 0.8.5.12), so the newest is found by its version number
+        rel = max(devs, key=lambda x: _vkey(channel.version_of_tag(x["tag_name"])), default=None)
     if not isinstance(rel, dict) or not rel.get("tag_name") or rel.get("draft"):
         return None
     out = {"version": channel.version_of_tag(rel["tag_name"]), "notes": rel.get("body") or "", "page": rel.get("html_url") or RELEASES_PAGE,

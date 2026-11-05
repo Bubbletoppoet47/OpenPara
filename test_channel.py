@@ -85,6 +85,10 @@ url = f"http://127.0.0.1:{srv.server_port}/releases"
 r = updater.fetch_latest(url)
 assert r["version"] == "0.8.5.40" and r["notes"] == "forty" and r["app"]["name"].startswith("OpenPara-Playground-app-")
 assert r["setup"]["name"].endswith(".exe"), r
+# GitHub lists releases in no version order (it showed 0.8.5.9 before 0.8.5.12): the newest is found by version number
+STATE["body"] = [{"tag_name": "dev-0.8.5.9", "prerelease": True, "assets": []}, {"tag_name": "dev-0.8.5.12", "prerelease": True, "assets": []},
+                 {"tag_name": "dev-0.8.5.10", "prerelease": True, "assets": []}]
+assert updater.fetch_latest(url)["version"] == "0.8.5.12"
 STATE["body"] = [FEED[0]]                                    # only plain releases: nothing for the playground
 assert updater.fetch_latest(url) is None
 # the normal program still takes a single release object (the "latest" feed) and its own file names
