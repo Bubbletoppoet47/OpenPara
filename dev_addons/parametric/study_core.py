@@ -9,6 +9,7 @@ study adapter of the simulation (see simulation/study_iface.py).
 import csv
 import itertools
 import json
+import math
 import os
 import pickle
 import re
@@ -32,6 +33,39 @@ def exists(project):
 def split_list(text):
     """'10, 15,20' -> ['10', '15', '20']"""
     return [v.strip() for v in str(text).replace(";", ",").split(",") if v.strip()]
+
+
+def spaced(start, end, n, log=False):
+    """n numbers from start to end, both included, as text: equal steps (like numpy.linspace) or equal ratios (log spacing, like numpy.geomspace).
+    ValueError for a bad count or, with log spacing, for values that are zero or of different sign."""
+    a, b = float(start), float(end)
+    n = int(n)
+    if n < 1:
+        raise ValueError("The count must be at least 1.")
+    if n > MAX_CASES:
+        raise ValueError(f"A count of {n} is too many (the most is {MAX_CASES}).")
+    if log:
+        if a == 0 or b == 0 or (a < 0) != (b < 0):
+            raise ValueError("Log spacing needs a start and an end that are not zero and have the same sign.")
+        sgn = -1.0 if a < 0 else 1.0
+        la, lb = math.log(abs(a)), math.log(abs(b))
+        vals = [sgn * math.exp(la + (lb - la) * k / (n - 1)) for k in range(n)] if n > 1 else [a]
+        if n > 1:
+            vals[0], vals[-1] = a, b
+    else:
+        vals = [a + (b - a) * k / (n - 1) for k in range(n)] if n > 1 else [a]
+        if n > 1:
+            vals[-1] = b
+    return [format(v, ".10g") for v in vals]
+
+
+def range_rows(cols, specs, together, log=False, rows=None):
+    """specs {column: (start, end, count)}.  together=True: `rows` rows, every column stepping at once (row 1 = all starts, last row = all ends);
+    False: every combination of the columns' own counts.  -> design rows."""
+    if together:
+        lists = [spaced(specs[p][0], specs[p][1], rows, log) for p in cols]
+        return [dict(zip(cols, vals)) for vals in zip(*lists)]
+    return grid_rows(cols, [spaced(specs[p][0], specs[p][1], specs[p][2], log) for p in cols])
 
 
 def grid_rows(cols, lists):

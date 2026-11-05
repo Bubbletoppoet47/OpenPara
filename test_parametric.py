@@ -99,6 +99,27 @@ tick(dim); tick("fea.load0.p")
 assert tab.cols() == [dim, "fea.load0.p"] and tab.data.rows[0][dim] == d[dim]["now"] and tab.data.rows[0]["fea.load0.p"] == "0.5"
 assert tab.fill_grid({dim: "100, 200", "fea.load0.p": "0.5, 1.0"})
 assert len(tab.data.rows) == 4
+# range fills: linspace-like, log spacing, together (shared rows) and every combination, with the replace confirmation
+assert core.spaced(0, 10, 5) == ["0", "2.5", "5", "7.5", "10"] and core.spaced(1, 100, 3, True) == ["1", "10", "100"]
+assert core.spaced(5, 9, 1) == ["5"]
+for bad in ((1, 10, 0), (0, 10, 3, True), (-1, 10, 3, True)):
+    try:
+        core.spaced(*bad); raise SystemExit("should fail")
+    except ValueError:
+        pass
+assert tab.fill_range({dim: ("100", "200", 3), "fea.load0.p": ("0.5", "2", 4)}, together=True, log=False, rows=5, confirm=False)
+rr = tab.data.rows
+assert len(rr) == 5 and rr[0][dim] == "100" and rr[-1][dim] == "200" and rr[0]["fea.load0.p"] == "0.5" and rr[-1]["fea.load0.p"] == "2"
+assert tab.fill_range({dim: ("100", "200", 3), "fea.load0.p": ("0.5", "2", 4)}, together=False, log=True, confirm=False)
+assert len(tab.data.rows) == 12 and tab.data.rows[0][dim] == "100" and tab.data.rows[-1]["fea.load0.p"] == "2"
+from PyQt6.QtWidgets import QMessageBox as _QM
+_old = _QM.question
+_QM.question = staticmethod(lambda *a, **k: _QM.StandardButton.No)
+n_before = len(tab.data.rows)
+assert not tab.fill_range({dim: ("1", "2", 2), "fea.load0.p": ("1", "2", 2)}, together=False, log=False) and len(tab.data.rows) == n_before, "No keeps the table"
+_QM.question = _old
+assert tab.fill_range({dim: ("1", "2", 2), "fea.load0.p": ("1", "2", 2)}, together=False, log=False) and len(tab.data.rows) == 4
+tab.fill_grid({dim: "100, 200", "fea.load0.p": "0.5, 1.0"})
 tab.data.out_checked = ["fea.status", "fea.umax", "fea.vm"]
 tab.fill_outputs()
 before = (t.mesh, t.result, repr(t.loads), t.e_h.text())

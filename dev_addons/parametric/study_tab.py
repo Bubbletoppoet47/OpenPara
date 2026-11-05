@@ -17,7 +17,7 @@ import traceback
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
-                             QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSplitter,
+                             QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox, QSplitter,
                              QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import study_core as core
@@ -184,9 +184,9 @@ class StudyTab(QWidget):
         tl.addWidget(self.design, 1)
         row = QHBoxLayout()
         for text, fn in (("Add row", self.add_row), ("Duplicate row", self.dup_row), ("Delete row", self.del_row),
-                         ("Fill grid...", self.fill_grid)):
+                         ("Fill grid...", self.fill_grid), ("Fill range...", self.fill_range)):
             b = QPushButton(text)
-            b.clicked.connect(fn)
+            b.clicked.connect(lambda _c=False, f=fn: f())
             row.addWidget(b)
         row.addStretch(1)
         tl.addLayout(row)
@@ -512,6 +512,71 @@ class StudyTab(QWidget):
         if len(rows) > 30 and QMessageBox.question(self, "Fill grid", f"That makes {len(rows)} cases. Continue?") != QMessageBox.StandardButton.Yes:
             return False
         self.data.rows = rows
+        self.mark()
+        self.rebuild_design()
+        return True
+
+    def fill_range(self, specs=None, together=None, log=None, rows=None, confirm=True):
+        """Fills the table from a start value, an end value and a count per input (like linspace; log spacing too).  `together`: one row per step
+        with all inputs moving at once (shared row count); otherwise every combination.  Replaces all rows after a confirmation.
+        `specs` ({id: (start, end, count)}, with together/log/rows) skips the dialog."""
+        cols = self.cols()
+        if not cols:
+            QMessageBox.information(self, "Fill range", "Tick at least one input on the left first.")
+            return False
+        if specs is None:
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Fill range")
+            dlg.setMinimumWidth(560)
+            lay = QVBoxLayout(dlg)
+            lay.addWidget(self.note("Give each input a start value and an end value; the values in between are made for you. "
+                                    "The table is replaced (you are asked first)."))
+            form = QFormLayout()
+            cb_mode = QComboBox()
+            cb_mode.addItem("One row per step: all inputs move together (same number of rows)", True)
+            cb_mode.addItem("Every combination of the inputs", False)
+            form.addRow("Rows", cb_mode)
+            cb_sp = QComboBox()
+            cb_sp.addItem("Equal steps (linear)", False)
+            cb_sp.addItem("Equal ratios (log)", True)
+            form.addRow("Spacing", cb_sp)
+            sp_rows = QSpinBox()
+            sp_rows.setRange(1, core.MAX_CASES)
+            sp_rows.setValue(10)
+            form.addRow("Number of rows", sp_rows)
+            lay.addLayout(form)
+            grid = QFormLayout()
+            edits = {}
+            for p in cols:
+                cur = str(self.data.rows[0].get(p, "")) if self.data.rows else ""
+                a, b, n = QLineEdit(cur), QLineEdit(cur), QSpinBox()
+                n.setRange(1, core.MAX_CASES)
+                n.setValue(5)
+                n.setToolTip("Values for this input (used when every combination is made)")
+                r = QHBoxLayout()
+                for lab, w_ in (("from", a), ("to", b), ("values", n)):
+                    r.addWidget(QLabel(lab))
+                    r.addWidget(w_, 1)
+                grid.addRow(self.desc[p]["label"], r)
+                edits[p] = (a, b, n)
+            lay.addLayout(grid)
+            bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            bb.accepted.connect(dlg.accept)
+            bb.rejected.connect(dlg.reject)
+            lay.addWidget(bb)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return False
+            together, log, rows = cb_mode.currentData(), cb_sp.currentData(), sp_rows.value()
+            specs = {p: (e[0].text(), e[1].text(), e[2].value()) for p, e in edits.items()}
+        try:
+            new = core.range_rows(cols, specs, bool(together), bool(log), rows)
+        except (ValueError, KeyError) as ex:
+            QMessageBox.warning(self, "Fill range", f"Check the values: {ex}")
+            return False
+        if confirm and QMessageBox.question(self, "Fill range", f"This replaces all {len(self.data.rows)} row(s) of the table with {len(new)} new "
+                                            "row(s). Continue?") != QMessageBox.StandardButton.Yes:
+            return False
+        self.data.rows = new
         self.mark()
         self.rebuild_design()
         return True
