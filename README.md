@@ -71,7 +71,7 @@ follows the newest `dev-<version>` pre-release instead of the newest release.
 - A Playground build has two modes (Help > Playground mode; it asks to restart):
   - **Testing** (the default): exactly what the next release would be. Only the add-ons in `addons_src/` (the ones that ship) are available,
     so the menus match OpenPara.
-  - **Full dev**: no restrictions. It also loads `dev_addons/` (unreleased add-ons: FEA 3D, mesh, circuits ...; Simulation was promoted to Testing in 0.8.5 and lives in `addons_src/simulation`) and `shared/` (code they
+  - **Full dev**: no restrictions. It also loads `dev_addons/` (unreleased add-ons: 3D FEA of parametric parts (`solid_fea`), Parametric Studies (`parametric`), voxel/mesh FEA, mesh, circuits ...; Simulation was promoted to Testing in 0.8.5 and lives in `addons_src/simulation`) and `shared/` (code they
     share).
   A release never contains `dev_addons/` or `shared/`.
 - Putting an add-on "in testing" means moving it from `dev_addons/<id>/` to `addons_src/<id>/` with an `id`, `version` and `requires` (its pip

@@ -1,0 +1,27 @@
+{
+ "name": "3D FEA (parametric parts)",
+ "order": 4,
+ "status": "workshopping",
+ "needs": [
+  "simulation"
+ ],
+ "description": "Linear elastic 3D FEA of a single parametric OpenPara part: pick faces for supports (fixed, one direction, bolt hole) and loads (force, pressure, force at a vertex, gravity), quadratic tetrahedra from gmsh, von Mises, displacement and safety factor, animation. A .gpv project folder with its own copy of the part; works with Parametric Studies.",
+ "extension": "solid_ext",
+ "tabs": [
+  {
+   "kind": "solid",
+   "label": "3D FEA",
+   "short": "3D FEA",
+   "module": "solid_tab",
+   "factory": "make_solid",
+   "args": [
+    "host",
+    "path"
+   ],
+   "project_folder": {
+    "marker": "simulation.json",
+    "format": "openpara-sim-solid"
+   }
+  }
+ ]
+}

@@ -262,7 +262,8 @@ class StudyTab(QWidget):
         """The dimensions of the part copied into the project (only for a simulation of a sketch of a part)."""
         src = getattr(self.sw, "source", None)
         sid = self.sw.meta.get("sid") if isinstance(getattr(self.sw, "meta", None), dict) else None
-        if src is None or getattr(src, "type", "") != "part" or not sid or str(sid).startswith("__"):
+        solid = getattr(self.sw, "study_geometry", False)                        # a 3D part simulation: the whole part is its geometry
+        if src is None or getattr(src, "type", "") != "part" or (not solid and (not sid or str(sid).startswith("__"))):
             return []
         out = []
         try:
@@ -546,6 +547,10 @@ class StudyTab(QWidget):
                 from study_iface import parse_bool
                 v = parse_bool(v)
             vals[k] = v
+        if hasattr(self.adapter, "geometry_state"):                       # the simulation turns the changed part into its own state
+            st = self.adapter.geometry_state(src, vals)
+            self.geo_cache[key] = st
+            return st
         src.set_values(vals)
         m = src.doc.models.get(sid)
         if m is None:
