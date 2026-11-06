@@ -33,7 +33,7 @@ for dx in (0.5, 3.0):
     assert not ok
     assert A.status[m1["id"]] == "ok", ("the plate contact moved", A.status, t)
     assert A.status[m2["id"]] == "ok", ("the distance moved", A.status, t)
-    assert A.status[m3["id"]].startswith("error: this concentric mate conflicts"), A.status[m3["id"]]
+    assert A.status[m3["id"]] == am.Assembly.CONFLICT, A.status[m3["id"]]
     assert abs(t[2] - 25) < 1e-4 and np.allclose(Rr[:, 2], [0, 0, 1], atol=1e-5), ("pin lifted or tilted", t, Rr[:, 2])
     assert abs(t[0] - (20 - dx)) < 1e-3, (t, dx)
 # without the concentric mate the same two holding mates are fine (control)

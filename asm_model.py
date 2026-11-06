@@ -20,8 +20,6 @@ import refgeo
 FUNCS = {k: getattr(math, k) for k in ("sin", "cos", "tan", "atan", "sqrt", "pi", "radians", "degrees", "floor", "ceil")}
 FUNCS.update({"abs": abs, "min": min, "max": max, "round": round})
 
-SOFT_TYPES = ("concentric",)            # these give way when the mates that hold the part disagree with them
-SOFT_WEIGHT = 0.01
 TYPES = ["coincident", "parallel", "perpendicular", "tangent", "concentric", "lock", "distance", "angle", "symmetric"]
 LINELIKE = ("axis", "circle", "line")
 BASE_N = {"Front": (0.0, -1.0, 0.0), "Top": (0.0, 0.0, 1.0), "Right": (1.0, 0.0, 0.0)}
@@ -700,24 +698,6 @@ class Assembly:
         if targets and mates and fl:           # a drag: glide along what the mates leave free, never pull against them
             return self._drag_step(fl, mates, {cid: v for cid, v in (drag or {}).items() if cid in idx}, extra, limit, grab or {})
 
-        # A concentric mate has to yield to the mates that hold the part (planes, locks, distances ...): when they disagree, the error goes to the
-        # concentric one, not into a tilt or a lift of the part.  So its residual counts little in the first pass, and a second pass makes the
-        # holding mates exact again if the concentric one could not be met.
-        has_soft = any(m["type"] in SOFT_TYPES for m in mates)
-        soft_w = [SOFT_WEIGHT if has_soft and any(m["type"] not in SOFT_TYPES for m in mates) else 1.0]
-
-        def res(x, with_drag=True):
-            P = poses_of(x)
-            out = []
-            for m in mates:
-                rr_ = self.mate_residual(m, P)
-                out += [soft_w[0] * v for v in rr_] if m["type"] in SOFT_TYPES else rr_
-            r = np.array(out, float)
-            if with_drag and targets:
-                pull = [weight * (x[6 * i:6 * i + 6] - tv) for i, tv in targets.items()]
-                r = np.concatenate([r] + pull)
-            return r
-
         if not mates or not fl:
             if drag:
                 for cid, (R, t) in drag.items():
@@ -727,59 +707,40 @@ class Assembly:
             self.status = {m["id"]: "ok" for m in self.mates}
             self.dof = {c["id"]: (0 if c.get("fixed") else 6) for c in self.components if not c.get("derived")}
             return True
-        def lm(x, n_iter):
-            lam = 1e-3
-            r = res(x)
-            for _ in range(n_iter):
-                n = len(x)
-                J = np.zeros((len(r), n))
-                for j in range(n):
-                    h = 1e-6 if j % 6 < 3 else 1e-7
-                    xp = x.copy()
-                    xp[j] += h
-                    J[:, j] = (res(xp) - r) / h
-                g = J.T @ r
-                if np.linalg.norm(g, np.inf) < 1e-10:
-                    break
-                improved = False
-                for _k in range(8):
-                    A = J.T @ J + lam * np.eye(n)
-                    try:
-                        dx = -np.linalg.solve(A, g)
-                    except np.linalg.LinAlgError:
-                        lam *= 10
-                        continue
-                    r2 = res(x + dx)
-                    if float(r2 @ r2) < float(r @ r):
-                        x, r, lam, improved = x + dx, r2, max(lam / 3, 1e-9), True
-                        break
-                    lam *= 4
-                if not improved or float(r @ r) < 1e-22:
-                    break
-            return x
 
-        x = lm(x, iters)
-        if soft_w[0] != 1.0 and not targets:
-            P0 = poses_of(x)
-            soft_off = max([float(np.max(np.abs(self.mate_residual(m, P0)))) for m in mates if m["type"] in SOFT_TYPES and self.mate_residual(m, P0)] or [0.0])
-            if soft_off > 1e-4:                                  # it cannot be met together with the rest: the rest stays exact, this one is reported
-                soft_w[0] = 0.0
-                x = lm(x, 60)
-        for i, c in enumerate(fl):
-            c["pos"], c["rv"] = list(map(float, x[6 * i:6 * i + 3])), list(map(float, x[6 * i + 3:6 * i + 6]))
-        if targets:                      # the pull left the mates slightly off: snap them exactly (no pull this time)
-            return self.solve(extra=extra, iters=40, limit=limit)
+        start = {c["id"]: (list(c["pos"]), list(c["rv"])) for c in fl}
+        failed = {}
+        try:
+            together = self._fit(fl, mates, iters)
+        except MateError:
+            together = False
+        keep = mates
+        if not together:
+            # Something disagrees.  Solve ONE MATE AT A TIME in the order they were made (a mate that is being added or edited counts as the newest):
+            # every earlier mate is trusted and stays exact, the next one is solved with them as hard constraints, and one that cannot be met is
+            # left out and reported - it never drags the others out of place.
+            for c in fl:
+                c["pos"], c["rv"] = list(start[c["id"]][0]), list(start[c["id"]][1])
+            keep, failed = self._solve_in_order(fl, mates, iters, limit)
+        x = np.concatenate([np.concatenate([c["pos"], c["rv"]]) for c in fl])
+
+        def poses_of(x):
+            return {c["id"]: (rodrigues(x[6 * i + 3:6 * i + 6]), x[6 * i:6 * i + 3]) for i, c in enumerate(fl)}
+
         # report
         P = poses_of(x)
-        ok = True
+        ok = not failed
         if limit is None:
             self.status = {}
         live = self.active_mates()
-        for m in self.mates:
+        for m in list(self.mates) + [e for e in (extra or []) if e not in self.mates]:
             if limit is not None and m not in mates:
                 continue
-            if m.get("suppressed") or m not in live:
+            if m.get("suppressed") or (m not in live and m not in (extra or [])):
                 self.status[m["id"]] = "suppressed"
+                continue
+            if m["id"] in failed:
+                self.status[m["id"]] = failed[m["id"]]
                 continue
             try:
                 rr = np.array(self.mate_residual(m, P), float)
@@ -787,15 +748,99 @@ class Assembly:
                 self.status[m["id"]] = f"error: {ex}"
                 ok = False
                 continue
-            if rr.size and float(np.max(np.abs(rr))) > 1e-4 * max(1.0, 1.0):
-                self.status[m["id"]] = ("error: this concentric mate conflicts with the mates that hold the part (they were kept exact)"
-                                        if m["type"] in SOFT_TYPES else "error: this mate cannot be satisfied together with the others")
+            if rr.size and float(np.max(np.abs(rr))) > 1e-4:
+                self.status[m["id"]] = "error: this mate cannot be satisfied together with the others"
                 ok = False
             else:
                 self.status[m["id"]] = "ok"
         if limit is None:
-            self.dof = self.degrees_of_freedom(fl, mates, x, poses_of)
+            self.dof = self.degrees_of_freedom(fl, keep, x, poses_of)
         return ok
+
+    CONFLICT = "error: conflicts with the mates before it (they were kept exact, this one was left out)"
+
+    def _fit(self, fl, mates, iters=80):
+        """Least squares on the poses of the components fl so that all the mates hold; writes the poses back.  True when every mate is met."""
+        idx = {c["id"]: i for i, c in enumerate(fl)}
+        x = np.concatenate([np.concatenate([c["pos"], c["rv"]]) for c in fl]) if fl else np.zeros(0)
+
+        def res(x):
+            P = {c["id"]: (rodrigues(x[6 * i + 3:6 * i + 6]), x[6 * i:6 * i + 3]) for i, c in enumerate(fl)}
+            out = []
+            for m in mates:
+                out += self.mate_residual(m, P)
+            return np.array(out, float)
+
+        lam = 1e-3
+        r = res(x)
+        for _ in range(iters):
+            if float(r @ r) < 1e-22:
+                break
+            n = len(x)
+            J = np.zeros((len(r), n))
+            for j in range(n):
+                h = 1e-6 if j % 6 < 3 else 1e-7
+                xp = x.copy()
+                xp[j] += h
+                J[:, j] = (res(xp) - r) / h
+            g = J.T @ r
+            if np.linalg.norm(g, np.inf) < 1e-10:
+                break
+            improved = False
+            for _k in range(8):
+                A = J.T @ J + lam * np.eye(n)
+                try:
+                    dx = -np.linalg.solve(A, g)
+                except np.linalg.LinAlgError:
+                    lam *= 10
+                    continue
+                r2 = res(x + dx)
+                if float(r2 @ r2) < float(r @ r):
+                    x, r, lam, improved = x + dx, r2, max(lam / 3, 1e-9), True
+                    break
+                lam *= 4
+            if not improved:
+                break
+        for i, c in enumerate(fl):
+            c["pos"], c["rv"] = list(map(float, x[6 * i:6 * i + 3])), list(map(float, x[6 * i + 3:6 * i + 6]))
+        return bool(r.size == 0 or float(np.max(np.abs(r))) <= 1e-4)
+
+    def _solve_in_order(self, fl, mates, iters, limit):
+        """The mates in order, each added to the ones already holding: only the components the new mate can move (those tied to it through the
+        earlier mates) are solved, and a mate that cannot be met is rolled back and reported.  -> (the mates that hold, {mate id: message})."""
+        floating = {c["id"]: c for c in fl}
+        held, failed = [], {}
+        for m in mates:
+            ids = {r["c"] for r in m["refs"]} & set(floating)
+            grew = True
+            while grew:                                        # everything tied to those components through the mates that already hold
+                grew = False
+                for h in held:
+                    hid = {r["c"] for r in h["refs"]} & set(floating)
+                    if hid & ids and not hid <= ids:
+                        ids |= hid
+                        grew = True
+            trial = held + [m]
+            sub = [floating[i] for i in floating if i in ids]
+            before = {c["id"]: (list(c["pos"]), list(c["rv"])) for c in sub}
+            try:
+                met = self._fit(sub, [t for t in trial if {r["c"] for r in t["refs"]} & ids], iters) if sub else self._met(trial)
+            except MateError as ex:
+                met = False
+                failed[m["id"]] = f"error: {ex}"
+            if met:
+                held.append(m)
+                continue
+            for c in sub:                                      # roll back: this mate does not fit with the earlier ones
+                c["pos"], c["rv"] = before[c["id"]]
+            failed.setdefault(m["id"], self.CONFLICT)
+        return held, failed
+
+    def _met(self, mates):
+        try:
+            return all(not len(r) or float(np.max(np.abs(r))) <= 1e-4 for r in (np.array(self.mate_residual(m), float) for m in mates))
+        except MateError:
+            return False
 
     def drag_reset(self):
         """A new drag starts: forget where the mouse target was."""

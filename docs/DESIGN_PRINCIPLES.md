@@ -43,7 +43,7 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 ## 6. Sketching
 - The context menu on a plane says just **Sketch**.
 - Exactly one ribbon tool button is lit at a time (plain buttons and drop-downs alike).
-- Mates that hold a part (planes, locks, distances) stay exact; a concentric mate yields to them and is the one reported when they disagree.
+- Mates are solved in the order they were made. If they all agree they are solved together; if not, one at a time: earlier mates are trusted and stay exact, a mate that cannot be met is left out and reported ("conflicts with the mates before it"), and a mate being added or edited counts as the newest. No mate type is special.
 - Assembly mates can use the assembly's own planes and origin, even with a single component.
 - Tools finish with **Enter, Esc or a double-click**; Esc never throws away finished work.
 - Everything drawn stays editable: points can be dragged, including a spline's fit points.

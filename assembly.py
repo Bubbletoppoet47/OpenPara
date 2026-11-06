@@ -2015,7 +2015,9 @@ class AssemblyWindow(QMainWindow):
                 self.mate_opts.setdefault("value", m.get("value"))
                 ok = self.asm.solve(extra=[m])
                 if not ok:
-                    self.mate_error = "These items cannot be mated with the other mates as they are."
+                    st = self.asm.status.get(m["id"], "")
+                    self.mate_error = ("This mate conflicts with the mates already holding the parts, so they stayed where they are and it was left out."
+                                       if st == am.Assembly.CONFLICT else "These items cannot be mated with the other mates as they are.")
                 self.mate_built = m
             except am.MateError as ex:
                 self.mate_error = str(ex)
