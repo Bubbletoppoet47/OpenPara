@@ -196,7 +196,7 @@ class AppShell(QMainWindow):
         if ext.present("simulation") or ext.present("render"):               # only when a simulation / renderer add-on is installed
             am = mb.addMenu("&Add")
             if ext.present("render"):
-                add(am, "New render (photorealistic pictures and videos)", lambda: self.add_render())
+                add(am, "Visualize: Preview / Render (lit view, pictures and videos)", lambda: self.add_render())
                 am.addSeparator()
             if ext.present("simulation"):
                 for kind, text in (("beam", "1D FEA (frames and trusses) - of a part"), ("fea", "2D FEA"), ("cfd", "2D CFD")):
@@ -487,7 +487,7 @@ class AppShell(QMainWindow):
         return self.add_tab(sim_tab.SimWindow(kind, shell=self, src_tab=src))
 
     def add_render(self):
-        """A Render Studio tab for the part or assembly that is on screen (or the source of the render tab that is on screen)."""
+        """A Visualize tab for the part or assembly that is on screen (or the model of the Visualize tab that is on screen)."""
         if not self.need_addon("render", "A render"):
             return None
         import render_studio
@@ -500,7 +500,7 @@ class AppShell(QMainWindow):
             QMessageBox.information(self, "Renderer", "Open a part or an assembly first: a render shows the one that is on screen.")
             return None
         if not getattr(src, "path", None):
-            QMessageBox.information(self, "Renderer", "Save the part / assembly first, so the render can be linked to it (File > Save).")
+            QMessageBox.information(self, "Renderer", "Save the part / assembly first (File > Save): the Visualize project is named after it and gets its own copy.")
             return None
         try:
             w = render_studio.RenderStudio(shell=self, src_widget=src)
@@ -657,16 +657,7 @@ class AppShell(QMainWindow):
             return self.new_addon_tab(next(k for k, v in addons.tab_kinds().items() if v is spec or v == spec), path)
         if os.path.isdir(path):
             return self.open_project_folder(path)
-        if path.lower().endswith(".gpr"):
-            if not self.need_addon("render", "This render file (.gpr)"):
-                return None
-            import render_studio
-            try:
-                w = render_studio.RenderStudio.open_file(self, path)
-            except Exception as ex:
-                QMessageBox.warning(self, "Open", f"Could not open {os.path.basename(path)}: {ex}")
-                return None
-        elif path.lower().endswith(".gpa"):
+        if path.lower().endswith(".gpa"):
             import assembly
             w = assembly.AssemblyWindow(path, shell=self)
         else:

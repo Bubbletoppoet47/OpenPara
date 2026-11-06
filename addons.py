@@ -48,6 +48,9 @@ CATALOG = {
                   "description": "Draw boxes on photos and video frames, pick LiDAR distances, pre-label with YOLO models downloaded from GitHub, hand a "
                                  "dataset to someone as a zip (and merge theirs into yours), annotate from a tablet. An annotator project is a folder "
                                  "with its dataset inside."},
+    "render": {"project_marker": {"marker": "visualize.json", "format": "openpara-visualize"},
+               "name": "Renderer",
+               "description": "Visualize: Previs, a live lit Preview and ray-traced Renders (pictures and videos) of a part or assembly, with sun, lights, floor and cameras. A Visualize project is a folder (.gpv) with its own copy of the model."},
     "simulation": {"name": "Simulation (1D FEA, 2D FEA, 2D CFD)",
                    "description": "Frames and trusses (1D FEA), plane stress / strain FEA (2D FEA) and 2D CFD of a sketch or a slice of a part or "
                                   "assembly, with animation export. Each simulation is a project folder (.gpb, .gpf, .gpc) with its own copy of the part. "
@@ -66,7 +69,7 @@ CATALOG = {
 
 
 # files the program opens through an add-on although the add-on has no document tab of its own: extension -> (add-on id, name in the Open dialog)
-OPENABLE = {".gpr": ("render", "Render")}
+OPENABLE = {}
 
 
 class AddonError(Exception):

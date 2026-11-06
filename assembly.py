@@ -272,7 +272,7 @@ class AssemblyWindow(QMainWindow):
             self.ribbon.addTab(self.ribbon_page([("sim_fea", "▦", "2D FEA", "Plane stress / strain FEA of a slice through this assembly", lambda: self.add_sim("fea")),
                                         ("sim_cfd", "≋", "2D CFD", "Flow around a slice through this assembly", lambda: self.add_sim("cfd"))]), "Simulation")
         if ext.present("render"):
-            self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "New render", "Photorealistic pictures and videos of this assembly: sun, lights, floor, cameras", lambda: self.add_render())]), "Render")
+            self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "Preview / Render", "Visualize this assembly: Previs, a live lit Preview, and ray-traced pictures and videos", lambda: self.add_render())]), "Visualize")
         self.left = QTabWidget()
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)

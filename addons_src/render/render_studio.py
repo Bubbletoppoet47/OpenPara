@@ -1,5 +1,12 @@
 """
-render_studio.py - Render Studio: photorealistic pictures of a part or an assembly (Mitsuba 3 path tracer).
+render_studio.py - Visualize (the Render Studio): Previs, Preview and Render of a part or an assembly.
+
+  Previs   the simple fast view: parts, cameras, the sun and spot light.  Cameras, appearances and lights are set up here.
+  Preview  a live lit view of the same scene (sky light, sun, soft shadows, ambient occlusion, PBR looks) - orbit and look through the cameras.
+  Render   the Mitsuba 3 path tracer: pictures and videos.
+Both Previs and Preview can look through a camera and scrub the video track.
+
+Render Studio (the original description): photorealistic pictures of a part or an assembly (Mitsuba 3 path tracer).
 
 Open a part (.gpd) or an assembly (.gpa), give each material a colour / roughness / metallic, set the sun (date, time, place), a spot light and
 a floor, place several cameras, and render all of them to PNG files.  Run it with run_render_studio.bat (or:  python render_studio.py [file]).
@@ -16,13 +23,14 @@ import tempfile
 
 import numpy as np
 from PyQt6.QtCore import QDate, QProcess, QSize, Qt, QTime, QTimer, QUrl
-from PyQt6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPixmap
+from PyQt6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDateEdit, QDialog, QDockWidget, QDoubleSpinBox, QFileDialog,
                              QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-                             QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSlider, QSpinBox, QTextEdit, QTimeEdit, QToolButton,
-                             QVBoxLayout, QWidget)
+                             QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QButtonGroup, QScrollArea, QSlider, QSpinBox, QTextEdit,
+                             QTimeEdit, QToolButton, QVBoxLayout, QWidget)
 
 import render_core as rc
+import vis_project as vp
 import render_scene as rs
 import unitctl
 
@@ -33,6 +41,8 @@ except Exception:
     pv, QtInteractor = None, None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+WHAT = [("Selected camera", "selected"), ("All cameras", "all"), ("Video (MP4)", "video"), ("Still preview (fast)", "preview"),
+        ("Video preview (fast)", "video_preview")]
 SIZES = [("1280 x 720", 1280, 720), ("1920 x 1080", 1920, 1080), ("800 x 600", 800, 600), ("1080 x 1080 (square)", 1080, 1080),
          ("3840 x 2160 (4K)", 3840, 2160), ("Custom", 0, 0)]
 QUALITY = [("Draft (fast, grainy)", 32), ("Normal", 128), ("High", 512), ("Very high", 2048), ("Ultra 4096 (slow)", 4096), ("Ultra+ 8192 (slower)", 8192), ("Maximum 16384 (very slow)", 16384)]
@@ -42,35 +52,70 @@ def mitsuba_ok():
     return importlib.util.find_spec("mitsuba") is not None
 
 
-class Section(QWidget):
-    """A titled block that folds away (like a Blender panel)."""
+BIG_CSS = ("QPushButton { background:#0e7f86; color:white; font-size:15px; font-weight:bold; border:none; border-radius:8px; margin:4px 2px; }"
+           "QPushButton:hover { background:#12949c; } QPushButton:disabled { background:#b9c4cc; color:#eef2f4; }"
+           "QPushButton:!checked:checkable { background:white; color:#0e7f86; border:2px solid #0e7f86; }"
+           "QPushButton:checked:checkable { background:#0e7f86; color:white; }")
 
-    def __init__(self, title, open_=True):
+
+def big_button(text, checkable=False):
+    """The full-width teal button of a stage (Previs / Preview / Render) - like Solve in the simulation panels."""
+    b = QPushButton(text)
+    b.setMinimumHeight(44)
+    b.setCheckable(checkable)
+    b.setStyleSheet(BIG_CSS)
+    return b
+
+
+def note_label(text):
+    n = QLabel(text)
+    n.setWordWrap(True)
+    n.setStyleSheet("color:#53647c; font-size:11px; padding:0 4px;")
+    return n
+
+
+class Section(QWidget):
+    """A numbered block that folds away; `summary` (a callable) is shown under the header while it is folded."""
+
+    def __init__(self, title, open_=True, number=None, summary=None):
         super().__init__()
+        self.title, self.number, self.summary = title, number, summary
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 2)
-        lay.setSpacing(0)
-        self.head = QToolButton()
-        self.head.setText(title)
+        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setSpacing(2)
+        self.head = QPushButton()
         self.head.setCheckable(True)
         self.head.setChecked(open_)
-        self.head.setArrowType(Qt.ArrowType.DownArrow if open_ else Qt.ArrowType.RightArrow)
-        self.head.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.head.setStyleSheet("QToolButton{font-weight:bold; text-align:left; padding:4px; border:none; background:#e3e8f0;}")
-        self.head.setSizePolicy(self.head.sizePolicy().horizontalPolicy(), self.head.sizePolicy().verticalPolicy())
-        self.head.clicked.connect(self.toggle)
+        self.head.setFlat(True)
+        self.head.setMinimumHeight(26)
+        self.head.setStyleSheet("QPushButton { text-align:left; border:none; border-bottom:1px solid #cfd6e0; padding:3px 2px; font-weight:bold; "
+                                "color:#16324f; } QPushButton:hover { background:#eef4f7; }")
+        self.head.toggled.connect(self.toggle)
         lay.addWidget(self.head)
+        self.sum_lbl = QLabel("")
+        self.sum_lbl.setStyleSheet("color:#53647c; font-size:11px; padding-left:18px;")
+        self.sum_lbl.setWordWrap(True)
+        lay.addWidget(self.sum_lbl)
         self.body = QWidget()
         self.form = QFormLayout(self.body)
-        self.form.setContentsMargins(8, 6, 4, 6)
-        self.body.setVisible(open_)
+        self.form.setContentsMargins(4, 4, 2, 4)
         lay.addWidget(self.body)
-        self.head.setMinimumWidth(10)
-        self.head.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle(open_)
 
     def toggle(self, on):
         self.body.setVisible(on)
-        self.head.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
+        self.head.setText(f"{'▾' if on else '▸'}  {self.number}   {self.title}" if self.number else f"{'▾' if on else '▸'}  {self.title}")
+        self.refresh_summary()
+
+    def refresh_summary(self):
+        txt = ""
+        if not self.head.isChecked() and self.summary is not None:
+            try:
+                txt = self.summary() or ""
+            except Exception:  # noqa: BLE001 - a summary must never break the panel
+                txt = ""
+        self.sum_lbl.setText(txt)
+        self.sum_lbl.setVisible(bool(txt))
 
 
 def dspin(lo, hi, val, step=1.0, dec=2, w=84):
@@ -145,24 +190,68 @@ def row(*widgets):
     return w
 
 
+class FrameOverlay(QWidget):
+    """Darkens what is outside the picture frame (the shape of the output) on top of the 3D view; mouse clicks pass through."""
+
+    def __init__(self, parent, aspect_fn):
+        super().__init__(parent)
+        self.aspect_fn = aspect_fn
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        parent.installEventFilter(self)
+        self.hide()
+
+    def eventFilter(self, obj, ev):
+        if obj is self.parent() and ev.type() == ev.Type.Resize:
+            self.setGeometry(0, 0, obj.width(), obj.height())
+        return False
+
+    def frame_rect(self):
+        W, H = self.width(), self.height()
+        a = max(0.05, float(self.aspect_fn()))
+        w, h = (W, W / a) if W / a <= H else (H * a, H)
+        return (W - w) / 2, (H - h) / 2, w, h
+
+    def paintEvent(self, _ev):
+        x, y, w, h = self.frame_rect()
+        p = QPainter(self)
+        shade = QColor(20, 24, 32, 120)
+        W, H = self.width(), self.height()
+        p.fillRect(0, 0, W, int(y), shade)
+        p.fillRect(0, int(y + h), W, H - int(y + h), shade)
+        p.fillRect(0, int(y), int(x), int(h), shade)
+        p.fillRect(int(x + w), int(y), W - int(x + w), int(h), shade)
+        p.setPen(QPen(QColor("#ffffff"), 1.5))
+        p.drawRect(int(x), int(y), int(w), int(h))
+
+
 class RenderStudio(QMainWindow):
-    def __init__(self, path=None, shell=None, src_widget=None, gpr=None):
+    def __init__(self, path=None, shell=None, src_widget=None, gpr=None, folder=None):
         super().__init__()
         self.shell = shell                                  # the modeller's main window when this is one of its tabs
-        self.embedded = shell is not None or src_widget is not None or gpr is not None
+        self.embedded = shell is not None or src_widget is not None or gpr is not None or folder is not None
         self.kind = "render"
         self.src_tab = src_widget
         self.setWindowTitle("Render Studio")
         self.resize(1480, 900)
         self.proj = None
         self.bodies, self.meshes = [], []
-        self.proj_path = None
+        self.proj_path = None                                # the project folder (.gpv) once saved
+        self.orig_path = None                                # the file the model was read from (only for 'read it again')
+        self.repack = False                                  # the model was read again: the project's copy is renewed at the next save
         self.dirty = False
         self.busy = False
         self.proc = None
         self.tmp = tempfile.mkdtemp(prefix="gpd_studio_")
         self.cur_cam = -1
+        self.mode = "previs"                                 # previs | preview
+        self.view_cam = -1                                   # -1: free view; i: looking through camera i; -2: along the video path
+        self.scrub_t = 0.0                                   # 0..1 along the video track
+        self._path = (None, [])
         self.results = []
+        self.play_timer = QTimer(self)
+        self.play_timer.setInterval(66)
+        self.play_timer.timeout.connect(self.play_step)
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.setInterval(120)
@@ -173,7 +262,9 @@ class RenderStudio(QMainWindow):
         self.make_bottom()
         self.make_props()
         self.statusBar().showMessage("Open a part or an assembly (File > Open model...)." if not self.embedded else "")
-        if gpr:
+        if folder:
+            self.open_folder(folder)
+        elif gpr:
             self.open_embedded_gpr(gpr)
         elif src_widget is not None:
             self.load_from_widget(src_widget)
@@ -194,7 +285,7 @@ class RenderStudio(QMainWindow):
         if self.proj_path:
             return os.path.basename(self.proj_path)
         if self.proj and self.proj.get("source"):
-            return os.path.splitext(os.path.basename(self.proj["source"]))[0] + " (render)"
+            return os.path.splitext(os.path.basename(self.proj.get("orig") or self.proj["source"]))[0] + " (visualize)"
         return "Render"
 
     def is_dirty(self):
@@ -225,10 +316,11 @@ class RenderStudio(QMainWindow):
             return False
 
     def source_widget(self):
-        """The part / assembly tab this render belongs to (opened again when it was closed); None when it cannot be found."""
+        """The part / assembly tab the model was read from, if it is still open (or can be opened); None otherwise.  Only 'read it again'
+        uses it: the project works from its own copy."""
         if self.alive(self.src_tab):
             return self.src_tab
-        p = (self.proj or {}).get("source")
+        p = self.orig_path
         if self.shell is None or not p or not os.path.exists(p):
             return None
         here = self.shell.tabs.indexOf(self)
@@ -240,7 +332,23 @@ class RenderStudio(QMainWindow):
 
     def load_from_widget(self, w):
         bodies = rs.bodies_from_widget(w)
+        self.orig_path = getattr(w, "path", None)
         self.set_bodies(bodies, w.path)
+
+    def open_folder(self, folder):
+        """Opens a project folder: the model is read from the project's own copy."""
+        folder = os.path.abspath(folder)
+        proj = vp.read(folder)
+        src = vp.source_file(folder, proj)
+        if not os.path.exists(src):
+            raise ValueError(f"the project's copy of the model is missing: {src}")
+        self.load_model(src)
+        self.orig_path = proj.get("orig")
+        proj["source"] = src
+        self.merge_project(proj)
+        self.proj["orig"] = proj.get("orig")
+        self.proj_path = folder
+        self.finish_open()
 
     def open_embedded_gpr(self, path):
         proj = rs.load_project(path)
@@ -285,6 +393,7 @@ class RenderStudio(QMainWindow):
             QMessageBox.warning(self, "Render", f"Could not read the model: {ex}")
             return
         self.merge_project(old)
+        self.repack = True
         self.finish_open(keep_cam=True)
         self.dirty = True
         self.set_title()
@@ -312,17 +421,55 @@ class RenderStudio(QMainWindow):
         holder = QWidget()
         lay = QVBoxLayout(holder)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        # top bar: which camera the view looks through
+        top = QWidget()
+        top.setStyleSheet("background:#eef2f6;")
+        tl = QHBoxLayout(top)
+        tl.setContentsMargins(8, 3, 8, 3)
+        self.mode_lbl = QLabel("Previs")
+        self.mode_lbl.setStyleSheet("font-weight:bold; color:#0e7f86;")
+        self.vw_cam = QComboBox()
+        self.vw_cam.setMinimumWidth(180)
+        self.vw_cam.activated.connect(lambda i: self.set_view(i - 1))
+        tl.addWidget(self.mode_lbl)
+        tl.addStretch(1)
+        tl.addWidget(QLabel("View:"))
+        tl.addWidget(self.vw_cam)
+        lay.addWidget(top)
         self.pl = None
+        self.overlay = None
         if QtInteractor is None:
             lay.addWidget(QLabel("The 3D view needs pyvista and pyvistaqt (run_render_studio.bat installs them)."))
         else:
             try:
                 self.pl = QtInteractor(holder)
-                lay.addWidget(self.pl.interactor if hasattr(self.pl, "interactor") else self.pl)
+                w = self.pl.interactor if hasattr(self.pl, "interactor") else self.pl
+                lay.addWidget(w, 1)
                 self.pl.set_background("#f4f6fa")
+                self.overlay = FrameOverlay(w, lambda: self.proj["render"]["width"] / max(1, self.proj["render"]["height"]) if self.proj else 1.5)
             except Exception as ex:
                 self.pl = None
                 lay.addWidget(QLabel(f"The 3D view could not start: {ex}"))
+        # bottom bar: the video track
+        self.scrub_bar = QWidget()
+        self.scrub_bar.setStyleSheet("background:#eef2f6;")
+        sl = QHBoxLayout(self.scrub_bar)
+        sl.setContentsMargins(8, 3, 8, 3)
+        self.sc_play = QPushButton("▶")
+        self.sc_play.setFixedWidth(40)
+        self.sc_slider = QSlider(Qt.Orientation.Horizontal)
+        self.sc_slider.setRange(0, 1000)
+        self.sc_time = QLabel("0.0 s / 0.0 s")
+        self.sc_frame = QLabel("")
+        sl.addWidget(self.sc_play)
+        sl.addWidget(self.sc_slider, 1)
+        sl.addWidget(self.sc_time)
+        sl.addWidget(self.sc_frame)
+        lay.addWidget(self.scrub_bar)
+        self.scrub_bar.hide()
+        self.sc_play.clicked.connect(lambda _=False: self.play_toggle())
+        self.sc_slider.valueChanged.connect(lambda v: self.scrub_to(v / 1000.0, from_ui="bar"))
         self.setCentralWidget(holder)
 
     def make_menus(self):
@@ -337,7 +484,7 @@ class RenderStudio(QMainWindow):
         emb = self.embedded
         if not emb:
             act(fm, "Open model (part or assembly)...", self.open_model_dialog, "Ctrl+O")
-            act(fm, "Open render project...", self.open_project_dialog)
+            act(fm, "Open Visualize project (folder)...", self.open_project_dialog)
             fm.addSeparator()
         else:
             act(fm, "Read the part / assembly again", self.refresh_model)
@@ -347,13 +494,13 @@ class RenderStudio(QMainWindow):
         act(fm, "Export cameras...", self.export_cameras)
         act(fm, "Import cameras...", self.import_cameras)
         fm.addSeparator()
-        act(fm, "Save render project", self.save_project, None if emb else "Ctrl+S")
-        act(fm, "Save render project as...", lambda: self.save_project(True), None if emb else "Ctrl+Shift+S")
+        act(fm, "Save Visualize project", self.save_project, None if emb else "Ctrl+S")
+        act(fm, "Save Visualize project as...", lambda: self.save_project(True), None if emb else "Ctrl+Shift+S")
         if not emb:
             fm.addSeparator()
             act(fm, "Quit", self.close)
         rm = self.menuBar().addMenu("Render")
-        self.a_prev = act(rm, "Preview of the selected camera (fast)", lambda: self.start_render("preview"), "F5")
+        self.a_prev = act(rm, "Still preview of the selected camera (fast)", lambda: self.start_render("preview"), "F5")
         self.a_sel = act(rm, "Render the selected camera", lambda: self.start_render("selected"), "F11")
         self.a_all = act(rm, "Render all cameras", lambda: self.start_render("all"), "F12")
         rm.addSeparator()
@@ -371,13 +518,19 @@ class RenderStudio(QMainWindow):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(2)
         # ---- scene
-        self.s_scene = Section("Scene")
+        self.s_scene = Section("Scene", True, 1)
+        self.b_previs = big_button("Previs", checkable=True)
+        self.b_previs.setChecked(True)
+        self.b_previs.clicked.connect(lambda _=False: self.set_mode("previs"))
+        self.s_scene.form.addRow(self.b_previs)
+        self.s_scene.form.addRow(note_label("Set up the cameras, looks and lights here. A simple, fast view."))
         self.src_lbl = QLabel("(nothing open)")
         self.src_lbl.setWordWrap(True)
         b = QPushButton("Open model...")
         b.clicked.connect(self.open_model_dialog)
         self.s_scene.form.addRow(self.src_lbl)
-        self.s_scene.form.addRow(b)
+        if not self.embedded:
+            self.s_scene.form.addRow(b)
         self.up_combo = QComboBox()
         self.up_combo.addItems(["+Z", "-Z", "+Y", "-Y", "+X", "-X"])
         self.up_combo.setToolTip("Which direction of the model is UP.  The floor is flat, perpendicular to it.  Change it to stand the model on "
@@ -386,14 +539,14 @@ class RenderStudio(QMainWindow):
         self.s_scene.form.addRow("Up direction of the model", self.up_combo)
         lay.addWidget(self.s_scene)
         # ---- appearance
-        self.s_app = Section("Appearance (colour, roughness, metallic)")
+        self.s_app = Section("Appearance", True, 2)
         self.app_host = QWidget()
         self.app_lay = QVBoxLayout(self.app_host)
         self.app_lay.setContentsMargins(0, 0, 0, 0)
         self.s_app.form.addRow(self.app_host)
         lay.addWidget(self.s_app)
         # ---- sun
-        self.s_sun = Section("Sun and sky")
+        self.s_sun = Section("Sun and sky", False, 3, lambda: self.sum_sun())
         f = self.s_sun.form
         self.sun_on = QCheckBox("Sun and sky light")
         self.sun_shadows = QCheckBox("Sun shadows (off = soft sky light only)")
@@ -429,7 +582,7 @@ class RenderStudio(QMainWindow):
         f.addRow(self.sun_read)
         lay.addWidget(self.s_sun)
         # ---- spot
-        self.s_spot = Section("Spot light", False)
+        self.s_spot = Section("Spot light", False, 4, lambda: "On" if self.sp_on.isChecked() else "Off")
         f = self.s_spot.form
         self.sp_on = QCheckBox("Spot light")
         self.sp_pos = [dlen(-1e6, 1e6, 0) for _ in range(3)]
@@ -448,7 +601,7 @@ class RenderStudio(QMainWindow):
         f.addRow("Colour", self.sp_col)
         lay.addWidget(self.s_spot)
         # ---- floor
-        self.s_floor = Section("Floor")
+        self.s_floor = Section("Floor", False, 5, lambda: ("On - height " + self.fl_z.text()) if self.fl_on.isChecked() else "Off")
         f = self.s_floor.form
         self.fl_on = QCheckBox("Floor")
         self.fl_z = dlen(-1e6, 1e6, 0, 1.0, 84)
@@ -465,7 +618,7 @@ class RenderStudio(QMainWindow):
         f.addRow("Roughness", self.fl_rough)
         lay.addWidget(self.s_floor)
         # ---- cameras
-        self.s_cam = Section("Cameras")
+        self.s_cam = Section("Cameras", True, 6)
         f = self.s_cam.form
         self.cam_list = QListWidget()
         self.cam_list.setMaximumHeight(120)
@@ -510,8 +663,10 @@ class RenderStudio(QMainWindow):
         f.addRow("Field of view (deg)", self.cam_fov)
         lay.addWidget(self.s_cam)
         # ---- animation
-        self.s_anim = Section("Animation (video)", False)
-        f = self.s_anim.form
+        f = self.s_cam.form
+        vp = QLabel("Video path")
+        vp.setStyleSheet("font-weight:700; color:#16324f; padding-top:8px;")
+        f.addRow(vp)
         self.an_curve = QComboBox()
         self.an_curve.addItems(["Curved (smooth through the cameras)", "Straight (point to point)"])
         self.an_ease = QComboBox()
@@ -525,24 +680,67 @@ class RenderStudio(QMainWindow):
         self.an_show = QCheckBox("Show the path in the 3D view")
         self.an_show.setChecked(True)
         self.an_show.toggled.connect(lambda _=False: self.timer.start())
-        b_av = QPushButton("Preview video (fast)")
-        b_av.clicked.connect(lambda: self.start_render("video_preview"))
-        b_ar = QPushButton("Render video (MP4)")
-        b_ar.clicked.connect(lambda: self.start_render("video"))
-        b_ar.setStyleSheet("font-weight:bold;")
-        self.run_btns_extra = [b_av, b_ar]
-        f.addRow(QLabel("Tick two or more cameras above (start, middle, end ...) and put them in order."))
+        self.run_btns_extra = []
+        f.addRow(note_label("Tick two or more cameras above (start, middle, end ...) and put them in order: they are the keyframes."))
         f.addRow("Path", self.an_curve)
         f.addRow("Speed", self.an_ease)
         f.addRow("Length (seconds)", self.an_sec)
         f.addRow("Frames per second", self.an_fps)
         f.addRow(self.an_info)
         f.addRow(self.an_show)
-        f.addRow(row(b_av, b_ar))
-        lay.addWidget(self.s_anim)
-        # ---- output
-        self.s_out = Section("Output")
+        # ---- preview
+        self.s_prev = Section("Preview", True, 7)
+        f = self.s_prev.form
+        self.b_preview = big_button("Preview", checkable=True)
+        self.b_preview.clicked.connect(lambda _=False: self.set_mode("preview"))
+        f.addRow(self.b_preview)
+        f.addRow(note_label("A live lit view of the scene: orbit, pan and zoom as usual."))
+        self.rb_env = QRadioButton("Environment  (move around freely)")
+        self.rb_cam = QRadioButton("Through a camera:")
+        self.rb_env.setChecked(True)
+        self.pv_cam = QComboBox()
+        self.rb_env.toggled.connect(lambda on: self.set_view(-1) if on else None)
+        self.rb_cam.toggled.connect(lambda on: self.set_view(max(0, self.pv_cam.currentIndex())) if on else None)
+        self.pv_cam.activated.connect(lambda i: self.set_view(i))
+        f.addRow(self.rb_env)
+        f.addRow(self.rb_cam)
+        f.addRow("Camera", self.pv_cam)
+        self.pv_frame = QCheckBox("Show the picture frame (the shape of the output)")
+        self.pv_frame.setChecked(True)
+        self.pv_frame.toggled.connect(lambda _=False: self.update_frame())
+        f.addRow(self.pv_frame)
+        self.pv_qual = QComboBox()
+        self.pv_qual.addItems(["Fast", "Good", "Best"])
+        self.pv_qual.setCurrentIndex(1)
+        self.pv_qual.setToolTip("Fast: lights only.  Good: adds shadows.  Best: adds shadows and smooth edges (a little slower).")
+        self.pv_qual.currentIndexChanged.connect(lambda _=0: self.mode == "preview" and self.timer.start())
+        f.addRow("Quality", self.pv_qual)
+        vt = QLabel("Video track")
+        vt.setStyleSheet("font-weight:700; color:#16324f; padding-top:8px;")
+        f.addRow(vt)
+        self.pv_play = QPushButton("▶")
+        self.pv_play.setFixedWidth(40)
+        self.pv_slider = QSlider(Qt.Orientation.Horizontal)
+        self.pv_slider.setRange(0, 1000)
+        self.pv_time = QLabel("0.0 s / 0.0 s")
+        self.pv_play.clicked.connect(lambda _=False: self.play_toggle())
+        self.pv_slider.valueChanged.connect(lambda v: self.scrub_to(v / 1000.0, from_ui="panel"))
+        f.addRow(row(self.pv_play, self.pv_slider, self.pv_time))
+        self.pv_note = note_label("Drag to scrub: the camera moves along the video path (Cameras > Video path), in Previs and in Preview.")
+        f.addRow(self.pv_note)
+        lay.addWidget(self.s_prev)
+        # ---- render
+        self.s_out = Section("Render", True, 8)
         f = self.s_out.form
+        self.b_render = big_button("Render")
+        self.b_render.clicked.connect(lambda _=False: self.render_clicked())
+        self.run_btns.append(self.b_render)
+        f.addRow(self.b_render)
+        f.addRow(note_label("The finished picture or video, ray traced."))
+        self.o_what = QComboBox()
+        for t, m in WHAT:
+            self.o_what.addItem(t, m)
+        f.addRow("What to render", self.o_what)
         self.o_size = QComboBox()
         for t, _w, _h in SIZES:
             self.o_size.addItem(t)
@@ -566,10 +764,14 @@ class RenderStudio(QMainWindow):
         self.o_den.setToolTip("Cleans the grain with the NVIDIA OptiX denoiser (needs an NVIDIA card with a recent driver).\nIf it cannot run, the render goes on without it and the log says so.")
         self.o_folder = QLabel("(asked at the first render)")
         self.o_folder.setWordWrap(True)
-        b_fold = QPushButton("Folder...")
+        b_fold = QPushButton("Other folder...")
+        b_fold.setToolTip("Pictures and videos go into the project's own output folder unless you choose another one here.")
+        b_def = QPushButton("Use project folder")
+        b_def.clicked.connect(self.use_project_output)
+        b_fold2 = b_def
         b_fold.clicked.connect(self.choose_folder)
         b_open = QPushButton("Open folder")
-        b_open.clicked.connect(self.open_folder)
+        b_open.clicked.connect(self.open_output_folder)
         self.o_prefix = QComboBox()
         self.o_prefix.setEditable(True)
         self.o_prefix.setToolTip("Put in front of every file name (the camera name follows).")
@@ -583,7 +785,7 @@ class RenderStudio(QMainWindow):
         f.addRow(self.o_den)
         f.addRow("File name start", self.o_prefix)
         f.addRow("Folder", self.o_folder)
-        f.addRow(row(b_fold, b_open))
+        f.addRow(row(b_fold, b_fold2, b_open))
         lay.addWidget(self.s_out)
         lay.addStretch(1)
         sc = QScrollArea()
@@ -603,19 +805,12 @@ class RenderStudio(QMainWindow):
         lay = QHBoxLayout(host)
         left = QVBoxLayout()
         row_ = QHBoxLayout()
-        b1 = QPushButton("Preview (fast)")
-        b1.clicked.connect(lambda: self.start_render("preview"))
-        b2 = QPushButton("Render selected camera")
-        b2.clicked.connect(lambda: self.start_render("selected"))
-        b3 = QPushButton("Render ALL cameras")
-        b3.clicked.connect(lambda: self.start_render("all"))
-        b3.setStyleSheet("font-weight:bold;")
         self.b_stop = QPushButton("Stop")
         self.b_stop.clicked.connect(self.stop_render)
         self.b_stop.setEnabled(False)
-        self.run_btns = [b1, b2, b3]
-        for b in (b1, b2, b3, self.b_stop):
-            row_.addWidget(b)
+        self.run_btns = []                                   # the Render button joins in make_props
+        row_.addStretch(1)
+        row_.addWidget(self.b_stop)
         left.addLayout(row_)
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
@@ -669,7 +864,7 @@ class RenderStudio(QMainWindow):
             btn.clicked.connect(lambda _=False, k=key: self.pick(k))
 
     def setEnabled_props(self, on):
-        for s in (self.s_app, self.s_sun, self.s_spot, self.s_floor, self.s_cam, self.s_anim, self.s_out, self.up_combo):
+        for s in (self.s_app, self.s_sun, self.s_spot, self.s_floor, self.s_cam, self.s_prev, self.s_out, self.up_combo, self.b_previs, self.b_preview):
             s.setEnabled(on)
         for b in self.run_btns + self.run_btns_extra:
             b.setEnabled(on and not self.busy)
@@ -768,7 +963,7 @@ class RenderStudio(QMainWindow):
             self.an_sec.setValue(a["seconds"])
             self.an_fps.setValue(a["fps"])
             self.o_prefix.setEditText(p["output"].get("name", "render"))
-            self.o_folder.setText(p["output"].get("folder") or "(asked at the first render)")
+            self.update_output_label()
             self.fill_appearance()
             self.fill_cameras()
         finally:
@@ -825,6 +1020,7 @@ class RenderStudio(QMainWindow):
     def mark(self):
         self.dirty = True
         self.update_anim_info()
+        self.update_scrub_info()
         self.update_sun_readout()
         self.timer.start()
         self.set_title()
@@ -929,7 +1125,7 @@ class RenderStudio(QMainWindow):
             self.open_any(p)
 
     def open_project_dialog(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Open render project", self.start_dir(), "Render project (*.gpr)")
+        p = QFileDialog.getExistingDirectory(self, "Open Visualize project (a .gpv folder)", self.start_dir())
         if p:
             self.open_any(p)
 
@@ -940,7 +1136,9 @@ class RenderStudio(QMainWindow):
         if not self.ask_save():
             return
         try:
-            if path.lower().endswith(".gpr"):
+            if os.path.isdir(path):
+                self.open_folder(path)
+            elif path.lower().endswith(".gpr"):
                 proj = rs.load_project(path)
                 src = proj.get("source", "")
                 if src and not os.path.isabs(src):
@@ -952,6 +1150,7 @@ class RenderStudio(QMainWindow):
                 self.merge_project(proj)
                 self.proj_path = path
             else:
+                self.orig_path = path
                 self.load_model(path)
                 self.proj_path = None
         except Exception as ex:
@@ -968,6 +1167,8 @@ class RenderStudio(QMainWindow):
         self.setEnabled_props(True)
         self.dirty = False
         self.update_sun_readout()
+        self.fill_view_combos()
+        self.update_scrub_info()
         self.draw_scene(reset=not keep_cam)
         self.set_title()
         self.statusBar().showMessage(f"{len(self.bodies)} body(ies) loaded from {self.proj['source']}")
@@ -983,44 +1184,56 @@ class RenderStudio(QMainWindow):
         self.bodies = bodies
         self.meshes = [rs.mesh_of(b[1]) for b in bodies]
         self.proj = rs.new_project(bodies, self.meshes, path)
+        self.proj["orig"] = self.orig_path or path
         self.src_lbl.setText(f"<b>{os.path.basename(path)}</b><br>{len(bodies)} body(ies)")
 
+    def source_text(self):
+        """(JSON text, original path) of the model to copy into a project: the open tab as it is now, else the file."""
+        w = self.src_tab if self.alive(self.src_tab) else None
+        if w is not None:
+            return (w.asm.to_json() if hasattr(w, "asm") else w.doc.to_json()), getattr(w, "path", None)
+        p = self.proj["source"]
+        with open(p, encoding="utf-8") as f:
+            return f.read(), (self.proj.get("orig") or p)
+
     def save_project(self, as_new=False):
+        """Saves the project folder: visualize.json + its own copy of the model + the output folder.  Nothing links back to the original."""
         if self.proj is None:
             return False
         self.pull_from_controls()
-        path = self.proj_path
-        if (as_new or not path) and self.embedded and not as_new:
-            base = os.path.splitext(self.proj["source"])[0] + "_render"
-            path, k = base + ".gpr", 2
-            while os.path.exists(path):
-                path = f"{base}_{k}.gpr"
-                k += 1
-        elif as_new or not path:
-            start = os.path.splitext(self.proj["source"])[0] + ".gpr"
-            path, _ = QFileDialog.getSaveFileName(self, "Save render project", start, "Render project (*.gpr)")
-            if not path:
-                return False
-            if not path.lower().endswith(".gpr"):
-                path += ".gpr"
-        out = copy.deepcopy(self.proj)
+        folder = self.proj_path
+        fresh = as_new or not folder
+        if fresh:
+            if self.embedded and not as_new:
+                folder = vp.new_folder_name(self.proj.get("orig") or self.proj["source"])
+            else:
+                start = vp.new_folder_name(self.proj.get("orig") or self.proj["source"])
+                folder, _ = QFileDialog.getSaveFileName(self, "Save Visualize project (a folder)", start, "Visualize project (*.gpv)")
+                if not folder:
+                    return False
+                if not folder.lower().endswith(vp.EXT):
+                    folder += vp.EXT
         try:
-            out["source"] = os.path.relpath(self.proj["source"], os.path.dirname(os.path.abspath(path)))
-        except ValueError:
-            pass
-        rs.save_project(out, path)
-        self.proj_path = path
+            os.makedirs(folder, exist_ok=True)
+            if fresh or self.repack or not os.path.isdir(os.path.join(folder, vp.SOURCE_DIR)):
+                text, orig = self.source_text()
+                main, missing = vp.pack_source(folder, text, orig)
+                if missing:
+                    self.statusBar().showMessage("Not found, left out of the copy: " + ", ".join(missing))
+                self.proj["source"] = os.path.join(folder, main)
+                self.proj["orig"] = orig or self.proj.get("orig")
+                self.orig_path = self.proj["orig"]
+                self.repack = False
+            main_rel = os.path.relpath(self.proj["source"], folder).replace(os.sep, "/")
+            vp.write(folder, self.proj, main_rel)
+        except Exception as ex:
+            QMessageBox.warning(self, "Visualize", f"Could not save the project: {ex}")
+            return False
+        self.proj_path = folder
         self.dirty = False
+        self.update_output_label()
         self.set_title()
-        self.statusBar().showMessage(f"Saved {path}")
-        if self.embedded:
-            try:
-                import sim_links
-                src = self.source_widget()
-                if src is not None and sim_links.add(src, path, "renders"):
-                    src.refresh_tree()
-            except Exception as ex:
-                self.statusBar().showMessage(f"Saved {path} (could not link it to the model: {ex})")
+        self.statusBar().showMessage(f"Saved {folder}")
         return True
 
     def ask_save(self):
@@ -1148,6 +1361,7 @@ class RenderStudio(QMainWindow):
         if 0 <= self.cur_cam < self.cam_list.count():
             self.cam_list.setCurrentRow(self.cur_cam)
         self.cam_selected(self.cur_cam)
+        self.fill_view_combos()
 
     def cam_selected(self, i):
         self.cur_cam = i
@@ -1254,6 +1468,171 @@ class RenderStudio(QMainWindow):
         self.pl.reset_camera_clipping_range()
         self.pl.render()
 
+    # ================================================================ Previs / Preview, the camera view and the video track
+    WHATMODE = dict(WHAT)
+
+    def sum_sun(self):
+        if not self.sun_on.isChecked():
+            return "Sun off"
+        return f"Sun on - {self.sun_date.date().toString('d MMM')} {self.sun_time.time().toString('HH:mm')}"
+
+    def set_mode(self, mode):
+        """Previs <-> Preview: each button is the way back for the other."""
+        self.mode = mode
+        for b, m in ((self.b_previs, "previs"), (self.b_preview, "preview")):
+            b.blockSignals(True)
+            b.setChecked(mode == m)
+            b.blockSignals(False)
+        self.mode_lbl.setText("Previs" if mode == "previs" else "Preview")
+        self.draw_scene()
+
+    def fill_view_combos(self):
+        """The camera lists of the view bar and of the Preview section (one source of truth: view_cam)."""
+        if self.proj is None:
+            return
+        names = [c["name"] for c in self.proj["cameras"]]
+        for cb, free in ((self.vw_cam, True), (self.pv_cam, False)):
+            cb.blockSignals(True)
+            cb.clear()
+            if free:
+                cb.addItem("Free view")
+            cb.addItems(names)
+            cb.blockSignals(False)
+        self.sync_view_ui()
+
+    def sync_view_ui(self):
+        vc = self.view_cam
+        self.vw_cam.blockSignals(True)
+        self.vw_cam.setCurrentIndex(vc + 1 if vc >= 0 else 0)
+        self.vw_cam.blockSignals(False)
+        self.pv_cam.blockSignals(True)
+        if vc >= 0:
+            self.pv_cam.setCurrentIndex(vc)
+        self.pv_cam.blockSignals(False)
+        for rb, on in ((self.rb_env, vc < 0), (self.rb_cam, vc >= 0)):
+            rb.blockSignals(True)
+            rb.setChecked(on)
+            rb.blockSignals(False)
+        self.update_frame()
+
+    def set_view(self, i):
+        """-1: the free view; i >= 0: look through camera i (in Previs and in Preview alike)."""
+        if self.proj is None or self.pl is None:
+            return
+        self.view_cam = i if 0 <= i < len(self.proj["cameras"]) else -1
+        if self.view_cam >= 0:
+            self.cur_cam = self.view_cam
+            self.cam_list.blockSignals(True)
+            self.cam_list.setCurrentRow(self.cur_cam)
+            self.cam_list.blockSignals(False)
+            self.cam_selected(self.cur_cam)
+            self.apply_camera(self.proj["cameras"][self.view_cam])
+        self.sync_view_ui()
+        self.timer.start()
+
+    def apply_camera(self, c):
+        """Put the 3D view where camera dict `c` is.  With the picture frame shown the field of view is matched to the frame's height."""
+        pl = self.pl
+        cam = pl.camera
+        cam.position, cam.focal_point, cam.up = c["origin"], c["target"], c.get("up", [0, 0, 1])
+        fov = float(c["fov"])
+        try:
+            W, H = pl.interactor.width(), pl.interactor.height()
+            a = self.proj["render"]["width"] / max(1, self.proj["render"]["height"])
+            h = min(H, W / a)
+            if self.pv_frame.isChecked() and h > 0:
+                fov = math.degrees(2 * math.atan(math.tan(math.radians(fov) / 2) * H / h))
+        except Exception:  # noqa: BLE001
+            pass
+        cam.view_angle = max(1.0, min(170.0, fov))
+        pl.reset_camera_clipping_range()
+        pl.render()
+
+    def update_frame(self):
+        if self.overlay is None:
+            return
+        on = self.proj is not None and self.view_cam != -1 and self.pv_frame.isChecked()
+        self.overlay.setVisible(on)
+        if on:
+            self.overlay.setGeometry(0, 0, self.overlay.parent().width(), self.overlay.parent().height())
+            self.overlay.raise_()
+            self.overlay.update()
+
+    def path_list(self):
+        """The cameras along the video path (cached; a few hundred samples are enough for scrubbing)."""
+        if self.proj is None:
+            return []
+        p = self.proj
+        ac = [c for c in p["cameras"] if c.get("anim")]
+        if len(ac) < 2:
+            return []
+        key = (repr([(c["origin"], c["target"], c["fov"]) for c in ac]), p["anim"]["curved"], p["anim"]["ease"])
+        if self._path[0] != key:
+            self._path = (key, rs.path_cameras(ac, 300, curved=p["anim"]["curved"], ease=p["anim"]["ease"]))
+        return self._path[1]
+
+    def has_track(self):
+        return self.proj is not None and sum(1 for c in self.proj["cameras"] if c.get("anim")) >= 2
+
+    def update_scrub_info(self):
+        """Show or hide the scrub bar and refresh the time read-out."""
+        if self.proj is None:
+            return
+        ok = self.has_track()
+        self.scrub_bar.setVisible(ok)
+        for w in (self.pv_play, self.pv_slider):
+            w.setEnabled(ok)
+        secs = float(self.proj["anim"]["seconds"])
+        fps = int(self.proj["anim"]["fps"])
+        t = self.scrub_t * secs
+        txt = f"{t:.1f} s / {secs:.1f} s"
+        self.sc_time.setText(txt)
+        self.pv_time.setText(txt)
+        self.sc_frame.setText(f"frame {int(round(self.scrub_t * max(1, int(round(secs * fps)) - 1))) + 1}")
+        if not ok:
+            self.play_timer.stop()
+
+    def scrub_to(self, u, from_ui=None):
+        """Move the view along the video path to u (0..1) - from either slider, or from the play button."""
+        self.scrub_t = max(0.0, min(1.0, u))
+        for sl, tag in ((self.sc_slider, "bar"), (self.pv_slider, "panel")):
+            if tag != from_ui:
+                sl.blockSignals(True)
+                sl.setValue(int(round(self.scrub_t * 1000)))
+                sl.blockSignals(False)
+        self.update_scrub_info()
+        path = self.path_list()
+        if path and self.pl is not None:
+            c = path[int(round(self.scrub_t * (len(path) - 1)))]
+            self.view_cam = -2
+            self.apply_camera(c)
+            self.sync_view_ui()
+
+    def play_toggle(self):
+        if not self.has_track():
+            return
+        if self.play_timer.isActive():
+            self.play_timer.stop()
+        else:
+            if self.scrub_t >= 0.999:
+                self.scrub_to(0.0)
+            self.play_timer.start()
+        txt = "❚❚" if self.play_timer.isActive() else "▶"
+        self.sc_play.setText(txt)
+        self.pv_play.setText(txt)
+
+    def play_step(self):
+        secs = max(0.5, float(self.proj["anim"]["seconds"])) if self.proj else 1.0
+        u = self.scrub_t + self.play_timer.interval() / 1000.0 / secs
+        if u >= 1.0:
+            self.scrub_to(1.0)
+            self.play_toggle()
+        else:
+            self.scrub_to(u)
+
+    def render_clicked(self):
+        self.start_render(self.o_what.currentData() or "selected")
+
     # ================================================================ the 3D view
     def draw_scene(self, reset=False):
         pl = self.pl
@@ -1262,15 +1641,24 @@ class RenderStudio(QMainWindow):
         p = self.proj
         keep = None if reset else (pl.camera_position, pl.camera.view_angle)
         try:
+            self.passes_off()
+            pl.suppress_rendering = True                     # no half-drawn frames while the scene is rebuilt
             pl.clear()
             lo, hi = self.model_bounds()
             cen, diag = 0.5 * (lo + hi), float(np.linalg.norm(hi - lo))
+            prev = self.mode == "preview"
+            self.preview_scene_setup(prev, cen, diag)
             for (name, _s, _m), (v, n, f) in zip(self.bodies, self.meshes):
                 if not len(f):
                     continue
                 poly = pv.PolyData(v, np.hstack([np.full((len(f), 1), 3), f]).ravel())
                 poly.point_data["Normals"] = n
                 ap = p["appearance"][name]
+                if prev:
+                    pl.add_mesh(poly, color=ap["color"], smooth_shading=True, specular=0.15 + 0.7 * ap["metallic"],
+                                specular_power=8 + 80 * (1 - ap["roughness"]), diffuse=0.85 - 0.45 * ap["metallic"], ambient=0.12,
+                                reset_camera=False, pickable=False)
+                    continue
                 pl.add_mesh(poly, color=ap["color"], smooth_shading=False, pbr=False, specular=0.2 + 0.6 * ap["metallic"], specular_power=10 + 40 * (1 - ap["roughness"]),
                             reset_camera=False, pickable=False)
             R = rs.rotation_to_z(p.get("up", "+Z"))
@@ -1280,18 +1668,21 @@ class RenderStudio(QMainWindow):
                 sign = 1.0 if p.get("up", "+Z")[0] == "+" else -1.0
                 c = cen.copy()
                 c[ax] = sign * p["floor"]["z"]
-                pl.add_mesh(pv.Plane(center=c, direction=tuple(up), i_size=3.0 * diag, j_size=3.0 * diag), color=p["floor"]["color"], opacity=0.55,
-                            reset_camera=False, pickable=False, lighting=False)
-            if p["sun"]["on"]:
+                pl.add_mesh(pv.Plane(center=c, direction=tuple(up), i_size=3.0 * diag, j_size=3.0 * diag), color=p["floor"]["color"],
+                            opacity=1.0 if prev else 0.55, reset_camera=False, pickable=False, lighting=prev,
+                            specular=0.3 * (1 - p["floor"].get("roughness", 0.5)) if prev else 0.0)
+            if prev:
+                pass                                         # helpers (camera glyphs, sun arrow, spot line, path) stay hidden in Preview
+            elif p["sun"]["on"]:
                 el, az = rc.sun_position(p["sun"]["lat"], p["sun"]["lon"], p["sun"]["date"], p["sun"]["time"], p["sun"]["tz"])
                 v = R.T @ rc.sun_vector(max(el, 1.0), az, p["sun"]["north"])
                 pl.add_mesh(pv.Arrow(start=cen + v * 1.3 * diag, direction=-v, scale=0.5 * diag), color="#f2b800", reset_camera=False, pickable=False, lighting=False)
-            if p["spot"]["on"]:
+            if p["spot"]["on"] and not prev:
                 pos, tgt = np.array(p["spot"]["pos"], float), np.array(p["spot"]["target"], float)
                 pl.add_mesh(pv.Line(pos, tgt), color="#e08a00", line_width=2, reset_camera=False, pickable=False)
                 pl.add_mesh(pv.Sphere(radius=0.03 * diag, center=pos), color="#e08a00", reset_camera=False, pickable=False, lighting=False)
             aspect = p["render"]["width"] / max(1, p["render"]["height"])
-            for i, c in enumerate(p["cameras"]):
+            for i, c in enumerate(p["cameras"] if not prev else []):
                 o, t = np.array(c["origin"], float), np.array(c["target"], float)
                 fw = t - o
                 L = np.linalg.norm(fw)
@@ -1315,7 +1706,7 @@ class RenderStudio(QMainWindow):
                 pl.add_mesh(pd, color=col, line_width=3 if i == self.cur_cam else 2, reset_camera=False, pickable=False, lighting=False)
                 pl.add_point_labels([o], [c["name"]], font_size=11, text_color=col, shape=None, show_points=False, always_visible=True, reset_camera=False)
             ac = [c for c in p["cameras"] if c.get("anim")]
-            if len(ac) >= 2 and self.an_show.isChecked():
+            if len(ac) >= 2 and self.an_show.isChecked() and not prev:
                 pts = rs.path_polyline(ac, p["anim"]["curved"])
                 pd = pv.PolyData(pts)
                 pd.lines = np.hstack([[len(pts)], np.arange(len(pts))])
@@ -1323,35 +1714,124 @@ class RenderStudio(QMainWindow):
             if keep is None:
                 pl.camera_position = "iso"
                 pl.reset_camera()
+                self.view_cam = -1
+                self.sync_view_ui()
             else:
                 pl.camera_position, pl.camera.view_angle = keep
+            pl.suppress_rendering = False
+            self.passes_on()
             pl.render()
         except Exception as ex:
+            pl.suppress_rendering = False
             self.statusBar().showMessage(f"(3D view: {ex})")
+
+    def preview_scene_setup(self, prev, cen, diag):
+        """Lights, sky and quality of the Preview (or the plain Previs set-up)."""
+        pl, p = self.pl, self.proj
+        if not prev:
+            pl.set_background("#f4f6fa")
+            try:
+                pl.remove_all_lights()
+                pl.enable_lightkit()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        q = self.pv_qual.currentIndex()
+        R = rs.rotation_to_z(p.get("up", "+Z"))
+        up = np.array(rs.up_vector(p.get("up", "+Z")), float)
+        el = 45.0
+        sv = up * 0.7 + np.array([0.5, -0.5, 0.0])
+        sun = p["sun"]
+        try:
+            el, az = rc.sun_position(sun["lat"], sun["lon"], sun["date"], sun["time"], sun["tz"])
+            sv = R.T @ rc.sun_vector(max(el, 1.0), az, sun["north"])
+        except Exception:  # noqa: BLE001
+            pass
+        day = max(0.0, min(1.0, (el + 4.0) / 20.0))
+        top = np.array([0.30, 0.50, 0.82]) * day + np.array([0.02, 0.03, 0.08]) * (1 - day)
+        hor = np.array([0.86, 0.91, 0.96]) * day + np.array([0.06, 0.07, 0.12]) * (1 - day)
+        pl.set_background(tuple(hor), top=tuple(top))
+        pl.remove_all_lights()
+        amb = float(p.get("ambient", 0.0))
+        if sun["on"] and el > 0:
+            L = pv.Light(position=tuple(cen + sv * 3.0 * diag), focal_point=tuple(cen), color=(1.0, 0.96, 0.88), intensity=min(1.5, 0.9 * sun["intensity"]),
+                         light_type="scene light")
+            pl.add_light(L)
+        sky = pv.Light(position=tuple(cen + up * 3.0 * diag), focal_point=tuple(cen), color=tuple(0.7 * hor + 0.3 * top),
+                       intensity=0.35 + 0.4 * amb + 0.15 * day, light_type="scene light")
+        pl.add_light(sky)
+        bounce = pv.Light(position=tuple(cen - up * 3.0 * diag), focal_point=tuple(cen), color=(0.8, 0.78, 0.74), intensity=0.18, light_type="scene light")
+        pl.add_light(bounce)
+        pl.add_light(pv.Light(light_type="headlight", intensity=0.12))
+        if p["spot"]["on"]:
+            try:
+                sp = p["spot"]
+                pl.add_light(pv.Light(position=tuple(sp["pos"]), focal_point=tuple(sp["target"]), cone_angle=float(sp["cone"]),
+                                      intensity=min(1.0, float(sp["power"]) / 500.0 + 0.25), light_type="scene light"))
+            except Exception:  # noqa: BLE001
+                pass
+
+    def passes_off(self):
+        """Switch the shadow / smoothing render passes off (before the scene is cleared and redrawn: they must not see half a scene)."""
+        for fn in (self.pl.disable_shadows, self.pl.disable_anti_aliasing):
+            try:
+                fn()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def passes_on(self):
+        if self.mode != "preview":
+            return
+        q = self.pv_qual.currentIndex()
+        for need, fn in ((1, lambda: self.pl.enable_shadows()), (2, lambda: self.pl.enable_anti_aliasing("ssaa"))):
+            if q >= need:
+                try:
+                    fn()
+                except Exception:  # noqa: BLE001
+                    pass
 
     # ================================================================ rendering
     def choose_folder(self):
         if self.proj is None:
             return
-        start = self.proj["output"].get("folder") or os.path.dirname(self.proj["source"])
+        start = self.proj["output"].get("folder") or (os.path.join(self.proj_path, vp.OUTPUT_DIR) if self.proj_path else os.path.dirname(self.proj["source"]))
         d = QFileDialog.getExistingDirectory(self, "Folder for the pictures", start)
         if d:
             self.proj["output"]["folder"] = d
-            self.o_folder.setText(d)
+            self.update_output_label()
             self.mark()
 
-    def open_folder(self):
-        f = self.proj["output"].get("folder") if self.proj else ""
+    def open_output_folder(self):
+        f = (self.proj["output"].get("folder") or (os.path.join(self.proj_path, vp.OUTPUT_DIR) if self.proj_path else "")) if self.proj else ""
         if f and os.path.isdir(f):
             QDesktopServices.openUrl(QUrl.fromLocalFile(f))
 
-    def out_folder(self):
+    def use_project_output(self):
+        if self.proj is not None:
+            self.proj["output"]["folder"] = ""
+            self.update_output_label()
+            self.mark()
+
+    def update_output_label(self):
+        if self.proj is None:
+            return
         f = self.proj["output"].get("folder")
         if f:
-            os.makedirs(f, exist_ok=True)
-            return f
-        self.choose_folder()
-        return self.proj["output"].get("folder") or None
+            self.o_folder.setText(f)
+        elif self.proj_path:
+            self.o_folder.setText(os.path.join(self.proj_path, vp.OUTPUT_DIR) + "  (inside the project)")
+        else:
+            self.o_folder.setText("(inside the project: it is saved at the first render)")
+
+    def out_folder(self):
+        """The folder for pictures and videos: the one chosen, else <project>/output (the project is saved first if it was not)."""
+        f = self.proj["output"].get("folder")
+        if not f:
+            if not self.proj_path and not self.save_project():
+                return None
+            f = os.path.join(self.proj_path, vp.OUTPUT_DIR)
+        os.makedirs(f, exist_ok=True)
+        return f
 
     def start_render(self, mode):
         """mode: preview | selected | all | video_preview | video"""
@@ -1553,6 +2033,11 @@ class RenderStudio(QMainWindow):
             box.setPlainText("README_render.txt was not found next to the program.")
         lay.addWidget(box)
         dlg.exec()
+
+
+def make_visualize(host, path=None):
+    """The tab factory of the add-on (see addon.json): `path` is a Visualize project folder."""
+    return RenderStudio(shell=host, folder=path) if path else RenderStudio(shell=host)
 
 
 def main():

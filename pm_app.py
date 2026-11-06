@@ -186,7 +186,7 @@ class MainWindow(QMainWindow):
                                         ("sim_fea", "▦", "2D FEA", "Plane stress / strain FEA of a sketch or a slice of this part", lambda: self.add_sim("fea")),
                                         ("sim_cfd", "≋", "2D CFD", "Flow around a sketch or a slice of this part", lambda: self.add_sim("cfd"))]), "Simulation")
         if ext.present("render"):
-            self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "New render", "Photorealistic pictures and videos of this part: sun, lights, floor, cameras", lambda: self.add_render())]), "Render")
+            self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "Preview / Render", "Visualize this part: Previs, a live lit Preview, and ray-traced pictures and videos", lambda: self.add_render())]), "Visualize")
         self.ribbon.setCurrentIndex(0)
         # ---- the left panel: FeatureManager / PropertyManager / Equations
         self.left = QTabWidget()
