@@ -163,7 +163,7 @@ w.pick_filter.update(face=False, edge=True); assert w.pick_item(cx, cy)["kind"] 
 w.pick_filter.update(face=False, edge=False, vertex=True)
 assert w.pick_item(cx, cy) is None, "nothing picked when only points are on and none is near"
 w.pick_filter.update(face=True, edge=True, vertex=True)
-w.mate_start(); bar = w.pick_filter_bar(); assert len(bar.findChildren(type(w.hover_actor) if False else __import__("PyQt6.QtWidgets").QtWidgets.QCheckBox)) == 3
+w.mate_start(); bar = w.pick_filter_bar(); assert len(bar.findChildren(__import__("PyQt6.QtWidgets").QtWidgets.QPushButton)) == 3
 w.set_pick_filter("face", False); w.set_pick_filter("edge", False); w.set_pick_filter("vertex", False)
 assert any(w.pick_filter.values()), "one kind always stays on"
 w.pick_filter.update(face=True, edge=True, vertex=True)

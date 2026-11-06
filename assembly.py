@@ -19,7 +19,7 @@ from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PyQt6.QtGui import QAction, QBrush, QColor
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                              QListWidget, QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton, QButtonGroup, QTabWidget,
-                             QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QInputDialog, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox)
+                             QSizePolicy, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QInputDialog, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox)
 
 import asm_model as am
 import asm_refs
@@ -27,6 +27,7 @@ import asm_sub
 import config_panels
 import mini_tree
 import icons
+import mate_icons
 import icon_set
 import pm_model as pm
 import settings
@@ -49,6 +50,8 @@ PALETTE = [(0.62, 0.70, 0.82), (0.84, 0.72, 0.60), (0.66, 0.80, 0.66), (0.80, 0.
 SEL_COL, HI_COL = (0.45, 0.72, 1.0), (1.0, 0.45, 0.0)
 MATE_NAMES = {"coincident": "Coincident", "parallel": "Parallel", "perpendicular": "Perpendicular", "tangent": "Tangent",
               "concentric": "Concentric", "lock": "Lock", "distance": "Distance", "angle": "Angle", "symmetric": "Symmetric"}
+MATE_BTN_CSS = ("QPushButton { text-align:left; padding:4px 8px; border:1px solid #cfd6e0; border-radius:6px; background:white; } "
+                "QPushButton:hover { background:#eef4f7; } QPushButton:checked { border:2px solid #0e7f86; background:#e6f3f4; }")
 PREVIEW_COL = (0.20, 0.45, 0.95)       # faded blue: what a pattern / mirror about to be made adds (same as the part window)
 PREVIEW_FADE = 0.42
 MATE_HELP = {"coincident": "face/face, point/point, point/face, edge/edge, ...", "parallel": "faces or edges parallel",
@@ -2017,7 +2020,9 @@ class AssemblyWindow(QMainWindow):
                 if not ok:
                     st = self.asm.status.get(m["id"], "")
                     self.mate_error = ("This mate conflicts with the mates already holding the parts, so they stayed where they are and it was left out."
-                                       if st == am.Assembly.CONFLICT else "These items cannot be mated with the other mates as they are.")
+                                       if st == am.Assembly.CONFLICT else
+                                       "No position was found where this mate holds, so the parts stayed where they were." if st == am.Assembly.NO_FIT
+                                       else "These items cannot be mated with the other mates as they are.")
                 self.mate_built = m
             except am.MateError as ex:
                 self.mate_error = str(ex)
@@ -2039,18 +2044,23 @@ class AssemblyWindow(QMainWindow):
             m["tk"] = "int" if m["tk"] == "ext" else "ext"
 
     def pick_filter_bar(self):
-        """Faces / Edges / Points tick boxes: what a click may pick (a thin cut face is easiest with Edges and Points off)."""
+        """Faces / Edges / Points toggle buttons: what a click may pick (a thin cut face is easiest with Edges and Points off)."""
         w = QWidget()
         row = QHBoxLayout(w)
         row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(QLabel("Pick:"))
+        row.setSpacing(4)
         for key, text, tip in (("face", "Faces", "Faces can be picked"), ("edge", "Edges", "Edges can be picked"), ("vertex", "Points", "Points (corners) can be picked")):
-            cb = QCheckBox(text)
-            cb.setToolTip(tip + ".  With only Faces ticked a click never lands on a neighbouring edge or corner; with Faces off, edges and points get a wider reach.")
-            cb.setChecked(self.pick_filter[key])
-            cb.toggled.connect(lambda on, k=key: self.set_pick_filter(k, on))
-            row.addWidget(cb)
-        row.addStretch(1)
+            b = QPushButton("  " + text)
+            b.setIcon(mate_icons.icon(key))
+            b.setIconSize(QSize(20, 20))
+            b.setCheckable(True)
+            b.setMinimumHeight(28)
+            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            b.setStyleSheet(MATE_BTN_CSS)
+            b.setToolTip(tip + ".  With only Faces on a click never lands on a neighbouring edge or corner; with Faces off, edges and points get a wider reach.")
+            b.setChecked(self.pick_filter[key])
+            b.toggled.connect(lambda on, k=key: self.set_pick_filter(k, on))
+            row.addWidget(b)
         return w
 
     def set_pick_filter(self, key, on):
@@ -2063,36 +2073,40 @@ class AssemblyWindow(QMainWindow):
 
     def show_mate_panel(self):
         self.clear_props()
+        self.props_lay.setSpacing(4)
         lab = QLabel("<b>Mate</b>")
         self.props_lay.addWidget(lab)
         lst = QListWidget()
-        lst.setMaximumHeight(90)
+        lst.setMaximumHeight(72)
         for s in self.mate_sel:
             c = self.asm.comp(s["cid"])
             lst.addItem(f"{s['label']}<{c['name'] if c else ('Assembly' if s['cid'] == '@' else '?')}>")
         self.props_lay.addWidget(lst)
         row = QHBoxLayout()
-        b = QPushButton("✔  OK")
-        b.clicked.connect(self.mate_ok)
-        row.addWidget(b)
-        b = QPushButton("✖  Cancel")
-        b.clicked.connect(lambda: self.mate_cancel())
-        row.addWidget(b)
-        b = QPushButton("Clear picks")
-        b.clicked.connect(self.mate_clear)
-        row.addWidget(b)
+        row.setSpacing(4)
+        for text, fn in (("✔  OK", self.mate_ok), ("✖  Cancel", lambda: self.mate_cancel()), ("Clear picks", self.mate_clear)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            row.addWidget(b)
         w = QWidget()
         w.setLayout(row)
         self.props_lay.addWidget(w)
         self.props_lay.addWidget(self.pick_filter_bar())
         grp = QButtonGroup(self.props)
+        grp.setExclusive(True)
         for ty in am.TYPES:
-            rb = QRadioButton(MATE_NAMES[ty])
-            rb.setToolTip(MATE_HELP[ty])
-            rb.setChecked(self.mate_type == ty)
-            rb.toggled.connect(lambda on, ty=ty: on and self.set_mate_type(ty))
-            grp.addButton(rb)
-            self.props_lay.addWidget(rb)
+            b = QPushButton("  " + MATE_NAMES[ty])
+            b.setIcon(mate_icons.icon(ty))
+            b.setIconSize(QSize(22, 22))
+            b.setMinimumHeight(32)
+            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            b.setCheckable(True)
+            b.setStyleSheet(MATE_BTN_CSS)
+            b.setToolTip(MATE_HELP[ty])
+            b.setChecked(self.mate_type == ty)
+            b.toggled.connect(lambda on, ty=ty: on and self.set_mate_type(ty))
+            grp.addButton(b)
+            self.props_lay.addWidget(b)
         if self.mate_type in ("distance", "angle"):
             form = QFormLayout()
             dist = self.mate_type == "distance"

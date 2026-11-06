@@ -60,3 +60,5 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 - 3D FEA: no transparent animation export; results are not saved in the project.
 - Colour-scale text in transparent animations is black.
 - "Update from original" clears supports and loads in 1D / 2D.
+- Assembly mates: exact first moves ("snaps", registry `am.SNAPS` / `@snap(type)`) put a free part straight onto a mate's closed-form answer; the numeric fit then only verifies / finishes. Concentric is the first; add a type by registering one function.
+- Mate panel: nine full-width icon buttons (mate_icons.py) in the style of the FEA panel buttons; Faces / Edges / Points are icon toggles.

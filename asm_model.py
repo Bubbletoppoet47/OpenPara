@@ -294,6 +294,49 @@ def residual(mate, E, T=None):
     raise MateError(f"unknown mate type {ty}")
 
 
+# ---------------------------------------------------------------------------------------------- exact first moves ("snaps")
+# A snap puts the moving component straight onto the answer of ONE mate (where that mate has a closed-form one), so the numeric fit that follows
+# starts on top of the solution instead of searching for it from far away.  It is only a starting guess: the fit still checks the result.
+# To add one for another mate type: write  fn(mate, E, mover) -> (Rd, pivot, shift) | None  and register it with @snap("type").
+# E = world entities of the mate's refs, mover = index (0 / 1) of the ref whose component moves.  The move is  x -> Rd (x - pivot) + pivot + shift.
+SNAPS = {}
+
+
+def snap(*types):
+    def reg(fn):
+        for t in types:
+            SNAPS[t] = fn
+        return fn
+    return reg
+
+
+def _turn(a, b):
+    """The smallest rotation that turns direction a onto direction b."""
+    a, b = unit(a), unit(b)
+    ax = np.cross(a, b)
+    s = float(np.linalg.norm(ax))
+    if s < 1e-12:
+        return np.eye(3)
+    return rodrigues(ax / s * math.atan2(s, float(a @ b)))
+
+
+@snap("concentric")
+def snap_concentric(mate, E, mover):
+    mv, fx = E[mover], E[1 - mover]
+    if _is_line(mv) and _is_line(fx):
+        d = fx["d"] if float(mv["d"] @ fx["d"]) >= 0 else -fx["d"]          # the nearer way round: never a half turn
+        Rd = _turn(mv["d"], d)
+        off = fx["p"] - mv["p"]
+        return Rd, mv["p"], off - float(off @ fx["d"]) * fx["d"]            # slide across onto the axis, not along it
+    if _is_line(mv) and fx["t"] in ("point", "sphere"):
+        off = fx["p"] - mv["p"]
+        return np.eye(3), mv["p"], off - float(off @ mv["d"]) * mv["d"]
+    if _is_line(fx) and mv["t"] in ("point", "sphere"):
+        off = fx["p"] - mv["p"]
+        return np.eye(3), mv["p"], off - float(off @ fx["d"]) * fx["d"]
+    return None
+
+
 # ---------------------------------------------------------------------------------------------- the assembly
 class Assembly:
     def __init__(self):
@@ -758,9 +801,40 @@ class Assembly:
         return ok
 
     CONFLICT = "error: conflicts with the mates before it (they were kept exact, this one was left out)"
+    NO_FIT = "error: could not be solved (no position was found where it holds)"
+
+    def _snap(self, fl, mates):
+        """Give each mate that has an exact first move (SNAPS) that move, on a component no other mate of this set touches (so it cannot undo them)."""
+        ids = {c["id"] for c in fl}
+        uses = {}
+        for m in mates:
+            for cid in {r["c"] for r in m["refs"]}:
+                uses[cid] = uses.get(cid, 0) + 1
+        for m in mates:
+            fn = SNAPS.get(m["type"])
+            if fn is None or len(m["refs"]) < 2 or m["refs"][0]["c"] == m["refs"][1]["c"]:
+                continue
+            mover = next((i for i in (0, 1) if m["refs"][i]["c"] in ids and uses.get(m["refs"][i]["c"]) == 1), None)
+            if mover is None:
+                continue
+            try:
+                E = self.world_entities(m)
+                if all(abs(v) <= 1e-4 for v in residual(m, E)):
+                    continue
+                out = fn(m, E, mover)
+            except MateError:
+                continue
+            if out is None:
+                continue
+            Rd, pivot, shift = out
+            c = self.comp(m["refs"][mover]["c"])
+            R, t = self.pose(c)
+            c["pos"] = list(map(float, Rd @ (t - pivot) + pivot + shift))
+            c["rv"] = list(map(float, rotvec(Rd @ R)))
 
     def _fit(self, fl, mates, iters=80):
         """Least squares on the poses of the components fl so that all the mates hold; writes the poses back.  True when every mate is met."""
+        self._snap(fl, mates)
         idx = {c["id"]: i for i, c in enumerate(fl)}
         x = np.concatenate([np.concatenate([c["pos"], c["rv"]]) for c in fl]) if fl else np.zeros(0)
 
@@ -833,7 +907,8 @@ class Assembly:
                 continue
             for c in sub:                                      # roll back: this mate does not fit with the earlier ones
                 c["pos"], c["rv"] = before[c["id"]]
-            failed.setdefault(m["id"], self.CONFLICT)
+            tied = any({r["c"] for r in h["refs"]} & ids for h in held)         # earlier mates act on these components: a real conflict
+            failed.setdefault(m["id"], self.CONFLICT if tied else self.NO_FIT)
         return held, failed
 
     def _met(self, mates):
