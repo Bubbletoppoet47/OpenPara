@@ -328,6 +328,7 @@ class AssemblyWindow(QMainWindow):
                 pass
             self.plotter.add_axes()
             self.ed = ViewGeom(self.plotter)
+            self.setup_fps()
             self.hook = viewpick.ClickHook(self.plotter, self.on_click, on_move=self.on_hover)
             self.drag_hook = DragHook(self.plotter, self)
             self.nav = nav.NavHook(self.plotter, self)         # installed last: it sees the mouse events first
@@ -713,6 +714,40 @@ class AssemblyWindow(QMainWindow):
             pl.render()
         except Exception:
             pass
+
+    def setup_fps(self):
+        """Dev (Playground) build only: a frame-rate read-out at the bottom right of the 3D view, counted from the renders that really happen."""
+        try:
+            import channel
+            if channel.name_of_channel() != "playground":
+                return
+        except Exception:  # noqa: BLE001
+            return
+        import time
+        from PyQt6.QtCore import QTimer
+        self._frames = []
+        orig = self.plotter.render
+
+        def counted(*a, **k):
+            self._frames.append(time.perf_counter())
+            return orig(*a, **k)
+        self.plotter.render = counted
+        lbl = QLabel("-- fps", self.plotter)
+        lbl.setStyleSheet("background:rgba(255,255,255,170); color:#16324f; padding:2px 6px; border-radius:4px; font-size:11px;")
+        lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.fps_label = lbl
+
+        def tick():
+            now = time.perf_counter()
+            self._frames = [t for t in self._frames if now - t <= 1.0]
+            lbl.setText(f"{len(self._frames)} fps")
+            lbl.adjustSize()
+            lbl.move(max(0, self.plotter.width() - lbl.width() - 8), max(0, self.plotter.height() - lbl.height() - 8))
+            lbl.show()
+            lbl.raise_()
+        self.fps_timer = QTimer(self)
+        self.fps_timer.timeout.connect(tick)
+        self.fps_timer.start(400)
 
     def update_poses(self, render=True):
         for cid, e in self.entries.items():
@@ -1744,6 +1779,10 @@ class AssemblyWindow(QMainWindow):
             return None
         self.snapshot()
         self.asm.drag_reset()
+        for k in self.asm.cluster(cid):                      # the sizes the drag solver needs, computed once now (not on the first step)
+            kc = self.asm.comp(k)
+            if kc is not None:
+                self.asm._comp_scale(kc)
         self.sel_comp = cid
         self.set_selected_color()
         if self.mode in (None, "move", "rotate"):

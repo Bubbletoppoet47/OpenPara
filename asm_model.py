@@ -360,6 +360,7 @@ class Assembly:
         self.exprs = {}                    # formulas that drive a number: "pos:C1:0" "rv:C1:2" "val:M1" "pat:P1:s1" -> text (mm / deg)
         self.cfg = {"active": "Default", "names": ["Default"], "cols": [], "cells": {"Default": {}}}
         self._cache = {}
+        self._scales = {}
 
     # ------------------------------------------------------------------ globals and formulas
     def evaluate_params(self):
@@ -924,10 +925,19 @@ class Assembly:
     def _comp_scale(self, c):
         """A typical size of a component (half its bounding diagonal): turns radians into the same units as millimetres when steps are measured."""
         try:
-            bb = self.solid_fn(c).bounding_box()
-            return max(1.0, 0.5 * float(np.linalg.norm([bb.max.X - bb.min.X, bb.max.Y - bb.min.Y, bb.max.Z - bb.min.Z])))
+            solid = self.solid_fn(c)
         except Exception:
             return 100.0
+        hit = self._scales.get(c["id"])
+        if hit is not None and hit[0] is solid:                  # the bounding box is slow (0.1 s on a big part): once per solid, not once per drag step
+            return hit[1]
+        try:
+            bb = solid.bounding_box()
+            v = max(1.0, 0.5 * float(np.linalg.norm([bb.max.X - bb.min.X, bb.max.Y - bb.min.Y, bb.max.Z - bb.min.Z])))
+        except Exception:
+            return 100.0
+        self._scales[c["id"]] = (solid, v)
+        return v
 
     def _drag_step(self, fl, mates, drag, extra, limit, grab, rounds=8):
         """Follow the mouse while the mates hold.  The old way pulled the component towards the mouse with a soft spring and then snapped the mates
