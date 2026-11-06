@@ -36,11 +36,9 @@ def _coincident(p):                        # a block resting flat on a longer fa
     _dot(p, 12, 19)
 
 
-def _parallel(p):                          # two equal slanted lines with a tick on each
-    p.drawLine(QPointF(5, 20), QPointF(14, 4))
-    p.drawLine(QPointF(11, 20), QPointF(20, 4))
-    p.drawLine(QPointF(8.2, 11.6), QPointF(10.6, 13.0))
-    p.drawLine(QPointF(14.2, 11.6), QPointF(16.6, 13.0))
+def _parallel(p):                          # two equal slanted lines
+    p.drawLine(QPointF(6, 20), QPointF(14, 4))
+    p.drawLine(QPointF(12, 20), QPointF(20, 4))
 
 
 def _perpendicular(p):                     # two lines at a right angle with the little square
@@ -54,23 +52,16 @@ def _tangent(p):                           # a circle resting on a line
     _dot(p, 12, 19)
 
 
-def _concentric(p):                        # two circles around one centre
+def _concentric(p):                        # two circles inside each other
     p.drawEllipse(QPointF(12, 12), 9, 9)
     p.drawEllipse(QPointF(12, 12), 4.5, 4.5)
-    p.drawLine(QPointF(10, 12), QPointF(14, 12))
-    p.drawLine(QPointF(12, 10), QPointF(12, 14))
 
 
-def _lock(p):                              # two blocks held together by a pin
-    p.save()
-    p.setBrush(QBrush(QColor("#e4eaee")))
-    p.setPen(QPen(QColor(GREY), 1.4))
-    p.drawRect(QRectF(3, 6, 8, 12))
-    p.drawRect(QRectF(13, 6, 8, 12))
-    p.restore()
-    p.drawLine(QPointF(8, 12), QPointF(16, 12))
-    _dot(p, 8, 12, 1.3)
-    _dot(p, 16, 12, 1.3)
+def _lock(p):                              # a simple padlock: shackle over a body
+    p.drawArc(QRectF(7, 3, 10, 12), 0, 180 * 16)
+    p.drawLine(QPointF(7, 9), QPointF(7, 11))
+    p.drawLine(QPointF(17, 9), QPointF(17, 11))
+    p.drawRoundedRect(QRectF(5, 11, 14, 10), 2, 2)
 
 
 def _distance(p):                          # two faces with a double arrow between them
