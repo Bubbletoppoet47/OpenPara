@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QFileDi
                              QListWidget, QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton, QButtonGroup, QTabWidget,
                              QSizePolicy, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QInputDialog, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox)
 
+import asm_measure
 import asm_model as am
 import asm_refs
 import asm_sub
@@ -220,6 +221,12 @@ class AssemblyWindow(QMainWindow):
         asm_refs.init_vis(self)
         self.entries = {}                 # component id -> scene data
         self.hi_actors = []
+        self.measure_items, self.meas_segs, self.meas_actors = [], [], []     # the Measure tool: the (up to two) picked items, the lines drawn between them
+        self.measure_panel, self.measure_unit, self._meas_busy = None, None, False
+        self.measure_timer = QTimer(self)
+        self.measure_timer.setSingleShot(True)
+        self.measure_timer.setInterval(80)
+        self.measure_timer.timeout.connect(lambda: self.measure_update())
         self.pick_filter = {"face": True, "edge": True, "vertex": True}     # what a click in the mate / reference tools may pick
         self.hover_key, self.hover_actor = None, None
         self.mesh_cache = {}              # (part path, id(solid)) -> (mesh, edge polylines, local bbox centre)
@@ -266,6 +273,7 @@ class AssemblyWindow(QMainWindow):
         ]), "Assembly Features")
         self.ribbon.addTab(self.ribbon_page([
             ("mass", "⚖", "Mass\nProperties", "Mass, center of mass and moments of inertia of the whole assembly", lambda: self.mass_open()),
+            ("measure", "↔", "Measure", "Minimum, center and maximum distance between two points, edges, faces or pipes: click two items in the view", lambda: self.measure_toggle()),
         ]), "Evaluate")
         import ext
         if ext.present("simulation"):
@@ -857,6 +865,8 @@ class AssemblyWindow(QMainWindow):
             c = self.asm.comp(cid)
             if c is not None:
                 a.user_matrix = (S if id(a) in pulled else np.eye(4)) @ self.asm.T4(c)
+        if self.mode == "measure" and not self._meas_busy:
+            self.measure_timer.start()                       # the numbers follow the components (after the movement settles a little)
         if render and self.plotter is not None:
             try:
                 self.plotter.render()
@@ -890,7 +900,7 @@ class AssemblyWindow(QMainWindow):
             except Exception:
                 pass
         self.hi_actors = []
-        for it in self.mate_sel + (self.pat.get("hi", []) if self.pat else []) + (self.rg["refs"] if self.rg else []):
+        for it in self.mate_sel + (self.pat.get("hi", []) if self.pat else []) + (self.rg["refs"] if self.rg else []) + (self.measure_items if self.mode == "measure" else []):
             if it["kind"] in ("plane", "axis", "origin") or it["cid"] == "@":
                 a = asm_refs.highlight_extra(self, pl, pv, it)
                 if a is not None:
@@ -920,7 +930,89 @@ class AssemblyWindow(QMainWindow):
                 self.hi_actors.append((pa, "@"))
             except Exception:
                 pass
+        self.draw_measure_lines()
         self.update_poses(render=render)
+
+    # ------------------------------------------------------------------ Measure
+    def measure_toggle(self):
+        if self.mode == "measure":
+            self.set_mode(None)
+            return
+        self.set_mode("measure", quiet=True)
+        self.measure_items = []
+        if self.measure_panel is None:
+            import evaluate
+            self.measure_panel = evaluate.MeasurePanel(self)
+            for k in ("cc", "mx"):                                   # an assembly wants all three numbers
+                self.measure_panel.opt[k].setChecked(True)
+            self.measure_panel.opt["cc"].setText("Center")
+            self.measure_panel.opt["cc"].setToolTip("Center to center: axis to axis for pipes, holes and straight edges")
+        self.measure_panel.show()
+        self.measure_update()
+        self.say("Measure: click two points, edges, faces or pipes (Esc to stop).")
+
+    def measure_end(self):
+        """Leaving the tool: close the panel, take the lines and highlights away."""
+        self.measure_items, self.meas_segs = [], []
+        self.measure_timer.stop()
+        if self.measure_panel is not None:
+            self.measure_panel.hide()
+        self.mode = None
+        self.draw_highlights()
+
+    def measure_stop(self):
+        if self.mode == "measure":
+            self.set_mode(None)
+
+    def measure_clear(self):
+        self.measure_items = []
+        self.measure_update()
+
+    def measure_pick(self, it):
+        key = lambda i: (i["cid"], i["kind"], i["idx"], repr(i["ref"].get("r")) if i["cid"] == "@" or i["kind"] in ("plane", "axis", "origin") else "")
+        same = [i for i in self.measure_items if key(i) == key(it)]
+        if same:
+            self.measure_items = [i for i in self.measure_items if i not in same]
+        elif len(self.measure_items) >= 2:
+            self.measure_items = [it]
+        else:
+            self.measure_items.append(it)
+        self.measure_update()
+
+    def measure_update(self):
+        if self.measure_panel is None or self.mode != "measure":
+            return
+        self._meas_busy = True
+        try:
+            text, self.meas_segs = asm_measure.report(self.asm, self.measure_items, self.measure_panel.options(), unitctl.length_unit())
+            self.measure_panel.out.setPlainText(text)
+            self.draw_highlights()
+        finally:
+            self._meas_busy = False
+
+    def draw_measure_lines(self):
+        pl = self.plotter
+        for a in self.meas_actors:
+            try:
+                pl.remove_actor(a)
+            except Exception:
+                pass
+        self.meas_actors = []
+        if self.mode != "measure" or pl is None:
+            return
+        for p, q, col in self.meas_segs:
+            if float(np.linalg.norm(np.asarray(q) - np.asarray(p))) < 1e-9:
+                continue
+            for mesh, kw in ((pv.Line(np.asarray(p, float), np.asarray(q, float)), {"line_width": 4}),
+                             (pv.PolyData(np.array([p, q], float)), {"point_size": 9, "render_points_as_spheres": True})):
+                a = pl.add_mesh(mesh, color=col, lighting=False, pickable=False, reset_camera=False, **kw)
+                try:                                                     # drawn over the parts, so a line inside a pipe is still seen
+                    a.mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                    a.mapper.SetRelativeCoincidentTopologyLineOffsetParameters(-1, -66000)
+                    a.mapper.SetRelativeCoincidentTopologyPointOffsetParameter(-66000)
+                except Exception:
+                    pass
+                self.meas_actors.append(a)
 
     # ------------------------------------------------------------------ the tree
     def refresh_tree(self):
@@ -1762,7 +1854,7 @@ class AssemblyWindow(QMainWindow):
 
     def on_hover(self, x, y):
         """The cursor moved over the view while picking: light up the face / edge / point a click would take."""
-        if self.mode not in ("mate", "refgeo", "pattern", "mirror_plane", "axis_pick") or not settings.get("hover") or self.plotter is None:
+        if self.mode not in ("mate", "refgeo", "pattern", "mirror_plane", "axis_pick", "measure") or not settings.get("hover") or self.plotter is None:
             if self.hover_actor is not None:
                 self.clear_hover()
             return
@@ -1803,6 +1895,11 @@ class AssemblyWindow(QMainWindow):
         if self.mode in ("move", "rotate"):
             return
         try:
+            if self.mode == "measure":
+                it = self.pick_item(x, y) or asm_refs.world_pick(self, x, y)
+                if it is not None:
+                    self.measure_pick(it)
+                return
             if self.mode == "mate":
                 it = self.pick_item(x, y) or asm_refs.world_pick(self, x, y)
                 if it is not None:
@@ -1852,6 +1949,8 @@ class AssemblyWindow(QMainWindow):
 
     # ------------------------------------------------------------------ move / rotate
     def set_mode(self, mode, quiet=False):
+        if self.mode == "measure" and mode != "measure":
+            self.measure_end()
         if mode in ("move", "rotate") and not self.asm.components:
             self.say("Insert a component first.")
             return
