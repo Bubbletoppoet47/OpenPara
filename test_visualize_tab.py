@@ -1,4 +1,7 @@
 """Visualize inside the program: ribbon tab, project FOLDER (.gpv) with its own copy of the model, default output folder, reopening."""
+import os, tempfile
+_ud = os.environ["OPARA_USER_DIR"] = tempfile.mkdtemp()     # a fresh copy of the add-on from addons_src (the others are left out: no downloads)
+open(os.path.join(_ud, "addons.json"), "w").write('{"removed": ["partgen", "truss", "annotator", "annotator_gimble", "trainer", "simulation"]}')
 import addons; addons.startup()   # the render module lives in an add-on
 import faulthandler; faulthandler.dump_traceback_later(170, exit=True)
 import os, tempfile, json

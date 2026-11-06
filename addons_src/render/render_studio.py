@@ -190,6 +190,39 @@ def row(*widgets):
     return w
 
 
+class KeyframeSlider(QSlider):
+    """The scrub slider with a diamond for every keyframe (a ticked camera); clicking near a diamond jumps to it."""
+    jumped = None
+
+    def __init__(self):
+        super().__init__(Qt.Orientation.Horizontal)
+        self.marks = []                                      # positions 0..1
+        self.setMinimumHeight(28)
+
+    def x_of(self, u):
+        m = 10
+        return m + (self.width() - 2 * m) * u
+
+    def paintEvent(self, ev):
+        super().paintEvent(ev)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setBrush(QColor("#e8590c"))
+        p.setPen(QPen(QColor("#ffffff"), 1))
+        for u in self.marks:
+            x, y = self.x_of(u), 5
+            from PyQt6.QtGui import QPolygonF
+            from PyQt6.QtCore import QPointF
+            p.drawPolygon(QPolygonF([QPointF(x, y - 4), QPointF(x + 4, y), QPointF(x, y + 4), QPointF(x - 4, y)]))
+
+    def mousePressEvent(self, ev):
+        for i, u in enumerate(self.marks):
+            if abs(ev.position().x() - self.x_of(u)) <= 6 and ev.position().y() < 12 and self.jumped is not None:
+                self.jumped(i)
+                return
+        super().mousePressEvent(ev)
+
+
 class FrameOverlay(QWidget):
     """Darkens what is outside the picture frame (the shape of the output) on top of the 3D view; mouse clicks pass through."""
 
@@ -247,6 +280,7 @@ class RenderStudio(QMainWindow):
         self.mode = "previs"                                 # previs | preview
         self.view_cam = -1                                   # -1: free view; i: looking through camera i; -2: along the video path
         self.scrub_t = 0.0                                   # 0..1 along the video track
+        self.play_dir = 1
         self._path = (None, [])
         self.results = []
         self.play_timer = QTimer(self)
@@ -456,19 +490,29 @@ class RenderStudio(QMainWindow):
         self.scrub_bar.setStyleSheet("background:#eef2f6;")
         sl = QHBoxLayout(self.scrub_bar)
         sl.setContentsMargins(8, 3, 8, 3)
+        self.sc_prev = QPushButton("⏮")
+        self.sc_rev = QPushButton("◀")
         self.sc_play = QPushButton("▶")
-        self.sc_play.setFixedWidth(40)
-        self.sc_slider = QSlider(Qt.Orientation.Horizontal)
+        self.sc_next = QPushButton("⏭")
+        for b, tip in ((self.sc_prev, "Previous keyframe"), (self.sc_rev, "Play backwards"), (self.sc_play, "Play"), (self.sc_next, "Next keyframe")):
+            b.setFixedWidth(36)
+            b.setToolTip(tip)
+        self.sc_slider = KeyframeSlider()
         self.sc_slider.setRange(0, 1000)
+        self.sc_slider.jumped = lambda i: self.goto_key(i)
         self.sc_time = QLabel("0.0 s / 0.0 s")
         self.sc_frame = QLabel("")
-        sl.addWidget(self.sc_play)
+        self.sc_prev.clicked.connect(lambda _=False: self.step_key(-1))
+        self.sc_next.clicked.connect(lambda _=False: self.step_key(1))
+        self.sc_rev.clicked.connect(lambda _=False: self.play_toggle(-1))
+        for b in (self.sc_prev, self.sc_rev, self.sc_play, self.sc_next):
+            sl.addWidget(b)
         sl.addWidget(self.sc_slider, 1)
         sl.addWidget(self.sc_time)
         sl.addWidget(self.sc_frame)
         lay.addWidget(self.scrub_bar)
         self.scrub_bar.hide()
-        self.sc_play.clicked.connect(lambda _=False: self.play_toggle())
+        self.sc_play.clicked.connect(lambda _=False: self.play_toggle(1))
         self.sc_slider.valueChanged.connect(lambda v: self.scrub_to(v / 1000.0, from_ui="bar"))
         self.setCentralWidget(holder)
 
@@ -736,7 +780,10 @@ class RenderStudio(QMainWindow):
         self.b_render.clicked.connect(lambda _=False: self.render_clicked())
         self.run_btns.append(self.b_render)
         f.addRow(self.b_render)
-        f.addRow(note_label("The finished picture or video, ray traced."))
+        f.addRow(note_label("The finished picture or video, ray traced. It is written to the output folder below."))
+        f.addRow(row(self.bar, self.b_stop))
+        f.addRow(self.log_btn)
+        f.addRow(self.log)
         self.o_what = QComboBox()
         for t, m in WHAT:
             self.o_what.addItem(t, m)
@@ -796,46 +843,27 @@ class RenderStudio(QMainWindow):
         dock.setWidget(sc)
         dock.setMinimumWidth(400)
         dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
         self.connect_props()
         self.setEnabled_props(False)
 
     def make_bottom(self):
-        host = QWidget()
-        lay = QHBoxLayout(host)
-        left = QVBoxLayout()
-        row_ = QHBoxLayout()
+        """No bottom area any more: the Stop button, the progress bar and the (folded) log live in the Render section of the panel;
+        finished pictures and videos are in the output folder."""
         self.b_stop = QPushButton("Stop")
         self.b_stop.clicked.connect(self.stop_render)
         self.b_stop.setEnabled(False)
         self.run_btns = []                                   # the Render button joins in make_props
-        row_.addStretch(1)
-        row_.addWidget(self.b_stop)
-        left.addLayout(row_)
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
-        left.addWidget(self.bar)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(500)
-        left.addWidget(self.log)
-        self.files = QListWidget()
-        self.files.setMaximumHeight(90)
-        self.files.currentRowChanged.connect(self.show_result)
-        self.files.itemDoubleClicked.connect(lambda it: QDesktopServices.openUrl(QUrl.fromLocalFile(it.data(Qt.ItemDataRole.UserRole))))
-        left.addWidget(self.files)
-        lay.addLayout(left, 2)
-        self.img = QLabel("The picture appears here.")
-        self.img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.img.setMinimumSize(QSize(380, 220))
-        self.img.setStyleSheet("background:#d8dce3; border:1px solid #aab;")
-        lay.addWidget(self.img, 3)
-        dock = QDockWidget("Render", self)
-        dock.setWidget(host)
-        dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
-        self.bottom_dock = dock
-        QTimer.singleShot(0, lambda: self.resizeDocks([dock], [250], Qt.Orientation.Vertical))
+        self.log.setMaximumHeight(150)
+        self.log.hide()
+        self.log_btn = QPushButton("Show the log")
+        self.log_btn.setCheckable(True)
+        self.log_btn.toggled.connect(lambda on: (self.log.setVisible(on), self.log_btn.setText("Hide the log" if on else "Show the log")))
 
     # ================================================================ binding of the controls
     def connect_props(self):
@@ -1588,6 +1616,8 @@ class RenderStudio(QMainWindow):
         txt = f"{t:.1f} s / {secs:.1f} s"
         self.sc_time.setText(txt)
         self.pv_time.setText(txt)
+        self.sc_slider.marks = self.key_positions() if ok else []
+        self.sc_slider.update()
         self.sc_frame.setText(f"frame {int(round(self.scrub_t * max(1, int(round(secs * fps)) - 1))) + 1}")
         if not ok:
             self.play_timer.stop()
@@ -1608,25 +1638,62 @@ class RenderStudio(QMainWindow):
             self.apply_camera(c)
             self.sync_view_ui()
 
-    def play_toggle(self):
+    def key_positions(self):
+        """Where each keyframe (ticked camera, in list order) is on the track, 0..1: the point of the video path nearest to that camera."""
+        path = self.path_list()
+        if not path:
+            return []
+        ac = [c for c in self.proj["cameras"] if c.get("anim")]
+        O = np.array([c["origin"] for c in path], float)
+        out, last = [], 0
+        for c in ac:
+            d = np.linalg.norm(O[last:] - np.array(c["origin"], float), axis=1)
+            last += int(np.argmin(d))
+            out.append(last / max(1, len(path) - 1))
+        if out:
+            out[0], out[-1] = 0.0, 1.0
+        return out
+
+    def goto_key(self, i):
+        ks = self.key_positions()
+        if 0 <= i < len(ks):
+            self.scrub_to(ks[i])
+
+    def step_key(self, d):
+        ks = self.key_positions()
+        if not ks:
+            return
+        eps = 1e-3
+        if d > 0:
+            nxt = [u for u in ks if u > self.scrub_t + eps]
+            self.scrub_to(nxt[0] if nxt else ks[-1])
+        else:
+            prv = [u for u in ks if u < self.scrub_t - eps]
+            self.scrub_to(prv[-1] if prv else ks[0])
+
+    def play_toggle(self, direction=1):
         if not self.has_track():
             return
-        if self.play_timer.isActive():
+        if self.play_timer.isActive() and direction == self.play_dir:
             self.play_timer.stop()
         else:
-            if self.scrub_t >= 0.999:
+            self.play_dir = direction
+            if direction > 0 and self.scrub_t >= 0.999:
                 self.scrub_to(0.0)
+            if direction < 0 and self.scrub_t <= 0.001:
+                self.scrub_to(1.0)
             self.play_timer.start()
-        txt = "❚❚" if self.play_timer.isActive() else "▶"
-        self.sc_play.setText(txt)
-        self.pv_play.setText(txt)
+        on = self.play_timer.isActive()
+        self.sc_play.setText("❚❚" if on and self.play_dir > 0 else "▶")
+        self.sc_rev.setText("❚❚" if on and self.play_dir < 0 else "◀")
+        self.pv_play.setText("❚❚" if on and self.play_dir > 0 else "▶")
 
     def play_step(self):
         secs = max(0.5, float(self.proj["anim"]["seconds"])) if self.proj else 1.0
-        u = self.scrub_t + self.play_timer.interval() / 1000.0 / secs
-        if u >= 1.0:
-            self.scrub_to(1.0)
-            self.play_toggle()
+        u = self.scrub_t + self.play_dir * self.play_timer.interval() / 1000.0 / secs
+        if u >= 1.0 or u <= 0.0:
+            self.scrub_to(min(1.0, max(0.0, u)))
+            self.play_toggle(self.play_dir)
         else:
             self.scrub_to(u)
 
@@ -2002,19 +2069,8 @@ class RenderStudio(QMainWindow):
             a.setEnabled(not on)
 
     def add_result(self, path):
-        it = QListWidgetItem(os.path.basename(path))
-        it.setData(Qt.ItemDataRole.UserRole, path)
-        self.files.addItem(it)
-        self.files.setCurrentRow(self.files.count() - 1)
-
-    def show_result(self, i):
-        if i < 0:
-            return
-        path = self.files.item(i).data(Qt.ItemDataRole.UserRole)
-        pm = QPixmap(path)
-        if pm.isNull():
-            return
-        self.img.setPixmap(pm.scaled(self.img.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        self.results.append(path)
+        self.statusBar().showMessage(f"Saved {path}")
 
     # ================================================================ guide
     def show_guide(self):

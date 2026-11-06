@@ -1,4 +1,7 @@
 """Visualize (Render Studio): panel layout, Previs <-> Preview, camera view sync, video scrub bar, Preview lights, render-mode mapping."""
+import os, tempfile
+_ud = os.environ["OPARA_USER_DIR"] = tempfile.mkdtemp()     # a fresh copy of the add-on from addons_src (the others are left out: no downloads)
+open(os.path.join(_ud, "addons.json"), "w").write('{"removed": ["partgen", "truss", "annotator", "annotator_gimble", "trainer", "simulation"]}')
 import addons; addons.startup()   # the render module lives in an add-on
 import faulthandler; faulthandler.dump_traceback_later(250, exit=True)
 import os, tempfile, json
@@ -64,6 +67,19 @@ w.pv_slider.setValue(1000)
 assert [round(x, 2) for x in w.pl.camera.position] == [round(x, 2) for x in w.proj["cameras"][2]["origin"]]
 w.set_mode("preview"); w.pv_slider.setValue(300); assert w.view_cam == -2 and w.mode == "preview"
 w.play_toggle(); assert w.play_timer.isActive(); w.play_toggle(); assert not w.play_timer.isActive()
+# keyframe markers: first and last camera at the ends, in order; step and jump
+ks = w.sc_slider.marks; assert len(ks) == 3 and ks[0] == 0.0 and ks[-1] == 1.0 and ks == sorted(ks), ks
+w.scrub_to(0.0); w.step_key(1); assert abs(w.scrub_t - ks[1]) < 1e-9
+w.step_key(1); assert abs(w.scrub_t - 1.0) < 1e-9; w.step_key(-1); assert abs(w.scrub_t - ks[1]) < 1e-9
+w.sc_slider.jumped(2); assert w.scrub_t == 1.0
+w.scrub_to(0.5); w.play_toggle(-1); assert w.play_timer.isActive() and w.play_dir == -1; w.play_step(); assert w.scrub_t < 0.5
+w.play_toggle(-1); assert not w.play_timer.isActive()
+# ---- layout: panel on the left, nothing at the bottom
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QDockWidget
+docks = w.findChildren(QDockWidget); assert len(docks) == 1 and w.dockWidgetArea(docks[0]) == Qt.DockWidgetArea.LeftDockWidgetArea, docks
+assert not w.log.isVisibleTo(w) and w.b_stop.parent() is not None and w.bar.parent() is not None
+w.log_btn.setChecked(True); assert w.log.isVisibleTo(w); w.log_btn.setChecked(False)
 # ---- Preview draws (lit, helpers hidden) at all qualities; Previs keeps its helpers
 w.set_view(-1); w.fl_on.setChecked(True); w.sun_shadows.setChecked(True)
 def actors(): return len(w.pl.renderer.actors)
