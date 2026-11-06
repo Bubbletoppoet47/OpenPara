@@ -57,7 +57,7 @@ PREVIEW_FADE = 0.42
 MATE_HELP = {"coincident": "face/face, point/point, point/face, edge/edge, ...", "parallel": "faces or edges parallel",
              "perpendicular": "faces or edges at 90 degrees", "tangent": "flat face, cylinder, sphere or straight edge touching a curved face",
              "concentric": "cylinders / circles share an axis", "lock": "the two components keep their position to each other",
-             "distance": "type the distance", "angle": "type the angle", "symmetric": "pick two items, then the mirror plane"}
+             "distance": "type the distance (a pipe or hole to a flat face: its centre line stays that far from the face)", "angle": "type the angle", "symmetric": "pick two items, then the mirror plane"}
 
 
 class ViewGeom:
@@ -329,6 +329,7 @@ class AssemblyWindow(QMainWindow):
             self.plotter.add_axes()
             self.ed = ViewGeom(self.plotter)
             self.setup_fps()
+            self.setup_pick_renderer()
             self.hook = viewpick.ClickHook(self.plotter, self.on_click, on_move=self.on_hover)
             self.drag_hook = DragHook(self.plotter, self)
             self.nav = nav.NavHook(self.plotter, self)         # installed last: it sees the mouse events first
@@ -676,6 +677,9 @@ class AssemblyWindow(QMainWindow):
         pl.add_axes()
         self.hover_key, self.hover_actor = None, None
         self.entries, self.hi_actors, self.pull_actors, self.hover_pull = {}, [], [], None
+        baked = settings.get("outline_mode") == "baked"
+        if getattr(self, "pick_ren", None) is not None:
+            self.pick_ren.RemoveAllViewProps()
         for k, c in enumerate(self.asm.components):
             if c.get("hidden") or c.get("suppressed"):
                 continue
@@ -687,17 +691,40 @@ class AssemblyWindow(QMainWindow):
             opa = self.opacity_of(c)
             if self.pat is not None and (c.get("derived") or {}).get("pat") == self.pat["data"]["id"]:
                 col, opa = PREVIEW_COL, PREVIEW_FADE                # the copies the pattern / mirror being made will add: faded blue until OK
-            a = pl.add_mesh(m, color=col, opacity=opa, smooth_shading=False, pickable=True, show_edges=False, reset_camera=False,
-                            ambient=0.28, diffuse=0.78, specular=0.30, specular_power=22)
-            ml = pm_app.MainWindow.merged_lines(polys)
-            ea = pl.add_mesh(ml, color=(0.13, 0.15, 0.20), line_width=settings.get("line_px"), pickable=False, reset_camera=False) if ml is not None else None
-            if ea is not None:              # pull the outlines a little more towards the viewer, so a joint between two parts always shows its line
-                try:
+            if baked:
+                mb, n_lines = self.baked_mesh(m, polys, col)
+                a = pl.add_mesh(mb, scalars="rgb", rgb=True, preference="cell", opacity=opa, smooth_shading=False, pickable=False, show_edges=False,
+                                reset_camera=False, line_width=settings.get("line_px"), ambient=0.28, diffuse=0.78, specular=0.30, specular_power=22)
+                try:                    # faces sit a hair behind, lines a hair in front - one mesh, so the lines are hidden exactly where the part is
+                    mp = a.mapper
                     pp = settings.get("pull_px")
-                    ea.mapper.SetRelativeCoincidentTopologyLineOffsetParameters(-pp, -pp)
+                    mp.SetResolveCoincidentTopologyToPolygonOffset()
+                    mp.SetRelativeCoincidentTopologyPolygonOffsetParameters(1.0, 1.0)
+                    mp.SetRelativeCoincidentTopologyLineOffsetParameters(-pp, -pp)
                 except Exception:
                     pass
-            self.entries[c["id"]] = {"actor": a, "edges": ea, "mesh": m, "polys": polys, "lc": lc, "k": k}
+                ea, bk, pa = None, (mb, n_lines), None
+                if self.pick_ren is not None:                         # the surface-only copy that clicks land on
+                    try:
+                        pa = pv.Actor(mapper=pv.DataSetMapper(m))
+                        self.pick_ren.AddActor(pa)
+                    except Exception:
+                        pa = None
+                if pa is None:                                        # no hidden renderer: pick on the baked mesh itself (line cells are skipped later)
+                    a.SetPickable(True)
+            else:
+                a = pl.add_mesh(m, color=col, opacity=opa, smooth_shading=False, pickable=True, show_edges=False, reset_camera=False,
+                                ambient=0.28, diffuse=0.78, specular=0.30, specular_power=22)
+                ml = pm_app.MainWindow.merged_lines(polys)
+                ea = pl.add_mesh(ml, color=(0.13, 0.15, 0.20), line_width=settings.get("line_px"), pickable=False, reset_camera=False) if ml is not None else None
+                if ea is not None:          # pull the outlines a little more towards the viewer, so a joint between two parts always shows its line
+                    try:
+                        pp = settings.get("pull_px")
+                        ea.mapper.SetRelativeCoincidentTopologyLineOffsetParameters(-pp, -pp)
+                    except Exception:
+                        pass
+                bk, pa = None, None
+            self.entries[c["id"]] = {"actor": a, "edges": ea, "mesh": m, "polys": polys, "lc": lc, "k": k, "baked": bk, "pick": pa}
         self.hook_edge_pull(pl)
         asm_refs.draw_world(self, pl, pv)             # the origin, its planes, reference planes and axes
         self.update_poses(render=False)
@@ -714,6 +741,70 @@ class AssemblyWindow(QMainWindow):
             pl.render()
         except Exception:
             pass
+
+    def setup_pick_renderer(self):
+        """A second renderer that is never drawn: it holds surface-only copies of the parts, and clicks are picked in it (the visible parts carry
+        their outline lines in the same mesh, and a click must only ever land on a surface).  It shares the camera of the real view."""
+        self.pick_ren = None
+        try:
+            from vtkmodules.vtkRenderingCore import vtkRenderer
+            pr = vtkRenderer()
+            pr.SetLayer(1)
+            pr.DrawOff()
+            pr.InteractiveOff()
+            rw = self.plotter.render_window
+            rw.SetNumberOfLayers(max(2, rw.GetNumberOfLayers()))
+            rw.AddRenderer(pr)
+            self.pick_ren = pr
+        except Exception:  # noqa: BLE001
+            self.pick_ren = None
+
+    LINE_RGB = (33, 38, 51)
+
+    @staticmethod
+    def rgb255(col):
+        return [int(round(255 * float(v))) for v in col]
+
+    def baked_mesh(self, m, polys, col):
+        """The part's surface triangles AND its outline lines as ONE mesh (lines first, then triangles - the order VTK numbers cells in), with a colour
+        per cell: dark for lines, the part colour for surfaces.  -> (mesh, number of line cells)."""
+        ml = pm_app.MainWindow.merged_lines(polys)
+        n_pts = m.n_points
+        mb = pv.PolyData()
+        if ml is None:
+            mb.points = np.asarray(m.points)
+            mb.faces = np.asarray(m.faces)
+            n_lines = 0
+        else:
+            mb.points = np.vstack([np.asarray(m.points), np.asarray(ml.points)])
+            mb.faces = np.asarray(m.faces)
+            lines = np.asarray(ml.lines).copy()
+            i = 0
+            while i < len(lines):                                          # shift the line point numbers behind the triangle points
+                k = int(lines[i])
+                lines[i + 1:i + 1 + k] += n_pts
+                i += k + 1
+            mb.lines = lines
+            n_lines = int(ml.n_cells)
+        face = np.concatenate([np.full(n_lines, -1), np.asarray(m.cell_data["face"])]).astype(int)
+        rgb = np.empty((mb.n_cells, 3), np.uint8)
+        rgb[:n_lines] = self.LINE_RGB
+        rgb[n_lines:] = self.rgb255(col)
+        mb.cell_data["face"] = face
+        mb.cell_data["rgb"] = rgb
+        return mb, n_lines
+
+    def paint(self, e, col):
+        """A part's surface colour (the baked mesh keeps it per cell; the old drawing sets the actor's colour)."""
+        if e.get("baked") is not None:
+            mb, n_lines = e["baked"]
+            arr = mb.cell_data["rgb"]
+            arr[n_lines:] = self.rgb255(col)
+            mb.cell_data["rgb"] = arr
+            mb.GetCellData().Modified()
+            mb.Modified()
+        else:
+            e["actor"].prop.color = col
 
     def setup_fps(self):
         """Dev (Playground) build only: a frame-rate read-out at the bottom right of the 3D view, counted from the renders that really happen."""
@@ -756,6 +847,8 @@ class AssemblyWindow(QMainWindow):
                 continue
             M = self.asm.T4(c)
             e["actor"].user_matrix = M
+            if e.get("pick") is not None:
+                e["pick"].user_matrix = M
             if e["edges"] is not None:
                 e["edges"].user_matrix = getattr(self, "_pull_S", np.eye(4)) @ M
         pulled = {id(a) for a, _c in getattr(self, "pull_actors", [])}
@@ -785,7 +878,7 @@ class AssemblyWindow(QMainWindow):
             if self.pat is not None and (c.get("derived") or {}).get("pat") == self.pat["data"]["id"]:
                 continue                                              # the faded blue preview copies keep their colour
             col = SEL_COL if cid == self.sel_comp else self.base_color(c, e["k"])
-            e["actor"].prop.color = col
+            self.paint(e, col)
         if self.plotter is not None:
             self.plotter.render()
 
@@ -1559,18 +1652,28 @@ class AssemblyWindow(QMainWindow):
 
     def comp_at(self, actor):
         for cid, e in self.entries.items():
-            if viewpick.same_actor(e["actor"], actor):
+            if viewpick.same_actor(e["actor"], actor) or (e.get("pick") is not None and viewpick.same_actor(e["pick"], actor)):
                 return cid
         return None
 
     def surface_hit(self, x, y):
-        r = viewpick.pick_surface(self.plotter, x, y)
+        pr = getattr(self, "pick_ren", None)
+        if pr is not None and any(e.get("pick") is not None for e in self.entries.values()):
+            pr.SetActiveCamera(self.plotter.renderer.GetActiveCamera())          # the hidden renderer looks through the same camera
+            r = viewpick.pick_surface(self.plotter, x, y, renderer=pr)
+        else:
+            r = viewpick.pick_surface(self.plotter, x, y)
         if r is None:
             return None
         pos, actor, cid_cell = r
         cid = self.comp_at(actor)
         if cid is None:
             return None
+        e = self.entries.get(cid) or {}
+        if e.get("baked") is not None and e.get("pick") is None:             # picked on the baked mesh itself: its line cells come first
+            cid_cell -= e["baked"][1]
+            if cid_cell < 0:
+                return None
         return np.array(pos), cid, int(cid_cell)
 
     def pick_item(self, x, y):
@@ -1639,7 +1742,7 @@ class AssemblyWindow(QMainWindow):
         keys = set(keys)
         if keys & {"edge_gap", "surf_gap"}:
             self.mesh_cache.clear()
-        if keys & {"edge_gap", "surf_gap", "line_px", "pull_px"}:
+        if keys & {"edge_gap", "surf_gap", "line_px", "pull_px", "outline_mode"}:
             try:
                 self.rebuild_scene()
             except Exception:

@@ -248,6 +248,10 @@ def residual(mate, E, T=None):
             return [_line_dist(a, b["p"]) - D]
         if _is_line(b) and ta in ("point", "sphere"):
             return [_line_dist(b, a["p"]) - D]
+        for pl, ln in ((a, b), (b, a)):                                # a flat face and a pipe / hole / straight edge: the axis keeps its distance
+            if pl["t"] == "plane" and _is_line(ln):                    # to the face, and stays parallel to it (a circle edge: its centre only)
+                off = float((ln["p"] - pl["p"]) @ pl["n"]) - s * D
+                return [off] if ln["t"] == "circle" else [float(ln["d"] @ pl["n"]), off]
         raise bad
     if ty == "angle":
         A = math.radians(float(mate["value"]))
@@ -335,6 +339,35 @@ def snap_concentric(mate, E, mover):
         off = fx["p"] - mv["p"]
         return np.eye(3), mv["p"], off - float(off @ fx["d"]) * fx["d"]
     return None
+
+
+@snap("distance")
+def snap_distance(mate, E, mover):
+    """A flat face and a pipe / hole / edge / point: turn the axis parallel to the face (smallest turn), then slide along the face's normal."""
+    D, s = float(mate["value"]), float(mate.get("sgn", 1.0))
+    mv, fx = E[mover], E[1 - mover]
+    pl, ot = (mv, fx) if mv["t"] == "plane" else (fx, mv)
+    if pl["t"] != "plane" or ot["t"] == "plane":
+        return None
+    n, p_pl = pl["n"], pl["p"]
+    Rd = np.eye(3)
+    if ot["t"] in ("axis", "line"):
+        if mv is ot:                                # the pipe moves: tip its axis into the face's plane
+            d2 = ot["d"] - float(ot["d"] @ n) * n
+            if np.linalg.norm(d2) > 1e-9:
+                Rd = _turn(ot["d"], d2)
+        else:                                                                   # the face moves: tip its normal square to the axis
+            n2 = n - float(n @ ot["d"]) * ot["d"]
+            if np.linalg.norm(n2) > 1e-9:
+                Rd = _turn(n, n2)
+                n = unit(n2)
+    elif ot["t"] not in ("circle", "point", "sphere"):
+        return None
+    cur = float((ot["p"] - p_pl) @ n)
+    gap = cur - s * D
+    if mv is ot:
+        return Rd, mv["p"], -gap * n                                            # the pipe / point moves along the normal
+    return Rd, mv["p"], gap * n                                                 # the face moves the other way
 
 
 # ---------------------------------------------------------------------------------------------- the assembly

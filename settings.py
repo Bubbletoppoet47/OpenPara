@@ -21,12 +21,25 @@ ARROW_STYLES = {"open": "Open arrow", "filled": "Filled arrow", "closed": "Close
                 "tick": "Tick (slash)", "none": "None"}
 LINE_STYLES = {"solid": "Solid", "dashed": "Dashed", "dotted": "Dotted", "dashdot": "Dash-dot"}
 
+OUTLINE_MODES = {"baked": "Lines baked into the surface (new)", "classic": "Separate lines (old)"}
+
+
+def _outline_default():
+    """The new outline drawing is tried in the dev (Playground) build first."""
+    try:
+        import channel
+        return "baked" if channel.name_of_channel() == "playground" else "classic"
+    except Exception:  # noqa: BLE001
+        return "classic"
+
+
 # key: (default, minimum, maximum, label).  A text default is a choice (the maximum is then the dict of choices) or a colour (maximum "color").
 SPEC = {
     "edge_gap": (0.02, 0.001, 1.0, "Curve accuracy (edges)"),
     "surf_gap": (0.05, 0.005, 1.0, "Surface accuracy (shading)"),
     "line_px": (1.2, 0.5, 4.0, "Outline thickness"),
     "pull_px": (2.0, 0.0, 8.0, "Outline pull toward viewer"),
+    "outline_mode": (_outline_default(), None, OUTLINE_MODES, "Outline drawing (assembly view)"),
     "pick3d_px": (4.0, 1.0, 20.0, "3D pick distance"),
     "snap_px": (12.0, 4.0, 40.0, "Sketch snap distance"),
     "pick_px": (9.0, 3.0, 30.0, "Sketch pick distance"),

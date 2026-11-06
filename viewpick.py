@@ -63,16 +63,18 @@ class ClickHook(QObject):
         return False
 
 
-def pick_surface(plotter, x, y, tolerance=0.0005):
+def pick_surface(plotter, x, y, tolerance=0.0005, renderer=None):
+    """renderer: pick in this renderer instead of the plotter's (the assembly view picks in a hidden one that holds surface-only copies)."""
     if vtkCellPicker is None:
         return None
+    ren = renderer or plotter.renderer
     picker = vtkCellPicker()
     picker.SetTolerance(tolerance)
     picker.PickFromListOff()
-    ok = picker.Pick(x, y, 0, plotter.renderer)
+    ok = picker.Pick(x, y, 0, ren)
     if not ok or picker.GetCellId() < 0:
         picker.SetTolerance(0.004)                           # a second try with a wider reach
-        ok = picker.Pick(x, y, 0, plotter.renderer)
+        ok = picker.Pick(x, y, 0, ren)
     cid = picker.GetCellId()
     if not ok or cid < 0:
         return None

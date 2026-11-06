@@ -240,6 +240,7 @@ HINTS = {
     "surf_gap": "Largest gap between shaded facets and the true surface.",
     "line_px": "Thickness of outlines.",
     "pull_px": "How far outlines move toward you. Lower it if thin faces are covered.",
+    "outline_mode": "Baked: lines are part of each part's mesh. Old: separate line objects.",
     "pick3d_px": "Distance from an edge or corner at which a click picks it.",
     "snap_px": "Distance at which a new sketch point snaps.",
     "pick_px": "Distance at which a click selects a sketch item.",
@@ -400,7 +401,8 @@ class SettingsDialog(QDialog):
         self.curve, self.surf, self.line, self.pull = CurvePreview(), SurfacePreview(), LinePreview(), PullPreview()
         self.dimprev = DimPreview()
         self.section("Curves && Surfaces", [("edge_gap", self.curve), ("surf_gap", self.surf)], extra=self.warn)
-        self.section("Outlines", [("line_px", self.line), ("pull_px", self.pull)])
+        import channel
+        self.section("Outlines", [("line_px", self.line), ("pull_px", self.pull)] + ([("outline_mode", None)] if channel.name_of_channel() == "playground" else []))
         self.section("Dimensions", [("dim_line_px", None), ("dim_line_style", None), ("ext_line_px", None), ("ext_line_style", None),
                                     ("ext_gap_pct", None), ("ext_over_pct", None), ("arrow_pct", None), ("arrow_style", None),
                                     ("text_pt", None), ("dim_color", None), ("dim_sel_color", None), ("dim_driven_color", None)], top=self.dimprev)
