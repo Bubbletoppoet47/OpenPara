@@ -44,10 +44,10 @@ addons.register_extensions(ext)
 assert not ext.present("partgen") and not ext.present("simulation") and not ext.present("render") and ext.feature("partgen") is None
 w2 = pm_app.MainWindow()
 t = tabs(w2)
-assert "Simulation" not in t and "Visualize" not in t and "Part Features" in t, t
+assert "Simulation" not in t and "Visualize" in t and "Part Features" in t, t
 a2 = assembly.AssemblyWindow()
 t = tabs(a2)
-assert "Simulation" not in t and "Visualize" not in t, t
+assert "Simulation" not in t and "Visualize" in t, t
 d2 = pm.Document.from_json(saved)
 d2.rebuild()
 fid = next(x["id"] for x in d2.features if x["kind"] == "partgen")

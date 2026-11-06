@@ -185,7 +185,7 @@ class MainWindow(QMainWindow):
             self.ribbon.addTab(self.ribbon_page([("sim_beam", "┼", "1D FEA\n(frames)", "Frames and trusses from a sketch of this part", lambda: self.add_sim("beam")),
                                         ("sim_fea", "▦", "2D FEA", "Plane stress / strain FEA of a sketch or a slice of this part", lambda: self.add_sim("fea")),
                                         ("sim_cfd", "≋", "2D CFD", "Flow around a sketch or a slice of this part", lambda: self.add_sim("cfd"))]), "Simulation")
-        if ext.present("render"):
+        if True:                                             # always shown: without the add-on the button offers to install it
             self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "Preview / Render", "Visualize this part: Previs, a live lit Preview, and ray-traced pictures and videos", lambda: self.add_render())]), "Visualize")
         self.ribbon.setCurrentIndex(0)
         # ---- the left panel: FeatureManager / PropertyManager / Equations
