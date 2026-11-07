@@ -51,6 +51,9 @@ CATALOG = {
     "render": {"project_marker": {"marker": "visualize.json", "format": "openpara-visualize"},
                "name": "Renderer",
                "description": "Visualize: Previs, a live lit Preview and ray-traced Renders (pictures and videos) of a part or assembly, with sun, lights, floor and cameras. A Visualize project is a folder (.gpv) with its own copy of the model."},
+    "motor": {"project_marker": {"marker": "motor.json", "format": "openpara-motor"},
+              "name": "Motor Control",
+              "description": "Motor Control: connect to an ODESC / ODrive-style motor board, set up and calibrate the motor and its Hall sensors or encoder, run tests, see live plots and what the sensor can do. A project is a folder (.motor)."},
     "simulation": {"name": "Simulation (1D FEA, 2D FEA, 2D CFD)",
                    "description": "Frames and trusses (1D FEA), plane stress / strain FEA (2D FEA) and 2D CFD of a sketch or a slice of a part or "
                                   "assembly, with animation export. Each simulation is a project folder (.gpb, .gpf, .gpc) with its own copy of the part. "

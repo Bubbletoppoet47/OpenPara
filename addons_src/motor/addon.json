@@ -1,0 +1,29 @@
+{
+ "id": "motor",
+ "name": "Motor Control",
+ "version": "0.8.5",
+ "description": "Motor Control: connect to an ODESC / ODrive-style motor board, set up and calibrate the motor and its Hall sensors or encoder, run tests, see live plots and what the sensor can do. A project is a folder (.motor).",
+ "requires": [
+  {
+   "pip": "pyserial==3.5",
+   "import": "serial"
+  }
+ ],
+ "tabs": [
+  {
+   "kind": "motor",
+   "label": "Motor Control",
+   "short": "Motor",
+   "module": "motor_tab",
+   "factory": "make_tab",
+   "args": [
+    "host",
+    "path"
+   ],
+   "project_folder": {
+    "marker": "motor.json",
+    "format": "openpara-motor"
+   }
+  }
+ ]
+}
