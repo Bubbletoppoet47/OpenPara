@@ -37,11 +37,14 @@ MOTOR_FIELDS = [
     F(a("motor.config.current_lim"), "Current limit", "float", "A", "The most phase current the board lets through. Start low (a few amps) until the motor is tuned.", lo=0, hi=200, decimals=2),
     F(a("motor.config.calibration_current"), "Calibration current", "float", "A", "The current used to measure the motor. Higher gives a better measurement but heats the motor.", lo=0, hi=100, decimals=2),
     F(a("motor.config.resistance_calib_max_voltage"), "Max calibration voltage", "float", "V", "Upper limit of the voltage used while measuring the resistance.", lo=0, hi=60, decimals=2),
+    F(a("motor.config.direction"), "Motor direction", "enum", enum={1: "Normal", -1: "Reversed"}, tip="Set by the Hall polarity calibration; reverses which way positive is."),
     F(a("motor.config.torque_constant"), "Torque constant", "float", "N m / A", "Torque per amp. About 8.27 divided by the motor's KV rating.", lo=0, hi=10, decimals=5),
 ]
 SENSOR_FIELDS = [
     F(a("encoder.config.mode"), "Sensor type", "enum", enum=ENCODER_MODES, tip="Hall sensors give a few steps per turn; an encoder gives hundreds or thousands."),
     F(a("encoder.config.cpr"), "Counts per turn", "int", "", "For Hall sensors: 6 x pole pairs. For an incremental encoder: 4 x the lines per turn. For an absolute SPI encoder: its resolution (e.g. 16384).", lo=1, hi=1000000),
+    F(a("encoder.config.ignore_illegal_hall_state"), "Ignore illegal Hall states", "bool", tip="On: the board hides a wiring fault (state 0 or 7) instead of raising an error. Turn it off while you are checking the wiring."),
+    F(a("encoder.config.enable_phase_interpolation"), "Interpolate between steps", "bool", tip="Estimates where the rotor is between two Hall steps from its speed. Makes motion smoother; can be wrong at low speed."),
     F(a("encoder.config.use_index"), "Use the index pulse", "bool", tip="Only for incremental encoders that have an index (Z) pulse."),
     F(a("encoder.config.bandwidth"), "Sensor filter bandwidth", "float", "rad/s", "How fast the position / speed estimate follows the sensor. Higher is quicker but noisier. Hall sensors usually need a low value.", lo=1, hi=20000, decimals=1),
     F(a("encoder.config.calib_range"), "Calibration tolerance", "float", "", "How far the sensor reading may be from the expected one during calibration before it is called an error.", lo=0, hi=5, decimals=3),
@@ -65,8 +68,8 @@ ALL_FIELDS = [f for fs in SECTIONS.values() for f in fs]
 
 # live values
 LIVE = {"pos": a("encoder.pos_estimate"), "vel": a("encoder.vel_estimate"), "iq": a("motor.current_control.Iq_measured"), "vbus": "vbus_voltage",
-        "state": a("current_state"), "err": a("error"), "merr": a("motor.error"), "eerr": a("encoder.error"), "cerr": a("controller.error")}
-INFO = ["fw_version_major", "fw_version_minor", "fw_version_revision", "hw_version_major", "hw_version_minor", "serial_number"]
+        "state": a("current_state"), "err": a("error"), "merr": a("motor.error"), "eerr": a("encoder.error"), "cerr": a("controller.error"), "hall": a("encoder.hall_state")}
+INFO = ["fw_version_major", "fw_version_minor", "fw_version_revision", "fw_version_unreleased", "hw_version_major", "hw_version_minor", "serial_number"]
 CAL_RESULT = {"R": a("motor.config.phase_resistance"), "L": a("motor.config.phase_inductance"), "motor_ok": a("motor.is_calibrated"),
               "enc_ready": a("encoder.is_ready"), "offset": a("encoder.config.offset"), "pre_cal": a("encoder.config.pre_calibrated")}
 
@@ -129,3 +132,17 @@ def check_calibration(res, pole_pairs=None):
     else:
         out.append(("bad", "The inductance is zero: the motor is not calibrated."))
     return out
+
+
+def fw_label(info):
+    """'firmware 0.5.4', or a development-build note when the board reports 0.0.0 / unreleased."""
+    v = [info.get("fw_version_major"), info.get("fw_version_minor"), info.get("fw_version_revision")]
+    if v[0] is None:
+        return "firmware unknown"
+    if info.get("fw_version_unreleased") or v == [0, 0, 0]:
+        return "firmware: development build (reports 0.0.0)"
+    return f"firmware {v[0]}.{v[1]}.{v[2]}"
+
+
+# Hall state numbers 1..6 are legal (bits = sensor A, B, C); 0 and 7 mean all low / all high, which a working motor never shows.
+HALL_LEGAL = (1, 2, 3, 4, 5, 6)

@@ -78,4 +78,18 @@ b.erase(); assert b.get("axis0.motor.config.current_lim") == 10.0
 # ---- checks before calibration
 w = A.check_settings({M.a("encoder.config.mode"): 1, M.a("encoder.config.cpr"): 40, M.a("motor.config.pole_pairs"): 7, M.a("motor.config.current_lim"): 50})
 assert [l for l, _ in w].count("bad") == 1 and any("high" in t for _, t in w)
+# ---- development-build firmware label, Hall wiring verdicts, new fields
+assert "development build" in M.fw_label(L.SimLink(dev_build=True).info()) and M.fw_label(L.SimLink().info()) == "firmware 0.5.4"
+assert A.hall_wiring([7, 7, 7])[1][0][0] == "bad" and not A.hall_wiring([7])[0]
+ok, it = A.hall_wiring([1, 3, 2, 6, 4, 5, 1]); assert ok and it[-1][0] == "ok"
+ok, it = A.hall_wiring([1, 3, 1, 3]); assert not ok and any("missing" in t for _, t in it)
+ok, it = A.hall_wiring([1, 3, 5, 1]); assert not ok and any("Sensor" in t and "never changed" in t for _, t in it), it   # B and C ... states 1,3,5: bit 2 (B) flips, bit 4 (C) flips; A always 1
+assert any("Sensor A never changed" in t for _, t in it)
+d = L.SimLink(); seen = set()
+for _ in range(60):
+    d.turn_by_hand(1 / 7 / 6 * 0.5); seen.add(d.get(M.LIVE["hall"]))
+assert seen == set(M.HALL_LEGAL), seen
+d.hall_dead = True; assert d.get(M.LIVE["hall"]) == 7
+for k in ("motor.config.direction", "encoder.config.ignore_illegal_hall_state", "encoder.config.enable_phase_interpolation"):
+    assert d.get(M.a(k)) is not None
 print("PASS motor core")

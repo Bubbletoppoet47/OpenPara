@@ -41,6 +41,7 @@ class MotorTab(QWidget):
         self.hist = deque(maxlen=6000)
         self.last_rec = []
         self.cal_pending = False
+        self.hcheck = None
         self.poll_n = 0
         self.errors_now = []
         self.wall = None
@@ -250,6 +251,13 @@ class MotorTab(QWidget):
         self.hall_info = QLabel("")
         self.hall_info.setWordWrap(True)
         s.add(self.hall_info)
+        self.hc_btn = QPushButton("Check the Hall wiring (turn the motor by hand)")
+        self.hc_btn.clicked.connect(self.toggle_hall_check)
+        s.add(self.hc_btn)
+        self.hc_lbl = QLabel("")
+        self.hc_lbl.setWordWrap(True)
+        self.hc_lbl.setTextFormat(Qt.TextFormat.RichText)
+        s.add(self.hc_lbl)
         self.an_btn = big_button("Analyze the sensor at the target speed")
         self.an_btn.clicked.connect(lambda: self.start_run("analyze"))
         s.add(self.an_btn)
@@ -394,14 +402,13 @@ class MotorTab(QWidget):
     def attach(self, link):
         self.link = link
         info = link.info()
-        fw = [info.get("fw_version_major"), info.get("fw_version_minor"), info.get("fw_version_revision")]
-        if fw[0] is None:
+        if info.get("fw_version_major") is None:
             self.link = None
             link.close()
             self.say("The port opened, but the board did not answer. Check that it is powered, that it is the right port, and that nothing else (odrivetool) is using it.")
             return
         hw = f"hardware {info.get('hw_version_major')}.{info.get('hw_version_minor')}" if info.get("hw_version_major") is not None else ""
-        self.info_lbl.setText(("DEMO BOARD (simulated)  " if link.sim else "Connected  ") + f"firmware {fw[0]}.{fw[1]}.{fw[2]}  {hw}")
+        self.info_lbl.setText(("DEMO BOARD (simulated)  " if link.sim else "Connected  ") + f"{M.fw_label(info)}  {hw}")
         self.hist.clear()
         self.read_settings()
         self.say("Connected." + (" This is a simulated board: nothing is moving for real." if link.sim else ""))
@@ -427,7 +434,7 @@ class MotorTab(QWidget):
     def update_state_ui(self):
         c = self.connected()
         self.conn_btn.setText("Disconnect" if c else "Connect")
-        for b in (self.read_btn, self.write_btn, self.cal_btn, self.run_btn, self.an_btn, self.clear_btn):
+        for b in (self.read_btn, self.write_btn, self.cal_btn, self.run_btn, self.an_btn, self.clear_btn, self.hc_btn):
             b.setEnabled(c)
         self.demo_btn.setEnabled(not c)
         self.stop_btn.setEnabled(c)
@@ -558,6 +565,10 @@ class MotorTab(QWidget):
         bad = [t for l, t in A.check_settings(self.values()) if l == "bad"]
         if bad:
             return self.refuse(" ".join(bad))
+        if self.fields_mode_is_hall():
+            h = self.link.get(M.LIVE["hall"])
+            if h is not None and int(h) not in M.HALL_LEGAL:
+                return self.refuse(f"the Hall sensors show the illegal state {int(h)}: no sensor signal. Use 'Check the Hall wiring' in section 5.")
         self.write_settings()
         self.cal_pending = True
         self.link.set(M.a("requested_state"), M.FULL_CAL)
@@ -582,6 +593,8 @@ class MotorTab(QWidget):
     def start_run(self, kind):
         if not self.connected():
             return False
+        if self.hcheck is not None:
+            self.finish_hall_check()
         if not self.idle():
             return self.refuse("the board is not idle.")
         errs = self.read_errors()
@@ -623,6 +636,32 @@ class MotorTab(QWidget):
         self.run_btn.setText("Running...")
         self.say(f"Running: {'speed' if mode == 'speed' else 'move'} {target:g} for {dur:g} s. STOP (or Esc) ends it at once.")
         return True
+
+    HALL_CHECK_S = 30.0
+
+    def toggle_hall_check(self):
+        if not self.connected():
+            return
+        if self.hcheck is not None:
+            self.finish_hall_check()
+            return
+        if not self.idle():
+            self.say("Not started: the board is busy. Press STOP first.")
+            return
+        self.hcheck = {"states": [], "t_end": self.link.now() + self.HALL_CHECK_S}
+        self.hc_btn.setText("Stop checking (turn the shaft slowly by hand now)")
+        self.hc_lbl.setText("Turn the motor shaft slowly by hand, a full turn or more. The six states should all show up.")
+        self.say("Hall wiring check: the motor is NOT powered. Turn the shaft by hand.")
+
+    def finish_hall_check(self):
+        hc, self.hcheck = self.hcheck, None
+        self.hc_btn.setText("Check the Hall wiring (turn the motor by hand)")
+        if hc is None:
+            return
+        ok, items = A.hall_wiring(hc["states"])
+        self.hc_ok = ok
+        self.hc_lbl.setText(verdict_html(items))
+        self.say("Hall wiring check finished.")
 
     def stop(self, quiet=False):
         if self.link is None:
@@ -706,6 +745,7 @@ class MotorTab(QWidget):
             row = (t, self.link.get(M.LIVE["pos"]) or 0.0, self.link.get(M.LIVE["vel"]) or 0.0,
                    self.link.get(M.LIVE["iq"]) or 0.0, self.link.get(M.LIVE["vbus"]) or 0.0)
             state = self.link.get(M.LIVE["state"])
+            hall = self.link.get(M.LIVE["hall"])
             self.poll_n += 1
             errs = self.read_errors() if (self.poll_n % 2 == 0 or self.job or self.cal_pending) else self.errors_now
         except ML.LinkError as e:
@@ -715,7 +755,15 @@ class MotorTab(QWidget):
         self.errors_now = errs
         self.err_lbl.setText(verdict_html([("bad", e) for e in errs]) if errs else "")
         sname = M.STATES.get(int(state or 0), f"state {state}")
-        self.live_lbl.setText(f"{sname}   |   speed {row[2]:.3f} turn/s   position {row[1]:.3f} turns   current {row[3]:.2f} A   supply {row[4]:.1f} V")
+        hall_txt = ""
+        if hall is not None and self.fields_mode_is_hall():
+            hall_txt = f"   |   Hall state {int(hall)}" + ("  (ILLEGAL: no sensor signal?)" if int(hall) not in M.HALL_LEGAL else "")
+        if self.hcheck is not None:
+            if hall is not None:
+                self.hcheck["states"].append(int(hall))
+            if len({x for x in self.hcheck["states"] if x in M.HALL_LEGAL}) == 6 or t >= self.hcheck["t_end"]:
+                self.finish_hall_check()
+        self.live_lbl.setText(f"{sname}   |   speed {row[2]:.3f} turn/s   position {row[1]:.3f} turns   current {row[3]:.2f} A   supply {row[4]:.1f} V" + hall_txt)
         if self.job is not None:
             self.job["rec"].append(row)
             if errs:
@@ -733,6 +781,10 @@ class MotorTab(QWidget):
             self._cal_seen = True
             self.say(f"Calibrating: {sname}...")
         self.redraw()
+
+    def fields_mode_is_hall(self):
+        f = [x for x in M.SENSOR_FIELDS if x.path.endswith("config.mode")][0]
+        return self.field_value(f) == M.HALL_MODE
 
     def redraw(self):
         h = list(self.hist)

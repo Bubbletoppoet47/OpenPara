@@ -137,3 +137,24 @@ def check_settings(vals):
     if cur is not None and cal is not None and cal > cur:
         out.append(("warn", "The calibration current is above the current limit."))
     return out
+
+
+def hall_wiring(states):
+    """Verdict from the Hall states seen while the motor was turned by hand (list of ints): (all_ok, [(level, text)])."""
+    states = [int(x) for x in states if x is not None]
+    valid = {x for x in states if x in M.HALL_LEGAL}
+    if not states:
+        return False, [("warn", "No Hall readings: this board does not report them.")]
+    if not valid:
+        return False, [("bad", f"The Hall state stayed at {states[-1]} (legal states are 1 to 6). No sensor signal is changing: check the 5 V and ground to the "
+                               "sensor board and each of the three signal wires.")]
+    out = []
+    dead = [n for bit, n in ((1, "A"), (2, "B"), (4, "C")) if len({(x & bit) > 0 for x in valid}) < 2]
+    for n in dead:
+        out.append(("bad", f"Sensor {n} never changed: its wire is loose or stuck."))
+    if len(valid) == 6:
+        out.append(("ok", "All six Hall states were seen: the three sensors are wired and working."))
+        return True, out
+    miss = sorted(set(M.HALL_LEGAL) - valid)
+    out.append(("warn" if not dead else "bad", f"Only {len(valid)} of 6 states were seen (missing {', '.join(map(str, miss))}). Turn the motor a full turn, slowly, or check the wiring."))
+    return False, out

@@ -31,7 +31,7 @@ w.tick(0.02)                                    # no board: harmless
 
 # ---- demo board
 w.connect_demo()
-assert w.connected() and "DEMO" in w.info_lbl.text() and "0.5.4" in w.info_lbl.text()
+assert w.connected() and "DEMO" in w.info_lbl.text() and "firmware 0.5.4" in w.info_lbl.text()
 assert w.run_btn.isEnabled() and not w.demo_btn.isEnabled()
 f_mode = [f for f in M.SENSOR_FIELDS if f.path.endswith("mode")][0]
 f_cpr = [f for f in M.SENSOR_FIELDS if f.path.endswith("cpr")][0]
@@ -92,6 +92,18 @@ assert len(w.last_rec) > 100
 csvp = os.path.join(tempfile.mkdtemp(), "r.csv"); w.write_csv(csvp)
 assert open(csvp).read().splitlines()[0].startswith("time_s,position_turns")
 
+# ---- Hall wiring check: motor not powered, shaft turned by hand
+w.toggle_hall_check(); assert w.hcheck is not None
+for _ in range(80):
+    w.link.turn_by_hand(1 / 7 / 6 * 0.5); w.tick(0.02)
+    if w.hcheck is None: break
+assert w.hcheck is None and "All six Hall states" in w.hc_lbl.text() and "Hall state" in w.live_lbl.text(), w.hc_lbl.text()
+w.link.hall_dead = True; w.tick(0.02)
+assert "ILLEGAL" in w.live_lbl.text()
+assert not w.calibrate() and "illegal state 7" in w.status.text(), w.status.text()
+w.toggle_hall_check(); w.tick(0.02); w.tick(0.02); w.toggle_hall_check()
+assert "stayed at 7" in w.hc_lbl.text() and "5 V" in w.hc_lbl.text()
+w.link.hall_dead = False; w.tick(0.02)
 # ---- backup / restore through the tab
 cur = [f for f in M.MOTOR_FIELDS if f.path.endswith("current_lim")][0]
 import motor_analysis as A
@@ -112,3 +124,5 @@ bad = mt.make_tab(None, tempfile.mkdtemp()); assert "not a Motor Control project
 # ---- disconnect stops everything
 w3 = mt.make_tab(); w3.connect_demo(); w3.disconnect_board(); assert not w3.connected() and not w3.run_btn.isEnabled(); w3.shutdown()
 print("PASS motor tab")
+
+dv = mt.make_tab(); dv.attach(__import__("motor_link").SimLink(dev_build=True)); assert "development build" in dv.info_lbl.text(); dv.shutdown()

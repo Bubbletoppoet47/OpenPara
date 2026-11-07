@@ -107,7 +107,8 @@ def _defaults():
         "axis0.controller.config.control_mode": 3, "axis0.controller.config.input_mode": 1, "axis0.controller.config.pos_gain": 20.0,
         "axis0.controller.config.vel_gain": 0.16, "axis0.controller.config.vel_integrator_gain": 0.32, "axis0.controller.config.vel_limit": 20.0,
         "config.dc_bus_undervoltage_trip_level": 8.0, "config.dc_bus_overvoltage_trip_level": 30.0, "config.brake_resistance": 2.0,
-        "config.enable_brake_resistor": 0, "axis0.requested_state": 0, "axis0.controller.input_pos": 0.0, "axis0.controller.input_vel": 0.0,
+        "config.enable_brake_resistor": 0, "axis0.motor.config.direction": 1, "axis0.encoder.config.ignore_illegal_hall_state": 1,
+        "axis0.encoder.config.enable_phase_interpolation": 1, "axis0.requested_state": 0, "axis0.controller.input_pos": 0.0, "axis0.controller.input_vel": 0.0,
         "axis0.controller.input_torque": 0.0,
     }
 
@@ -117,7 +118,11 @@ class SimLink:
     sim = True
     HW = {"fw_version_major": 0, "fw_version_minor": 5, "fw_version_revision": 4, "hw_version_major": 3, "hw_version_minor": 6, "serial_number": 1234567}
 
-    def __init__(self, vbus=24.0, R=0.12, L=45e-6, J=2.0e-5, friction=2.0e-4, kt=0.04):
+    def __init__(self, vbus=24.0, R=0.12, L=45e-6, J=2.0e-5, friction=2.0e-4, kt=0.04, dev_build=False):
+        self.HW = dict(self.HW, fw_version_unreleased=0)
+        if dev_build:
+            self.HW.update(fw_version_major=0, fw_version_minor=0, fw_version_revision=0, fw_version_unreleased=1)
+        self.hall_dead = False      # True: the sensors give no signal (state 7), like unplugged wires
         self.cfg = _defaults()
         self.cfg["axis0.motor.config.torque_constant"] = kt
         self.vbus, self.R, self.L, self.J, self.fric, self.kt = vbus, R, L, J, friction, kt
@@ -335,6 +340,8 @@ class SimLink:
             return self.err["encoder"]
         if path == M.LIVE["cerr"]:
             return self.err["controller"]
+        if path == M.LIVE["hall"]:
+            return self.hall_state()
         if path in self.HW:
             return self.HW[path]
         return c.get(path)
@@ -349,6 +356,16 @@ class SimLink:
             self.cfg["axis0.encoder.is_ready"] = 0
         if path == "axis0.encoder.config.mode":
             self.cfg["axis0.encoder.is_ready"] = 0
+
+    def hall_state(self):
+        if self.hall_dead:
+            return 7
+        pp = max(1, int(self.cfg["axis0.motor.config.pole_pairs"]))
+        return (1, 3, 2, 6, 4, 5)[math.floor(self.theta * pp * 6) % 6]
+
+    def turn_by_hand(self, turns):
+        """Someone turns the shaft (tests, demo)."""
+        self.theta += turns
 
     def clear_errors(self):
         for k in self.err:
