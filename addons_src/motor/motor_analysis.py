@@ -123,10 +123,15 @@ def check_settings(vals):
     out = []
     g = lambda p: vals.get(p)
     mode, cpr, pp = g(M.a("encoder.config.mode")), g(M.a("encoder.config.cpr")), g(M.a("motor.config.pole_pairs"))
+    ign = g(M.a("encoder.config.ignore_illegal_hall_state"))
     if mode == M.HALL_MODE and cpr is not None and pp:
-        want = 6 * int(pp)
-        if int(cpr) != want:
-            out.append(("bad", f"Hall sensors need counts per turn = 6 x pole pairs = {want}, but it is {int(cpr)}."))
+        c, p6, p4 = int(cpr), 6 * int(pp), 4 * int(pp)
+        if c == p4 and ign:
+            out.append(("warn", f"{c} counts per turn = 4 x pole pairs: right for 60-degree Hall sensors (states 0 and 7 are skipped). That is only 4 uneven steps per "
+                                "electrical turn, so position and speed are coarse."))
+        elif c != p6:
+            out.append(("warn", f"Hall sensors normally need counts per turn = 6 x pole pairs = {p6} (120-degree sensors), or 4 x pole pairs = {p4} for 60-degree sensors "
+                                f"with 'ignore illegal Hall states' on. You have {c}; the board may refuse to calibrate (sensor error)."))
     bw = g(M.a("encoder.config.bandwidth"))
     if mode == M.HALL_MODE and bw is not None and bw > 300:
         out.append(("warn", f"A sensor filter bandwidth of {bw:g} rad/s is high for Hall sensors: the speed reading gets jumpy. Try 50 to 200."))
@@ -142,6 +147,11 @@ def check_settings(vals):
 def hall_wiring(states):
     """Verdict from the Hall states seen while the motor was turned by hand (list of ints): (all_ok, [(level, text)])."""
     states = [int(x) for x in states if x is not None]
+    seen = set(states)
+    flips = [bin(x ^ y).count("1") for x, y in zip(states, states[1:]) if x != y]
+    if {0, 7} <= seen and len(seen) == 6 and flips and all(f == 1 for f in flips):
+        return True, [("ok", "The sensors work and are the 60-degree type: states 0 and 7 are normal for them. The board expects 120-degree sensors (states 1 to 6), so it "
+                             "needs 'ignore illegal Hall states' on and counts per turn = 4 x pole pairs (coarse). Inverting one sensor signal would make them 120-degree.")]
     valid = {x for x in states if x in M.HALL_LEGAL}
     if not states:
         return False, [("warn", "No Hall readings: this board does not report them.")]

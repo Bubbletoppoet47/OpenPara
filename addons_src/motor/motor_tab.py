@@ -171,6 +171,9 @@ class MotorTab(QWidget):
         self.hall_btn = QPushButton("Counts per turn = 6 x pole pairs  (for Hall sensors)")
         self.hall_btn.clicked.connect(self.set_hall_cpr)
         s.add(self.hall_btn)
+        self.hall4_btn = QPushButton("Counts per turn = 4 x pole pairs  (60-degree Hall sensors, illegal states ignored)")
+        self.hall4_btn.clicked.connect(lambda: self.set_hall_cpr(4))
+        s.add(self.hall4_btn)
         self.check_lbl = QLabel("")
         self.check_lbl.setWordWrap(True)
         self.check_lbl.setTextFormat(Qt.TextFormat.RichText)
@@ -353,9 +356,12 @@ class MotorTab(QWidget):
             self.hall_info.setText(f"This sensor gives {int(cpr)} counts per turn ({360.0 / max(1, int(cpr)):.3f} degrees each).")
         self.check_lbl.setText(verdict_html(items))
 
-    def set_hall_cpr(self):
+    def set_hall_cpr(self, k=6):
+        k = k if k in (4, 6) else 6
         f = [x for x in M.SENSOR_FIELDS if x.path.endswith("cpr")][0]
-        self.set_field(f, 6 * int(self.field_value([x for x in M.MOTOR_FIELDS if x.path.endswith("pole_pairs")][0])))
+        if k == 4:
+            self.set_field([x for x in M.SENSOR_FIELDS if x.path.endswith("ignore_illegal_hall_state")][0], 1)
+        self.set_field(f, k * int(self.field_value([x for x in M.MOTOR_FIELDS if x.path.endswith("pole_pairs")][0])))
         self.dirty = True
         self.show_checks()
 
@@ -471,10 +477,6 @@ class MotorTab(QWidget):
         if not self.idle():
             self.say("Not written: the motor is running or calibrating. Press STOP first.")
             return
-        bad = [t for l, t in A.check_settings(self.values()) if l == "bad"]
-        if bad:
-            self.say("Not written: " + " ".join(bad))
-            return
         n = 0
         try:
             for f in M.ALL_FIELDS:
@@ -565,7 +567,7 @@ class MotorTab(QWidget):
         bad = [t for l, t in A.check_settings(self.values()) if l == "bad"]
         if bad:
             return self.refuse(" ".join(bad))
-        if self.fields_mode_is_hall():
+        if self.fields_mode_is_hall() and not self.ignore_illegal():
             h = self.link.get(M.LIVE["hall"])
             if h is not None and int(h) not in M.HALL_LEGAL:
                 return self.refuse(f"the Hall sensors show the illegal state {int(h)}: no sensor signal. Use 'Check the Hall wiring' in section 5.")
@@ -757,7 +759,7 @@ class MotorTab(QWidget):
         sname = M.STATES.get(int(state or 0), f"state {state}")
         hall_txt = ""
         if hall is not None and self.fields_mode_is_hall():
-            hall_txt = f"   |   Hall state {int(hall)}" + ("  (ILLEGAL: no sensor signal?)" if int(hall) not in M.HALL_LEGAL else "")
+            hall_txt = f"   |   Hall state {int(hall)}" + (("  (skipped: ignore-illegal is on)" if self.ignore_illegal() else "  (ILLEGAL: no sensor signal?)") if int(hall) not in M.HALL_LEGAL else "")
         if self.hcheck is not None:
             if hall is not None:
                 self.hcheck["states"].append(int(hall))
@@ -781,6 +783,10 @@ class MotorTab(QWidget):
             self._cal_seen = True
             self.say(f"Calibrating: {sname}...")
         self.redraw()
+
+    def ignore_illegal(self):
+        f = [x for x in M.SENSOR_FIELDS if x.path.endswith("ignore_illegal_hall_state")][0]
+        return bool(self.field_value(f))
 
     def fields_mode_is_hall(self):
         f = [x for x in M.SENSOR_FIELDS if x.path.endswith("config.mode")][0]

@@ -122,6 +122,7 @@ class SimLink:
         self.HW = dict(self.HW, fw_version_unreleased=0)
         if dev_build:
             self.HW.update(fw_version_major=0, fw_version_minor=0, fw_version_revision=0, fw_version_unreleased=1)
+        self.hall60 = False         # True: 60-degree sensors (states 0 and 7 appear), like Ian's motor
         self.hall_dead = False      # True: the sensors give no signal (state 7), like unplugged wires
         self.cfg = _defaults()
         self.cfg["axis0.motor.config.torque_constant"] = kt
@@ -289,7 +290,8 @@ class SimLink:
                 self._fail("encoder", 0x10)
         elif st == M.HALL_PHASE:
             pp = int(c["axis0.motor.config.pole_pairs"])
-            if int(c["axis0.encoder.config.cpr"]) != 6 * pp:
+            cpr = int(c["axis0.encoder.config.cpr"])
+            if cpr != 6 * pp and not (self.hall60 and c["axis0.encoder.config.ignore_illegal_hall_state"] and cpr == 4 * pp):
                 self._fail("encoder", 0x2)
                 return
             c["axis0.encoder.is_ready"] = 1
@@ -361,7 +363,8 @@ class SimLink:
         if self.hall_dead:
             return 7
         pp = max(1, int(self.cfg["axis0.motor.config.pole_pairs"]))
-        return (1, 3, 2, 6, 4, 5)[math.floor(self.theta * pp * 6) % 6]
+        i = math.floor(self.theta * pp * 6) % 6
+        return (0, 2, 3, 7, 5, 4)[i] if self.hall60 else (1, 3, 2, 6, 4, 5)[i]
 
     def turn_by_hand(self, turns):
         """Someone turns the shaft (tests, demo)."""

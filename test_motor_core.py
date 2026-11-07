@@ -77,7 +77,19 @@ b.save(); b.set("axis0.motor.config.current_lim", 1.0); b.reboot(); assert b.get
 b.erase(); assert b.get("axis0.motor.config.current_lim") == 10.0
 # ---- checks before calibration
 w = A.check_settings({M.a("encoder.config.mode"): 1, M.a("encoder.config.cpr"): 40, M.a("motor.config.pole_pairs"): 7, M.a("motor.config.current_lim"): 50})
-assert [l for l, _ in w].count("bad") == 1 and any("high" in t for _, t in w)
+assert [l for l, _ in w].count("bad") == 0 and any("high" in t for _, t in w) and any("6 x pole pairs = 42" in t for _, t in w)
+w = A.check_settings({M.a("encoder.config.mode"): 1, M.a("encoder.config.cpr"): 28, M.a("motor.config.pole_pairs"): 7, M.a("encoder.config.ignore_illegal_hall_state"): 1})
+assert len(w) == 1 and "60-degree" in w[0][1], w
+assert not any("counts per turn" in t for _, t in A.check_settings({M.a("encoder.config.mode"): 1, M.a("encoder.config.cpr"): 42, M.a("motor.config.pole_pairs"): 7}))
+# 60-degree sensors: the sequence Ian read (0 2 3 7 5 4) is recognised, and the board calibrates with cpr = 4 x pole pairs
+ok, it = A.hall_wiring([0, 2, 3, 7, 5, 4, 0]); assert ok and "60-degree" in it[0][1], it
+h = L.SimLink(); h.hall60 = True; h.set("axis0.encoder.config.mode", 1); h.set("axis0.encoder.config.cpr", 28)
+seq = []
+for _ in range(60):
+    h.turn_by_hand(1 / 7 / 6 * 0.5); seq.append(h.get(M.LIVE["hall"]))
+assert A.hall_wiring(seq)[0] and set(seq) == {0, 2, 3, 7, 5, 4}
+h.set("axis0.requested_state", M.FULL_CAL); h.advance(12)
+assert not h.get("axis0.error") and h.get("axis0.encoder.is_ready"), h.err
 # ---- development-build firmware label, Hall wiring verdicts, new fields
 assert "development build" in M.fw_label(L.SimLink(dev_build=True).info()) and M.fw_label(L.SimLink().info()) == "firmware 0.5.4"
 assert A.hall_wiring([7, 7, 7])[1][0][0] == "bad" and not A.hall_wiring([7])[0]

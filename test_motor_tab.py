@@ -45,7 +45,8 @@ assert not w.start_run("run") and "not calibrated" in w.status.text(), w.status.
 w.set_field(f_mode, 1)
 w.set_field(f_cpr, 40); w.show_checks()
 assert "6 x pole pairs = 42" in w.check_lbl.text(), w.check_lbl.text()
-w.write_settings(); assert "Not written" in w.status.text()
+w.set_hall_cpr(4); assert w.field_value(f_cpr) == 28 and "60-degree" in w.check_lbl.text() and "Counts per turn" not in w.check_lbl.text().replace("counts per turn", "")
+w.set_field(f_cpr, 40); w.show_checks()
 w.set_hall_cpr(); assert w.field_value(f_cpr) == 42 and "6 x pole pairs" not in w.check_lbl.text()
 assert "42 steps per turn" in w.hall_info.text()
 assert "jumpy" in w.check_lbl.text()
@@ -99,11 +100,14 @@ for _ in range(80):
     if w.hcheck is None: break
 assert w.hcheck is None and "All six Hall states" in w.hc_lbl.text() and "Hall state" in w.live_lbl.text(), w.hc_lbl.text()
 w.link.hall_dead = True; w.tick(0.02)
+assert "skipped" in w.live_lbl.text()          # ignore-illegal is on: 0 and 7 are expected for 60-degree sensors
+f_ign = [f for f in M.SENSOR_FIELDS if f.path.endswith("ignore_illegal_hall_state")][0]
+w.set_field(f_ign, 0); w.write_settings(); w.tick(0.02)
 assert "ILLEGAL" in w.live_lbl.text()
 assert not w.calibrate() and "illegal state 7" in w.status.text(), w.status.text()
 w.toggle_hall_check(); w.tick(0.02); w.tick(0.02); w.toggle_hall_check()
 assert "stayed at 7" in w.hc_lbl.text() and "5 V" in w.hc_lbl.text()
-w.link.hall_dead = False; w.tick(0.02)
+w.link.hall_dead = False; w.set_field(f_ign, 1); w.write_settings(); w.tick(0.02)
 # ---- backup / restore through the tab
 cur = [f for f in M.MOTOR_FIELDS if f.path.endswith("current_lim")][0]
 import motor_analysis as A
