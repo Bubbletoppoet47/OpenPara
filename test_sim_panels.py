@@ -31,7 +31,7 @@ for n in sim_icons.NAMES:
 # --- sections
 tabs = {"2D FEA": physics_tab.PhysicsTab(Win()), "1D FEA": beam_tab.BeamTab(Win()), "2D CFD": cfd_tab.CFDTab(Win())}
 want = {"2D FEA": ["Geometry", "Material and analysis", "Supports", "Loads", "Mesh", "Probe regions", "Results"],
-        "1D FEA": ["Geometry", "Material", "Joints", "Supports", "Loads", "Ties", "Results"],
+        "1D FEA": ["Geometry", "Material and analysis", "Joints", "Supports", "Loads", "Mesh", "Ties", "Results"],
         "2D CFD": ["Geometry", "Fluid and flow", "Domain", "Mesh", "Solver", "Results"]}
 for name, t in tabs.items():
     t.resize(1200, 800); t.show(); app.processEvents()

@@ -29,8 +29,10 @@ class BeamError(Exception):
         self.nodes = list(nodes or [])
 
 
-def local_k(E, A, I, L):
-    a, b, c, d, e = E * A / L, 12 * E * I / L ** 3, 6 * E * I / L ** 2, 4 * E * I / L, 2 * E * I / L
+def local_k(E, A, I, L, phi=0.0):
+    """Member stiffness.  phi = 12 E I / (G As L^2) is the shear-deformation parameter (0 = Euler-Bernoulli, no shear deformation)."""
+    f = 1.0 + phi
+    a, b, c, d, e = E * A / L, 12 * E * I / (f * L ** 3), 6 * E * I / (f * L ** 2), (4 + phi) * E * I / (f * L), (2 - phi) * E * I / (f * L)
     return np.array([[a, 0, 0, -a, 0, 0],
                      [0, b, c, 0, -b, c],
                      [0, c, d, 0, -c, e],
@@ -111,12 +113,13 @@ def _merge_pieces(out):
                   "umax": float(np.max(np.hypot(dxy[:, 0], dxy[:, 1]))),
                   "fos_y": float(sy) / smax if sy and sy > 0 and smax > 0 else None,
                   "fos_u": float(su) / smax if su and su > 0 and smax > 0 else None,
-                  "pcr": pcr, "euler_ratio": (-n_min / pcr) if n_min < 0 else 0.0, "pieces": len(rs)})
+                  "pcr": pcr, "euler_ratio": (-n_min / pcr) if n_min < 0 else 0.0, "pieces": len(rs),
+                  "bounds": [0.0] + list(np.cumsum([r["L"] for r in rs]))})
         final.append(m)
     return final
 
 
-def solve(nodes, members, supports, nodal, n_st=41):
+def _solve(nodes, members, supports, nodal, n_st=41, shear=False, nu=0.3):
     """nodes {id: (x, y)}; members [dict]; supports {node id: (fix_ux, fix_uy, fix_rz)}; nodal {node id: (fx, fy, mz)}.
     Returns the result dict (see the end of this function).  Raises BeamError."""
     if not members:
@@ -136,7 +139,11 @@ def solve(nodes, members, supports, nodal, n_st=41):
         E, A, I = float(m["E"]), float(m["A"]), float(m["I"])
         if not (E > 0 and A > 0 and I > 0):
             raise BeamError(f"Member '{m.get('name', m['id'])}' needs a positive E, area and moment of inertia.")
-        k = local_k(E, A, I, L)
+        phi, GAs = 0.0, 0.0
+        if shear and m.get("As") and float(m["As"]) > 0:
+            GAs = E / (2.0 * (1.0 + nu)) * float(m["As"])
+            phi = 12.0 * E * I / (GAs * L * L)
+        k = local_k(E, A, I, L, phi)
         qg = m.get("qg", (0.0, 0.0))
         ql = m.get("ql", (0.0, 0.0))
         px = qg[0] * c + qg[1] * s + ql[0]
@@ -157,7 +164,7 @@ def solve(nodes, members, supports, nodal, n_st=41):
         if not m.get("rel_b"):
             rot_stiff[ib] = True
         work.append({"m": m, "xa": xa, "ya": ya, "xb": xb, "yb": yb, "L": L, "c": c, "s": s, "E": E, "A": A, "I": I, "k": k, "f0": f0,
-                     "rel": rel, "rec": rec, "T": T, "dofs": dofs, "px": px, "py": py})
+                     "rel": rel, "rec": rec, "T": T, "dofs": dofs, "px": px, "py": py, "phi": phi, "GAs": GAs})
     for nid, (fx, fy, mz) in nodal.items():
         if nid in index:
             P[3 * index[nid]: 3 * index[nid] + 3] += (fx, fy, mz)
@@ -220,8 +227,8 @@ def solve(nodes, members, supports, nodal, n_st=41):
             reactions[nid] = tuple(float(Rv[3 * i + j]) if flags[j] else 0.0 for j in range(3))
     # --- member results
     out_members = []
-    xs_frac = np.linspace(0.0, 1.0, n_st)
     for w_ in work:
+        xs_frac = np.linspace(0.0, 1.0, max(3, int(w_["m"].get("n_st", n_st))))
         m, L, c, s, E, A, I = w_["m"], w_["L"], w_["c"], w_["s"], w_["E"], w_["A"], w_["I"]
         dl = w_["T"] @ d[w_["dofs"]]
         if w_["rec"] is not None:
@@ -237,8 +244,17 @@ def solve(nodes, members, supports, nodal, n_st=41):
         Vs = F[1] + py * x
         M = F[1] * x + py * x * x / 2 - F[2]
         xi = xs_frac
-        v = (dl[1] * (1 - 3 * xi ** 2 + 2 * xi ** 3) + dl[2] * L * (xi - 2 * xi ** 2 + xi ** 3) + dl[4] * (3 * xi ** 2 - 2 * xi ** 3)
-             + dl[5] * L * (-xi ** 2 + xi ** 3) + py * x ** 2 * (L - x) ** 2 / (24 * E * I))
+        ph = w_["phi"]
+        if ph == 0.0:
+            v = (dl[1] * (1 - 3 * xi ** 2 + 2 * xi ** 3) + dl[2] * L * (xi - 2 * xi ** 2 + xi ** 3) + dl[4] * (3 * xi ** 2 - 2 * xi ** 3)
+                 + dl[5] * L * (-xi ** 2 + xi ** 3) + py * x ** 2 * (L - x) ** 2 / (24 * E * I))
+        else:                                     # Timoshenko: the shape functions carry the shear deformation, the load adds its own shear term
+            f1 = 1.0 + ph
+            v = (dl[1] * (1 - 3 * xi ** 2 + 2 * xi ** 3 + ph * (1 - xi)) / f1
+                 + dl[2] * L * (xi - 2 * xi ** 2 + xi ** 3 + 0.5 * ph * (xi - xi ** 2)) / f1
+                 + dl[4] * (3 * xi ** 2 - 2 * xi ** 3 + ph * xi) / f1
+                 + dl[5] * L * (-xi ** 2 + xi ** 3 - 0.5 * ph * (xi - xi ** 2)) / f1
+                 + py * x ** 2 * (L - x) ** 2 / (24 * E * I) + py * x * (L - x) / (2 * w_["GAs"]))
         u = dl[0] * (1 - xi) + dl[3] * xi + px * x * (L - x) / (2 * E * A)
         sig_top = N / A - M * float(m["c_top"]) / I
         sig_bot = N / A + M * float(m["c_bottom"]) / I
@@ -258,8 +274,8 @@ def solve(nodes, members, supports, nodal, n_st=41):
             "rel_b": bool(m.get("rel_b")), "group": m.get("group"), "F": F, "d": dl, "x": x, "N": N, "V": Vs, "M": M, "u": u, "v": v, "sig_top": sig_top,
             "sig_bot": sig_bot, "sig": sig, "xy0": xy0, "dxy": dxy, "N_peak": pk(N), "V_peak": pk(Vs), "M_peak": pk(M),
             "sigma_max": smax, "umax": float(np.max(np.hypot(dxy[:, 0], dxy[:, 1]))), "fos_y": fos_y, "fos_u": fos_u,
-            "pcr": pcr, "euler_ratio": (-n_min / pcr) if n_min < 0 else 0.0, "px": px, "py": py})
-    out_members = _merge_pieces(out_members)
+            "pcr": pcr, "euler_ratio": (-n_min / pcr) if n_min < 0 else 0.0, "px": px, "py": py, "bounds": [0.0, L], "As": m.get("As"),
+            "phi": w_["phi"]})
     # --- global checks and summaries
     fa = np.zeros(3)
     for nid, (fx, fy, mz) in nodal.items():
@@ -282,6 +298,12 @@ def solve(nodes, members, supports, nodal, n_st=41):
           "residual": tuple(float(v) for v in resid), "relative": float(np.abs(resid).max() / scale)}
     node_disp = {nid: (float(d[3 * i]), float(d[3 * i + 1]), float(d[3 * i + 2])) for i, nid in enumerate(ids)}
     xy_nodes = {nid: (float(nodes[nid][0]), float(nodes[nid][1])) for nid in ids}
+    return _assemble_result(out_members, node_disp, xy_nodes, reactions, eq, notes, n_st)
+
+
+def _assemble_result(out_members, node_disp, xy_nodes, reactions, eq, notes, n_st):
+    """The result dict from the member records of the pieces (also used by the nonlinear solver)."""
+    out_members = _merge_pieces(out_members)
     best = lambda key: max(out_members, key=lambda r: abs(r[key]))
     fy = [r["fos_y"] for r in out_members if r["fos_y"] is not None]
     fu = [r["fos_u"] for r in out_members if r["fos_u"] is not None]
@@ -295,6 +317,113 @@ def solve(nodes, members, supports, nodal, n_st=41):
             "N_peak": best("N_peak")["N_peak"], "V_peak": best("V_peak")["V_peak"], "M_peak": best("M_peak")["M_peak"],
             "N_member": best("N_peak")["name"], "V_member": best("V_peak")["name"], "M_member": best("M_peak")["name"],
             "euler_max": max(r["euler_ratio"] for r in out_members), "n_st": n_st}
+
+
+
+
+MAX_ELEMENTS = 200
+
+
+def refine(nodes, members, opts):
+    """Mesh: every member is cut into equal elements (pieces of one "group", so the results are merged back into the member).
+    opts: "elements" (per member) or "size" (target element length).  -> (nodes with the new internal nodes, pieces, number of elements per member id)"""
+    n_fix = int(opts.get("elements") or 1)
+    size = opts.get("size")
+    nodes2 = dict(nodes)
+    out, count = [], {}
+    n_st_total = int(opts.get("n_st", 41))
+    for m in members:
+        if m["a"] not in nodes or m["b"] not in nodes:
+            out.append(m)                                 # the solver reports this
+            continue
+        xa, ya = nodes[m["a"]]
+        xb, yb = nodes[m["b"]]
+        L = math.hypot(xb - xa, yb - ya)
+        n = int(math.ceil(L / float(size) - 1e-9)) if size and float(size) > 0 and L > 0 else n_fix
+        n = max(1, min(MAX_ELEMENTS, n))
+        count[m.get("group", m["id"])] = count.get(m.get("group", m["id"]), 0) + n
+        if n == 1:
+            out.append(m)
+            continue
+        chain = [m["a"]]
+        for k in range(1, n):
+            nid = ("mesh", m["id"], k)
+            nodes2[nid] = (xa + (xb - xa) * k / n, ya + (yb - ya) * k / n)
+            chain.append(nid)
+        chain.append(m["b"])
+        for k in range(n):
+            pc = dict(m)
+            pc.update({"id": ("el", m["id"], k), "group": m.get("group", m["id"]), "a": chain[k], "b": chain[k + 1],
+                       "rel_a": bool(m.get("rel_a")) if k == 0 else False, "rel_b": bool(m.get("rel_b")) if k == n - 1 else False,
+                       "qg": list(m.get("qg", (0.0, 0.0))), "ql": list(m.get("ql", (0.0, 0.0))),
+                       "n_st": max(3, int(math.ceil((n_st_total - 1) / n)) + 1)})
+            out.append(pc)
+    return nodes2, out, count
+
+
+def _mesh_post(res, nodes, nodes2, count, opts):
+    res["mesh_nodes"] = {}
+    if len(nodes2) != len(nodes):
+        res["mesh_nodes"] = {k: (res["xy"][k][0], res["xy"][k][1]) + tuple(res["nodes"][k]) for k in list(res["nodes"]) if k not in nodes}
+        for k in res["mesh_nodes"]:
+            res["nodes"].pop(k)
+            res["xy"].pop(k)
+    res["mesh"] = {"elements": int(sum(count.values())) if count else len(res["members"]), "shear": bool(opts.get("shear")), "per_member": count}
+    return res
+
+
+def _trigger(res, opts):
+    """Why the nonlinear solver should take over from the linear result (None = it should not)."""
+    nld = opts.get("disp_trigger")
+    if nld is not None and nld > 0 and res["umax"] > nld:
+        return f"the largest displacement ({res['umax']:.4g}) passed the displacement trigger ({nld:.4g})"
+    pct = opts.get("stress_pct")
+    if pct is not None and pct > 0:
+        for r in res["members"]:
+            if r.get("sy") and r["sy"] > 0 and r["sigma_max"] >= pct / 100.0 * r["sy"]:
+                return f"the stress in {r['name']} reached {100.0 * r['sigma_max'] / r['sy']:.0f}% of the yield strength (trigger {pct:g}%)"
+    return None
+
+
+NL_MIN_ELEMENTS = 8
+
+
+def solve(nodes, members, supports, nodal, n_st=41, opts=None):
+    """The solve.  opts (all optional):
+      "elements" / "size"  the mesh (see refine); "shear" Timoshenko members (needs "As" on the members); "nu" Poisson's ratio (default 0.3)
+      "linear" (default True) / "nonlinear" (default False)  which solvers are allowed: both = linear first, nonlinear when a trigger is passed;
+      only nonlinear = always nonlinear.  "disp_trigger" (a length), "stress_pct" (% of the yield strength), "eu_pct" (plastic strain in % at the
+      ultimate strength).  The result has "nl": None (linear) or the nonlinear summary."""
+    opts = dict(opts or {})
+    opts.setdefault("n_st", n_st)
+    meshed = bool(opts.get("elements") or opts.get("size"))
+    nodes2, pieces, count = refine(nodes, members, opts) if meshed else (nodes, members, {})
+    res = _solve(nodes2, pieces, supports, nodal, n_st, bool(opts.get("shear")), float(opts.get("nu", 0.3)))     # also finds mechanisms
+    res = _mesh_post(res, nodes, nodes2, count, opts)
+    res["nl"] = None
+    if not opts.get("nonlinear"):
+        return res
+    reason = None
+    if not opts.get("linear", True):
+        reason = "the nonlinear solver was chosen"
+    else:
+        reason = _trigger(res, opts)
+    if reason is None:
+        return res
+    import beam_nl
+    o2 = dict(opts)
+    extra = []
+    if not o2.get("size") and int(o2.get("elements") or 1) < NL_MIN_ELEMENTS:
+        o2["elements"] = NL_MIN_ELEMENTS
+        extra.append(f"The nonlinear solve cuts every member into at least {NL_MIN_ELEMENTS} elements.")
+    nodes3, pieces3, count3 = refine(nodes, members, o2)
+    r2 = beam_nl.solve(nodes3, pieces3, supports, nodal, o2, n_st)
+    r2 = _mesh_post(r2, nodes, nodes3, count3, o2)
+    r2["nl"]["reason"] = reason if r2["nl"]["reason"] is None else r2["nl"]["reason"]
+    r2["nl"]["trigger"] = reason
+    r2["nl"]["linear_umax"], r2["nl"]["linear_sigma_max"] = res["umax"], res["sigma_max"]
+    r2["notes"] = list(res.get("notes", [])) + extra + list(r2.get("notes", []))
+    return r2
 
 
 def scale_result(res, lf, sf, ff):
@@ -313,6 +442,10 @@ def scale_result(res, lf, sf, ff):
         if m.get("su"):
             m["su"] = m["su"] * sf
         m["A"], m["I"] = m["A"] * lf ** 2, m["I"] * lf ** 4
+        if m.get("As"):
+            m["As"] = m["As"] * lf ** 2
+        if m.get("bounds") is not None:
+            m["bounds"] = [b_ * lf for b_ in m["bounds"]]
         for k in ("x", "u", "v"):
             m[k] = m[k] * lf
         for k in ("xy0", "dxy"):
@@ -336,6 +469,7 @@ def scale_result(res, lf, sf, ff):
     r["members"] = ml
     r["nodes"] = {k: (v[0] * lf, v[1] * lf, v[2]) for k, v in res["nodes"].items()}
     r["xy"] = {k: (v[0] * lf, v[1] * lf) for k, v in res["xy"].items()}
+    r["mesh_nodes"] = {k: (v[0] * lf, v[1] * lf, v[2] * lf, v[3] * lf, v[4]) for k, v in res.get("mesh_nodes", {}).items()}
     r["reactions"] = {k: (v[0] * ff, v[1] * ff, v[2] * ff * lf) for k, v in res["reactions"].items()}
     eq = dict(res["equilibrium"])
     for k in ("applied", "reactions", "residual"):
@@ -395,7 +529,7 @@ def selftest():
     a_, h_ = 100.0, 100.0
     nodes = {1: (-a_, 0.0), 2: (a_, 0.0), 3: (0.0, h_)}
     ms = [_member(1, 1, 3, rel_a=True, rel_b=True), _member(2, 2, 3, rel_a=True, rel_b=True)]
-    r = solve(nodes, ms, {1: (True, True, False), 2: (False, True, False)}, {3: (0.0, -P, 0.0)})
+    r = solve(nodes, ms, {1: (True, True, False), 2: (True, True, False)}, {3: (0.0, -P, 0.0)})
     f_bar = P / 2 * math.hypot(a_, h_) / h_
     check("truss bar 1 axial force (compression)", r["members"][0]["N"][0], -f_bar)
     check("truss bar 2 axial force (compression)", r["members"][1]["N"][0], -f_bar)
@@ -428,6 +562,28 @@ def selftest():
     check("tied member length", mem["L"], L)
     check("tied member peak moment", mem["M_peak"], w * L ** 2 / 8, 2e-3)
     check("tied member id", mem["id"], 1)
+    # 8. a mesh does not change the exact beam answer (cantilever, tip load; simply supported, uniform load), and the nodes are reported
+    r = solve({1: (0, 0), 2: (L, 0)}, [_member(1, 1, 2)], {1: (True, True, True)}, {2: (0.0, -P, 0.0)}, opts={"elements": 8})
+    check("meshed cantilever tip deflection", r["nodes"][2][1], -P * L ** 3 / (3 * E * I))
+    check("meshed member count", len(r["members"]), 1)
+    check("meshed internal nodes", len(r["mesh_nodes"]), 7)
+    check("meshed peak moment", r["members"][0]["M_peak"], -P * L, 1e-9)
+    check("meshed element count", r["mesh"]["elements"], 8)
+    check("meshed bounds", len(r["members"][0]["bounds"]), 9)
+    r = solve({1: (0, 0), 2: (L, 0)}, [_member(1, 1, 2, qg=(0.0, -w))], {1: (True, True, False), 2: (False, True, False)}, {}, opts={"size": 12.5})
+    mem = r["members"][0]
+    check("meshed ss mid deflection", float(mem["v"].min()), -5 * w * L ** 4 / (384 * E * I), 1e-3)
+    # 9. shear deformation (Timoshenko): cantilever tip adds P L / (G As); simply supported mid adds w L^2 / (8 G As)
+    As, nu = 60.0, 0.3
+    G = E / (2 * (1 + nu))
+    r = solve({1: (0, 0), 2: (L, 0)}, [_member(1, 1, 2, As=As)], {1: (True, True, True)}, {2: (0.0, -P, 0.0)}, opts={"shear": True})
+    check("Timoshenko cantilever tip deflection", r["nodes"][2][1], -(P * L ** 3 / (3 * E * I) + P * L / (G * As)))
+    r = solve({1: (0, 0), 2: (L, 0)}, [_member(1, 1, 2, As=As, qg=(0.0, -w))], {1: (True, True, False), 2: (False, True, False)}, {},
+              opts={"shear": True, "elements": 4})
+    mem = r["members"][0]
+    check("Timoshenko ss mid deflection", float(mem["v"].min()), -(5 * w * L ** 4 / (384 * E * I) + w * L ** 2 / (8 * G * As)), 1e-3)
+    r0 = solve({1: (0, 0), 2: (L, 0)}, [_member(1, 1, 2, As=As)], {1: (True, True, True)}, {2: (0.0, -P, 0.0)})
+    check("shear off by default", r0["nodes"][2][1], -P * L ** 3 / (3 * E * I))
     print("ALL OK" if not bad else "FAILED: " + ", ".join(bad))
     return not bad
 

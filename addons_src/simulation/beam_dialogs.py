@@ -4,7 +4,7 @@ import math
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+from PyQt6.QtWidgets import (QCheckBox, QGridLayout, QGroupBox, QSpinBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                              QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget)
 
 import loads1d
@@ -111,6 +111,46 @@ class ProfileDialog(QDialog):
         row_.addWidget(b)
         row_.addStretch(1)
         lay.addLayout(row_)
+        self.grp_copies = QGroupBox("Copies: this member stands for several equal sections")
+        self.grp_copies.setToolTip("Mirrors and linear patterns of the section above. The member is analysed with the combined section; the copies are "
+                                   "taken as one piece that deflects together. A gap is the clear space between neighbouring copies (0 = touching).")
+        cl = QGridLayout(self.grp_copies)
+        cp0 = (self.stored or {}).get("copies") or {}
+        self.cp_nx, self.cp_ny = QSpinBox(), QSpinBox()
+        for sp_, k in ((self.cp_nx, "nx"), (self.cp_ny, "ny")):
+            sp_.setRange(1, 50)
+            sp_.setValue(int(cp0.get(k, 1)))
+            sp_.valueChanged.connect(self.recompute)
+        self.cp_gx, self.cp_gy, self.cp_gv, self.cp_gh = QLineEdit(), QLineEdit(), QLineEdit(), QLineEdit()
+        for e_, k in ((self.cp_gx, "gx"), (self.cp_gy, "gy"), (self.cp_gv, "gap_v"), (self.cp_gh, "gap_h")):
+            e_.setText(f"{float(cp0.get(k, 0.0)):.6g}")
+            e_.setMaximumWidth(80)
+            e_.textChanged.connect(self.recompute)
+        self.cp_mv, self.cp_mh = QCheckBox("Mirror about a vertical axis"), QCheckBox("Mirror about a horizontal axis")
+        self.cp_mv.setChecked(bool(cp0.get("mirror_v")))
+        self.cp_mh.setChecked(bool(cp0.get("mirror_h")))
+        self.cp_mv.toggled.connect(self.recompute)
+        self.cp_mh.toggled.connect(self.recompute)
+        Lu = self.U["L"]
+        cl.addWidget(QLabel("Pattern side by side, count"), 0, 0)
+        cl.addWidget(self.cp_nx, 0, 1)
+        cl.addWidget(QLabel(f"gap ({Lu})"), 0, 2)
+        cl.addWidget(self.cp_gx, 0, 3)
+        cl.addWidget(QLabel("Pattern one above another, count"), 1, 0)
+        cl.addWidget(self.cp_ny, 1, 1)
+        cl.addWidget(QLabel(f"gap ({Lu})"), 1, 2)
+        cl.addWidget(self.cp_gy, 1, 3)
+        cl.addWidget(self.cp_mv, 2, 0)
+        cl.addWidget(QLabel(f"gap ({Lu})"), 2, 2)
+        cl.addWidget(self.cp_gv, 2, 3)
+        cl.addWidget(self.cp_mh, 3, 0)
+        cl.addWidget(QLabel(f"gap ({Lu})"), 3, 2)
+        cl.addWidget(self.cp_gh, 3, 3)
+        self.cp_note = QLabel("")
+        self.cp_note.setWordWrap(True)
+        self.cp_note.setStyleSheet("color:#555555; font-size:11px;")
+        cl.addWidget(self.cp_note, 4, 0, 1, 4)
+        lay.addWidget(self.grp_copies)
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -167,6 +207,9 @@ class ProfileDialog(QDialog):
         imported = key == "imported"
         self.cb_flip.setEnabled(not imported)
         self.cb_weak.setEnabled(not imported and key not in ("custom", "round", "pipe"))
+        self.grp_copies.setEnabled(not imported)
+        self.grp_copies.setToolTip(self.grp_copies.toolTip() if not imported else
+                                   "An imported section is only numbers. Use 'Enter A, I and c directly' to make copies of it.")
         if imported:
             self.preview.set_profile(None)
             return
@@ -187,7 +230,8 @@ class ProfileDialog(QDialog):
         else:
             try:
                 dims = {k: float(e.text()) for k, e in self.edits.items()}
-                self.profile = pr1.compute(key, dims, self.cb_flip.isChecked(), self.cb_weak.isChecked() and self.cb_weak.isEnabled())
+                self.profile = pr1.compute(key, dims, self.cb_flip.isChecked(), self.cb_weak.isChecked() and self.cb_weak.isEnabled(),
+                                           self.copies_spec())
             except ValueError as ex:
                 self.profile = None
                 ok = False
@@ -206,6 +250,23 @@ class ProfileDialog(QDialog):
             if key != "imported":
                 self.preview.set_profile(pf)
         self.bb.button(QDialogButtonBox.StandardButton.Ok).setEnabled(ok and self.profile is not None)
+
+    def copies_spec(self):
+        """The copies as typed (None when there are none); a bad gap raises ValueError, shown in the dialog."""
+        try:
+            spec = {"nx": self.cp_nx.value(), "ny": self.cp_ny.value(), "gx": float(self.cp_gx.text()), "gy": float(self.cp_gy.text()),
+                    "mirror_v": self.cp_mv.isChecked(), "gap_v": float(self.cp_gv.text()),
+                    "mirror_h": self.cp_mh.isChecked(), "gap_h": float(self.cp_gh.text())}
+        except ValueError:
+            raise ValueError("A gap between copies must be a number.")
+        n = pr1.copy_count(spec)
+        stacked = spec["ny"] > 1 or spec["mirror_h"]
+        self.cp_note.setText("" if n == 1 else
+                             f"{n} copies, analysed as one piece." + (" Copies one above another act fully together (as if welded all along); "
+                                                                     "if they are only touching or bolted at spaced points the real member is softer."
+                                                                     if stacked else
+                                                                     " Side by side they simply add their stiffness (they must deflect together)."))
+        return spec
 
     def import_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import profile properties", "", "Profile properties (*.profprops);;All files (*)")

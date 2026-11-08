@@ -535,6 +535,8 @@ def convert_beam_state(st, old, new, convert):
     lf, sf, ff = units.length_factor(old, new), units.stress_factor(old, new), units.force_factor(old, new)
     for n in ("e_E", "e_sy", "e_su"):
         _scale_text(st["inputs"], n, sf)
+    for n in ("e_msize", "e_nld"):
+        _scale_text(st["inputs"], n, lf)
     mems = []
     for m in st.get("members", []):
         m = dict(m)

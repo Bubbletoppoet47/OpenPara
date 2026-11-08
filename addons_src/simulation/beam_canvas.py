@@ -22,6 +22,11 @@ FOS_LOW, FOS_HIGH = 0.5, 3.0              # the factor-of-safety colours: red at
 import legend_draw
 
 
+def beam1d_max():
+    import beam1d
+    return beam1d.MAX_ELEMENTS + 1
+
+
 def colours(t):
     """0..1 -> RGB ints: the colour scheme shared by all result pictures (result_style.py)."""
     return result_style.colours(t)
@@ -133,7 +138,11 @@ class BeamCanvas(QWidget):
     def mouseMoveEvent(self, ev):
         sp = ev.position()
         x, y = self.s2w(sp)
-        self.tab.coords.setText(f"x = {x:.5g}   y = {y:.5g}")
+        txt = f"x = {x:.5g}   y = {y:.5g}"
+        probe = self.node_probe(sp)
+        if probe:
+            txt += "     " + probe
+        self.tab.coords.setText(txt)
         if self.pan_from is not None:
             self.pan_off = QPointF(sp.x() - self.pan_from.x(), sp.y() - self.pan_from.y())
             self.update()
@@ -182,6 +191,55 @@ class BeamCanvas(QWidget):
             super().keyPressEvent(ev)
 
     # --- drawing
+    def node_probe(self, sp):
+        """The displacement of the joint or mesh node under the cursor (when there is a result), as text."""
+        res = self.tab.result
+        if res is None:
+            return ""
+        best, bd = None, 9.0
+        for nid, (x, y) in res["xy"].items():
+            q = self.w2s(x, y)
+            d = math.hypot(q.x() - sp.x(), q.y() - sp.y())
+            if d < bd:
+                best, bd = (f"Joint {nid}", res["nodes"][nid]), d
+        for nid, v in res.get("mesh_nodes", {}).items():
+            q = self.w2s(v[0], v[1])
+            d = math.hypot(q.x() - sp.x(), q.y() - sp.y())
+            if d < bd:
+                best, bd = ("Mesh node", v[2:5]), d
+        if best is None:
+            return ""
+        ux, uy, rz = best[1]
+        return f"{best[0]}:  ux = {ux:.5g}  uy = {uy:.5g}  rotation = {rz:.5g}"
+
+    def paint_mesh(self, p, res):
+        """Short ticks across every member where one element ends and the next begins (the mesh nodes)."""
+        tab = self.tab
+        rm = {m["id"]: m for m in res["members"]} if res is not None else {}
+        try:
+            opts = tab.solver_opts()
+        except Exception:                                  # noqa: BLE001 - a bad number is reported when solving
+            return
+        p.setPen(QPen(QColor("#5b6f99"), 1.4))
+        for mem in tab.members:
+            if mem["profile"] is None:
+                continue
+            a, b = self.w2s(*tab.model.pts[mem["a"]]), self.w2s(*tab.model.pts[mem["b"]])
+            d = math.hypot(b.x() - a.x(), b.y() - a.y())
+            if d < 1:
+                continue
+            r = rm.get(mem["lid"])
+            if r is not None and r.get("bounds") is not None and len(r["bounds"]) > 1:
+                fr = [bd / r["bounds"][-1] for bd in r["bounds"][1:-1]]
+            else:
+                L = math.hypot(*(np.array(tab.model.pts[mem["b"]]) - np.array(tab.model.pts[mem["a"]])))
+                n = int(math.ceil(L / opts["size"] - 1e-9)) if opts.get("size") and L > 0 else opts["elements"]
+                fr = [k / n for k in range(1, min(n, beam1d_max()))] if n > 1 else []
+            nx, ny = -(b.y() - a.y()) / d, (b.x() - a.x()) / d
+            for f in fr:
+                q = QPointF(a.x() + (b.x() - a.x()) * f, a.y() + (b.y() - a.y()) * f)
+                p.drawLine(QPointF(q.x() - nx * 5, q.y() - ny * 5), QPointF(q.x() + nx * 5, q.y() + ny * 5))
+
     def paintEvent(self, ev):
         p = QPainter(self)
         p.fillRect(self.rect(), self.bg_color())
@@ -200,6 +258,8 @@ class BeamCanvas(QWidget):
         res = tab.result
         mode = tab.view_mode()
         self.paint_members(p, res, mode)
+        if tab.cb_mesh.isChecked():
+            self.paint_mesh(p, res)
         if res is not None and mode in DIAGRAM_MODES:
             self.paint_diagram(p, res, mode)
         if res is not None and tab.cb_def.isChecked():

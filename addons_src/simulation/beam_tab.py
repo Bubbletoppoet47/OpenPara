@@ -89,7 +89,8 @@ def fmt(v):
 
 
 class BeamTab(QWidget):
-    INPUTS = ("e_E", "e_sy", "e_su", "cb_def", "e_def", "cb_names", "cb_auto", "view_combo")
+    INPUTS = ("e_E", "e_sy", "e_su", "cb_def", "e_def", "cb_names", "cb_auto", "view_combo", "e_nu", "e_eu", "cb_lin", "cb_nl", "e_nld", "e_nly",
+              "e_nel", "e_msize", "cb_shear", "cb_mesh")
 
     def __init__(self, win):
         super().__init__()
@@ -150,9 +151,11 @@ class BeamTab(QWidget):
         self.info.setWordWrap(True)
         lay.addWidget(self.info)
 
-        lay = sec(2, "Material", False, help_text="Used by every member that does not choose its own. Materials come from the shared library "
-                  "(materials.json); add your own in the 2D FEA tab. A member can pick another material in its table row.",
-                  summary=lambda: self.mat_combo.currentText())
+        lay = sec(2, "Material and analysis", False, help_text="The material is used by every member that does not choose its own. Materials come from "
+                  "the shared library (materials.json); add your own in the 2D FEA tab. A member can pick another material in its table row. "
+                  "Analysis: the linear solver (small displacements, elastic) is exact for the beam theory; the nonlinear solver adds large "
+                  "displacements and yielding. Both ticked: solve linear first and switch to nonlinear when a trigger is passed.",
+                  summary=lambda: self.mat_combo.currentText() + (" - " + self.solver_text() if hasattr(self, "cb_lin") else ""))
         form = QFormLayout()
         self.mat_combo = QComboBox()
         self.e_E, self.e_sy, self.e_su = QLineEdit("200000"), QLineEdit("250"), QLineEdit("400")
@@ -162,6 +165,30 @@ class BeamTab(QWidget):
         form.addRow(self.lbl_E, self.e_E)
         form.addRow(self.lbl_sy, self.e_sy)
         form.addRow(self.lbl_su, self.e_su)
+        self.e_nu = QLineEdit("0.3")
+        self.e_nu.setToolTip("Poisson's ratio: only used for the shear modulus when 'Include shear deformation' (Mesh section) is on.")
+        form.addRow("Poisson's ratio", self.e_nu)
+        self.e_eu = QLineEdit("10")
+        self.e_eu.setToolTip("Nonlinear solver: the plastic strain (in %) at which the stress reaches the ultimate strength. The stress rises in a "
+                             "straight line from the yield to the ultimate strength over this strain, then stays flat.")
+        self.lbl_eu = QLabel("Plastic strain at ultimate (%)")
+        form.addRow(self.lbl_eu, self.e_eu)
+        self.cb_lin = QCheckBox("Linear solver")
+        self.cb_nl = QCheckBox("Nonlinear solver")
+        self.cb_lin.setChecked(True)
+        self.cb_nl.setChecked(True)
+        self.cb_lin.setToolTip("Both ticked: solve linear first, and switch to the nonlinear solver if a trigger below is passed.\n"
+                               "Linear only: never switch.  Nonlinear only: always solve nonlinearly (the triggers are ignored).")
+        self.cb_nl.setToolTip(self.cb_lin.toolTip() + "\nThe nonlinear solver uses large displacements AND yielding (Euler-Bernoulli elements, at "
+                              "least 8 per member).")
+        self.e_nld, self.e_nly = QLineEdit(""), QLineEdit("90")
+        self.e_nld.setToolTip("Largest displacement (a length) that triggers the nonlinear solver. Empty = no displacement trigger.")
+        self.e_nly.setToolTip("Largest stress, in % of the yield strength, that triggers the nonlinear solver. Empty = no stress trigger.")
+        self.lbl_nld = QLabel("Displacement trigger")
+        form.addRow(self.cb_lin)
+        form.addRow(self.cb_nl)
+        form.addRow(self.lbl_nld, self.e_nld)
+        form.addRow("Stress trigger (% of yield)", self.e_nly)
         lay.addLayout(form)
         self.units_note = self.note("")
         lay.addWidget(self.units_note)
@@ -172,6 +199,10 @@ class BeamTab(QWidget):
         for e in (self.e_E, self.e_sy, self.e_su):
             e.textEdited.connect(self.set_custom)
             e.editingFinished.connect(self.changed)
+        for e in (self.e_nu, self.e_eu, self.e_nld, self.e_nly):
+            e.editingFinished.connect(self.changed)
+        self.cb_lin.toggled.connect(self.changed)
+        self.cb_nl.toggled.connect(self.changed)
 
         lay = sec(3, "Joints", True, help_text="Select joints or members on the drawing first. Rigid joint: the selected joints carry bending "
                   "moment between the members that meet there. Pinned joint: the members can rotate freely there; a frame with pinned joints "
@@ -231,7 +262,37 @@ class BeamTab(QWidget):
         row.addWidget(b)
         lay.addLayout(row)
 
-        lay = sec(6, "Ties", False, help_text="Select one or more joints and the member they lie on (in the middle of it), then press Tie point to "
+        lay = sec(6, "Mesh", True, help_text="Every member is cut into equal elements. The result is the same as one element for a uniform "
+                  "member under end loads (that one is exact), but the mesh shows where the results are computed, lets you read values at "
+                  "the nodes, and is needed by the nonlinear solver (at least 8 elements per member are used there). Set either the number of "
+                  "elements per member or a target element size (the size wins when both are set).",
+                  summary=lambda: self.mesh_text())
+        form = QFormLayout()
+        self.e_nel = QLineEdit("1")
+        self.e_nel.setToolTip("Elements per member (1 to 200). 1 = the exact beam solution of the whole member.")
+        self.e_msize = QLineEdit("")
+        self.e_msize.setPlaceholderText("not used")
+        self.e_msize.setToolTip("Target element length. Empty = use the number of elements per member.")
+        self.lbl_msize = QLabel("Element size")
+        form.addRow("Elements per member", self.e_nel)
+        form.addRow(self.lbl_msize, self.e_msize)
+        self.cb_shear = QCheckBox("Include shear deformation (Timoshenko)")
+        self.cb_shear.setToolTip("Short or deep members also deflect by shear. Uses the shear area of each profile (web area for I / channel / "
+                                 "tee sections, 5/6 of the area for a rectangle...). Off = pure bending (Euler-Bernoulli). Sections entered by "
+                                 "numbers have no shear area and stay Euler-Bernoulli. The nonlinear solver does not include shear deformation.")
+        form.addRow(self.cb_shear)
+        self.cb_mesh = QCheckBox("Show the mesh on the drawing")
+        self.cb_mesh.setChecked(True)
+        form.addRow(self.cb_mesh)
+        lay.addLayout(form)
+        self.mesh_lbl = self.note("")
+        lay.addWidget(self.mesh_lbl)
+        for e in (self.e_nel, self.e_msize):
+            e.editingFinished.connect(self.changed)
+        self.cb_shear.toggled.connect(self.changed)
+        self.cb_mesh.toggled.connect(self.view_changed)
+
+        lay = sec(7, "Ties", False, help_text="Select one or more joints and the member they lie on (in the middle of it), then press Tie point to "
                   "member. The joint becomes part of the member (the member is continuous through it), so other members that end there are "
                   "connected to it. Ties made by hand are listed here (automatic ones are counted in the line under the import buttons). In the "
                   "results a tied member is still ONE member.", summary=lambda: self.count_text(self.ties, "manual tie"))
@@ -254,10 +315,11 @@ class BeamTab(QWidget):
         self.tie_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         lay.addWidget(self.tie_table)
 
-        lay = sec(7, "Results", True, summary=lambda: self.view_combo.currentText(),
-                  help_text="Beam theory (Euler-Bernoulli, linear elastic): bending and axial deformation, no shear deformation, no buckling or "
-                            "second-order (P-delta) effects, no joint stress concentrations. The Euler column shows how close a compressed member "
-                            "is to its pin-ended buckling load (1 or more = it would buckle). Use the 2D FEA tab for local effects.")
+        lay = sec(8, "Results", True, summary=lambda: self.view_combo.currentText(),
+                  help_text="Beam theory: bending and axial deformation (Euler-Bernoulli, or Timoshenko when shear deformation is on), linear "
+                            "elastic; the nonlinear solver adds large displacements and yielding. No joint stress concentrations. The Euler column "
+                            "shows how close a compressed member is to its pin-ended buckling load (1 or more = it would buckle). Use the 2D "
+                            "FEA tab for local effects.")
         self.cb_auto = QCheckBox("Solve automatically after every change")
         self.cb_auto.setChecked(True)
         self.cb_auto.setToolTip("A frame solves in a fraction of a second, so this is on by default.")
@@ -338,7 +400,7 @@ class BeamTab(QWidget):
         lay.addWidget(b)
 
         for s_ in sorted(self.sections, key=lambda x: x.number):
-            if s_.number == 7:
+            if s_.number == 8:
                 lay0.addWidget(self.b_solve)          # the one big Solve button sits between the setup sections and the Results
                 lay0.addWidget(self.study_box)
             lay0.addWidget(s_)
@@ -396,6 +458,39 @@ class BeamTab(QWidget):
     # ------------------------------------------------------------------------------------------
     # small helpers
     # ------------------------------------------------------------------------------------------
+    def solver_text(self):
+        lin, nl = self.cb_lin.isChecked(), self.cb_nl.isChecked()
+        return "linear + nonlinear" if lin and nl else "nonlinear" if nl else "linear"
+
+    def mesh_text(self):
+        t = self.e_msize.text().strip()
+        n = self.e_nel.text().strip() or "1"
+        return (f"size {t}" if t else f"{n} element(s) per member") + (", shear" if self.cb_shear.isChecked() else "")
+
+    def solver_opts(self):
+        """The mesh / shear / solver choices of the panel as the options of beam1d.solve.  Raises beam1d.BeamError for a bad number."""
+        def num(edit, what, positive=True, empty=None):
+            t = edit.text().strip()
+            if not t:
+                return empty
+            try:
+                v = float(t)
+            except ValueError:
+                raise beam1d.BeamError(f"{what} must be a number.")
+            if positive and not v > 0:
+                raise beam1d.BeamError(f"{what} must be positive.")
+            return v
+        n = num(self.e_nel, "Elements per member", empty=1.0)
+        if n != int(n) or not 1 <= n <= beam1d.MAX_ELEMENTS:
+            raise beam1d.BeamError(f"Elements per member must be a whole number from 1 to {beam1d.MAX_ELEMENTS}.")
+        nu = num(self.e_nu, "Poisson's ratio", empty=0.3)
+        if not 0 < nu < 0.5:
+            raise beam1d.BeamError("Poisson's ratio must be between 0 and 0.5.")
+        lin, nl = self.cb_lin.isChecked(), self.cb_nl.isChecked()
+        return {"elements": int(n), "size": num(self.e_msize, "The element size"), "shear": self.cb_shear.isChecked(), "nu": nu,
+                "linear": lin or not nl, "nonlinear": nl, "disp_trigger": num(self.e_nld, "The displacement trigger"),
+                "stress_pct": num(self.e_nly, "The stress trigger"), "eu_pct": num(self.e_eu, "The plastic strain at ultimate", empty=10.0)}
+
     @staticmethod
     def count_text(items, word):
         n = len(items)
@@ -483,6 +578,8 @@ class BeamTab(QWidget):
         self.lbl_E.setText(f"E ({u['S']})")
         self.lbl_sy.setText(f"Yield strength ({u['S']})")
         self.lbl_su.setText(f"Ultimate strength ({u['S']})")
+        self.lbl_msize.setText(f"Element size ({u['L']})")
+        self.lbl_nld.setText(f"Displacement trigger ({u['L']})")
         self.units_note.setText(f"Units: {self.cur_unit}  (change in File > Units)")
         L, F, S = u["L"], u["F"], u["S"]
         heads = list(HEADERS)
@@ -499,6 +596,13 @@ class BeamTab(QWidget):
             self.cur_unit = new
             return
         self.convert_default_material(old, new)
+        lf = units.length_factor(old, new)
+        for w in (self.e_msize, self.e_nld):
+            try:
+                if w.text().strip():
+                    w.setText(f"{float(w.text()) * lf:.10g}")
+            except ValueError:
+                pass
         self.cur_unit = new
 
     def convert_default_material(self, old, new):
@@ -1482,7 +1586,7 @@ class BeamTab(QWidget):
             E, sy, su = self.member_material(mem, ov)
             used.append({"id": mem["lid"], "name": mem["name"], "a": mem["a"], "b": mem["b"], "E": E, "A": prof["A"], "I": prof["I"],
                          "c_top": prof["c_top"], "c_bottom": prof["c_bottom"], "sy": sy, "su": su, "rel_a": mem["rel_a"],
-                         "rel_b": mem["rel_b"], "qg": [0.0, 0.0], "ql": [0.0, 0.0]})
+                         "rel_b": mem["rel_b"], "qg": [0.0, 0.0], "ql": [0.0, 0.0], "As": pr1.shear_area(prof), "prof": prof})
         if left_out:
             notes.append("Left out of the analysis because they have no profile: " + ", ".join(left_out) + ".")
         nodes = {}
@@ -1602,7 +1706,7 @@ class BeamTab(QWidget):
             elif not sups:
                 problem = "Add at least one support (select a joint, then Fixed / Pinned / ux = 0 / uy = 0)."
             if problem is None:
-                self.result = beam1d.solve(nodes, mems, sups, nodal)
+                self.result = beam1d.solve(nodes, mems, sups, nodal, 41, self.solver_opts())
                 self.result["notes"] = list(notes) + list(self.result.get("notes", []))
                 self.result["excluded"] = left_out
         except beam1d.BeamError as ex:
@@ -1630,13 +1734,29 @@ class BeamTab(QWidget):
         R = sim_report
         rows = [("Largest fibre stress", R.num(r["sigma_max"]), f"{u['S']}  ({r['sigma_member']})"),
                 ("Largest displacement", R.num(r["umax"]), f"{u['L']}  ({r['umax_member']})")]
-        html = R.heading("Solved", f"{len(r['members'])} member(s), {len(r['nodes'])} joint(s)")
+        nl = r.get("nl")
+        html = R.heading("Solved (nonlinear)" if nl else "Solved (linear)", f"{len(r['members'])} member(s), {len(r['nodes'])} joint(s)")
         html += R.summary(r.get("fos_y"), r.get("fos_u"), rows)
         for key, lab in (("fos_y", "yield"), ("fos_u", "ultimate")):
             if r.get(key) is None:
                 html += R.note(f"No {lab} strength is set, so there is no {lab} safety factor.")
             else:
                 html += R.note(f"Lowest {lab} safety factor is in {r[key + '_member']}.")
+        if nl:
+            html += R.heading("Nonlinear solution", "large displacements and yielding")
+            html += R.note(nl.get("trigger") or nl.get("reason") or "Nonlinear solver used.")
+            rows2 = [("Load fraction carried", f"{100 * nl['lambda']:.1f} %", None),
+                     ("Load steps / iterations", f"{nl['steps']} / {nl['iterations']}", None)]
+            if nl.get("linear_umax") is not None:
+                rows2.append(("Linear displacement", R.num(nl["linear_umax"]), u["L"]))
+            if nl.get("linear_sigma_max") is not None:
+                rows2.append(("Linear fibre stress", R.num(nl["linear_sigma_max"]), u["S"]))
+            html += R.kv(rows2)
+            if nl.get("yielded"):
+                html += R.note("Yielded: " + ", ".join(str(x) for x in nl["yielded"]) + ".", R.AMBER)
+            if not nl.get("converged") or nl["lambda"] < 0.9999:
+                html += R.note(f"The structure carries only {100 * nl['lambda']:.1f} % of the load: it collapses or the solver could not "
+                               "go further. The result shown is the last equilibrium found.", R.RED)
         html += R.heading("Peaks")
         html += R.kv([("Axial force N", R.num(r["N_peak"]), f"{u['F']}  ({r['N_member']})"),
                       ("Shear force V", R.num(r["V_peak"]), f"{u['F']}  ({r['V_member']})"),
@@ -1658,6 +1778,10 @@ class BeamTab(QWidget):
         for n in r.get("notes", []):
             html += R.note(n, R.AMBER)
         self.res_lbl.setText(html)
+        ms = r.get("mesh")
+        if ms:
+            self.mesh_lbl.setText(f"Last solve: {ms['elements']} element(s), {len(r['nodes']) + len(r.get('mesh_nodes', {}))} node(s)"
+                                  + (", shear deformation included." if ms.get("shear") else "."))
 
     def show_report(self):
         if self.result is None:
@@ -1676,6 +1800,13 @@ class BeamTab(QWidget):
                     f"  peaks: N {m['N_peak']:.6g}, V {m['V_peak']:.6g}, M {m['M_peak']:.6g}; largest stress {m['sigma_max']:.6g} {u['S']}; "
                     f"displacement {m['umax']:.6g} {u['L']}",
                     f"  FoS yield {fmt(m['fos_y']) or 'n/a'}, ultimate {fmt(m['fos_u']) or 'n/a'}; Euler N/Pcr {m['euler_ratio']:.4g}", ""]
+        if r.get("nl"):
+            out += [f"Nonlinear solve: {100 * r['nl']['lambda']:.2f} % of the load carried.", ""]
+        if r.get("mesh_nodes"):
+            out.append("Mesh node displacements (x, y, ux, uy, rotation):")
+            for nid, v in r["mesh_nodes"].items():
+                out.append("  " + ", ".join(f"{q:.6g}" for q in v))
+            out.append("")
         out.append("Joint displacements (ux, uy, rotation):")
         for pid, (ux, uy, rz) in sorted(r["nodes"].items()):
             out.append(f"  Point {pid}: {ux:.6g}, {uy:.6g}, {rz:.6g}")
@@ -1702,7 +1833,7 @@ class BeamTab(QWidget):
             raise beam1d.BeamError("No member has a profile.")
         if not sups:
             raise beam1d.BeamError("The 1D FEA tab has no supports.")
-        return {"args": (nodes, copy.deepcopy(mems), sups, nodal), "notes": notes, "excluded": left_out}
+        return {"args": (nodes, copy.deepcopy(mems), sups, nodal, 41, self.solver_opts()), "notes": notes, "excluded": left_out}
 
     def study_adapter(self):
         """What the Parametric Studies add-on talks to (study_iface.py)."""
