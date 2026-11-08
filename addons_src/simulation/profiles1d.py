@@ -197,7 +197,8 @@ def _base(key, d, flip, weak):
     return {"A": A, "I": I, "As": As, "ct": ct, "cb": cb, "polys": polys, "box": box, "yc0": yc0}
 
 
-COPY_DEFAULTS = {"nx": 1, "gx": 0.0, "ny": 1, "gy": 0.0, "mirror_v": False, "gap_v": 0.0, "mirror_h": False, "gap_h": 0.0}
+COPY_DEFAULTS = {"nx": 1, "gx": 0.0, "ny": 1, "gy": 0.0, "mirror_v": False, "gap_v": 0.0, "mirror_h": False, "gap_h": 0.0,
+                 "side_v": "right", "side_h": "top"}
 MAX_COPIES = 200
 
 
@@ -217,6 +218,8 @@ def normalize_copies(c):
             raise ValueError("A gap between copies must be 0 or more (copies cannot overlap).")
         out[k] = v
     out["mirror_v"], out["mirror_h"] = bool(out["mirror_v"]), bool(out["mirror_h"])
+    if out["side_v"] not in ("right", "left") or out["side_h"] not in ("top", "bottom"):
+        raise ValueError("The side of a mirror copy must be right or left (vertical axis), top or bottom (horizontal axis).")
     if copy_count(out) > MAX_COPIES:
         raise ValueError(f"That is {copy_count(out)} copies; the limit is {MAX_COPIES}.")
     return None if copy_count(out) == 1 else out
@@ -241,10 +244,12 @@ def _layout(box, c):
         ys = (sy * y0 + ty, sy * y1 + ty)
         return min(xs), max(xs), min(ys), max(ys)
     if c["mirror_v"]:
-        xl = max(ext(t)[1] for t in cps) + c["gap_v"] / 2
+        xl = (max(ext(t)[1] for t in cps) + c["gap_v"] / 2 if c["side_v"] == "right"
+              else min(ext(t)[0] for t in cps) - c["gap_v"] / 2)
         cps = cps + [(-sx, sy, 2 * xl - tx, ty) for sx, sy, tx, ty in cps]
     if c["mirror_h"]:
-        yl = max(ext(t)[3] for t in cps) + c["gap_h"] / 2
+        yl = (max(ext(t)[3] for t in cps) + c["gap_h"] / 2 if c["side_h"] == "top"
+              else min(ext(t)[2] for t in cps) - c["gap_h"] / 2)
         cps = cps + [(sx, -sy, tx, 2 * yl - ty) for sx, sy, tx, ty in cps]
     return cps, ext
 

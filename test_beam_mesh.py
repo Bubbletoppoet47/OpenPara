@@ -88,4 +88,39 @@ b.cb_lin.setChecked(False)
 assert b.solve()
 nl = b.result["nl"]
 assert nl["lambda"] < 1.0 or nl["yielded"], nl
+# --- mirror side: a channel mirrored to the right faces itself (box), to the left it sits back to back
+dch = {"bf": 75.0, "h": 150.0, "tf": 7.0, "tw": 6.0}
+chb = pr1.compute("channel", dch)
+def xs_of(p_):
+    return [x for poly, _h in pr1.drawing(p_) for x, _y in poly]
+cr = pr1.compute("channel", dch, copies={"mirror_v": True, "gap_v": 10.0, "side_v": "right"})
+cl = pr1.compute("channel", dch, copies={"mirror_v": True, "gap_v": 10.0, "side_v": "left"})
+assert abs(cr["A"] - 2 * chb["A"]) < 1e-9 and abs(cl["A"] - 2 * chb["A"]) < 1e-9 and abs(cr["I"] - 2 * chb["I"]) < 1e-6
+bx0 = (min(x for poly, _h in pr1.drawing(chb) for x, _y in poly), max(x for poly, _h in pr1.drawing(chb) for x, _y in poly))
+assert max(xs_of(cr)) > bx0[1] and min(xs_of(cr)) == bx0[0], "right: the copy is added on the right"
+assert min(xs_of(cl)) < bx0[0] and max(xs_of(cl)) == bx0[1], "left: the copy is added on the left"
+# gap = clear space between the facing copies, on both sides
+for p_, sd in ((cr, "right"), (cl, "left")):
+    w = bx0[1] - bx0[0]
+    assert abs((max(xs_of(p_)) - min(xs_of(p_))) - (2 * w + 10.0)) < 1e-9, sd
+# stacked below: same I as stacked above (the section is symmetric about nothing; check the centroid moved to the right side)
+ca = pr1.compute("rect", {"b": 20.0, "h": 40.0}, copies={"mirror_h": True, "gap_h": 4.0, "side_h": "top"})
+cb_ = pr1.compute("rect", {"b": 20.0, "h": 40.0}, copies={"mirror_h": True, "gap_h": 4.0, "side_h": "bottom"})
+assert abs(ca["I"] - cb_["I"]) / ca["I"] < 1e-9 and abs(ca["c_top"] - cb_["c_bottom"]) < 1e-9
+for bad in ({"mirror_v": True, "side_v": "up"}, {"mirror_h": True, "side_h": "left"}):
+    try:
+        pr1.compute("channel", dch, copies=bad); assert False
+    except ValueError:
+        pass
+# an old saved profile (no side keys) loads as before
+old = {k: v for k, v in cr["copies"].items() if k not in ("side_v", "side_h")}
+assert pr1.compute("channel", dch, copies=old)["A"] == cr["A"]
+# the dialog has the side boxes and passes them on
+import beam_dialogs
+b.set_profiles([0], pr1.compute("channel", dch))
+dlg = beam_dialogs.ProfileDialog(b, 0)
+dlg.cp_mv.setChecked(True); dlg.cp_gv.setText("10"); dlg.cp_sv.setCurrentIndex(1)
+assert dlg.copies_spec()["side_v"] == "left" and dlg.profile and dlg.profile["copies"]["side_v"] == "left"
+dlg.cp_sv.setCurrentIndex(0)
+assert dlg.profile["copies"]["side_v"] == "right"
 print("ALL OK")

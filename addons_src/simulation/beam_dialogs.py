@@ -131,6 +131,16 @@ class ProfileDialog(QDialog):
         self.cp_mh.setChecked(bool(cp0.get("mirror_h")))
         self.cp_mv.toggled.connect(self.recompute)
         self.cp_mh.toggled.connect(self.recompute)
+        self.cp_sv, self.cp_sh = QComboBox(), QComboBox()
+        self.cp_sv.addItems(["copy on the right", "copy on the left"])
+        self.cp_sh.addItems(["copy above", "copy below"])
+        self.cp_sv.setCurrentIndex(1 if cp0.get("side_v") == "left" else 0)
+        self.cp_sh.setCurrentIndex(1 if cp0.get("side_h") == "bottom" else 0)
+        self.cp_sv.setToolTip("Which side of the section the mirrored copy goes. For a channel this is the difference between flanges facing each other "
+                              "(a box) and back to back.")
+        self.cp_sh.setToolTip("Which side of the section the mirrored copy goes (above or below).")
+        self.cp_sv.currentIndexChanged.connect(self.recompute)
+        self.cp_sh.currentIndexChanged.connect(self.recompute)
         Lu = self.U["L"]
         cl.addWidget(QLabel("Pattern side by side, count"), 0, 0)
         cl.addWidget(self.cp_nx, 0, 1)
@@ -141,9 +151,11 @@ class ProfileDialog(QDialog):
         cl.addWidget(QLabel(f"gap ({Lu})"), 1, 2)
         cl.addWidget(self.cp_gy, 1, 3)
         cl.addWidget(self.cp_mv, 2, 0)
+        cl.addWidget(self.cp_sv, 2, 1)
         cl.addWidget(QLabel(f"gap ({Lu})"), 2, 2)
         cl.addWidget(self.cp_gv, 2, 3)
         cl.addWidget(self.cp_mh, 3, 0)
+        cl.addWidget(self.cp_sh, 3, 1)
         cl.addWidget(QLabel(f"gap ({Lu})"), 3, 2)
         cl.addWidget(self.cp_gh, 3, 3)
         self.cp_note = QLabel("")
@@ -256,6 +268,8 @@ class ProfileDialog(QDialog):
         try:
             spec = {"nx": self.cp_nx.value(), "ny": self.cp_ny.value(), "gx": float(self.cp_gx.text()), "gy": float(self.cp_gy.text()),
                     "mirror_v": self.cp_mv.isChecked(), "gap_v": float(self.cp_gv.text()),
+                    "side_v": "left" if self.cp_sv.currentIndex() == 1 else "right",
+                    "side_h": "bottom" if self.cp_sh.currentIndex() == 1 else "top",
                     "mirror_h": self.cp_mh.isChecked(), "gap_h": float(self.cp_gh.text())}
         except ValueError:
             raise ValueError("A gap between copies must be a number.")
