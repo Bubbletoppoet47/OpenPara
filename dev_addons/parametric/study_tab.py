@@ -5,16 +5,18 @@ Everything simulation-specific comes from the study adapter of the simulation (s
 2D FEA, 2D CFD and any simulation that offers an adapter.  Besides the adapter's inputs, the dimensions of the part copied into the project can
 be varied (a study of the geometry) when the simulation works on a sketch of the part.
 
-How a run goes: every case is PREPARED on the main thread (it builds the scratch tab of the case and reads the widgets), then the cases are
-COMPUTED one after another on a worker thread, and each finished case is recorded on the main thread (outputs, early-exit conditions).
+How a run goes: each case is PREPARED on the main thread, one at a time, in small slices between window events (it builds the scratch tab of
+the case and reads the widgets), while the cases are COMPUTED one after another on a worker thread; each finished case is recorded on the main
+thread (outputs, early-exit conditions).  Nothing is done for all cases at once, so the window never freezes, however many cases there are.
 The live simulation tab is never changed by a run; a case is put on its screen only when you click its row.
 """
 import itertools
 import os
+import queue as _queue
 import threading
 import traceback
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
                              QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox, QSplitter,
@@ -45,36 +47,41 @@ def run_one(spec, progress, cancel):
 
 
 class CaseWorker(QThread):
+    """Solves the prepared cases one after another.  The cases are prepared on the main thread (one slice at a time, see StudyTab.prep_tick) and
+    arrive through `queue`; the worker never waits for the window, so a long study cannot freeze it."""
     progress = pyqtSignal(str)
     case_done = pyqtSignal(int, object)
     all_done = pyqtSignal(bool)
 
-    def __init__(self, specs):
+    def __init__(self, n, labels=None):
         super().__init__()
-        self.specs = specs
+        self.n = n
+        self.queue = _queue.Queue()
         self.stop = False
         self.halt = False                    # an early-exit condition was met: the rows below are skipped
-        self.ack = threading.Event()
 
     def run(self):
         stopped = False
-        n = len(self.specs)
-        for i, spec in enumerate(self.specs):
+        for i in range(self.n):
+            spec = None
+            while spec is None:
+                if self.stop:
+                    break
+                try:
+                    spec = self.queue.get(timeout=0.1)
+                except _queue.Empty:
+                    pass
             if self.stop:
                 stopped = True
                 break
             if self.halt:
                 break
-            self.ack.clear()
-            head = f"Case {spec['label']} ({i + 1} of {n}): "
+            head = f"Case {spec['label']} ({i + 1} of {self.n}): "
             case = run_one(spec, lambda t, head=head: self.progress.emit(head + str(t)), lambda: self.stop)
             if case is None:
                 stopped = True
                 break
             self.case_done.emit(i, case)
-            while not self.ack.wait(0.1):
-                if self.stop:
-                    break
         self.all_done.emit(stopped)
 
 
@@ -470,6 +477,15 @@ class StudyTab(QWidget):
             self.mark()
             self.rebuild_design()
 
+    def remember_fill(self, kind, value):
+        """Keeps what a Fill window held when it was closed, in the study file, so the next one opens with the same values."""
+        self.data.fill[kind] = value
+        self.mark()
+        try:
+            self.save()
+        except Exception:
+            pass
+
     def fill_grid(self, lists_text=None):
         """The table becomes every combination of the values typed for each ticked input.  `lists_text` ({id: 'a, b, c'}) skips the dialog."""
         cols = self.cols()
@@ -485,8 +501,9 @@ class StudyTab(QWidget):
                                     "replaced by every combination of them."))
             form = QFormLayout()
             edits = {}
+            mem = (self.data.fill.get("grid") or {})
             for p in cols:
-                e = QLineEdit(str(self.data.rows[0].get(p, "")) if self.data.rows else "")
+                e = QLineEdit(str(mem[p]) if p in mem else (str(self.data.rows[0].get(p, "")) if self.data.rows else ""))
                 form.addRow(self.desc[p]["label"], e)
                 edits[p] = e
             lay.addLayout(form)
@@ -494,7 +511,9 @@ class StudyTab(QWidget):
             bb.accepted.connect(dlg.accept)
             bb.rejected.connect(dlg.reject)
             lay.addWidget(bb)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+            ok_ = dlg.exec() == QDialog.DialogCode.Accepted
+            self.remember_fill("grid", {**mem, **{p: e.text() for p, e in edits.items()}})        # kept whether the window was accepted or cancelled
+            if not ok_:
                 return False
             lists_text = {p: e.text() for p, e in edits.items()}
         lists = []
@@ -509,7 +528,9 @@ class StudyTab(QWidget):
         except ValueError as ex:
             QMessageBox.warning(self, "Fill grid", str(ex))
             return False
-        if len(rows) > 30 and QMessageBox.question(self, "Fill grid", f"That makes {len(rows)} cases. Continue?") != QMessageBox.StandardButton.Yes:
+        if len(rows) > 30 and QMessageBox.question(self, "Fill grid", f"That makes {len(rows):,} cases"
+                                                   + (" - a very long study, one case after another." if len(rows) > core.CONFIRM_ABOVE else ".")
+                                                   + " Continue?") != QMessageBox.StandardButton.Yes:
             return False
         self.data.rows = rows
         self.mark()
@@ -532,26 +553,30 @@ class StudyTab(QWidget):
             lay.addWidget(self.note("Give each input a start value and an end value; the values in between are made for you. "
                                     "The table is replaced (you are asked first)."))
             form = QFormLayout()
+            mem = self.data.fill.get("range") or {}
             cb_mode = QComboBox()
             cb_mode.addItem("One row per step: all inputs move together (same number of rows)", True)
             cb_mode.addItem("Every combination of the inputs", False)
+            cb_mode.setCurrentIndex(0 if mem.get("together", True) else 1)
             form.addRow("Rows", cb_mode)
             cb_sp = QComboBox()
             cb_sp.addItem("Equal steps (linear)", False)
             cb_sp.addItem("Equal ratios (log)", True)
+            cb_sp.setCurrentIndex(1 if mem.get("log") else 0)
             form.addRow("Spacing", cb_sp)
             sp_rows = QSpinBox()
             sp_rows.setRange(1, core.MAX_CASES)
-            sp_rows.setValue(10)
+            sp_rows.setValue(int(mem.get("rows", 10)))
             form.addRow("Number of rows", sp_rows)
             lay.addLayout(form)
             grid = QFormLayout()
             edits = {}
             for p in cols:
                 cur = str(self.data.rows[0].get(p, "")) if self.data.rows else ""
-                a, b, n = QLineEdit(cur), QLineEdit(cur), QSpinBox()
+                m0 = (mem.get("specs") or {}).get(p) or [cur, cur, 5]
+                a, b, n = QLineEdit(str(m0[0])), QLineEdit(str(m0[1])), QSpinBox()
                 n.setRange(1, core.MAX_CASES)
-                n.setValue(5)
+                n.setValue(int(m0[2]))
                 n.setToolTip("Values for this input (used when every combination is made)")
                 r = QHBoxLayout()
                 for lab, w_ in (("from", a), ("to", b), ("values", n)):
@@ -564,7 +589,12 @@ class StudyTab(QWidget):
             bb.accepted.connect(dlg.accept)
             bb.rejected.connect(dlg.reject)
             lay.addWidget(bb)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+            ok_ = dlg.exec() == QDialog.DialogCode.Accepted
+            old_specs = dict(mem.get("specs") or {})
+            old_specs.update({p: [e[0].text(), e[1].text(), e[2].value()] for p, e in edits.items()})
+            self.remember_fill("range", {"together": bool(cb_mode.currentData()), "log": bool(cb_sp.currentData()), "rows": sp_rows.value(),
+                                         "specs": old_specs})                                  # kept whether the window was accepted or cancelled
+            if not ok_:
                 return False
             together, log, rows = cb_mode.currentData(), cb_sp.currentData(), sp_rows.value()
             specs = {p: (e[0].text(), e[1].text(), e[2].value()) for p, e in edits.items()}
@@ -573,8 +603,9 @@ class StudyTab(QWidget):
         except (ValueError, KeyError) as ex:
             QMessageBox.warning(self, "Fill range", f"Check the values: {ex}")
             return False
-        if confirm and QMessageBox.question(self, "Fill range", f"This replaces all {len(self.data.rows)} row(s) of the table with {len(new)} new "
-                                            "row(s). Continue?") != QMessageBox.StandardButton.Yes:
+        if confirm and QMessageBox.question(self, "Fill range", f"This replaces all {len(self.data.rows)} row(s) of the table with {len(new):,} new "
+                                            "row(s)" + (" - a very long study, one case after another" if len(new) > core.CONFIRM_ABOVE else "")
+                                            + ". Continue?") != QMessageBox.StandardButton.Yes:
             return False
         self.data.rows = new
         self.mark()
@@ -627,23 +658,24 @@ class StudyTab(QWidget):
         self.geo_cache[key] = st
         return st
 
+    def prepare_one(self, label, vals, pids):
+        """The spec of one case, built on the main thread: {label, values, run, error, state}."""
+        vals = {p: vals[p] for p in pids if p in vals}
+        geo = {p: v for p, v in vals.items() if p.startswith(core.GEO)}
+        plain = {p: v for p, v in vals.items() if p not in geo}
+        spec = {"label": label, "values": dict(vals), "run": None, "error": None, "state": None}
+        try:
+            st = self.geo_state(geo) if geo else None
+            sp = self.adapter.prepare(plain, self.ctx, st)
+            spec["run"], spec["error"], spec["state"] = sp.get("run"), sp.get("error"), st
+        except Exception as ex:
+            spec["error"] = str(ex) if isinstance(ex, ValueError) else traceback.format_exc()
+        return spec
+
     def prepare_all(self, jobs, use_params):
-        """Builds a spec for each job on the main thread: {label, values, run, error, state}."""
+        """All the specs at once (used where nothing is shown, as in tests); a real run prepares them one by one."""
         pids = self.cols() if use_params else []
-        specs = []
-        for label, vals in jobs:
-            vals = {p: vals[p] for p in pids if p in vals}
-            geo = {p: v for p, v in vals.items() if p.startswith(core.GEO)}
-            plain = {p: v for p, v in vals.items() if p not in geo}
-            spec = {"label": label, "values": dict(vals), "run": None, "error": None, "state": None}
-            try:
-                st = self.geo_state(geo) if geo else None
-                sp = self.adapter.prepare(plain, self.ctx, st)
-                spec["run"], spec["error"], spec["state"] = sp.get("run"), sp.get("error"), st
-            except Exception as ex:
-                spec["error"] = str(ex) if isinstance(ex, ValueError) else traceback.format_exc()
-            specs.append(spec)
-        return specs, pids
+        return [self.prepare_one(label, vals, pids) for label, vals in jobs], pids
 
     def start(self, jobs, use_params):
         if self.running():
@@ -660,30 +692,36 @@ class StudyTab(QWidget):
         self.geo_cache = {}
         if self.own_state is not None:
             self.back_to_own()
-        specs, pids = self.prepare_all(jobs, use_params)
+        pids = self.cols() if use_params else []
         outs = {o["id"]: o["label"] for o in self.outs}
         unit = getattr(self.tab(), "unit_name", None)
         self.data.clear_cases()
         self.data.run_meta = {"params": [(p, self.desc[p]["label"]) for p in pids],
                               "outputs": [(k, outs[k]) for k in self.data.out_checked if k in outs],
                               "unit": unit() if callable(unit) else None}
-        self.specs = specs
+        self.specs = []
+        self.jobs, self.pids, self.next_job, self.halted = list(jobs), pids, 0, False
         self.mark()
         self.rebuild_results()
         self.bar.setValue(0)
+        self.prog.setText(f"Starting: {len(jobs)} case(s)...")
         self.set_busy(True)
+        self.worker = CaseWorker(len(jobs))
         if self.threaded:
-            self.worker = CaseWorker(specs)
             self.worker.progress.connect(lambda t: self.prog.setText(t))
             self.worker.case_done.connect(self.on_case_done)
             self.worker.all_done.connect(self.on_all_done)
             self.worker.start()
-        else:                                           # no thread (tests): the same steps, in order
-            self.worker = CaseWorker(specs)
+            self.prep_timer = QTimer(self)                   # prepares the next cases a little at a time, between window events
+            self.prep_timer.timeout.connect(self.prep_tick)
+            self.prep_timer.start(5)
+        else:                                               # no thread (tests): the same steps, in order
             stopped = False
-            for i, spec in enumerate(specs):
+            for i, (label, vals) in enumerate(self.jobs):
                 if self.worker.halt:
                     break
+                spec = self.prepare_one(label, vals, pids)
+                self.specs.append(spec)
                 case = run_one(spec, lambda t: None, lambda: self.worker.stop)
                 if case is None:
                     stopped = True
@@ -691,6 +729,22 @@ class StudyTab(QWidget):
                 self.on_case_done(i, case)
             self.on_all_done(stopped)
         return True
+
+    PREFETCH = 3                                            # cases prepared ahead of the one being solved
+
+    def prep_tick(self):
+        """Prepares one more case (about one slice of work) when the worker is running low; stops when all are prepared or the run is over."""
+        w = self.worker
+        if w is None or w.stop or w.halt or self.halted or self.next_job >= len(self.jobs):
+            self.prep_timer.stop()
+            return
+        if w.queue.qsize() >= self.PREFETCH:
+            return
+        label, vals = self.jobs[self.next_job]
+        self.next_job += 1
+        spec = self.prepare_one(label, vals, self.pids)
+        self.specs.append(spec)
+        w.queue.put(spec)
 
     def set_busy(self, on):
         for w in (self.b_all, self.b_sel, self.b_cur):
@@ -705,6 +759,8 @@ class StudyTab(QWidget):
             self.prog.setText("Stopping after the current step...")
 
     def on_case_done(self, i, case):
+        if self.halted:                                        # an early exit was met: a case that was already under way is dropped
+            return
         spec = self.specs[i]
         keys = [k for k, _ in self.data.run_meta["outputs"]]
         want = sorted(set(keys) | set(core.exit_keys(self.data.exit_conds)))
@@ -722,23 +778,29 @@ class StudyTab(QWidget):
         if hit and self.worker is not None:
             summary["early_exit"] = hit
             self.worker.halt = True
+            self.halted = True
         self.data.add_case(summary, case if case.get("status") != "failed" or case.get("result") is not None else None)
-        self.bar.setValue(int(1000 * (i + 1) / max(1, len(self.specs))))
-        self.rebuild_results()
-        if self.worker is not None:
-            self.worker.ack.set()
+        self.bar.setValue(int(1000 * (i + 1) / max(1, len(self.jobs))))
+        self.append_result(len(self.data.cases) - 1)
+        if len(self.data.cases) % core.FLUSH_EVERY == 0 and self.sw.path:     # a long run does not keep every full result in memory
+            try:
+                self.data.flush(self.sw.path)
+            except Exception:
+                pass
 
     def on_all_done(self, stopped):
         w = self.worker
         self.worker = None
+        if getattr(self, "prep_timer", None) is not None:
+            self.prep_timer.stop()
         if w is not None and self.threaded:
             w.wait()
         self.set_busy(False)
         n = len(self.data.cases)
         if w is not None and w.halt and not stopped:
             first = next((c for c in self.data.cases if c.get("early_exit")), None)
-            for spec in self.specs[n:]:
-                self.data.add_case({"label": spec["label"], "values": dict(spec["values"]), "status": "skipped", "outputs": {}, "error": None,
+            for label, jv in self.jobs[n:]:
+                self.data.add_case({"label": label, "values": {p: jv[p] for p in self.pids if p in jv}, "status": "skipped", "outputs": {}, "error": None,
                                     "early_exit": None, "early_skipped": True, "file": None,
                                     "notes": [f"Skipped: early exit after case {first['label'] if first else '?'} ({first['early_exit'] if first else ''})."]}, None)
             self.prog.setText(f"Stopped early: {first['early_exit'] if first else 'an early-exit condition'}.")
@@ -756,22 +818,40 @@ class StudyTab(QWidget):
         self.sw.refresh_study_button() if hasattr(self.sw, "refresh_study_button") else None
 
     # ------------------------------------------------------------------ results
+    def result_cells(self, r, c, cells):
+        sev = self.data.severity(c)
+        for col, txt in enumerate(cells):
+            it = QTableWidgetItem(txt)
+            if sev == "bad":
+                it.setBackground(QColor("#fde0e0"))
+            elif sev == "warn":
+                it.setBackground(QColor("#fff3d6"))
+            self.res_table.setItem(r, col, it)
+
     def rebuild_results(self):
+        """The whole results table (at the start and the end of a run, not after every case)."""
         heads, rows = self.data.table()
         t = self.res_table
-        t.setColumnCount(len(heads))
-        t.setHorizontalHeaderLabels(heads)
-        t.setRowCount(len(rows))
-        for r, (c, cells) in enumerate(zip(self.data.cases, rows)):
-            sev = self.data.severity(c)
-            for col, txt in enumerate(cells):
-                it = QTableWidgetItem(txt)
-                if sev == "bad":
-                    it.setBackground(QColor("#fde0e0"))
-                elif sev == "warn":
-                    it.setBackground(QColor("#fff3d6"))
-                t.setItem(r, col, it)
-        t.resizeColumnsToContents()
+        t.setUpdatesEnabled(False)
+        try:
+            t.setColumnCount(len(heads))
+            t.setHorizontalHeaderLabels(heads)
+            t.setRowCount(len(rows))
+            for r, (c, cells) in enumerate(zip(self.data.cases, rows)):
+                self.result_cells(r, c, cells)
+            t.resizeColumnsToContents()
+        finally:
+            t.setUpdatesEnabled(True)
+
+    def append_result(self, i):
+        """Adds the row of case i to the table (during a run: the work per case stays the same however many cases there are)."""
+        t = self.res_table
+        if t.rowCount() != i or t.columnCount() != len(self.data.heads()):
+            return self.rebuild_results()
+        t.setRowCount(i + 1)
+        self.result_cells(i, self.data.cases[i], self.data.row_cells(self.data.cases[i]))
+        if i < 20 or i % 50 == 0:
+            t.resizeColumnsToContents()
 
     def show_case(self, r):
         if not (0 <= r < len(self.data.cases)) or self.running():
@@ -844,6 +924,5 @@ class StudyTab(QWidget):
     def closeEvent(self, ev):
         if self.worker is not None:
             self.worker.stop = True
-            self.worker.ack.set()
             self.worker.wait(3000)
         super().closeEvent(ev)

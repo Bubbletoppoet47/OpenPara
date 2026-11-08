@@ -23,8 +23,9 @@ T = tempfile.mkdtemp(prefix="opara_par_")
 assert core.split_list("10, 15;20,,") == ["10", "15", "20"]
 rows = core.grid_rows(["a", "b"], [["1", "2"], ["x", "y", "z"]])
 assert len(rows) == 6 and rows[0] == {"a": "1", "b": "x"} and rows[-1] == {"a": "2", "b": "z"}
+assert len(core.grid_rows(["a", "b"], [["1"] * 30, ["1"] * 30])) == 900, "no 500-case limit any more"
 try:
-    core.grid_rows(["a", "b"], [["1"] * 30, ["1"] * 30]); raise SystemExit("too many cases must be refused")
+    core.grid_rows(["a", "b"], [["1"] * 1001, ["1"] * 1001]); raise SystemExit("an absurd count must still be refused")
 except ValueError:
     pass
 conds = [{"on": True, "key": "fea.fos_y", "op": "<", "value": "1.5"}, {"on": False, "key": "fea.vm", "op": ">", "value": "0"}]

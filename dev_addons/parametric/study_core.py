@@ -18,7 +18,9 @@ STUDY_DIR = "study"
 FILE = "study.json"
 CASES = "cases"
 OPS = ["<", "<=", ">", ">="]
-MAX_CASES = 500
+MAX_CASES = 1_000_000                       # not a real limit: only a guard against typing a count that would never finish or fill the memory
+CONFIRM_ABOVE = 2000                         # a table this long is made only after the user confirms
+FLUSH_EVERY = 200                            # during a long run the finished cases are written to disk and dropped from memory this often
 GEO = "geo."                                  # ids of the parameters that belong to the source part (its dimensions), not to the adapter
 
 
@@ -43,7 +45,7 @@ def spaced(start, end, n, log=False):
     if n < 1:
         raise ValueError("The count must be at least 1.")
     if n > MAX_CASES:
-        raise ValueError(f"A count of {n} is too many (the most is {MAX_CASES}).")
+        raise ValueError(f"A count of {n:,} is too many (the most is {MAX_CASES:,}).")
     if log:
         if a == 0 or b == 0 or (a < 0) != (b < 0):
             raise ValueError("Log spacing needs a start and an end that are not zero and have the same sign.")
@@ -74,7 +76,7 @@ def grid_rows(cols, lists):
     for v in lists:
         n *= len(v)
     if n > MAX_CASES:
-        raise ValueError(f"That would be {n} cases. The most a table makes at once is {MAX_CASES}.")
+        raise ValueError(f"That would be {n:,} cases. The most a table makes at once is {MAX_CASES:,}.")
     return [dict(zip(cols, combo)) for combo in itertools.product(*lists)]
 
 
@@ -121,11 +123,13 @@ class StudyData:
         self.heavy = {}               # case index -> the full case (in memory)
         self.unsaved = set()          # case indexes whose pickle is not on disk yet
         self.folder = None
+        self.fill = {}                # what the Fill grid / Fill range windows held when they were last closed: {"grid": ..., "range": ...}
 
     # ---------------------------------------------------------------- save / load
     def to_json(self):
         return {"format": "openpara-study", "version": 1, "checked": self.checked, "rows": self.rows, "outputs": self.out_checked,
-                "exit_conds": self.exit_conds, "cases": self.cases, "run_meta": self.run_meta}
+                "exit_conds": self.exit_conds, "cases": self.cases, "run_meta": self.run_meta,
+                "fill": self.fill}
 
     def save(self, project):
         d = os.path.join(project, STUDY_DIR)
@@ -171,6 +175,7 @@ class StudyData:
         s.exit_conds = [dict(c) for c in j.get("exit_conds", [])]
         s.cases = list(j.get("cases", []))
         s.run_meta = j.get("run_meta") or {"params": [], "outputs": [], "unit": None}
+        s.fill = dict(j.get("fill") or {})
         s.folder = project
         return s
 
@@ -198,19 +203,30 @@ class StudyData:
             self.unsaved.add(len(self.cases) - 1)
 
     # ---------------------------------------------------------------- the results table
-    def table(self):
-        """(headers, rows of text) of the results: #, one column per changed input, status, one column per recorded output."""
+    def heads(self):
         pm_ = self.run_meta.get("params", [])
         om = self.run_meta.get("outputs", [])
-        heads = ["#"] + [lab for _, lab in pm_] + ["Status"] + [lab for _, lab in om]
-        rows = []
-        for c in self.cases:
-            st = c.get("status", "")
-            if c.get("early_exit"):
-                st += " - EARLY EXIT: " + c["early_exit"]
-            rows.append([str(c["label"])] + [str(c["values"].get(p, "")) for p, _ in pm_] + [st] +
-                        [fmt_cell(c.get("outputs", {}).get(k)) for k, _ in om])
-        return heads, rows
+        return ["#"] + [lab for _, lab in pm_] + ["Status"] + [lab for _, lab in om]
+
+    def row_cells(self, c):
+        """The text cells of one case in the results table."""
+        pm_ = self.run_meta.get("params", [])
+        om = self.run_meta.get("outputs", [])
+        st = c.get("status", "")
+        if c.get("early_exit"):
+            st += " - EARLY EXIT: " + c["early_exit"]
+        return [str(c["label"])] + [str(c["values"].get(p, "")) for p, _ in pm_] + [st] + [fmt_cell(c.get("outputs", {}).get(k)) for k, _ in om]
+
+    def table(self):
+        """(headers, rows of text) of the results: #, one column per changed input, status, one column per recorded output."""
+        return self.heads(), [self.row_cells(c) for c in self.cases]
+
+    def flush(self, project):
+        """Writes the finished cases to disk and frees their full results from memory (they are read back when a case is shown)."""
+        self.save(project)
+        for i in list(self.heavy):
+            if self.cases[i].get("file"):
+                del self.heavy[i]
 
     def write_csv(self, path):
         heads, rows = self.table()
