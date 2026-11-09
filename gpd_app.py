@@ -11,7 +11,7 @@ import channel
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
-from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget, QVBoxLayout, QWidget
 
 SPLASH = None
 APP = None               # kept alive here: if the QApplication were dropped, Qt would delete the card with it
@@ -177,6 +177,8 @@ class AppShell(QMainWindow):
         kinds = addons.tab_kinds()
         for kind, spec in kinds.items():
             add(fm, "New " + spec.get("label", kind), lambda k=kind: self.new_addon_tab(k))
+        if ext.present("simulation") and ext.hooks("sim_study"):
+            add(fm, "New Parametric Study...", self.new_param_study)
         fm.addSeparator()
         add(fm, "Open...", self.open_dialog, "Ctrl+O")
         add(fm, "Open Project Folder...", self.open_project_folder_dialog)          # always there: it offers the add-on that opens the folder
@@ -485,6 +487,38 @@ class AppShell(QMainWindow):
             QMessageBox.information(self, "Add", "1D FEA works on a sketch of a part. An assembly can only be used for 2D, through a slice.")
             return None
         return self.add_tab(sim_tab.SimWindow(kind, shell=self, src_tab=src))
+
+    def new_param_study(self):
+        """File > New Parametric Study: which simulation, where to save the project, which part to study, and the study opens (its tab says
+        what is still missing, such as the sketch, the supports or the loads)."""
+        if not self.need_addon("simulation", "A parametric study"):
+            return None
+        if not ext.hooks("sim_study"):
+            QMessageBox.information(self, "Parametric study", "The Parametric Studies add-on is not loaded. Install or enable it, then restart.")
+            return None
+        import sim_tab
+        names = {"1D FEA (frames and trusses) - of a part": "beam", "2D FEA": "fea", "2D CFD": "cfd"}
+        pick, ok = QInputDialog.getItem(self, "New Parametric Study", "What do you want to study?", list(names), 0, False)
+        if not ok:
+            return None
+        kind = names[pick]
+        src = self.cur()
+        if isinstance(src, sim_tab.SimWindow):
+            src = None
+        if not (src is not None and (hasattr(src, "asm") or isinstance(src, pm_app.MainWindow))) or (kind == "beam" and hasattr(src, "asm")):
+            src = None                                   # nothing suitable on screen: the import window offers the open parts and a file browser
+        w = sim_tab.SimWindow(kind, shell=self, src_tab=src)
+        self.add_tab(w)
+        if not w.import_source():                        # asks where to save the project, then which part or assembly to copy into it
+            if not w.project_ok():
+                self.close_tab(self.tabs.indexOf(w))
+            return None
+        try:
+            return w.open_study()
+        except Exception:
+            import traceback
+            QMessageBox.warning(self, "Parametric study", "The study could not be opened:\n\n" + traceback.format_exc())
+            return None
 
     def add_render(self):
         """A Visualize tab for the part or assembly that is on screen (or the model of the Visualize tab that is on screen)."""

@@ -184,10 +184,8 @@ class SimWindow(QWidget):
             QMessageBox.information(self, "Parametric study", "This simulation has no project folder yet. Press 'New project...', import a part, "
                                     "choose a sketch or a slice and press Import. The study is saved in that project.")
             return None
-        if self.source is None or getattr(self.tab, "model", None) is None:
-            QMessageBox.information(self, "Parametric study", "Import a part and choose its sketch (or a slice) in this simulation first: a study "
-                                    "varies the inputs of the simulation that is set up here.")
-            return None
+        # a study opens as soon as there is a project folder: the study tab itself says what is still missing (a sketch, supports...) and only a
+        # run needs it
         if self.is_dirty():
             if not self.save():
                 return None
