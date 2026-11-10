@@ -66,6 +66,15 @@ file_items = [a.text() for a in w.file_menu.actions() if a.text()]
 assert file_items == ["Import Video...", "Export dataset as zip...", "Import dataset zip...", "Download models from GitHub...", "Open in browser (tablet)..."], file_items
 edit_items = [a.text() for a in w.edit_menu.actions() if a.text()]
 assert edit_items == ["Classes...", "Hotkeys...", "My name...", "AI confidence..."], edit_items
+# inside the program: one bar (what it is, which project, the three menus as drop-down buttons) instead of a second menu bar
+assert w.menuWidget() is not None and w.menuBar().isHidden() and sorted(w.bar_buttons) == ["edit", "file", "manage"]
+assert w.bar_buttons["file"].menu() is w.file_menu and "0 images" in w.bar_lbl.text() and "not saved yet" in w.bar_lbl.text()
+# an empty project says what to do first, on the canvas, with the buttons to do it
+assert w.canvas.empty.isVisible() and [b.text() for b in w.canvas.empty_buttons] == ["Import video...", "Import dataset zip..."]
+from PyQt6.QtWidgets import QPushButton as _PB
+texts = {b.text() for b in w.findChildren(_PB)}
+assert {"Confirm image", "Clear boxes and retry AI", "Delete selected box", "Clear distance of box", "Delete frame..."} <= texts, texts
+assert "font-weight:600" in w.confirm_btn.styleSheet(), "the action that moves the work on stands out"
 for gone in ("Insert Assist Model", "Insert Scratch Model", "Publish to shared folder", "Import data to edit...", "Shared folder location...", "Models folder location...", "Dataset location...", "Import Gimble Session..."):
     assert gone not in file_items
 # a box cannot be drawn without a class

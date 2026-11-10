@@ -22,7 +22,7 @@ import tabs as TB
 import tet as TT
 import verify as VF
 from tasks import sub
-from uiparts import button, row, spin
+from uiparts import button, row, spin, stack
 
 FIELDS = [(("Element size" if k == "brick size" else n), k, kd, w) for n, k, kd, w in TB.FIELDS]
 SURFACE_ABOVE = 200_000                    # more tetrahedra than this are drawn as their outer surface only
@@ -171,7 +171,7 @@ class MeshFEATab(TB.VoxelTab):
             sp = spin(5, 100, 100, 0, 5, " %")
             sp.valueChanged.connect(self.update_estimate)
             self.crop_spins.append(sp)
-        al.addWidget(row("Block from the middle: X", self.crop_spins[0], "Y", self.crop_spins[1], "Z", self.crop_spins[2]))
+        al.addWidget(stack("Block from the middle (X, Y, Z)", *self.crop_spins))
         self.note(al, "The block cut is capped with new flat faces (clean ends for supports and loads); on a very porous surface the caps can be rough.")
         self.mode_combo.currentIndexChanged.connect(self.mode_changed)
 
@@ -233,7 +233,7 @@ class MeshFEATab(TB.VoxelTab):
 
     def build_nodes_box(self):
         super().build_nodes_box()
-        lay = self.lay.itemAt(self.lay.count() - 1).widget().layout()
+        lay = self.last_box                       # the layout of the step the parent just built
         depth_row = self.depth_lo.parentWidget()
         lay.removeWidget(depth_row)
         al = self.advanced(lay)

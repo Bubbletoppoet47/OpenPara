@@ -98,7 +98,7 @@ class Section(QWidget):
         lay.addWidget(self.sum_lbl)
         self.body = QWidget()
         self.form = QFormLayout(self.body)
-        self.form.setContentsMargins(4, 4, 2, 4)
+        self.form.setContentsMargins(10, 4, 8, 6)            # the contents line up under the heading text, not at the panel's edge
         lay.addWidget(self.body)
         self.toggle(open_)
 
@@ -116,6 +116,10 @@ class Section(QWidget):
                 txt = ""
         self.sum_lbl.setText(txt)
         self.sum_lbl.setVisible(bool(txt))
+
+
+def bodies_text(n):
+    return f"{n} body" if n == 1 else f"{n} bodies"
 
 
 def dspin(lo, hi, val, step=1.0, dec=2, w=84):
@@ -145,7 +149,7 @@ class LenSpin(QDoubleSpinBox):
         self.lineEdit().setText(self.textFromValue(self.value()))
 
 
-def dlen(lo, hi, val, step=10.0, w=78):
+def dlen(lo, hi, val, step=10.0, w=92):
     s = LenSpin()
     s.setRange(lo, hi)
     s.setDecimals(6)
@@ -316,11 +320,11 @@ class RenderStudio(QMainWindow):
         return self.pl
 
     def title(self):
-        if self.proj_path:
-            return os.path.basename(self.proj_path)
+        if self.proj_path:                               # a project tab is named after its folder, without the extension (as the simulations are)
+            return os.path.splitext(os.path.basename(self.proj_path.rstrip("/\\")))[0]
         if self.proj and self.proj.get("source"):
-            return os.path.splitext(os.path.basename(self.proj.get("orig") or self.proj["source"]))[0] + " (visualize)"
-        return "Render"
+            return "Visualize - " + os.path.splitext(os.path.basename(self.proj.get("orig") or self.proj["source"]))[0]
+        return "Visualize"
 
     def is_dirty(self):
         return bool(self.dirty)
@@ -480,7 +484,7 @@ class RenderStudio(QMainWindow):
                 self.pl = QtInteractor(holder)
                 w = self.pl.interactor if hasattr(self.pl, "interactor") else self.pl
                 lay.addWidget(w, 1)
-                self.pl.set_background("#f4f6fa")
+                self.pl.set_background("#f7f9fc", top="#cfd9ea")       # the soft gradient of the Part and Assembly views
                 self.overlay = FrameOverlay(w, lambda: self.proj["render"]["width"] / max(1, self.proj["render"]["height"]) if self.proj else 1.5)
             except Exception as ex:
                 self.pl = None
@@ -555,6 +559,60 @@ class RenderStudio(QMainWindow):
         self.a_stop.setEnabled(False)
         hm = self.menuBar().addMenu("Help")
         act(hm, "Guide", self.show_guide, "F1")
+        self.menus = {"file": fm, "render": rm, "help": hm}
+        if emb:
+            self.make_bar()
+
+    def make_bar(self):
+        """As a tab of the program: the menu bar is replaced by one bar, like the bar of the Truss and simulation tabs - what this is and which
+        model, then the project and render commands as drop-down buttons.  The same actions (and their shortcuts) stay."""
+        try:
+            import ui_kit
+        except ImportError:                                  # a program older than this add-on keeps the plain menu bar
+            return
+        bar = QWidget()
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(6, 5, 6, 5)
+        lay.setSpacing(8)
+        lay.addWidget(ui_kit.kind_chip("Visualize", "#7c4dcc"))
+        self.bar_lbl = QLabel("")
+        self.bar_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
+        lay.addWidget(self.bar_lbl, 1)
+        self.bar_buttons = {}
+        b = QPushButton("Update from original")
+        b.setToolTip("Reads the part / assembly again as it is now (the cameras, looks and lights stay).")
+        b.clicked.connect(self.refresh_model)
+        lay.addWidget(b)
+        self.bar_buttons["update"] = b
+        for key, text, tip in (("file", "Project ▾", "Save the Visualize project, export / import its settings and cameras"),
+                               ("render", "Render ▾", "Still pictures and videos of the cameras")):
+            tb = QToolButton()
+            tb.setText(text)
+            tb.setToolTip(tip)
+            tb.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            tb.setMenu(self.menus[key])
+            ui_kit.menu_button(tb)
+            lay.addWidget(tb)
+            self.bar_buttons[key] = tb
+        g = QPushButton("Guide")
+        g.setToolTip("How Previs, Preview and Render work (F1)")
+        g.clicked.connect(self.show_guide)
+        lay.addWidget(g)
+        self.bar_buttons["guide"] = g
+        for m in self.menus.values():                        # the shortcuts keep working without the menu bar
+            self.addActions(m.actions())
+        self.setMenuWidget(bar)
+        self.refresh_bar()
+
+    def refresh_bar(self):
+        lb = getattr(self, "bar_lbl", None)
+        if lb is None:
+            return
+        proj = getattr(self, "proj", None) or {}
+        src = proj.get("orig") or proj.get("source") or ""
+        name = os.path.basename(str(src)) if src else ""
+        lb.setText((f"of <b>{name}</b> (the copy in the project)" if getattr(self, "proj_path", None) else f"of <b>{name}</b>") if name
+                   else "Nothing loaded yet")
 
     def make_props(self):
         host = QWidget()
@@ -674,21 +732,26 @@ class RenderStudio(QMainWindow):
         b_add.clicked.connect(self.cam_add_view)
         self.preset = QComboBox()
         self.preset.addItems(list(rs.PRESET_VIEWS))
+        self.preset.setToolTip("A standard view to add as a camera")
         b_pre = QPushButton("Add view")
+        b_pre.setToolTip("Adds the standard view chosen on the left as a camera.")
         b_pre.clicked.connect(self.cam_add_preset)
-        f.addRow(row(b_add))
-        f.addRow(row(self.preset, b_pre))
+        f.addRow(row(b_add, self.preset, b_pre))
         b_up = QPushButton("Move up")
         b_up.clicked.connect(lambda: self.cam_move(-1))
         b_dn = QPushButton("Move down")
         b_dn.clicked.connect(lambda: self.cam_move(1))
-        f.addRow(row(QLabel("Tick = part of the video path; the list order is the path order:"), b_up, b_dn))
         b_exp = QPushButton("Export cameras...")
         b_exp.clicked.connect(self.export_cameras)
         b_imp = QPushButton("Import cameras...")
         b_imp.clicked.connect(self.import_cameras)
-        f.addRow(row(b_exp, b_imp))
+        f.addRow(row(b_up, b_dn, b_exp, b_imp))
+        f.addRow(note_label("A ticked camera is part of the video path; the order of the list is the order of the path."))
+        sc_ = QLabel("Selected camera")
+        sc_.setStyleSheet("font-weight:700; color:#16324f; padding-top:8px;")
+        f.addRow(sc_)
         b_look = QPushButton("Look through")
+        b_look.setToolTip("Shows the 3D view from the selected camera.")
         b_look.clicked.connect(self.cam_look)
         b_upd = QPushButton("Set from current view")
         b_upd.setToolTip("Moves the selected camera to where you are looking now.")
@@ -844,6 +907,12 @@ class RenderStudio(QMainWindow):
         dock.setMinimumWidth(400)
         dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
+        self.props_dock, self.props_host = dock, host
+        try:                                                  # the panel opens as wide as its contents need: nothing cut off, no sideways scroll bar
+            import ui_kit
+            ui_kit.fit_dock(self, dock, host, lo=400, hi=640)
+        except ImportError:
+            pass
         self.connect_props()
         self.setEnabled_props(False)
 
@@ -1199,7 +1268,7 @@ class RenderStudio(QMainWindow):
         self.update_scrub_info()
         self.draw_scene(reset=not keep_cam)
         self.set_title()
-        self.statusBar().showMessage(f"{len(self.bodies)} body(ies) loaded from {self.proj['source']}")
+        self.statusBar().showMessage(f"{bodies_text(len(self.bodies))} loaded from {self.proj['source']}")
 
     def load_model(self, path):
         self.statusBar().showMessage("Loading the model...")
@@ -1213,7 +1282,8 @@ class RenderStudio(QMainWindow):
         self.meshes = [rs.mesh_of(b[1]) for b in bodies]
         self.proj = rs.new_project(bodies, self.meshes, path)
         self.proj["orig"] = self.orig_path or path
-        self.src_lbl.setText(f"<b>{os.path.basename(path)}</b><br>{len(bodies)} body(ies)")
+        self.src_lbl.setText(f"<b>{os.path.basename(path)}</b><br>{bodies_text(len(bodies))}")
+        self.refresh_bar()
 
     def source_text(self):
         """(JSON text, original path) of the model to copy into a project: the open tab as it is now, else the file."""

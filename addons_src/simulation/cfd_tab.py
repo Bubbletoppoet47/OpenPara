@@ -577,7 +577,7 @@ class CFDTab(QWidget):
         self.info.setWordWrap(True)
         lay.addWidget(self.info)
 
-        lay.addWidget(QLabel("Solid bodies (tick = solid; the closed outlines of the sketch)"))
+        lay.addWidget(sim_ui.wrapped("Solid bodies (tick = solid; the closed outlines of the sketch)"))
         self.bodies = QListWidget()
         self.bodies.setMaximumHeight(110)
         self.bodies.itemChanged.connect(self.body_toggled)
@@ -718,6 +718,7 @@ class CFDTab(QWidget):
         for name, key, _, _ in FIELD_LIST:
             self.field.addItem(name, key)
         self.field.setCurrentIndex(0)
+        sim_ui.tame(self.field, 26)                          # its longest entry does not set the width of the whole panel
         self.field.currentIndexChanged.connect(self.refresh)
         lay.addWidget(with_help(self.field, HELP["field"]))
         row = QHBoxLayout()
@@ -809,7 +810,7 @@ class CFDTab(QWidget):
         split.addWidget(self.canvas)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        split.setSizes([400, 1000])                 # the panel starts about 400 wide; drag the divider for more (not remembered)
+        sim_ui.fit_side_panel(split, scroll, left)   # as wide as its sections need; drag the divider for more (not remembered)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)

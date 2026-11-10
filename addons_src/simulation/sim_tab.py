@@ -15,7 +15,7 @@ import types
 
 import numpy as np
 
-from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox, QPushButton, QVBoxLayout,
+from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout,
                              QWidget)
 
 import beam_tab
@@ -29,6 +29,7 @@ import sim_project
 import sim_slice
 import sim_source
 import sketcher_core as sc
+import ui_kit
 import slice3d
 import slice_sketch as ss
 import unitctl
@@ -105,8 +106,11 @@ class SimWindow(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
         bar = QHBoxLayout()
+        bar.setSpacing(8)
+        bar.addWidget(ui_kit.kind_chip(self.label, "#7c4dcc"))      # the same bar as the Truss, Visualize and Study tabs: what it is, then its commands
         self.src_lbl = QLabel()
         self.src_lbl.setWordWrap(True)
+        self.src_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
         bar.addWidget(self.src_lbl, 1)
         self.b_new = QPushButton("New project...")
         self.b_new.setToolTip(f"Makes the project folder of this simulation ({sim_project.ext_of(kind)}). The source is copied into it, so the "
@@ -128,8 +132,13 @@ class SimWindow(QWidget):
         self.status_lbl.setStyleSheet("color:#707070;")
         self.tab = cls(self.host)
         self.tab.picker.on_import = self.on_imported
-        lay.addWidget(self.tab, 1)
+        self.empty = ui_kit.EmptyState("", "", [("New project...", self.new_project), ("Import source...", self.import_source)])
+        self.stack = QStackedWidget()                        # the guidance while there is nothing to work on; the solver tab once there is
+        self.stack.addWidget(self.empty)
+        self.stack.addWidget(self.tab)
+        lay.addWidget(self.stack, 1)
         lay.addWidget(self.status_lbl)
+        self.status_lbl.hide()                               # one status line per tab: the solver tab's own (see say)
         self.b_study = QPushButton("Create parametric study")
         self.b_study.setToolTip("Opens a parametric study tab for this simulation: the inputs to vary, the cases to run and the results. The "
                                 "study is saved in the project folder (study/).")
@@ -142,7 +151,7 @@ class SimWindow(QWidget):
     def title(self):
         if self.path:
             return os.path.splitext(os.path.basename(self.path.rstrip("/\\")))[0]
-        return f"{self.label} - {self.src.get('name') or 'new'}"
+        return f"{self.label} - {os.path.splitext(self.src.get('name') or 'new')[0]}"
 
     def show_source(self):
         have = self.project_ok()
@@ -150,18 +159,28 @@ class SimWindow(QWidget):
         self.b_new.setVisible(not have)
         self.b_import.setEnabled(have)
         self.b_refresh.setEnabled(self.source is not None)
+        what = "a part" if self.kind == "beam" else "a part or an assembly"
+        self.stack.setCurrentWidget(self.tab if have and self.source is not None else self.empty)
         if not have:
-            self.src_lbl.setText(f"<b>{self.label}</b> - no project yet. <b>New project...</b> makes the folder of this simulation, then "
-                                 "<b>Import source...</b> copies a part or an assembly into it.")
+            self.src_lbl.setText("No project yet")
+            self.empty.set_text(f"Start a {self.label} project",
+                                f"A simulation is a project folder with its own copy of {what}, so it never depends on the original. "
+                                f"Make the folder, then import {what} into it.")
+            self.empty.buttons[0].setVisible(True)
+            self.empty.buttons[1].setStyleSheet("")
             return
         if self.source is None:
-            self.src_lbl.setText(f"<b>{self.label}</b> - project <b>{os.path.basename(self.path.rstrip('/' + chr(92)))}</b>. Press <b>Import source...</b> "
-                                 "to copy a part or an assembly into it.")
+            self.src_lbl.setText(f"Project <b>{os.path.basename(self.path.rstrip('/' + chr(92)))}</b> - nothing imported yet")
+            self.empty.set_text(f"Import {what}",
+                                f"The project folder is made. Import {what} - from a tab that is open, or from a file. The simulation works on "
+                                "its own copy; you then choose the sketch" + (" of the part." if self.kind == "beam" else " or the slice to analyse."))
+            self.empty.buttons[0].setVisible(False)
+            ui_kit.primary(self.empty.buttons[1])
             return
         kind = "assembly" if self.src["type"] == "asm" else "part"
         rule = ("slice only (a plane through the parts; touching parts are bonded)" if kind == "assembly" else
                 ("sketch of the part" if self.kind == "beam" else "sketch of the part, or a slice"))
-        self.src_lbl.setText(f"<b>{self.label}</b> of the {kind} <b>{self.src.get('name') or '?'}</b> (the copy in the project) - works on: {rule}")
+        self.src_lbl.setText(f"of the {kind} <b>{self.src.get('name') or '?'}</b> (the copy in the project) - works on: {rule}")
         self.refresh_study_button()
 
     def refresh_study_button(self):
@@ -232,12 +251,28 @@ class SimWindow(QWidget):
         self.path = os.path.abspath(path)
         self.show_source()
         self.say(f"Project folder {self.path} made.")
+        self.retitle()
         if self.candidate is not None and self.candidate_ok():
             return self.import_tab(self.candidate)
         return True
 
+    def retitle(self):
+        """The tab strip and the title bar show the new name at once (not at the window's next look)."""
+        try:
+            if self.shell is not None:
+                self.shell.refresh_titles()
+        except Exception:
+            pass
+
     def say(self, text):
+        """A message of the project (made, saved, imported).  It is shown on the tab's one status line, next to the coordinates; the window's
+        own label is kept (hidden) for what reads it."""
         self.status_lbl.setText(text)
+        try:
+            self.tab.status_lbl.setText(text)
+            self.tab.status_lbl.setToolTip(text)
+        except (AttributeError, RuntimeError):
+            pass
 
     def candidate_ok(self):
         c = self.candidate

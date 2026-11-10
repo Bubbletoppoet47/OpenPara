@@ -17,7 +17,7 @@ import numpy as np
 import pyvista as pv
 from pyvistaqt import QtInteractor
 from PyQt6.QtCore import QEvent, QRect, QTimer, Qt
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDockWidget, QFileDialog, QGroupBox, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
+from PyQt6.QtWidgets import (QCheckBox, QHBoxLayout, QFrame, QComboBox, QDockWidget, QFileDialog, QGroupBox, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
                              QPlainTextEdit, QPushButton, QRubberBand, QScrollArea, QSlider, QVBoxLayout, QWidget)
 
 import fem3d as F
@@ -31,7 +31,8 @@ import verify as VF
 import voxel as VX
 from jobs import JobMixin
 from tasks import sub, tick
-from uiparts import button, row, spin
+import ui_kit
+from uiparts import button, narrow, row, spin, stack
 
 AXES = ["X", "Y", "Z"]
 # (name, key, kind of value, where it lives): the same list style as OpenPara's FEA tab
@@ -104,16 +105,26 @@ class VoxelTab(QMainWindow, JobMixin):
         self.plotter.interactor.installEventFilter(self)
         self.panel = QWidget()
         self.lay = QVBoxLayout(self.panel)
+        self.lay.setContentsMargins(6, 2, 6, 6)
+        self.lay.setSpacing(2)
+        self.sections = []                  # the numbered, foldable steps of the panel (the look of the 1D / 2D FEA panels)
+        self.last_box = None
         self.build_ui()
         self.lay.addStretch(1)
+        self.polish_panel()
         sc = QScrollArea()
         sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.Shape.NoFrame)
         sc.setWidget(self.panel)
         sc.setMinimumWidth(360)
-        dock = QDockWidget("Tools", self)
+        dock = QDockWidget("", self)
+        dock.setTitleBarWidget(QWidget())   # no "Tools" strip: the bar on top says what this tab is
         dock.setWidget(sc)
         dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
+        self.props_dock, self.panel_scroll = dock, sc
+        self.make_bar()
+        ui_kit.fit_dock(self, dock, self.panel, lo=360, hi=560)
         self.init_jobs()
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setSingleShot(True)
@@ -123,10 +134,39 @@ class VoxelTab(QMainWindow, JobMixin):
 
     # ------------------------------------------------------------------------------------------------------ small helpers
     def box(self, title):
-        g = QGroupBox(title)
-        lay = QVBoxLayout(g)
-        self.lay.addWidget(g)
-        return lay
+        """A step of the panel: "3. Material" becomes the numbered, foldable section 3 (its fold is remembered).  Returns the layout to fill."""
+        num, _, name = title.partition(". ")
+        if not name or not num.isdigit():
+            num, name = len(self.sections) + 1, title
+        sec = ui_kit.Section(self.KIND, int(num), name, True)
+        self.sections.append(sec)
+        self.lay.addWidget(sec)
+        self.last_box = sec.body
+        return sec.body
+
+    PRIMARY = ("Voxelise and show", "Reduce, mesh and show", "Run")          # the buttons that move the work on: teal, like Solve in the FEA tabs
+
+    def polish_panel(self):
+        """After the panel is built: the main actions stand out, long drop-downs do not set the panel's width, plain labels wrap."""
+        for b in self.panel.findChildren(QPushButton):
+            if b.text() in self.PRIMARY:
+                ui_kit.primary(b)
+                b.setMinimumHeight(34)
+        for c in self.panel.findChildren(QComboBox):
+            if not c.isEditable() and max((len(c.itemText(i)) for i in range(c.count())), default=0) > 26:
+                ui_kit.tame_combo(c, 26)
+
+    def make_bar(self):
+        """The bar on top, as in the other tabs: what this is, and what is loaded."""
+        bar = QWidget()
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(6, 5, 6, 5)
+        lay.setSpacing(8)
+        lay.addWidget(ui_kit.kind_chip(self.TITLE, "#7c4dcc"))
+        self.bar_lbl = QLabel("Nothing loaded yet")
+        self.bar_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
+        lay.addWidget(self.bar_lbl, 1)
+        self.setMenuWidget(bar)
 
     def note(self, lay, text):
         lb = QLabel(text)
@@ -206,6 +246,8 @@ class VoxelTab(QMainWindow, JobMixin):
         elif s["kind"] == "voxels":
             extra = f"\nVoxels: {s['occ'].shape[0]} x {s['occ'].shape[1]} x {s['occ'].shape[2]}, voxel {look.fmt('L', s['h'])}, {int(s['occ'].sum()):,} solid"
         self.src_lbl.setText(f"From: {s['label']}{extra}")
+        if getattr(self, "bar_lbl", None) is not None:
+            self.bar_lbl.setText(f"of <b>{s['label']}</b>" if s["kind"] else "Nothing loaded yet")
         self.src_lbl.setStyleSheet("color:#b00020;" if s.get("open") else "")
 
     def reset_discretisation(self):
@@ -356,7 +398,7 @@ class VoxelTab(QMainWindow, JobMixin):
             s = spin(5, 100, 100, 0, 5, " %")
             s.valueChanged.connect(self.update_estimate)
             self.crop_spins.append(s)
-        lay.addWidget(row("Block from the middle: X", self.crop_spins[0], "Y", self.crop_spins[1], "Z", self.crop_spins[2]))
+        lay.addWidget(stack("Block from the middle (X, Y, Z)", *self.crop_spins))
         self.est_lbl = QLabel("")
         self.est_lbl.setWordWrap(True)
         lay.addWidget(self.est_lbl)
@@ -537,8 +579,9 @@ class VoxelTab(QMainWindow, JobMixin):
         self.g_axes = [QCheckBox(a) for a in AXES]
         self.g_disp = [look.UnitSpin("L", -1e6, 1e6, 0.0, 5, 0.01) for _ in AXES]
         self.g_force = [look.UnitSpin("F", -1e9, 1e9, 0.0, 4, 1.0) for _ in AXES]
-        self.g_disp_row = row("Move by", *self.g_disp)
-        self.g_force_row = row("Total force", *self.g_force)
+        narrow(*self.g_disp, *self.g_force)
+        self.g_disp_row = stack("Move by (x, y, z)", *self.g_disp)
+        self.g_force_row = stack("Total force (x, y, z)", *self.g_force)
         lay.addWidget(row("Name", self.g_name))
         lay.addWidget(row("Kind", self.g_kind))
         lay.addWidget(row("Acts along", *self.g_axes))

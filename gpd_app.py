@@ -72,6 +72,8 @@ class AppShell(QMainWindow):
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
         self.tabs.setDocumentMode(True)
+        from PyQt6.QtCore import QSize
+        self.tabs.setIconSize(QSize(16, 16))
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self.tab_changed)
         import start_page
@@ -454,6 +456,31 @@ class AppShell(QMainWindow):
         return out
 
     # ------------------------------------------------------------------ recent files
+    def tab_kind(self, w):
+        """The kind of a tab: "part", "assembly", or the kind its add-on gave it (its manifest "kind", or the tab's own  kind  attribute)."""
+        if isinstance(w, pm_app.MainWindow):
+            return "part"
+        if hasattr(w, "asm"):
+            return "assembly"
+        k = getattr(w, "kind", None)
+        if isinstance(k, str) and k:
+            return k
+        try:                                              # a tab the add-on opened itself: the kind of its add-on's (first) document
+            aid = addons.owner_of_module(type(w).__module__)
+            return next((kind for kind, spec in addons.tab_kinds().items() if spec.get("aid") == aid), "")
+        except Exception:
+            return ""
+
+    def tab_icon(self, w):
+        """The small icon of a tab (icon_set): the one its add-on names (the tab's  tab_icon  or the manifest's "icon"), else by kind."""
+        try:
+            import icon_set
+            kind = self.tab_kind(w)
+            spec = addons.tab_kinds().get(kind) or {}
+            return icon_set.for_tab(kind, getattr(w, "tab_icon", None) or spec.get("icon"))
+        except Exception:
+            return None
+
     def kind_label(self, w):
         """What a tab is, in a word or two, for the recent list: Part, Assembly, or the label of the add-on's document (+ "project" for a folder)."""
         if isinstance(w, pm_app.MainWindow):
@@ -461,6 +488,12 @@ class AppShell(QMainWindow):
         if hasattr(w, "asm"):
             return "Assembly"
         spec = addons.tab_kinds().get(getattr(w, "kind", None))
+        if spec is None:                                  # a tab its add-on opened itself (Visualize of a part): the add-on's (first) document
+            try:
+                aid = addons.owner_of_module(type(w).__module__)
+                spec = next((sp for sp in addons.tab_kinds().values() if sp.get("aid") == aid), None)
+            except Exception:
+                spec = None
         label = spec.get("label", "") if spec else ""
         p = getattr(w, "path", None)
         return (label + " project").strip() if isinstance(p, str) and os.path.isdir(p) else label
@@ -635,6 +668,9 @@ class AppShell(QMainWindow):
     # ------------------------------------------------------------------ documents
     def add_tab(self, w):
         i = self.tabs.addTab(w, w.title())
+        ic = self.tab_icon(w)
+        if ic is not None:
+            self.tabs.setTabIcon(i, ic)                   # what kind of document the tab is, at a glance
         self.tabs.setCurrentIndex(i)
         self.show_stack()
         self.note_recent(w)
@@ -987,8 +1023,10 @@ class AppShell(QMainWindow):
             if self.tabs.tabText(i) != t:
                 self.tabs.setTabText(i, t)
             p = getattr(w, "path", None)
-            if isinstance(p, str) and p and self.tabs.tabToolTip(i) != p:
-                self.tabs.setTabToolTip(i, p)             # hovering a tab says where its file is
+            if isinstance(p, str) and p:                  # hovering a tab says what it is and where its file is
+                tip = (self.kind_label(w) + "\n" if self.kind_label(w) else "") + p
+                if self.tabs.tabToolTip(i) != tip:
+                    self.tabs.setTabToolTip(i, tip)
             self.note_recent(w)                           # a document saved under a (new) name, a project folder just made
         self.update_window()
 

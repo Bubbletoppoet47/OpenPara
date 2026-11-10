@@ -18,7 +18,7 @@ import traceback
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
+from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHeaderView,
                              QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox, QSplitter,
                              QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -89,6 +89,7 @@ class StudyTab(QWidget):
     def __init__(self, sw, threaded=True):
         super().__init__()
         self.sw = sw                          # the SimWindow this study belongs to
+        self.kind = "study"                   # (the program window picks the tab's icon by it)
         self.threaded = threaded
         self.path_ = sw.path                  # (not .path: the shell finds the simulation's tab by that name)
         self.data = core.StudyData.load(sw.path) if core.exists(sw.path) else core.StudyData()
@@ -103,43 +104,76 @@ class StudyTab(QWidget):
         self.dirty = not core.exists(sw.path)
         self.building = False
 
-        left = QWidget()
-        ll = QVBoxLayout(left)
-        ll.setContentsMargins(6, 6, 6, 6)
+        import sim_ui                                        # the numbered, foldable sections of the simulation panels (a study always belongs to one)
+        import ui_kit
+
+        # ---- the bar on top: what this is, and the way back to its simulation
+        topbar = QHBoxLayout()
+        topbar.setContentsMargins(6, 6, 6, 4)
+        topbar.setSpacing(8)
+        topbar.addWidget(ui_kit.kind_chip("Study", "#7c4dcc"))
         self.head = QLabel()
         self.head.setWordWrap(True)
-        ll.addWidget(self.head)
-        ll.addWidget(self.note("Tick the inputs that should change from case to case. Each ticked input becomes a column of the design-point "
-                               "table; every row of the table is one case."))
+        topbar.addWidget(self.head, 1)
+        self.b_refresh = QPushButton("Refresh inputs")
+        self.b_refresh.setToolTip("Reads the list of inputs and outputs from the simulation again (after supports, loads or profiles were changed).")
+        self.b_refresh.clicked.connect(lambda: self.refresh_params())
+        topbar.addWidget(self.b_refresh)
+        self.b_sim = QPushButton("Go to the simulation")
+        self.b_sim.setToolTip("Shows the simulation tab this study belongs to.")
+        self.b_sim.clicked.connect(self.goto_sim)
+        topbar.addWidget(self.b_sim)
+
+        # ---- the left panel: three numbered steps (they fold), and the Run bar that is always in view
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(6, 2, 6, 6)
+        ll.setSpacing(2)
+        self.sections = []
+
+        def sec(n, title, open_, help_text=None, summary=None):
+            sc_ = sim_ui.Section("study", n, title, open_, help_text, summary)
+            self.sections.append(sc_)
+            ll.addWidget(sc_)
+            return sc_.body
+
+        lay = sec(1, "Inputs to vary", True,
+                  help_text="Tick the inputs that should change from case to case. Each ticked input becomes a column of the design-point table; "
+                            "every row of the table is one case.",
+                  summary=lambda: f"{len(self.cols())} input(s) ticked" if self.desc else "")
         self.tree = QTreeWidget()
         self.tree.setColumnCount(2)
         self.tree.setHeaderLabels(["Input", "Now"])
-        self.tree.setMinimumHeight(240)
+        self.tree.setMinimumHeight(200)
         self.tree.header().resizeSection(0, 250)
         self.tree.itemChanged.connect(self.param_toggled)
-        ll.addWidget(self.tree, 2)
-        b = QPushButton("Refresh the list from the simulation")
-        b.clicked.connect(lambda: self.refresh_params())
-        ll.addWidget(b)
+        lay.addWidget(self.tree, 2)
 
-        ll.addWidget(QLabel("<b>Outputs to record</b>"))
+        lay = sec(2, "Outputs to record", True, help_text="The results that are written into the results table for every case.",
+                  summary=lambda: f"{len(self.data.out_checked)} output(s)")
         self.out_tree = QTreeWidget()
         self.out_tree.setColumnCount(1)
         self.out_tree.setHeaderHidden(True)
-        self.out_tree.setMinimumHeight(160)
+        self.out_tree.setMinimumHeight(150)
         self.out_tree.itemChanged.connect(self.output_toggled)
-        ll.addWidget(self.out_tree, 1)
+        lay.addWidget(self.out_tree, 1)
 
-        ll.addWidget(QLabel("<b>Stop early when...</b>"))
-        ll.addWidget(self.note("Checked after every case, in table order. The case that meets a condition is kept (and marked); every row below "
-                               "it is skipped. Put the heavier cases last."))
+        lay = sec(3, "Stop early when", True,
+                  help_text="Checked after every case, in table order. The case that meets a condition is kept (and marked); every row below it "
+                            "is skipped. Put the heavier cases last.",
+                  summary=lambda: f"{sum(1 for c in self.data.exit_conds if c.get('on', True))} condition(s) on" if self.data.exit_conds else "No conditions")
         self.exit_table = QTableWidget(0, 4)
         self.exit_table.setHorizontalHeaderLabels(["On", "Output", "", "Value"])
         self.exit_table.verticalHeader().hide()
-        self.exit_table.setMinimumHeight(100)
+        self.exit_table.setMinimumHeight(90)
         self.exit_table.setMaximumHeight(160)
-        self.exit_table.horizontalHeader().setStretchLastSection(True)
-        ll.addWidget(self.exit_table)
+        hh = self.exit_table.horizontalHeader()
+        hh.setStretchLastSection(True)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)        # the output's name takes the room; no sideways scroll bar
+        self.exit_table.setColumnWidth(0, 34)
+        self.exit_table.setColumnWidth(2, 54)
+        self.exit_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        lay.addWidget(self.exit_table)
         row = QHBoxLayout()
         self.b_addx = QPushButton("Add condition")
         self.b_addx.clicked.connect(self.add_exit)
@@ -147,48 +181,73 @@ class StudyTab(QWidget):
         b = QPushButton("Remove selected")
         b.clicked.connect(self.del_exit)
         row.addWidget(b)
-        ll.addLayout(row)
-
-        ll.addWidget(QLabel("<b>Run</b>"))
-        row = QHBoxLayout()
-        self.b_all = QPushButton("Run all rows")
-        self.b_all.clicked.connect(self.run_all)
-        self.b_sel = QPushButton("Run selected row")
-        self.b_sel.clicked.connect(self.run_selected)
-        row.addWidget(self.b_all)
-        row.addWidget(self.b_sel)
-        ll.addLayout(row)
-        self.b_cur = QPushButton("Run current setup (one case, nothing changed)")
-        self.b_cur.clicked.connect(self.run_current)
-        ll.addWidget(self.b_cur)
-        self.b_stop = QPushButton("Stop")
-        self.b_stop.setEnabled(False)
-        self.b_stop.clicked.connect(self.stop_run)
-        ll.addWidget(self.b_stop)
-        self.bar = QProgressBar()
-        self.bar.setRange(0, 1000)
-        ll.addWidget(self.bar)
-        self.prog = self.note("")
-        ll.addWidget(self.prog)
+        lay.addLayout(row)
         ll.addStretch(1)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setWidget(left)
-        scroll.setMinimumWidth(380)
-        scroll.setMaximumWidth(480)
+
+        runbar = QFrame()                                    # pinned under the scrolling steps: Run is always one click away
+        runbar.setObjectName("runbar")
+        runbar.setStyleSheet("QFrame#runbar { border-top:1px solid #cfd6e0; background:#f6f8fa; }")
+        rl = QVBoxLayout(runbar)
+        rl.setContentsMargins(8, 8, 8, 6)
+        rl.setSpacing(6)
+        row = QHBoxLayout()
+        self.b_all = ui_kit.primary(QPushButton("Run all rows"))
+        self.b_all.setMinimumHeight(34)
+        self.b_all.setToolTip("Runs every row of the design-point table, one case after another.")
+        self.b_all.clicked.connect(self.run_all)
+        self.b_stop = QPushButton("Stop")
+        self.b_stop.setMinimumHeight(34)
+        self.b_stop.setEnabled(False)
+        self.b_stop.setToolTip("Stops after the case that is being solved; the finished cases are kept.")
+        self.b_stop.clicked.connect(self.stop_run)
+        row.addWidget(self.b_all, 3)
+        row.addWidget(self.b_stop, 1)
+        rl.addLayout(row)
+        row = QHBoxLayout()
+        self.b_sel = QPushButton("Run selected row")
+        self.b_sel.setToolTip("Runs only the row that is selected in the design-point table.")
+        self.b_sel.clicked.connect(self.run_selected)
+        self.b_cur = QPushButton("Run current setup")
+        self.b_cur.setToolTip("One case with the simulation exactly as it is now: nothing is changed. A quick check that the simulation solves.")
+        self.b_cur.clicked.connect(self.run_current)
+        row.addWidget(self.b_sel)
+        row.addWidget(self.b_cur)
+        rl.addLayout(row)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 1000)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(8)
+        rl.addWidget(self.bar)
+        self.prog = self.note("Ready.")
+        rl.addWidget(self.prog)
+
+        panel = QWidget()
+        pv = QVBoxLayout(panel)
+        pv.setContentsMargins(0, 0, 0, 0)
+        pv.setSpacing(0)
+        pv.addWidget(scroll, 1)
+        pv.addWidget(runbar)
+        panel.setMinimumWidth(360)
+        self.panel = panel
 
         right = QSplitter(Qt.Orientation.Vertical)
         top = QWidget()
         tl = QVBoxLayout(top)
         tl.setContentsMargins(6, 6, 6, 0)
-        tl.addWidget(QLabel("<b>Design points</b> (one row = one case; double-click a cell to edit)"))
+        tl.addWidget(self.table_head("Design points", "one row is one case; double-click a cell to edit it"))
         self.design = QTableWidget(0, 0)
         self.design.itemChanged.connect(self.design_edited)
         self.design.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         tl.addWidget(self.design, 1)
+        self.design_hint = self.note("No columns yet. Tick an input in step 1 on the left: every ticked input becomes a column here, and every "
+                                     "row is one case to run. Fill grid and Fill range make many rows at once.")
+        tl.addWidget(self.design_hint)
         row = QHBoxLayout()
         for text, fn in (("Add row", self.add_row), ("Duplicate row", self.dup_row), ("Delete row", self.del_row),
                          ("Fill grid...", self.fill_grid), ("Fill range...", self.fill_range)):
@@ -200,7 +259,7 @@ class StudyTab(QWidget):
         bottom = QWidget()
         bl_ = QVBoxLayout(bottom)
         bl_.setContentsMargins(6, 6, 6, 6)
-        bl_.addWidget(QLabel("<b>Results</b> (click a row to put that case on the screen of the simulation)"))
+        bl_.addWidget(self.table_head("Results", "click a row to show that case in the simulation tab"))
         self.res_table = QTableWidget(0, 0)
         self.res_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.res_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -227,11 +286,15 @@ class StudyTab(QWidget):
         right.setStretchFactor(1, 1)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
-        split.addWidget(scroll)
+        split.addWidget(panel)
         split.addWidget(right)
+        split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
+        ui_kit.fit_panel(split, panel, left, lo=380, hi=520)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addLayout(topbar)
         outer.addWidget(split, 1)
 
         self.refresh_params()
@@ -243,6 +306,21 @@ class StudyTab(QWidget):
 
     # ------------------------------------------------------------------ small helpers
     @staticmethod
+    def table_head(title, hint):
+        lb = QLabel(f"<span style='color:#4a5872; font-size:11px; font-weight:600; letter-spacing:1px;'>{title.upper()}</span>"
+                    f"&nbsp;&nbsp;<span style='color:#6a7790;'>{hint}</span>")
+        return lb
+
+    def goto_sim(self):
+        sh = getattr(self.sw, "shell", None)
+        if sh is not None and sh.is_open(self.sw):
+            sh.tabs.setCurrentWidget(self.sw)
+
+    def refresh_sections(self):
+        for sc_ in getattr(self, "sections", []):
+            sc_.refresh_summary()
+
+    @staticmethod
     def note(text):
         lb = QLabel(text)
         lb.setWordWrap(True)
@@ -250,7 +328,7 @@ class StudyTab(QWidget):
         return lb
 
     def title(self):
-        return "Study - " + os.path.basename(str(self.path_).rstrip("/\\"))
+        return "Study - " + os.path.splitext(os.path.basename(str(self.path_).rstrip("/\\")))[0]
 
     def is_dirty(self):
         return self.dirty
@@ -292,9 +370,10 @@ class StudyTab(QWidget):
             self.desc = {d["id"]: d for d in plist}
             self.outs = list(self.adapter.outputs())
             ready = self.adapter.ready()
-            pname = os.path.basename(str(self.path_).rstrip("/\\"))
+            pname = os.path.splitext(os.path.basename(str(self.path_).rstrip("/\\")))[0]
             self.head.setText(f"<b>{self.adapter.label}</b> study of the project <b>{pname}</b>"
                               + (f"<br><span style='color:#a05000'>{ready}</span>" if ready else ""))
+            self.refresh_sections()
             self.tree.blockSignals(True)
             self.tree.clear()
             groups = {}
@@ -448,6 +527,8 @@ class StudyTab(QWidget):
                 self.design.setItem(r, c, QTableWidgetItem(str(row.get(p, ""))))
         self.design.resizeColumnsToContents()
         self.design.blockSignals(False)
+        self.design_hint.setVisible(not cols)             # nothing ticked yet: say how the table gets its columns
+        self.refresh_sections()
 
     def design_edited(self, item):
         cols = self.cols()

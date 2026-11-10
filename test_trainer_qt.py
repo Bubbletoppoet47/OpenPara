@@ -84,6 +84,12 @@ assert spec["kind"] == "trainer" and spec["project_folder"] == {"marker": "train
 w = tt.make_tab(None); w.host = host; w.resize(1200, 800); w.show(); pump(4)
 assert isinstance(w, tt.TrainerTab) and w.title() == "Trainer" and not w.is_dirty() and w.temp_root
 assert "No pictures yet" in w.data_info.text()
+# the look of the family: the bar (what it is, which project, its commands on the right), three numbered foldable steps, the main action in teal
+assert "not saved yet" in w.bar_lbl.text() and [b.text() for b in w.bar_buttons] == ["Import dataset zip...", "Save project as..."]
+assert [(s.number, s.title) for s in w.sections] == [(1, "Data"), (2, "Distortions"), (3, "Model")]
+assert not w.findChildren(tt.QGroupBox), "no grey group boxes"
+assert "font-weight:600" in w.btn_train.styleSheet() and w.btn_train.text() == "Start training"
+assert w.panel_scroll.viewport().width() >= w.panel.minimumSizeHint().width(), "the left panel shows its contents whole"
 assert w.type_box.findData("fake") >= 0 and w.type_box.findData("yolo") >= 0 and w.type_box.findData("yolo_scratch") >= 0
 assert [w.type_box.itemText(i) for i in range(2)] == ["YOLO  (pretrained)", "YOLO  (not pretrained: random starting weights)"]
 import re

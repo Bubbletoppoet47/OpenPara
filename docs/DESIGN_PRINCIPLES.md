@@ -19,7 +19,7 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 - The note text under a control is short, plain, and says what the control does, not how it is coded.
 
 ## 2b. Project bars (Truss Generator, simulation tabs)
-- A project tab's top bar is short: **New project…** (makes the folder first), **Import source…** (copies a sketch, part or assembly in), **Update from original**. Project name and Configuration sit beside them.
+- A project tab's top bar is short: **New project...** (makes the folder first), **Import source...** (copies a sketch, part or assembly in), **Update from original**, on the right of the bar; the kind chip, project name and Configuration sit on the left (see 7d).
 - Less-used commands (Open sketch for editing, Clear sketch) live in a small menu, not on the bar. Export lives on the page it belongs to (Assembly), not on the bar.
 - Heavy rebuilds are incremental: an edit rebuilds only what it touches, the rest (and its meshes) is reused; the Assembly page is built when it is opened.
 
@@ -70,6 +70,19 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 - **Tab lifetime**: a closed tab is deleted by Qt. Never keep a closed tab and reuse it (check it is alive, or forget it in `shutdown()`). A tab that cannot live without another one says so with `depends_on()`; the window closes it first. Background work is stopped in `shutdown()` (a closed tab gets no `closeEvent`), and `can_close()` asks before a run is interrupted.
 - File > Add-ons says for every add-on **what it adds** (read from its manifest by `addons.adds`), its state, and its load error. Playground add-ons are used where they are: no Install / Uninstall.
 
+## 7d. One family of tabs (`ui_kit.py`)
+- **Every document tab carries the icon of its kind** (`icon_set.TAB_KIND`; a manifest may name another with `"icon"`). Hues: modelling blue / teal, analysis purple, data and AI magenta, tools grey. New icons are drawn in the `icon_set` style (24 x 24 grid, the classes b / a / l / n).
+- **Tab names**: a file tab shows its file name (`bracket.gpd`); a project tab shows its folder without the extension (`frame`, `Roof`); a tab without a file yet says what it is and of what (`1D FEA - bracket`, `Visualize - bracket`); a study is `Study - <project>`. The tab's tooltip says the kind and the path.
+- **The bar on top is the same everywhere** (Truss, Visualize, the simulations, Study, Mesh FEA, Mesh fixing, Annotator, Trainer): a coloured chip that says what the tab is (`ui_kit.kind_chip`), then what it works on in muted text, then - on the right - its commands (`New project...`, `Import source...`, `Update from original`, drop-down buttons). A tab never has a second menu bar: inside the program its menus become drop-down buttons on the bar (`ui_kit.menu_button`).
+- **An empty tab says how to begin** (`ui_kit.EmptyState`): a title, one or two plain sentences, and the buttons that start the work - the first one teal. Never three empty panes, never a blank canvas.
+- **Side panels are numbered, foldable sections** (`ui_kit.Section`; the simulation tabs' `sim_ui.Section` is the same look). No grey group boxes for the steps of a panel.
+- **A panel opens as wide as its contents** (`ui_kit.fit_panel` / `fit_dock`): nothing is cut off and there is no sideways scroll bar at the start. It widens when its contents grow, until the user drags the divider. A long drop-down is tamed (`ui_kit.tame_combo`), three axis boxes go under their label (`uiparts.stack`), long labels wrap.
+- **One teal button per panel** is the action that moves the work on (`ui_kit.primary`): Solve, Run all rows, Reduce, mesh and show, Repair, Start training, Confirm image, Export assembly. Everything else is a plain button. A Run / Solve bar that must always be reachable is pinned under the scrolling part.
+- **One status line per tab** (`ui_kit.StatusLine` or the tab's own label): a long message is cut with "..." and shown whole on hover; it never widens the window.
+- **3D views share one background** (`ui_kit.view_background`, the Part window's soft gradient).
+- **Wording**: sentence case ("Confirm image", "Delete frame..."); three dots, never the single ellipsis character; "1 body" / "2 bodies", never "body(ies)".
+- **The Add menu makes things from what is on screen**: Visualize, the simulations, Truss Generator (from a sketch of the part), Parametric study (of the simulation). An add-on registers its own entry with `ext.add_command("add", ...)`.
+
 ## 8. Known gaps (so they are not rediscovered)
 - Splines: a spline END can be made tangent to a line, an arc or another spline (Tangent tool; the end point must be shared, so add Coincident too). No tangent at interior fit points, no point-on-spline constraint, no trim / fillet / offset.
 - 3D FEA: no transparent animation export; results are not saved in the project.
@@ -79,3 +92,4 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 - Mate panel: nine full-width icon buttons (mate_icons.py) in the style of the FEA panel buttons; Faces / Edges / Points are icon toggles.
 - Start page: no thumbnails of the recent documents, no pinning. The Add menu entries of Simulation and Visualize are still made by the core (`gpd_app.build_menus`), because add-ons of an older version would lose them; new add-ons use `ext.add_command`.
 - Tab commands (right-click, Window menu) work on whole tabs only; tabs cannot be split side by side.
+- Family look: the Part and Assembly windows keep their ribbon (no chip bar); Motor Control, Circuits, Voxel-only helpers and the 3D FEA tab were not restyled in this pass (3D FEA already uses the simulation sections). The Mesh FEA / Voxel FEA view has no empty-state overlay (the status bar says what to do). The Annotator keeps Title Case in its File menu items ("Import Video...").

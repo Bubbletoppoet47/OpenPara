@@ -442,7 +442,7 @@ class BeamTab(QWidget):
         split.addWidget(right)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        split.setSizes([400, 1000])                 # the panel starts about 400 wide; drag the divider for more (not remembered)
+        sim_ui.fit_side_panel(split, scroll, left)   # as wide as its sections need; drag the divider for more (not remembered)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)

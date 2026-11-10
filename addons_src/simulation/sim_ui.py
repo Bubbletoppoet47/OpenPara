@@ -219,3 +219,29 @@ def make_panel(content, pinned_widgets, min_w=340, max_w=None):
     panel.scroll = scroll
     panel.bar = bar
     return panel
+
+
+def fit_side_panel(split, panel, content):
+    """The panel opens as wide as its sections need (nothing cut off, no sideways scroll bar at the start), between 340 and 640 pixels; the view
+    gets the rest.  The user can still drag the divider; the width is not remembered."""
+    try:
+        import ui_kit
+        ui_kit.fit_panel(split, panel, content, lo=max(340, panel.minimumWidth()), hi=640)
+    except ImportError:                                  # a program older than this add-on: the fixed start width it always had
+        split.setSizes([getattr(panel, "default_w", 400), 1000])
+
+
+def tame(combo, chars=18):
+    """A drop-down with long entries does not force the panel wide (ui_kit.tame_combo); the whole text is in the list and in the tooltip."""
+    try:
+        import ui_kit
+        return ui_kit.tame_combo(combo, chars)
+    except ImportError:
+        return combo
+
+
+def wrapped(text):
+    """A plain label that wraps instead of forcing the panel wide."""
+    lb = QLabel(text)
+    lb.setWordWrap(True)
+    return lb

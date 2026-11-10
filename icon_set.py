@@ -14,7 +14,7 @@ from PyQt6.QtGui import QIcon, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 
 INK = "#26303c"
-HUE = {"feat": "#2f6fed", "cut": "#d6453d", "ref": "#c27a00", "asm": "#0e9488", "ana": "#7c4dcc", "cfg": "#5f6b7a"}
+HUE = {"feat": "#2f6fed", "cut": "#d6453d", "ref": "#c27a00", "asm": "#0e9488", "ana": "#7c4dcc", "cfg": "#5f6b7a", "ai": "#b83280"}
 
 PICKS = {
     'assembly': ('<path class="b" d="M12 3l9 4.5-9 4.5-9-4.5z"/><path class="l" d="M3 12l9 4.5 9-4.5M3 16.5l9 4.5 9-4.5"/>', 'asm'),
@@ -49,6 +49,39 @@ PICKS = {
     'equations': ('<rect class="b" x="3.5" y="3.5" width="17" height="17" rx="3"/><path class="n" d="M16.5 7.5h-8l3.5 4.5-3.5 4.5h8"/>', 'cfg'),
     'material': ('<rect class="b" x="3.5" y="3.5" width="17" height="17" rx="3"/><path class="n" d="M3.5 14.500l11-11M3.5 20.500l17-17M9.500 20.500l11-11"/>', 'cfg'),
 }
+
+# the icons of the document tabs (what kind of document a tab is): modelling blue / teal, analysis purple, data and AI magenta, tools grey
+PICKS.update({
+    'tab_part': ('<path class="b" d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path class="l" d="M4 7.5l8 4.5 8-4.5M12 12v9"/>', 'feat'),
+    'tab_truss': ('<path class="b" d="M3 18L7.5 7h9L21 18z"/><path class="n" d="M7.5 7L12 18l4.5-11"/>', 'feat'),
+    'tab_beam': ('<path class="b" d="M5 11l-2.500 5h5z"/><path class="b" d="M19 11l-2.500 5h5z"/><path class="l" d="M2 19h6M16 19h6M12 3v5M10 6l2 2 2-2"/>'
+                 '<path class="n" stroke-width="2.200" d="M3 11h18"/>', 'ana'),
+    'tab_fea': ('<path class="b" d="M3 5h18v14H3z"/><path class="n" d="M3 12h18M12 5v14M3 12l9-7M12 19l9-7"/>', 'ana'),
+    'tab_cfd': ('<circle class="b" cx="9" cy="12" r="3.200"/><path class="n" d="M2 6h8c5 0 6 2 12 2M2 18h8c5 0 6-2 12-2M15 12h7"/>', 'ana'),
+    'tab_study': ('<rect class="b" x="3" y="4" width="18" height="16" rx="1.500"/><path class="l" d="M3 9.300h18M3 14.600h18M9 4v16M15 4v16"/>'
+                  '<rect class="a" x="9" y="9.300" width="6" height="5.300" style="opacity:.6"/>', 'ana'),
+    'tab_tet': ('<path class="b" d="M11 3L2.500 17l10.500 4 8.500-6.500z"/><path class="n" d="M11 3l2 18"/>', 'ana'),
+    'tab_voxel': ('<rect class="b" x="4" y="4" width="16" height="16" rx="1"/><path class="n" d="M4 12h16M12 4v16"/>', 'ana'),
+    'tab_solid': ('<path class="b" d="M12 3l8 4.500v9L12 21l-8-4.500v-9z"/><path class="n" d="M4 7.500l8 4.500 8-4.500M12 12v9M4 16.500l8-4.500 8 4.500"/>', 'ana'),
+    'tab_mesh': ('<path class="b" d="M3 19L8 6l8 3 5 10z"/><path class="n" d="M8 6l4 13M16 9l-4 10M3 19l13-10"/>', 'cfg'),
+    'tab_annotator': ('<rect class="b" x="2.500" y="4" width="19" height="16" rx="1.500"/><rect class="n" x="7" y="8.500" width="10" height="7.500"/>'
+                      '<circle class="a" cx="7" cy="8.500" r="1.300"/><circle class="a" cx="17" cy="8.500" r="1.300"/><circle class="a" cx="7" cy="16" r="1.300"/>'
+                      '<circle class="a" cx="17" cy="16" r="1.300"/>', 'ai'),
+    'tab_trainer': ('<path class="l" d="M4 4v16h16"/><path class="n" stroke-width="2" d="M6.500 7c2.500 7 6 9.500 12.500 10"/>'
+                    '<circle class="a" cx="6.500" cy="7" r="1.400"/><circle class="a" cx="19" cy="17" r="1.400"/>', 'ai'),
+    'tab_motor': ('<circle class="b" cx="12" cy="12" r="8.500"/><circle class="a" cx="12" cy="12" r="2.200"/>'
+                  '<path class="n" d="M12 3.500v4M12 16.500v4M3.500 12h4M16.500 12h4"/>', 'cfg'),
+})
+# the kind of a document tab (its manifest "kind"; "part" / "assembly" for the program's own) -> icon key.  A manifest may name another with "icon".
+TAB_KIND = {"part": "tab_part", "assembly": "assembly", "truss": "tab_truss", "visualize": "render", "render": "render", "beam": "tab_beam", "fea": "tab_fea",
+            "cfd": "tab_cfd", "study": "tab_study", "tet": "tab_tet", "voxel": "tab_voxel", "solid": "tab_solid", "mesh": "tab_mesh",
+            "annotator": "tab_annotator", "trainer": "tab_trainer", "motor": "tab_motor"}
+
+
+def for_tab(kind, key=None):
+    """The 16 px icon of a document tab of this kind (or of the icon key a manifest / tab names); None when there is none."""
+    return qicon(key if key in PICKS else TAB_KIND.get(kind, ""), 16)
+
 
 # toolbar button text (lower case, line breaks as spaces) -> icon key
 LABELS = {

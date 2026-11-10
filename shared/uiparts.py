@@ -27,3 +27,22 @@ def row(*widgets):
     for x in widgets:
         lay.addWidget(QLabel(x) if isinstance(x, str) else x)
     return w
+
+
+def stack(label, *widgets):
+    """A label on its own line with the widgets in a row under it - for three axis boxes that would make one line too wide."""
+    from PyQt6.QtWidgets import QVBoxLayout
+    w = QWidget()
+    lay = QVBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(2)
+    lay.addWidget(QLabel(label))
+    lay.addWidget(row(*widgets))
+    return w
+
+
+def narrow(*spins, width=92):
+    """Number boxes that ask for less room than their range would (three of them fit side by side in a panel)."""
+    for sp in spins:
+        sp.setMinimumWidth(width)
+    return spins

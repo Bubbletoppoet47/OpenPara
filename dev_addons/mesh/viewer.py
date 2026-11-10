@@ -22,11 +22,12 @@ import pyvista as pv
 from pyvistaqt import QtInteractor
 from PyQt6.QtCore import QEvent, QObject, QPoint, QRect, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDockWidget, QDoubleSpinBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QMainWindow,
+from PyQt6.QtWidgets import (QApplication, QFrame, QCheckBox, QComboBox, QDialog, QDockWidget, QDoubleSpinBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QMainWindow,
                              QMessageBox, QProgressBar, QPushButton, QRubberBand, QScrollArea, QSlider, QTabWidget, QVBoxLayout, QWidget)
 
 import look
 import mesh2d as M2
+import ui_kit
 import picking as PK
 import remesh as RM
 import repair as R
@@ -120,12 +121,15 @@ class Viewer(QMainWindow, JobMixin):
         w = QWidget()
         self.panel = w
         lay = QVBoxLayout(w)
+        lay.setContentsMargins(6, 2, 6, 6)
+        lay.setSpacing(2)
+        self.sections = []                   # the numbered, foldable blocks of the panel (the look of the FEA panels)
 
         def group(title):
-            g = QGroupBox(title)
-            v = QVBoxLayout(g)
-            lay.addWidget(g)
-            return v
+            sec = ui_kit.Section("mesh", len(self.sections) + 1, title, True)
+            self.sections.append(sec)
+            lay.addWidget(sec)
+            return sec.body
 
         g = group("Mesh")
         self.shape_box = QComboBox()
@@ -254,14 +258,31 @@ class Viewer(QMainWindow, JobMixin):
         g.addWidget(self.sketch_lbl)
         lay.addStretch(1)
 
+        for b in w.findChildren(QPushButton):               # the action that moves the work on stands out, like Solve in the FEA tabs
+            if b.text() == "Repair":
+                ui_kit.primary(b)
+                b.setMinimumHeight(34)
         sc = QScrollArea()
         sc.setWidget(w)
         sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.Shape.NoFrame)
         sc.setMinimumWidth(380)
-        dock = QDockWidget("Tools", self)
+        dock = QDockWidget("", self)
+        dock.setTitleBarWidget(QWidget())                    # no "Tools" strip: the bar on top says what this tab is
         dock.setWidget(sc)
         dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
+        self.props_dock, self.panel_scroll = dock, sc
+        bar = QWidget()                                      # the bar on top, as in the other tabs: what this is, and what is loaded
+        bl = QHBoxLayout(bar)
+        bl.setContentsMargins(6, 5, 6, 5)
+        bl.setSpacing(8)
+        bl.addWidget(ui_kit.kind_chip("Mesh fixing", "#5f6b7a"))
+        self.bar_lbl = QLabel("Nothing loaded yet")
+        self.bar_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
+        bl.addWidget(self.bar_lbl, 1)
+        self.setMenuWidget(bar)
+        ui_kit.fit_dock(self, dock, w, lo=380, hi=560)
         self.update_sub_label()
 
     def build_statusbar(self):
@@ -337,6 +358,8 @@ class Viewer(QMainWindow, JobMixin):
 
     def install(self, m, analysis, reset=False):
         self.mesh = m
+        if getattr(self, "bar_lbl", None) is not None:
+            self.bar_lbl.setText(f"<b>{m.n_cells:,}</b> triangles")
         self.diagnosis = analysis["diag"]
         self.problem_data = analysis["problems"]
         self.sel = np.zeros(m.n_cells, bool)

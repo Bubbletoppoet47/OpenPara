@@ -11,7 +11,7 @@ import threading
 import time
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                              QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QSplitter, QTableWidget,
                              QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -19,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import trainer_core as tc  # noqa: E402
+import ui_kit  # noqa: E402
 
 
 HINTS = {
@@ -44,7 +45,7 @@ HINTS = {
 def hint(key_or_text):
     lab = QLabel(HINTS.get(key_or_text, key_or_text))
     lab.setWordWrap(True)
-    lab.setStyleSheet("color: gray; font-size: 11px;")
+    lab.setStyleSheet("color:#6a7790; font-size:11px;")
     return lab
 
 
@@ -55,6 +56,13 @@ def tip(widget, key):
 
 def same_path(a, b):
     return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def pane_head(text):
+    """The small heading of a pane ("RUN"), the same as in the rest of the program."""
+    lb = QLabel(text.upper())
+    lb.setStyleSheet("color:#4a5872; font-size:11px; font-weight:600; letter-spacing:1px;")
+    return lb
 
 
 class Poster:
@@ -196,23 +204,45 @@ class TrainerTab(QWidget):
     # ------------------------------------------------------------------ the window
     def _build(self):
         outer = QVBoxLayout(self)
-        top = QHBoxLayout()
-        for text, fn in (("Import dataset zip...", self.import_zip), ("Save project as...", lambda: self.save(True))):
+        outer.setContentsMargins(6, 6, 6, 4)
+        top = QHBoxLayout()                                  # the bar: what this is and which project on the left, its commands on the right
+        top.setSpacing(8)
+        top.addWidget(ui_kit.kind_chip("Trainer", "#b83280"))
+        self.bar_lbl = QLabel("")
+        self.bar_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
+        top.addWidget(self.bar_lbl)
+        self.status = QLabel("")
+        self.status.setStyleSheet(f"color:{ui_kit.WARN};")
+        top.addWidget(self.status, 1)
+        self.bar_buttons = []
+        for text, fn, tipx in (("Import dataset zip...", self.import_zip, "Adds the pictures and boxes of a dataset zip (made by the Annotator or another Trainer) to this project."),
+                               ("Save project as...", lambda: self.save(True), "Gives the project a .training folder of its own (or copies it to a new one).")):
             b = QPushButton(text)
+            b.setToolTip(tipx)
             b.clicked.connect(lambda _c=False, f=fn: f())
             top.addWidget(b)
-        top.addStretch(1)
-        self.status = QLabel("")
-        top.addWidget(self.status)
+            self.bar_buttons.append(b)
         outer.addLayout(top)
         split = QSplitter(Qt.Orientation.Horizontal)
+        split.setChildrenCollapsible(False)
         outer.addWidget(split, 1)
+        self.sections = []
+
+        def section(n, title, help_text=None, summary=None):
+            """A numbered, foldable step of the left panel (the look of the analysis panels); returns its layout."""
+            sec = ui_kit.Section("trainer", n, title, True, help_text, summary)
+            self.sections.append(sec)
+            lv.addWidget(sec)
+            return sec.body
 
         # ---- left: data, distortions, model
         left = QWidget()
         lv = QVBoxLayout(left)
-        g = QGroupBox("1. Data  (sets marked Validation are only used for the scores)")
-        gv = QVBoxLayout(g)
+        lv.setContentsMargins(4, 2, 6, 6)
+        lv.setSpacing(2)
+        gv = section(1, "Data", "The sets of pictures this model learns from. A set marked Validation is never trained on: it is only used for the "
+                                "scores, so they say how the model does on pictures it has not seen.",
+                     lambda: self.data_info.text().split("\n")[0])
         self.sets_table = QTableWidget(0, 4)
         self.sets_table.setHorizontalHeaderLabels(["Set", "Pictures", "Annotated", "Use as"])
         self.sets_table.horizontalHeader().setStretchLastSection(True)
@@ -223,15 +253,15 @@ class TrainerTab(QWidget):
         self.data_info = QLabel("")
         self.data_info.setWordWrap(True)
         gv.addWidget(self.data_info)
-        gv.addWidget(QLabel("Classes to train on:"))
+        gv.addWidget(QLabel("Classes to train on"))
         self.class_list = QListWidget()
         self.class_list.setMaximumHeight(110)
         self.class_list.itemChanged.connect(lambda _i: self._classes_changed())
         gv.addWidget(self.class_list)
-        lv.addWidget(g)
 
-        g = QGroupBox("2. Distortions")
-        dv = QVBoxLayout(g)
+        dv = section(2, "Distortions", "Extra, slightly changed copies of the training pictures (lighter, blurred, noisy ...), so the model copes "
+                                       "with pictures that are not perfect. Validation pictures are never distorted.",
+                     lambda: "On" if self.dist_on.isChecked() else "Off")
         self.dist_on = QCheckBox("Train on distorted copies of the training pictures")
         self.dist_on.toggled.connect(lambda _c: self._dist_changed())
         dv.addWidget(self.dist_on)
@@ -269,16 +299,12 @@ class TrainerTab(QWidget):
         form.addRow("Copies per training picture:", self.dist_count)
         form.addRow(hint("count"))
         dv.addWidget(self.dist_box)
-        note = QLabel("Copies are made when training starts (and again if you change these settings). Validation pictures are never distorted.")
-        note.setWordWrap(True)
-        dv.addWidget(note)
+        dv.addWidget(ui_kit.note("Copies are made when training starts (and again if you change these settings). Validation pictures are never distorted."))
         btn = QPushButton("Delete the distorted copies")
         btn.clicked.connect(self.clear_distortions)
         dv.addWidget(btn)
-        lv.addWidget(g)
 
-        g = QGroupBox("3. Model")
-        mv = QVBoxLayout(g)
+        mv = section(3, "Model", None, lambda: f"{self.type_box.currentText()}, {self.epochs.value()} epochs")
         mf = QFormLayout()
         mv.addLayout(mf)
         self.type_box = QComboBox()
@@ -330,17 +356,19 @@ class TrainerTab(QWidget):
             mf.addRow(label + ":", sp)
             mf.addRow(hint(key))
             self.more[key] = sp
-        lv.addWidget(g)
         lv.addStretch(1)
         sc = QScrollArea()
         sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.Shape.NoFrame)
         sc.setWidget(left)
         split.addWidget(sc)
+        self.panel_scroll, self.panel = sc, left
 
         # ---- right: environment, run, log, models
         right = QWidget()
         rv = QVBoxLayout(right)
-        rv.addWidget(QLabel("Training Python:"))
+        rv.setContentsMargins(8, 4, 2, 2)
+        rv.addWidget(pane_head("Training Python"))
         prow = QHBoxLayout()
         self.py_box = QComboBox()
         self.py_box.setMinimumWidth(260)
@@ -358,9 +386,14 @@ class TrainerTab(QWidget):
         self.env_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         rv.addWidget(self.env_label)
         row = QHBoxLayout()
-        self.btn_train = QPushButton("Start training")
+        rv.addSpacing(6)
+        rv.addWidget(pane_head("Run"))
+        self.btn_train = ui_kit.primary(QPushButton("Start training"))       # the action that moves the work on
+        self.btn_train.setMinimumHeight(34)
+        self.btn_train.setMinimumWidth(170)
         self.btn_train.clicked.connect(self.start)
         self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setMinimumHeight(34)
         self.btn_stop.clicked.connect(self.stop)
         self.btn_stop.setEnabled(False)
         for b in (self.btn_train, self.btn_stop):
@@ -374,12 +407,15 @@ class TrainerTab(QWidget):
         self.log.setMaximumBlockCount(5000)
         self.log.setStyleSheet("font-family: Consolas, monospace;")
         rv.addWidget(self.log, 1)
-        rv.addWidget(QLabel("Models trained in this project (they are also in the annotator's AI model box):"))
+        rv.addWidget(pane_head("Models trained in this project"))
+        rv.addWidget(ui_kit.note("They are also offered in the Annotator's AI model box."))
         self.models_list = QListWidget()
         self.models_list.setMaximumHeight(110)
         rv.addWidget(self.models_list)
         split.addWidget(right)
-        split.setSizes([620, 600])
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        ui_kit.fit_panel(split, sc, left, lo=480, hi=700)
 
         types = tc.model_types()
         for k, spec in types.items():
@@ -437,6 +473,15 @@ class TrainerTab(QWidget):
         self.size_box.setCurrentIndex(max(0, i))
         self.size_box.blockSignals(False)
 
+    def refresh_bar(self):
+        """The bar says which project this is, and the folded steps their one-line summary."""
+        try:
+            self.bar_lbl.setText(f"<b>{self.title()}</b>" if self.path else "A new project (not saved yet)")
+            for sec in self.sections:
+                sec.refresh_summary()
+        except (AttributeError, RuntimeError):
+            pass
+
     def refresh_data(self):
         was = self._loading
         self._loading = True
@@ -479,7 +524,8 @@ class TrainerTab(QWidget):
         s = self.tp.summary(chosen)
         total = len(self.tp.annotated_ids())
         if not total:
-            self.data_info.setText("No pictures yet. Import a dataset zip made by the annotator (or another Trainer).")
+            self.data_info.setText("No pictures yet. Import a dataset zip made by the Annotator (or another Trainer): Import dataset zip... above.")
+            self.refresh_bar()
             return
         tr = ", ".join(f"{n}: {c}" for n, c in zip(s["classes"], s["boxes"]["train"]))
         va = ", ".join(f"{n}: {c}" for n, c in zip(s["classes"], s["boxes"]["val"]))
@@ -489,6 +535,7 @@ class TrainerTab(QWidget):
         elif s["train"] == 0:
             warn = "\nNo training pictures: keep at least one set as Training."
         self.data_info.setText(f"{s['train']} training and {s['val']} validation pictures.\nBoxes in training - {tr}\nBoxes in validation - {va}{warn}")
+        self.refresh_bar()
 
     def refresh_models(self):
         self.models_list.clear()

@@ -24,6 +24,11 @@ from PyQt6.QtGui import QAction, QColor, QShortcut
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QMessageBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QPushButton,
                              QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
+try:                                                         # inside OpenPara: the shared look (bar, button weights); on its own the annotator does without
+    import ui_kit
+except ImportError:
+    ui_kit = None
+
 import annotator_core as ac
 import annotator_canvas as cv
 import annotator_dialogs as dlg
@@ -212,8 +217,11 @@ class AnnotatorWindow(QMainWindow):
         self.ai_choice.addItems(AI_CHOICES)
         self.ai_choice.activated.connect(lambda _i: self.load_ai_model())
         tb.addWidget(self.ai_choice)
-        b = QPushButton("Confirm Image")
+        b = self.confirm_btn = QPushButton("Confirm image")
+        b.setToolTip("Marks this image as annotated the way it is now (its boxes are kept) and goes to the next one.")
         b.clicked.connect(self.confirm_current_as_is)
+        if ui_kit is not None:
+            ui_kit.primary(b)                                # the action that moves the work on
         tb.addWidget(b)
         self.ai_status = QLabel("No model loaded")
         tb.addWidget(self.ai_status)
@@ -236,17 +244,17 @@ class AnnotatorWindow(QMainWindow):
         ll.addWidget(self.class_list, 1)
         ll.addWidget(self._note("Press a class key [ ] to pick it. A selected box is relabeled too.\nEdit > Classes / Hotkeys to change."))
         ll.addWidget(self._rule())
-        ll.addWidget(self._heading("AI Assist"))
+        ll.addWidget(self._heading("AI assist"))
         ll.addWidget(self._note("Check classes for live predictions on this photo. Confirmed images are never touched."))
         self.ai_box = QVBoxLayout()
         ll.addLayout(self.ai_box)
-        b = QPushButton("Clear Boxes && Retry AI")
+        b = QPushButton("Clear boxes and retry AI")
         b.clicked.connect(self.clear_and_retry_ai)
         ll.addWidget(b)
         ll.addWidget(self._note("Wipes this image's boxes and predicts again."))
         ll.addWidget(self._rule())
         ll.addWidget(self._heading("Selected box"))
-        for text, fn in (("Delete Selected Box", self.delete_selected_box), ("Clear Distance of Box", self.clear_selected_distance)):
+        for text, fn in (("Delete selected box", self.delete_selected_box), ("Clear distance of box", self.clear_selected_distance)):
             b = QPushButton(text)
             b.clicked.connect(fn)
             ll.addWidget(b)
@@ -277,7 +285,7 @@ class AnnotatorWindow(QMainWindow):
             b.clicked.connect(fn)
             row.addWidget(b)
         rl.addLayout(row)
-        for text, fn in (("Rotate 90° ⟳", self.rotate_current_frame), ("Delete Frame...", self.delete_current_frame)):
+        for text, fn in (("Rotate 90° ⟳", self.rotate_current_frame), ("Delete frame...", self.delete_current_frame)):
             b = QPushButton(text)
             b.clicked.connect(fn)
             rl.addWidget(b)
@@ -294,20 +302,60 @@ class AnnotatorWindow(QMainWindow):
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addPermanentWidget(self.progress_label)
         self._build_menubar()
+        self._build_bar()
+
+    def _build_bar(self):
+        """Inside OpenPara: the second menu bar is replaced by one bar, as in the other tabs - what this is and which project, then the File /
+        Edit / Manage commands as drop-down buttons.  On its own (no OpenPara around it) the annotator keeps its menu bar."""
+        self.bar_lbl = None
+        if ui_kit is None:
+            return
+        from PyQt6.QtWidgets import QToolButton
+        bar = QWidget()
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(6, 5, 6, 3)
+        lay.setSpacing(8)
+        lay.addWidget(ui_kit.kind_chip("Annotator", "#b83280"))
+        self.bar_lbl = QLabel("")
+        self.bar_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
+        lay.addWidget(self.bar_lbl, 1)
+        self.bar_buttons = {}
+        for key, text, menu, tip in (("file", "File ▾", self.file_menu, "Import videos and datasets, export a dataset, download models, annotate from a tablet"),
+                                     ("edit", "Edit ▾", self.edit_menu, "Classes, hotkeys, your name, AI confidence"),
+                                     ("manage", "Manage ▾", self.manage_menu, "Sessions, and files deleted outside the annotator")):
+            tb = QToolButton()
+            tb.setText(text)
+            tb.setToolTip(tip)
+            tb.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            tb.setMenu(menu)
+            ui_kit.menu_button(tb)
+            lay.addWidget(tb)
+            self.bar_buttons[key] = tb
+        self.setMenuWidget(bar)
+
+    def _refresh_bar(self):
+        lb = getattr(self, "bar_lbl", None)
+        if lb is None:
+            return
+        try:
+            n = len(self.project.list_images())
+            name = self.title() if self.path else "A new project (not saved yet)"
+            lb.setText(f"<b>{name}</b> - {n} image{'s' if n != 1 else ''}")
+        except Exception:
+            lb.setText("")
 
     @staticmethod
     def _heading(text, size=11):
-        lab = QLabel(text)
-        f = lab.font()
-        f.setBold(True)
-        f.setPointSize(size)
-        lab.setFont(f)
+        """A pane heading, the same small capitals as in the rest of the program."""
+        lab = QLabel(text.upper())
+        lab.setStyleSheet("color:#4a5872; font-size:11px; font-weight:600; letter-spacing:1px; padding-top:2px;")
         return lab
 
     @staticmethod
     def _note(text):
         lab = QLabel(text)
         lab.setWordWrap(True)
+        lab.setStyleSheet("color:#6a7790; font-size:11px;")
         return lab
 
     @staticmethod
@@ -1226,7 +1274,7 @@ class AnnotatorWindow(QMainWindow):
     # ------------------------------------------------------------------ model-assisted labeling
     # Load a model once, check the classes you want AI help with; then every time you land on an unannotated image (or toggle a
     # checkbox) ONLY the current photo is (re-)predicted, filtered to what is checked. Predictions go through
-    # Project.set_ai_predicted_boxes(), which never marks an image annotated: you fix it or press Confirm Image.
+    # Project.set_ai_predicted_boxes(), which never marks an image annotated: you fix it or press Confirm image.
     def _refresh_ai_choices(self, entries=None):
         """Fills the AI model box with the trained model slots that exist right now."""
         try:
@@ -1446,6 +1494,8 @@ class AnnotatorWindow(QMainWindow):
 
     # ------------------------------------------------------------------ status
     def _update_status(self):
+        self._refresh_bar()
+        self.canvas.update_empty()
         if self.current_image_id is None:
             n = len(self.project.list_images())
             hint = "" if n else "  |  empty - File > Import Gimble Session... or Import Video..."

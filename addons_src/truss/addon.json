@@ -23,5 +23,6 @@
     "format": "openpara-truss"
    }
   }
- ]
+ ],
+ "extension": "truss_ext"
 }

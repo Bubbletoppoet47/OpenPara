@@ -51,7 +51,8 @@ assert seen == {"open": work, "dir": work}, seen
 w = shell.new_part(); assert len(recent.items()) == 2
 p3 = os.path.join(work, "three.gpd"); w.path = p3; open(p3, "w", encoding="utf-8").write(w.doc.to_json())
 shell.refresh_titles()
-assert recent.items()[0]["name"] == "three.gpd" and shell.tabs.tabToolTip(shell.tabs.indexOf(w)) == p3
+assert recent.items()[0]["name"] == "three.gpd" and shell.tabs.tabToolTip(shell.tabs.indexOf(w)) == "Part\n" + p3
+assert not shell.tabs.tabIcon(shell.tabs.indexOf(w)).isNull() and shell.tab_kind(w) == "part", "a tab carries the icon of its kind"
 # a project folder of an add-on
 proj = os.path.join(work, "job.demo"); os.makedirs(proj); open(os.path.join(proj, "marker.txt"), "w").write("{}")
 shell.open_project_folder(proj)

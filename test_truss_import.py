@@ -50,7 +50,7 @@ def inspect(shell, out):
     t = shell.new_addon_tab("truss")
     # the top bar: New project / Import source / Update from original / Sketch menu, Project and Configuration; no Export here (it is on the Assembly page)
     bar_texts = [t.btn_new.text(), t.btn_import.text(), t.btn_refresh.text(), t.btn_sketch.text()]
-    assert bar_texts == ["New project…", "Import source…", "Update from original", "Sketch ▾"], bar_texts
+    assert bar_texts == ["New project...", "Import source...", "Update from original", "Sketch ▾"], bar_texts
     assert [a.text() for a in t.btn_sketch.menu().actions()] == ["Open sketch for editing", "Clear sketch"]
     assert not hasattr(t, "btn_export") and not hasattr(t, "btn_open")
     # New project... makes the folder first (cancel does nothing), an empty truss with no sketch

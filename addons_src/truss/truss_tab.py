@@ -5,10 +5,11 @@ import os
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
+from PyQt6.QtWidgets import (QCheckBox, QFrame, QScrollArea, QStackedWidget, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                              QListWidgetItem, QMessageBox, QPushButton, QToolButton, QMenu, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
 import truss_core as tc
+import ui_kit
 import unitctl
 
 
@@ -60,7 +61,7 @@ class View3D(QWidget):
         try:
             from pyvistaqt import QtInteractor
             self.plotter = QtInteractor(self)
-            self.plotter.set_background("#f4f5f7")
+            ui_kit.view_background(self.plotter)             # the same soft gradient as the Part and Assembly views
             lay.addWidget(self.plotter.interactor, 1)
             row = QHBoxLayout()
             for text, fn in (("Iso", lambda: self.set_view("iso")), ("Truss plane", lambda: self.set_view("xy")), ("Side", lambda: self.set_view("xz")), ("Fit", lambda: self.set_view("fit"))):
@@ -447,6 +448,13 @@ class EndEditor(QGroupBox):
         return {"kind": k}
 
 
+def pane_head(text):
+    """The small heading of a pane ("SKETCH LINES"), the same as on the start page."""
+    lb = QLabel(text.upper())
+    lb.setStyleSheet(f"color:#4a5872; font-size:11px; font-weight:600; letter-spacing:1px;")
+    return lb
+
+
 class TrussTab(QWidget):
     KIND = "truss"
 
@@ -464,10 +472,10 @@ class TrussTab(QWidget):
         self.busy = False
         root = QVBoxLayout(self)
         bar = QHBoxLayout()
-        self.btn_new = QPushButton("New project…")
-        self.btn_new.setToolTip("Make the truss's own .truss folder first; then Import source… copies a sketch into it from a tab that is already open or from a part file.")
+        self.btn_new = QPushButton("New project...")
+        self.btn_new.setToolTip("Make the truss's own .truss folder first; then Import source... copies a sketch into it from a tab that is already open or from a part file.")
         self.btn_new.clicked.connect(self.new_project)
-        self.btn_import = QPushButton("Import source…")
+        self.btn_import = QPushButton("Import source...")
         self.btn_import.setToolTip("Copy a sketch (with its configurations) into this truss from any open part tab or from a part file. The truss is saved to its .truss folder first; the copy there (sketch.gpd) is the sketch from then on, and importing again replaces it and clears the members.")
         self.btn_import.clicked.connect(self.import_menu)
         self.btn_refresh = QPushButton("Update from original")
@@ -488,14 +496,30 @@ class TrussTab(QWidget):
         sk_menu.addAction("Open sketch for editing").triggered.connect(lambda _=False: self.open_sketch_for_editing())
         sk_menu.addAction("Clear sketch").triggered.connect(lambda _=False: self.clear_sketch())
         self.btn_sketch.setMenu(sk_menu)
-        for w_ in (QLabel("Project"), self.name_edit, self.btn_new, self.btn_import, self.btn_refresh, self.btn_sketch, self.lbl_sketch, QLabel("Configuration"), self.cfg):
+        ui_kit.menu_button(self.btn_sketch)
+        self.name_edit.setToolTip("The name of this truss (also the name of its project folder when it is first saved)")
+        self.lbl_sketch.setStyleSheet(f"color:{ui_kit.MUTED};")
+        self.lbl_cfg = QLabel("Configuration")
+        self.cfg.setMinimumWidth(110)
+        root.setContentsMargins(6, 6, 6, 4)
+        bar.setSpacing(8)
+        for w_ in (ui_kit.kind_chip("Truss", "#2f6fed"), self.name_edit, self.lbl_sketch, self.lbl_cfg, self.cfg):
             bar.addWidget(w_)
         bar.addStretch(1)
+        for w_ in (self.btn_new, self.btn_import, self.btn_refresh, self.btn_sketch):      # the project commands sit on the right, as in the simulation tabs
+            bar.addWidget(w_)
         root.addLayout(bar)
         self.pages = QTabWidget()
-        root.addWidget(self.pages, 1)
-        self.msg = QLabel("")
-        self.msg.setWordWrap(True)
+        self.empty = ui_kit.EmptyState(
+            "Start with a sketch",
+            "A truss is built from the lines of a sketch: every line can become a member with a profile and its end cuts. "
+            "Make the project folder, then import the sketch from an open part or from a part file.",
+            [("New project...", self.new_project), ("Import source...", self.import_menu)])
+        self.stack = QStackedWidget()                        # the guidance while there is no sketch, the Members / Assembly pages once there is one
+        self.stack.addWidget(self.empty)
+        self.stack.addWidget(self.pages)
+        root.addWidget(self.stack, 1)
+        self.msg = ui_kit.StatusLine("")
         root.addWidget(self.msg)
 
         # Members page
@@ -505,7 +529,9 @@ class TrussTab(QWidget):
         self.canvas = SketchCanvas()
         self.canvas.picked.connect(self.line_picked)
         self.canvas.toggled.connect(self.line_toggled)
-        ll.addWidget(QLabel("Sketch: click a line, double-click to make it a member.  Green dot = start of the line, arrow = its end."))
+        ll.setContentsMargins(4, 6, 4, 4)
+        ll.addWidget(pane_head("Sketch lines"))
+        ll.addWidget(ui_kit.note("Click a line to select it; double-click to make it a member. The green dot is the start of a line, the arrow its end."))
         ll.addWidget(self.canvas, 1)
         row = QHBoxLayout()
         b = QPushButton("Add member from line")
@@ -515,13 +541,20 @@ class TrussTab(QWidget):
         b.clicked.connect(self.remove_member)
         row.addWidget(b)
         ll.addLayout(row)
+        self.lbl_members = pane_head("Members")
+        ll.addWidget(self.lbl_members)
         self.mlist = QListWidget()
-        self.mlist.setMaximumHeight(110)
+        self.mlist.setMinimumHeight(80)
+        self.mlist.setMaximumHeight(170)
         self.mlist.currentRowChanged.connect(self.member_row)
         ll.addWidget(self.mlist)
         mp.addWidget(left)
         mid = QWidget()
         ml = QVBoxLayout(mid)
+        ml.setContentsMargins(6, 6, 6, 4)
+        ml.addWidget(pane_head("Selected member"))
+        self.no_member = ui_kit.note("No member selected. Double-click a sketch line to make one, or pick a member in the list.")
+        ml.addWidget(self.no_member)
         self.mname = QLineEdit()
         self.mname.editingFinished.connect(self.member_edited)
         self.mref = QComboBox()
@@ -557,10 +590,18 @@ class TrussTab(QWidget):
             w_.pick_requested.connect(lambda e_=e_: self.start_pick(e_))
             ml.addWidget(w_)
         ml.addStretch(1)
-        mp.addWidget(mid)
+        mid_scroll = QScrollArea()                           # a short window scrolls the member's settings instead of squeezing them
+        mid_scroll.setWidgetResizable(True)
+        mid_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        mid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        mid_scroll.setWidget(mid)
+        mid_scroll.setStyleSheet("QScrollArea { background: transparent; } QScrollArea > QWidget > QWidget { background: transparent; }")
+        mid_scroll.setMinimumWidth(330)
+        mp.addWidget(mid_scroll)
         vbox = QWidget()
         vl = QVBoxLayout(vbox)
-        vl.setContentsMargins(0, 0, 0, 0)
+        vl.setContentsMargins(4, 6, 4, 4)
+        vl.addWidget(pane_head("Preview"))
         self.only_sel = QCheckBox("Show only the selected member")
         self.only_sel.setToolTip("Off: the whole truss is shown, the selected member highlighted")
         self.only_sel.toggled.connect(lambda *_: self.refresh_preview())
@@ -580,7 +621,9 @@ class TrussTab(QWidget):
         ap = QSplitter(Qt.Orientation.Horizontal)
         al = QWidget()
         av = QVBoxLayout(al)
-        av.addWidget(QLabel("Members of this configuration. The part name is the file name of an export; the offsets move a member off its sketch position."))
+        av.setContentsMargins(4, 6, 4, 4)
+        av.addWidget(pane_head("Members of this configuration"))
+        av.addWidget(ui_kit.note("The part name is the file name of an export; the offsets move a member off its sketch position."))
         self.table = QTableWidget(0, 7)
         self.set_headers()
         self.table.itemChanged.connect(self.table_edited)
@@ -592,7 +635,8 @@ class TrussTab(QWidget):
         b = QPushButton("Rebuild")
         b.clicked.connect(self.rebuild)
         row.addWidget(b)
-        b = QPushButton("Export assembly…")
+        row.addStretch(1)
+        b = self.b_export_asm = ui_kit.primary(QPushButton("Export assembly..."))
         b.setToolTip("Writes ONE configurable assembly file (every sketch configuration in it), the part files, one cut list, and STEP / STL per configuration")
         b.clicked.connect(lambda _=False: self.export_dialog())
         row.addWidget(b)
@@ -608,6 +652,13 @@ class TrussTab(QWidget):
         if path:
             self.open_path(path)
         self.refresh_all()
+        self.update_empty()
+
+    def title(self):
+        """The tab is named after the project (its folder without the extension), as the simulation and Visualize tabs are."""
+        if self.path:
+            return os.path.splitext(os.path.basename(self.path.rstrip("/\\")))[0]
+        return self.p.get("name") or "Truss"
 
     # ------------------------------------------------------------------ the file
     def is_dirty(self):
@@ -655,7 +706,7 @@ class TrussTab(QWidget):
         self.dirty = False
         self.load_source()
         self.refresh_all()
-        self.say("New truss. Press Import source… to copy a sketch into it.")
+        self.say("New truss. Press Import source... to copy a sketch into it.")
 
     def save(self, as_new=False):
         path = self.path
@@ -830,6 +881,23 @@ class TrussTab(QWidget):
             self.config = self.cfg.currentText()
         self.busy = False
         self.lbl_sketch.setText(f"Sketch: {s['name']}" if s else "No sketch yet")
+        self.update_empty()
+
+    def update_empty(self):
+        """The guidance page while the truss has no sketch; the Members / Assembly pages once it has one."""
+        have = bool(self.p.get("sketch")) or self.src is not None
+        self.stack.setCurrentWidget(self.pages if have else self.empty)
+        if self.path:                                        # the folder exists: the next step is the sketch
+            self.empty.set_text("Import a sketch", "The project folder is made. Import the sketch whose lines become the members: from a part "
+                                "that is open in a tab, or from a part file.")
+            self.empty.buttons[0].setVisible(False)
+            ui_kit.primary(self.empty.buttons[1])
+        else:
+            self.empty.buttons[0].setVisible(True)
+            self.empty.buttons[1].setStyleSheet("")
+        for w_ in (self.lbl_cfg, self.cfg):
+            w_.setVisible(self.cfg.count() > 1)              # one configuration: nothing to choose, so it is not shown
+        self.btn_refresh.setEnabled(have)
 
     def config_changed(self, *a):
         if self.busy or not self.src:
@@ -1099,6 +1167,7 @@ class TrussTab(QWidget):
         try:
             for w_ in (self.mname, self.mref, self.moff, self.mroll, self.own_prof, self.prof, *self.end_ed.values()):
                 w_.setEnabled(m is not None)
+            self.no_member.setVisible(m is None)
             if not m:
                 self.mname.setText("")
                 self.stock.setText("")

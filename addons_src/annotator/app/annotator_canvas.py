@@ -122,6 +122,59 @@ class ImageCanvas(QWidget):
 
     def resizeEvent(self, e):
         self.redraw()
+        self.place_empty()
+
+    # ---- what the canvas shows while the project has no images: what to do first, with the buttons to do it
+    def build_empty(self):
+        from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+        box = QWidget(self)
+        box.setStyleSheet("QLabel { color:#d7dce6; } QLabel#h { color:#ffffff; font-size:15px; font-weight:600; }"
+                          "QPushButton { background:#2d333d; color:#e8ecf2; border:1px solid #4a5361; border-radius:5px; padding:6px 14px; }"
+                          "QPushButton:hover { background:#3a4250; border-color:#7f8ea3; }"
+                          "QPushButton#go { background:#0e7f86; border:none; font-weight:600; color:white; } QPushButton#go:hover { background:#12949c; }")
+        lay = QVBoxLayout(box)
+        lay.setSpacing(8)
+        h = QLabel("No images yet")
+        h.setObjectName("h")
+        h.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(h)
+        t = QLabel("An annotator project is a folder of pictures with their boxes. Bring pictures in from a video, or from a dataset zip "
+                   "someone handed you. The File menu has the other ways (a Gimble session, models, a tablet).")
+        t.setWordWrap(True)
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        t.setFixedWidth(430)
+        lay.addWidget(t)
+        row = QHBoxLayout()
+        row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_buttons = []
+        for i, (text, fn) in enumerate((("Import video...", self.app.import_video), ("Import dataset zip...", self.app.import_zip))):
+            b = QPushButton(text)
+            if i == 0:
+                b.setObjectName("go")
+            b.clicked.connect(lambda _c=False, f=fn: f())
+            row.addWidget(b)
+            self.empty_buttons.append(b)
+        lay.addLayout(row)
+        box.hide()
+        return box
+
+    def place_empty(self):
+        e = getattr(self, "empty", None)
+        if e is not None:
+            e.adjustSize()
+            e.move(max(0, (self.width() - e.width()) // 2), max(0, (self.height() - e.height()) // 2))
+
+    def update_empty(self):
+        """Shown only while the project holds no image at all (not while a set merely has nothing left to annotate)."""
+        if getattr(self, "empty", None) is None:
+            self.empty = self.build_empty()
+        try:
+            none = not self.app.project.list_images()
+        except Exception:
+            none = False
+        if none != self.empty.isVisible() or none:
+            self.place_empty()
+            self.empty.setVisible(none)
 
     def paintEvent(self, e):
         a = self.app

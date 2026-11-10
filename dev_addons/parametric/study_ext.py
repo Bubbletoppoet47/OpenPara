@@ -74,7 +74,22 @@ def new_study(shell):
         return None
 
 
+def study_of_current(shell):
+    """Add > Parametric study: the study of the simulation that is on screen (made the first time, shown the next)."""
+    from PyQt6.QtWidgets import QMessageBox
+    w = shell.cur()
+    if getattr(w, "kind", None) == "study":              # already looking at a study
+        return w
+    if not callable(getattr(w, "open_study", None)):
+        QMessageBox.information(shell, "Parametric study", "Show the simulation tab (1D FEA, 2D FEA or 2D CFD) you want to study first.\n\n"
+                                "File > New Parametric Study starts a new simulation project with its study.")
+        return None
+    return w.open_study()
+
+
 def register(ext):
     ext.add_hook("sim_study", open_study)
+    ext.add_command("add", "Parametric study of this simulation", study_of_current,
+                    tip="Vary the inputs of the simulation on screen and record the outputs")
     ext.add_command("file.new", "New Parametric Study...", new_study,
                     tip="Vary the inputs of a 1D FEA, 2D FEA or 2D CFD project and record the outputs")
