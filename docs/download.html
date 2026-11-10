@@ -1,14 +1,17 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Download - OpenPara</title><meta name="description" content="Download the OpenPara Windows installer, or run it from source."><meta name="theme-color" content="#071f3a">
+<title>Download - OpenPara</title><meta name="description" content="Download the OpenPara Windows installer, or run it from source."><meta name="theme-color" content="#0f2742">
 <link rel="icon" type="image/svg+xml" href="assets/openpara-logo-small.svg"><link rel="apple-touch-icon" href="icon.png">
 <meta property="og:type" content="website"><meta property="og:title" content="Download - OpenPara"><meta property="og:description" content="Download the OpenPara Windows installer, or run it from source."><meta property="og:image" content="img/planetary.jpg">
+<link rel="preload" href="assets/fonts/sofia-sans.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/sofia-sans-condensed.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css"></head><body>
 <a class="skip" href="#main">Skip to the content</a>
-<header class="nav"><div class="wrap"><a class="brand" href="index.html"><img src="assets/openpara-logo-small.svg" alt="">OpenPara</a><nav aria-label="Main"><a href="index.html">Home</a><a href="download.html" class=on aria-current=page>Download</a><a href="features.html">Features</a><a href="guides.html">Guides</a><a href="about.html">About</a><a class="gh" href="https://github.com/Bubbletoppoet47/OpenPara">GitHub</a></nav></div></header>
-<main id="main"><div class="page-head"><div class="wrap"><h1>Download</h1><p>Free. No account needed.</p></div></div><section style="padding-top:56px"><div class="wrap prose" style="max-width:860px">
-<div class="dl"><img src="assets/openpara-logo-small.svg" alt=""><div class="t"><h2>OpenPara for Windows</h2><p>Installs for your user only, with its own Python and every package it needs. Adds a Start-menu entry.</p><div class="meta" id="dl-info">Latest version: see the releases page.</div></div>
-<a class="btn p" id="dl-exe" href="https://github.com/Bubbletoppoet47/OpenPara/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true" style="fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round"><path d="M12 3.5v12M7 11l5 5 5-5M4 20h16"/></svg>Download the installer</a></div>
+<header class="top"><div class="wrap"><a class="brand" href="index.html"><img src="assets/openpara-logo-small.svg" width="30" height="30" alt="">OpenPara</a>
+<nav aria-label="Main"><a href="features.html">Features</a><a href="guides.html">Guides</a><a href="about.html">About</a><a href="https://github.com/Bubbletoppoet47/OpenPara">GitHub</a><a class="get" href="download.html" aria-current=page>Download</a></nav></div></header>
+<main id="main"><div class="page-head"><div class="wrap"><h1>Download</h1><p>Free. No account needed.</p></div></div><section class="first"><div class="wrap"><div class="prose">
+<div class="dl"><div><h2>OpenPara for Windows</h2><p>Installs for your user only, with its own Python and every package it needs. Adds a Start-menu entry.</p><p class="meta" id="dl-info">Latest version: see the releases page.</p></div>
+<a class="btn go" id="dl-exe" href="https://github.com/Bubbletoppoet47/OpenPara/releases/latest">Download the installer</a></div>
 <h2>Install in three steps</h2>
 <ol class="steps"><li><b>Download and run</b> <code>OpenPara-Setup-&lt;version&gt;.exe</code>. No administrator rights are needed.</li><li><b>Start OpenPara</b> from the Start menu.</li><li><b>Stay up to date</b> with <b>Help &gt; Check for updates</b>. New versions install for you, and your settings and material library are kept.</li></ol>
 <h2>Linux and macOS, or from source</h2><p>OpenPara is written in Python. Install the packages and run it:</p>
@@ -16,12 +19,15 @@
 cd OpenPara
 pip install -r requirements.txt
 python gpd_app.py</code></pre>
-<div class="note"><div><b>Tested on Windows.</b> The Windows installer is the tested way to run OpenPara. Running from source on Linux or macOS should work but has had less testing.</div></div>
-<h2>Other versions</h2><p>Every release is on the <a href="https://github.com/Bubbletoppoet47/OpenPara/releases">releases page</a>, each with its notes.</p></div></section></main>
-<footer><div class="wrap"><div class="cols">
-<div><div class="b"><img src="assets/openpara-logo-small.svg" alt="">OpenPara</div><p style="margin:0;max-width:300px">Free, open-source parametric CAD for everyone from hobbyists to engineers.</p></div>
-<div><h4>Project</h4><a href="download.html">Download</a><a href="features.html">Features</a><a href="guides.html">Guides</a><a href="about.html">About</a></div>
-<div><h4>Community</h4><a href="https://github.com/Bubbletoppoet47/OpenPara">Source code</a><a href="https://github.com/Bubbletoppoet47/OpenPara/releases">Releases</a><a href="https://github.com/Bubbletoppoet47/OpenPara/issues">Report a problem</a></div>
-<div><h4>Legal</h4><a href="about.html#licence">GNU GPL v3 licence</a><a href="https://github.com/Bubbletoppoet47/OpenPara/blob/main/LICENSE">Licence text</a></div></div>
-<div class="legal"><span>OpenPara is free software: you can use, study, change and share it.</span><span>Version <span id="foot-ver">0.4</span></span></div></div></footer>
-<script src="site.js"></script></body></html>
+<p class="note"><b>Tested on Windows.</b> The Windows installer is the tested way to run OpenPara. Running from source on Linux or macOS should work but has had less testing.</p>
+<h2>Other versions</h2><p>Every release is on the <a href="https://github.com/Bubbletoppoet47/OpenPara/releases">releases page</a>, each with its notes.</p>
+<h2>Questions</h2><p>Write to <a href="mailto:inquiries.openpara@gmail.com">inquiries.openpara@gmail.com</a>. For a fault in the program, the <a href="https://github.com/Bubbletoppoet47/OpenPara/issues">issues page</a> is the quickest way to get it looked at.</p></div></div></section></main>
+<footer><div class="wrap"><div class="block">
+<div class="cell wide"><span class="k">Project</span><span class="v name"><img src="assets/openpara-logo-small.svg" width="26" height="26" alt="">OpenPara</span><span class="s">Free, open-source parametric CAD for hobbyists, students and engineers.</span></div>
+<div class="cell"><span class="k">Licence</span><span class="v"><a href="about.html#licence">GNU GPL v3</a></span><span class="s">Use it, study it, change it, share it.</span></div>
+<div class="cell"><span class="k">Version</span><span class="v" id="foot-ver">0.8.5</span><span class="s"><a href="https://github.com/Bubbletoppoet47/OpenPara/releases">All releases</a></span></div>
+<div class="cell wide"><span class="k">Pages</span><span class="links"><a href="download.html">Download</a><a href="features.html">Features</a><a href="guides.html">Guides</a><a href="about.html">About</a></span></div>
+<div class="cell"><span class="k">Source</span><span class="links"><a href="https://github.com/Bubbletoppoet47/OpenPara">GitHub</a><a href="https://github.com/Bubbletoppoet47/OpenPara/issues">Report a problem</a></span></div>
+<div class="cell"><span class="k">Inquiries</span><span class="links"><a href="mailto:inquiries.openpara@gmail.com">inquiries.openpara@gmail.com</a></span></div>
+</div></div></footer>
+<script src="site.js"></script><script src="drawing.js"></script></body></html>
