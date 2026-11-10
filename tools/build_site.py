@@ -96,7 +96,7 @@ def page(fn, title, desc, main, cls=""):
     nav = "".join(f'<a href="{h}"{" aria-current=page" if h == fn else ""}>{t}</a>' for h, t in NAV)
     html = f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{title}</title><meta name="description" content="{desc}"><meta name="theme-color" content="#0f2742">
+<title>{title}</title><meta name="description" content="{desc}"><meta name="theme-color" content="#071f3a">
 <link rel="icon" type="image/svg+xml" href="assets/openpara-logo-small.svg"><link rel="apple-touch-icon" href="icon.png">
 <meta property="og:type" content="website"><meta property="og:title" content="{title}"><meta property="og:description" content="{desc}"><meta property="og:image" content="img/planetary.jpg">
 <link rel="preload" href="assets/fonts/sofia-sans.woff2" as="font" type="font/woff2" crossorigin>
