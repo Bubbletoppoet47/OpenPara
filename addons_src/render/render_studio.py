@@ -535,8 +535,8 @@ class RenderStudio(QMainWindow):
             act(fm, "Open Visualize project (folder)...", self.open_project_dialog)
             fm.addSeparator()
         else:
-            act(fm, "Read the part / assembly again", self.refresh_model)
-            fm.addSeparator()
+            self.a_reread = act(fm, "Read the part / assembly again", self.refresh_model)
+            self.a_sep_reread = fm.addSeparator()
         act(fm, "Export general settings...", self.export_settings)
         act(fm, "Import general settings...", self.import_settings)
         act(fm, "Export cameras...", self.export_cameras)
@@ -601,7 +601,10 @@ class RenderStudio(QMainWindow):
         self.bar_buttons["guide"] = g
         for m in self.menus.values():                        # the shortcuts keep working without the menu bar
             self.addActions(m.actions())
-        self.setMenuWidget(bar)
+        ui_kit.top_bar(self, bar)                             # (the menu bar is hidden, not replaced: its menus are what the buttons show)
+        for a in (getattr(self, "a_reread", None), getattr(self, "a_sep_reread", None)):
+            if a is not None:
+                a.setVisible(False)                           # one place for each command: the bar's "Update from original" does this
         self.refresh_bar()
 
     def refresh_bar(self):

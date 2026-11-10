@@ -331,7 +331,7 @@ class AnnotatorWindow(QMainWindow):
             ui_kit.menu_button(tb)
             lay.addWidget(tb)
             self.bar_buttons[key] = tb
-        self.setMenuWidget(bar)
+        ui_kit.top_bar(self, bar)                             # (the menu bar is hidden, not replaced: its menus are what the buttons show)
 
     def _refresh_bar(self):
         lb = getattr(self, "bar_lbl", None)

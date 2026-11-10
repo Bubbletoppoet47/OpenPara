@@ -166,7 +166,7 @@ class VoxelTab(QMainWindow, JobMixin):
         self.bar_lbl = QLabel("Nothing loaded yet")
         self.bar_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
         lay.addWidget(self.bar_lbl, 1)
-        self.setMenuWidget(bar)
+        ui_kit.top_bar(self, bar)
 
     def note(self, lay, text):
         lb = QLabel(text)

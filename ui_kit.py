@@ -5,6 +5,7 @@ ui_kit.py - small building blocks every window of the program and of its add-ons
     fit_dock(window, dock, content)       the same for a dock panel;   tame_combo(combo)  a long drop-down that does not force the panel wide
     EmptyState(title, text, actions)      what a view shows while there is nothing in it yet: what this is for, and the buttons to begin
     Section(kind, n, title)               a numbered, foldable block of a side panel (the look of the simulation panels), fold remembered
+    top_bar(window, bar)                  the bar on top of a QMainWindow-based tab (its menu bar is hidden, never deleted)
     StatusLine()                          one quiet line for "what just happened" at the bottom of a tab
     kind_chip(text)                       a small coloured label that says what kind of document this is
     primary(button) / quiet(button)       the two button weights: the one action that moves the work on, and everything else
@@ -13,7 +14,7 @@ ui_kit.py - small building blocks every window of the program and of its add-ons
 Colours are the ones of the program's theme (pm_app.THEME); nothing here knows about any add-on.
 """
 from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
-from PyQt6.QtWidgets import QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStyle, QToolTip, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStyle, QToolBar, QToolTip, QVBoxLayout, QWidget
 
 INK = "#1f2a3c"
 MUTED = "#6a7790"
@@ -363,6 +364,25 @@ def menu_button(tool_button):
     """A drop-down tool button that looks like the push buttons next to it (and shows one arrow, not two)."""
     tool_button.setStyleSheet(BUTTON_QSS)
     return tool_button
+
+
+def top_bar(window, bar):
+    """Puts `bar` (the chip + commands strip) at the top of a QMainWindow-based tab and hides the window's own menu bar.
+    The menu bar is only hidden, never replaced: QMainWindow.setMenuWidget() would delete it, and with it the menus that the bar's drop-down
+    buttons show.  Returns the (fixed) tool bar that holds the bar."""
+    window.menuBar().hide()
+    tb = QToolBar(window)
+    tb.setObjectName("topbar")
+    tb.setMovable(False)
+    tb.setFloatable(False)
+    tb.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
+    tb.toggleViewAction().setEnabled(False)                   # it cannot be switched off from a right-click list
+    tb.setStyleSheet("QToolBar#topbar { border:0; padding:0; spacing:0; background:transparent; }")
+    bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    tb.addWidget(bar)
+    window.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
+    window.top_bar = tb
+    return tb
 
 
 def hline():

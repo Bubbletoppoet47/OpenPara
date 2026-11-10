@@ -156,11 +156,16 @@ class SimWindow(QWidget):
     def show_source(self):
         have = self.project_ok()
         self.refresh_study_button()
-        self.b_new.setVisible(not have)
+        working = have and self.source is not None
+        # one place for each command: while the guidance page is up IT has New project / Import source, so the bar does not repeat them;
+        # once there is something to work on the bar has Import source (another part) and Update from original
+        self.b_new.setVisible(False)
+        self.b_import.setVisible(working)
+        self.b_refresh.setVisible(working)
         self.b_import.setEnabled(have)
         self.b_refresh.setEnabled(self.source is not None)
         what = "a part" if self.kind == "beam" else "a part or an assembly"
-        self.stack.setCurrentWidget(self.tab if have and self.source is not None else self.empty)
+        self.stack.setCurrentWidget(self.tab if working else self.empty)
         if not have:
             self.src_lbl.setText("No project yet")
             self.empty.set_text(f"Start a {self.label} project",

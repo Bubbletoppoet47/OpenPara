@@ -30,8 +30,12 @@ import sim_tab, study_tab, truss_tab, render_studio
 
 
 def settle():
+    """What the real program does between two clicks: pending events, and Qt deletes what was scheduled for deletion (a test that skips
+    this misses anything that was destroyed by accident - the menus behind a bar's drop-down buttons, for example)."""
+    from PyQt6.QtCore import QCoreApplication, QEvent
     for _ in range(4):
         app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
 
 
 # ---------------------------------------------------------------- 1. the shared pieces
@@ -104,6 +108,7 @@ bar = t.layout().itemAt(0).layout()
 order = [bar.itemAt(i).widget() for i in range(bar.count()) if bar.itemAt(i).widget() is not None]
 assert order.index(t.name_edit) < order.index(t.btn_new) < order.index(t.btn_import) < order.index(t.btn_refresh) < order.index(t.btn_sketch), "name left, commands right"
 assert "…" not in "".join(b.text() for b in t.findChildren(QPushButton)), "three dots, as everywhere else"
+assert all(b.isHidden() for b in (t.btn_new, t.btn_import, t.btn_refresh, t.btn_sketch)), "the guidance has the commands: the bar does not repeat them"
 sh.close_tab(sh.tabs.indexOf(t))
 # Add > Truss Generator: straight from the part on screen
 acts = [a.text() for a in menu("Add").actions()]
@@ -115,6 +120,7 @@ t = sh.cur()
 assert isinstance(t, truss_tab.TrussTab) and t.path and len(t.lines()) == 3, "the truss has the part's sketch"
 assert t.stack.currentWidget() is t.pages and t.title() == "Roof" and t.lbl_sketch.text().startswith("Sketch:")
 assert not t.no_member.isHidden(), "no member yet: the editor says so"
+assert not any(b.isHidden() for b in (t.btn_new, t.btn_import, t.btn_refresh, t.btn_sketch)), "with a sketch the bar has the project commands"
 for ln in list(t.lines()):
     t.line_toggled(ln, add_only=True)
 t.mlist.setCurrentRow(0); settle()
@@ -129,8 +135,23 @@ assert sh.tabs.count() == n and BOX and "part" in BOX[-1]
 sh.tabs.setCurrentWidget(ptab)
 r = sh.add_render(); settle()
 assert isinstance(r, render_studio.RenderStudio) and not icon_of(r).isNull(), "a Visualize tab has its icon"
-assert r.title() == "Visualize - roof" and r.menuWidget() is not None and r.menuBar().isHidden(), "one bar instead of a second menu bar"
-assert sorted(r.bar_buttons) == ["file", "guide", "render", "update"] and r.bar_buttons["render"].menu() is r.menus["render"]
+settle()
+assert r.title() == "Visualize - roof" and r.top_bar.isVisible() and r.menuBar().isHidden(), "one bar instead of a second menu bar"
+assert sorted(r.bar_buttons) == ["file", "guide", "render", "update"]
+for key in ("file", "render"):                               # the drop-down buttons really have their menus (they were once deleted with the menu bar)
+    assert r.bar_buttons[key].menu() is r.menus[key] and len([a for a in r.menus[key].actions() if a.text()]) >= 3, key
+assert "Render all cameras" in [a.text() for a in r.bar_buttons["render"].menu().actions()]
+assert "Read the part / assembly again" not in [a.text() for a in r.menus["file"].actions() if a.isVisible()], "the bar's Update from original does that: not twice"
+from PyQt6.QtCore import QTimer
+opened = {}
+def close_popup():
+    p_ = QApplication.activePopupWidget()
+    opened["texts"] = None if p_ is None else [a.text() for a in p_.actions() if a.text()]
+    if p_ is not None:
+        p_.close()
+QTimer.singleShot(300, close_popup)
+r.bar_buttons["render"].click()                              # a click on the button really opens its menu
+assert opened.get("texts") and "Render all cameras" in opened["texts"], opened
 assert "roof.gpd" in r.bar_lbl.text()
 assert r.a_sel in r.actions() and r.a_sel.shortcut().toString() == "F11", "the shortcuts keep working without the menu bar"
 ps = r.props_dock.widget()
@@ -146,8 +167,10 @@ for kind in ("beam", "fea", "cfd"):
     assert w.title() == f"{w.label} - roof", w.title()
     assert w.stack.currentWidget() is w.empty and "Start a" in w.empty.title.text(), "no project yet: the tab says how to begin"
     assert [b.text() for b in w.empty.buttons if not b.isHidden()] == ["New project...", "Import source..."] and w.src_lbl.text() == "No project yet"
+    assert w.b_new.isHidden() and w.b_import.isHidden() and w.b_refresh.isHidden(), "the guidance has the commands: the bar does not repeat them"
     assert w.create_project(os.path.join(UD, "p_" + kind)); settle()
     assert w.stack.currentWidget() is w.tab and "roof" in w.src_lbl.text(), "the part on screen was imported: the solver tab is shown"
+    assert w.b_new.isHidden() and not w.b_import.isHidden() and not w.b_refresh.isHidden(), "working: the bar has Import source and Update from original"
     assert w.title() == "p_" + kind and sh.tabs.tabText(sh.tabs.indexOf(w)).startswith("p_" + kind), "the tab is renamed at once"
     w.tab.picker.refresh(); w.tab.picker.select(s["id"]); w.tab.picker.go(); settle(); settle()
     assert not icon_of(w).isNull() and sh.tab_kind(w) == kind
@@ -160,6 +183,7 @@ for kind in ("beam", "fea", "cfd"):
 lone = sim_tab.SimWindow("fea", shell=sh); sh.add_tab(lone)
 assert lone.create_project(os.path.join(UD, "p_lone")) and lone.stack.currentWidget() is lone.empty
 assert [b.text() for b in lone.empty.buttons if not b.isHidden()] == ["Import source..."] and "Import" in lone.empty.title.text()
+assert lone.b_new.isHidden() and lone.b_import.isHidden() and lone.b_refresh.isHidden()
 sh.close_tab(sh.tabs.indexOf(lone))
 tip = sh.tabs.tabToolTip(sh.tabs.indexOf(sims["beam"]))
 sh.refresh_titles()

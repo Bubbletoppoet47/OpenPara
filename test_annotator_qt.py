@@ -67,8 +67,27 @@ assert file_items == ["Import Video...", "Export dataset as zip...", "Import dat
 edit_items = [a.text() for a in w.edit_menu.actions() if a.text()]
 assert edit_items == ["Classes...", "Hotkeys...", "My name...", "AI confidence..."], edit_items
 # inside the program: one bar (what it is, which project, the three menus as drop-down buttons) instead of a second menu bar
-assert w.menuWidget() is not None and w.menuBar().isHidden() and sorted(w.bar_buttons) == ["edit", "file", "manage"]
-assert w.bar_buttons["file"].menu() is w.file_menu and "0 images" in w.bar_lbl.text() and "not saved yet" in w.bar_lbl.text()
+from PyQt6.QtCore import QCoreApplication, QEvent
+QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value); pump(2)      # as in the real program: scheduled deletions happen
+assert w.top_bar.isVisible() and w.menuBar().isHidden() and sorted(w.bar_buttons) == ["edit", "file", "manage"]
+# the three buttons really open their menus (the menus were once deleted together with the menu bar, so the buttons did nothing)
+for key, menu, first in (("file", w.file_menu, "Import Video..."), ("edit", w.edit_menu, "Classes..."), ("manage", w.manage_menu, None)):
+    bm = w.bar_buttons[key].menu()
+    assert bm is menu and [a.text() for a in bm.actions() if a.text()], key
+    assert first is None or bm.actions()[0].text() == first
+    assert all(a.isEnabled() or not a.text() for a in bm.actions()[:1])
+from PyQt6.QtCore import QTimer
+for key, expect in (("file", "Import Video..."), ("edit", "Classes..."), ("manage", "Sessions...")):
+    opened = {}
+    def close_popup():
+        p_ = QApplication.activePopupWidget()
+        opened["texts"] = None if p_ is None else [a.text() for a in p_.actions() if a.text()]
+        if p_ is not None:
+            p_.close()
+    QTimer.singleShot(300, close_popup)
+    w.bar_buttons[key].click()                               # a click on the button really opens its menu
+    assert opened.get("texts") and expect in opened["texts"], (key, opened)
+assert "0 images" in w.bar_lbl.text() and "not saved yet" in w.bar_lbl.text()
 # an empty project says what to do first, on the canvas, with the buttons to do it
 assert w.canvas.empty.isVisible() and [b.text() for b in w.canvas.empty_buttons] == ["Import video...", "Import dataset zip..."]
 from PyQt6.QtWidgets import QPushButton as _PB

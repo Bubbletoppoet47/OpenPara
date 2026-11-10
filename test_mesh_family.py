@@ -24,8 +24,10 @@ sh = Shell(); sh.resize(1500, 900); sh.show()
 
 
 def settle():
+    from PyQt6.QtCore import QCoreApplication, QEvent
     for _ in range(5):
         app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)      # as in the real program: scheduled deletions happen
 
 
 def fits(w):
@@ -42,7 +44,7 @@ for kind, titles, primary in (("tet", ["Geometry", "Mesh", "Material", "Supports
     assert all(isinstance(s, ui_kit.Section) for s in w.sections)
     assert not [g for g in w.panel.findChildren(QGroupBox) if g.title()[:2] in ("1.", "2.", "3.", "4.", "5.", "6.")], "no grey group boxes for the steps"
     assert fits(w), (kind, w.panel_scroll.viewport().width(), w.panel.minimumSizeHint().width())
-    assert w.menuWidget() is not None and w.bar_lbl.text() == "Nothing loaded yet"
+    assert w.top_bar.isVisible() and w.menuBar().isHidden() and w.bar_lbl.text() == "Nothing loaded yet"
     styled = {b.text() for b in w.panel.findChildren(QPushButton) if "font-weight:600" in b.styleSheet()}
     assert primary <= styled, (kind, styled)
     assert not sh.tabs.tabIcon(sh.tabs.indexOf(w)).isNull()
@@ -60,7 +62,7 @@ if "tet" in addons.tab_kinds():
 m = sh.new_addon_tab("mesh"); settle()
 assert m is not None and [s.number for s in m.sections] == list(range(1, len(m.sections) + 1)) and m.sections[0].title == "Mesh"
 assert "Repair" in {b.text() for b in m.panel.findChildren(QPushButton) if "font-weight:600" in b.styleSheet()}
-assert m.menuWidget() is not None and "triangles" in m.bar_lbl.text() or m.bar_lbl.text() == "Nothing loaded yet"
+assert m.top_bar.isVisible() and ("triangles" in m.bar_lbl.text() or m.bar_lbl.text() == "Nothing loaded yet")
 m.load_shape("blob")
 import time
 t0 = time.time()

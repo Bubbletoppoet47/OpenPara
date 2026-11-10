@@ -898,6 +898,9 @@ class TrussTab(QWidget):
         for w_ in (self.lbl_cfg, self.cfg):
             w_.setVisible(self.cfg.count() > 1)              # one configuration: nothing to choose, so it is not shown
         self.btn_refresh.setEnabled(have)
+        # one place for each command: while the guidance page is up IT has New project / Import source, so the bar does not repeat them
+        for w_ in (self.btn_new, self.btn_import, self.btn_refresh, self.btn_sketch):
+            w_.setVisible(have)
 
     def config_changed(self, *a):
         if self.busy or not self.src:
