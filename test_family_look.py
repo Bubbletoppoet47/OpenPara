@@ -137,7 +137,8 @@ r = sh.add_render(); settle()
 assert isinstance(r, render_studio.RenderStudio) and not icon_of(r).isNull(), "a Visualize tab has its icon"
 settle()
 assert r.title() == "Visualize - roof" and r.top_bar.isVisible() and r.menuBar().isHidden(), "one bar instead of a second menu bar"
-assert sorted(r.bar_buttons) == ["file", "guide", "render", "update"]
+assert sorted(r.bar_buttons) == ["file", "guide", "import", "render", "update"]
+assert r.bar_buttons["import"].text() == "Import source..." and r.bar_buttons["update"].isEnabled(), "the same two commands as the simulations and the Truss"
 for key in ("file", "render"):                               # the drop-down buttons really have their menus (they were once deleted with the menu bar)
     assert r.bar_buttons[key].menu() is r.menus[key] and len([a for a in r.menus[key].actions() if a.text()]) >= 3, key
 assert "Render all cameras" in [a.text() for a in r.bar_buttons["render"].menu().actions()]

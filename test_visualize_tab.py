@@ -33,8 +33,9 @@ walk(wp)
 assert any("Preview / Render" in l for l in labels), "ribbon button missing"
 tabs = [wp.ribbon.tabText(i) for i in range(wp.ribbon.count())]
 assert "Visualize" in tabs and "Render" not in tabs, tabs
-# unsaved part -> message
-sh2 = gpd_app.AppShell([]); sh2.new_part(); assert sh2.add_render() is None and MSGS; MSGS.clear()
+# a new part with nothing in it yet -> the Visualize tab opens on its guidance page (it used to refuse with a message)
+sh2 = gpd_app.AppShell([]); sh2.new_part(); r0 = sh2.add_render()
+assert isinstance(r0, render_studio.RenderStudio) and r0.proj is None and r0.stack.currentWidget() is r0.empty and not MSGS, MSGS
 r = sh.add_render(); assert isinstance(r, render_studio.RenderStudio), MSGS
 assert len(r.bodies) == 1 and r.proj_path is None and not r.is_dirty()
 from PyQt6.QtCore import QTime

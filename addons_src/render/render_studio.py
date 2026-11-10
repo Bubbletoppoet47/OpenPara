@@ -1,17 +1,18 @@
 """
-render_studio.py - Visualize (the Render Studio): Previs, Preview and Render of a part or an assembly.
+render_studio.py - Visualize: Previs, Preview and Render of a part or an assembly.
 
   Previs   the simple fast view: parts, cameras, the sun and spot light.  Cameras, appearances and lights are set up here.
   Preview  a live lit view of the same scene (sky light, sun, soft shadows, ambient occlusion, PBR looks) - orbit and look through the cameras.
   Render   the Mitsuba 3 path tracer: pictures and videos.
 Both Previs and Preview can look through a camera and scrub the video track.
 
-Render Studio (the original description): photorealistic pictures of a part or an assembly (Mitsuba 3 path tracer).
-
-Open a part (.gpd) or an assembly (.gpa), give each material a colour / roughness / metallic, set the sun (date, time, place), a spot light and
-a floor, place several cameras, and render all of them to PNG files.  Run it with run_render_studio.bat (or:  python render_studio.py [file]).
-The renderer runs as a separate program (render_core.py), so a problem there can never close this window; Stop kills it.
-Settings are saved in a render project (.gpr): the model it was made from, the looks, the lights, the cameras and the output settings.
+Getting a model in (the user must never have to work out how):
+  * the ribbon / Add menu of a part or assembly, or File > New Visualize while one is on screen: it is shown at once, saved or not;
+  * a tab with nothing to show opens on a guidance page: Import part or assembly... (the open tabs, or a file), Open Visualize project...,
+    or drop a file on it;
+  * Import source... in the bar puts another model in the same tab (general settings stay); Update from original reads the same one again.
+Visualize works on its own copy: a project is a folder (.gpv, see vis_project.py) saved with File > Save or at the first render.
+The renderer runs as a separate program (render_core.py), so a problem there can never close this window; Stop ends it.
 """
 import copy
 import importlib.util
@@ -22,17 +23,22 @@ import sys
 import tempfile
 
 import numpy as np
-from PyQt6.QtCore import QDate, QProcess, QSize, Qt, QTime, QTimer, QUrl
-from PyQt6.QtGui import QAction, QColor, QDesktopServices, QKeySequence, QPainter, QPen, QPixmap
+from PyQt6.QtCore import QDate, QEvent, QProcess, QSize, Qt, QTime, QTimer, QUrl
+from PyQt6.QtGui import QAction, QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDateEdit, QDialog, QDockWidget, QDoubleSpinBox, QFileDialog,
                              QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-                             QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QButtonGroup, QScrollArea, QSlider, QSpinBox, QTextEdit,
-                             QTimeEdit, QToolButton, QVBoxLayout, QWidget)
+                             QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QButtonGroup, QScrollArea, QSlider, QSpinBox, QStackedWidget,
+                             QTextBrowser, QTimeEdit, QToolButton, QVBoxLayout, QWidget, QDialogButtonBox)
 
 import render_core as rc
 import vis_project as vp
 import render_scene as rs
 import unitctl
+
+try:
+    import ui_kit                                          # the program's shared look (a program older than this add-on has none)
+except ImportError:
+    ui_kit = None
 
 try:
     import pyvista as pv
@@ -41,6 +47,9 @@ except Exception:
     pv, QtInteractor = None, None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+MODEL_EXT = (".gpd", ".gpa")
+# what a new model keeps from the one it replaces: the settings that do not depend on the size or the bodies of the model
+KEPT_ON_IMPORT = ("sun", "ambient", "render", "output", "anim")
 WHAT = [("Selected camera", "selected"), ("All cameras", "all"), ("Video (MP4)", "video"), ("Still preview (fast)", "preview"),
         ("Video preview (fast)", "video_preview")]
 SIZES = [("1280 x 720", 1280, 720), ("1920 x 1080", 1920, 1080), ("800 x 600", 800, 600), ("1080 x 1080 (square)", 1080, 1080),
@@ -137,7 +146,8 @@ class LenSpin(QDoubleSpinBox):
     """A length box: its value is always in millimetres, but it is shown and typed in the program's unit (File > Units)."""
 
     def textFromValue(self, v):
-        return unitctl.num(unitctl.to_disp(v), 7)
+        d = unitctl.to_disp(v)
+        return unitctl.num(round(d, 2 if abs(d) >= 10 else 3), 9)        # a hundredth is plenty for a camera, a light or a floor
 
     def valueFromText(self, t):
         try:
@@ -269,12 +279,15 @@ class RenderStudio(QMainWindow):
         self.embedded = shell is not None or src_widget is not None or gpr is not None or folder is not None
         self.kind = "render"
         self.src_tab = src_widget
-        self.setWindowTitle("Render Studio")
+        self.setWindowTitle("Visualize")
         self.resize(1480, 900)
         self.proj = None
         self.bodies, self.meshes = [], []
         self.proj_path = None                                # the project folder (.gpv) once saved
-        self.orig_path = None                                # the file the model was read from (only for 'read it again')
+        self.orig_path = None                                # the file the model was read from (only for 'Update from original')
+        self.candidate = None                                # the part / assembly that was on screen when this tab was made: Import lists it first
+        self.src_name = ""                                   # what the model is called on screen ("bracket.gpd", or the tab's name when unsaved)
+        self.snapshot = None                                 # JSON of a model that was never saved, kept so the project can still be saved
         self.repack = False                                  # the model was read again: the project's copy is renewed at the next save
         self.dirty = False
         self.busy = False
@@ -299,7 +312,6 @@ class RenderStudio(QMainWindow):
         self.make_menus()
         self.make_bottom()
         self.make_props()
-        self.statusBar().showMessage("Open a part or an assembly (File > Open model...)." if not self.embedded else "")
         if folder:
             self.open_folder(folder)
         elif gpr:
@@ -309,6 +321,7 @@ class RenderStudio(QMainWindow):
             self.finish_open()
         elif path:
             QTimer.singleShot(0, lambda: self.open_any(path))
+        self.show_state()
 
     # ---- what the modeller's tab bar needs (title, dirty flag, save, path, plotter)
     @property
@@ -322,8 +335,8 @@ class RenderStudio(QMainWindow):
     def title(self):
         if self.proj_path:                               # a project tab is named after its folder, without the extension (as the simulations are)
             return os.path.splitext(os.path.basename(self.proj_path.rstrip("/\\")))[0]
-        if self.proj and self.proj.get("source"):
-            return "Visualize - " + os.path.splitext(os.path.basename(self.proj.get("orig") or self.proj["source"]))[0]
+        if self.proj and self.src_name:
+            return "Visualize - " + os.path.splitext(self.src_name)[0]
         return "Visualize"
 
     def is_dirty(self):
@@ -337,7 +350,7 @@ class RenderStudio(QMainWindow):
 
     def set_title(self):
         t = self.title()
-        self.setWindowTitle(("* " if self.dirty else "") + ("Render Studio - " + t if not self.embedded else t))
+        self.setWindowTitle(("* " if self.dirty else "") + (t if self.embedded or t.startswith("Visualize") else "Visualize - " + t))
         if self.shell is not None:
             try:
                 self.shell.refresh_titles()
@@ -369,9 +382,21 @@ class RenderStudio(QMainWindow):
         return w
 
     def load_from_widget(self, w):
+        """The model of an open part / assembly tab as it is on screen now - saved or not."""
         bodies = rs.bodies_from_widget(w)
-        self.orig_path = getattr(w, "path", None)
-        self.set_bodies(bodies, w.path)
+        path = getattr(w, "path", None) or ""
+        name = os.path.basename(path) if path else self.tab_name(w)
+        snap = None if path else (w.asm.to_json() if hasattr(w, "asm") else w.doc.to_json())
+        self.set_bodies(bodies, path, name)
+        self.orig_path = path or None
+        self.snapshot = snap
+
+    def tab_name(self, w):
+        try:
+            t = str(w.title()).strip().rstrip("*").strip()
+        except Exception:
+            t = ""
+        return t or ("Assembly" if hasattr(w, "asm") else "Part")
 
     def open_folder(self, folder):
         """Opens a project folder: the model is read from the project's own copy."""
@@ -381,11 +406,13 @@ class RenderStudio(QMainWindow):
         if not os.path.exists(src):
             raise ValueError(f"the project's copy of the model is missing: {src}")
         self.load_model(src)
-        self.orig_path = proj.get("orig")
+        self.orig_path = proj.get("orig") or None
+        self.src_name = os.path.basename(self.orig_path or src)
         proj["source"] = src
         self.merge_project(proj)
-        self.proj["orig"] = proj.get("orig")
+        self.proj["orig"] = proj.get("orig") or ""
         self.proj_path = folder
+        self.src_tab = None
         self.finish_open()
 
     def open_embedded_gpr(self, path):
@@ -416,26 +443,50 @@ class RenderStudio(QMainWindow):
             elif k != "source":
                 base[k] = {**base[k], **v} if isinstance(v, dict) and isinstance(base.get(k), dict) else v
 
+    def original(self):
+        """Where 'Update from original' reads from: ("tab", widget) while the part / assembly is open, ("file", path) while its file exists,
+        (None, None) when there is nothing to read again (the project still has its own copy)."""
+        if self.alive(self.src_tab):
+            return "tab", self.src_tab
+        p = self.orig_path
+        if p and self.shell is not None:
+            i = self.shell.find_tab(p)
+            if i is not None:
+                self.src_tab = self.shell.tabs.widget(i)
+                return "tab", self.src_tab
+        if p and os.path.isfile(p):
+            return "file", p
+        return None, None
+
     def refresh_model(self):
         """Reads the part / assembly again (it may have changed); looks, lights and cameras stay."""
-        w = self.source_widget()
-        if w is None:
-            QMessageBox.information(self, "Render", "The part / assembly of this render is not open and could not be opened.")
+        if self.proj is None:
+            return
+        how, src = self.original()
+        if how is None:
+            where = f"\n\n{self.orig_path}" if self.orig_path else ""
+            QMessageBox.information(self, "Update from original", "The original part or assembly is not open and its file was not found, so there is "
+                                    f"nothing to read again.{where}\n\nThe project keeps working on its own copy. To use another model, press Import source...")
             return
         self.pull_from_controls()
-        old = copy.deepcopy(self.proj)
+        keep = (copy.deepcopy(self.proj), self.bodies, self.meshes, self.src_name, self.snapshot, self.orig_path)
         try:
-            self.load_from_widget(w)
+            if how == "tab":
+                self.load_from_widget(src)
+            else:
+                self.load_model(src)
+                self.orig_path = src
         except Exception as ex:
-            self.proj = old
-            QMessageBox.warning(self, "Render", f"Could not read the model: {ex}")
+            self.proj, self.bodies, self.meshes, self.src_name, self.snapshot, self.orig_path = keep
+            self.refresh_source_label()
+            QMessageBox.warning(self, "Update from original", f"Could not read the model again: {ex}")
             return
-        self.merge_project(old)
+        self.merge_project(keep[0])
         self.repack = True
         self.finish_open(keep_cam=True)
         self.dirty = True
         self.set_title()
-        self.statusBar().showMessage("The model was read again.")
+        self.statusBar().showMessage(f"Updated from {self.src_name}: {bodies_text(len(self.bodies))}. The looks, lights and cameras were kept.")
 
     @classmethod
     def open_file(cls, shell, path):
@@ -478,7 +529,7 @@ class RenderStudio(QMainWindow):
         self.pl = None
         self.overlay = None
         if QtInteractor is None:
-            lay.addWidget(QLabel("The 3D view needs pyvista and pyvistaqt (run_render_studio.bat installs them)."))
+            lay.addWidget(QLabel("The 3D view needs the pyvista and pyvistaqt packages, which were not found."))
         else:
             try:
                 self.pl = QtInteractor(holder)
@@ -518,7 +569,78 @@ class RenderStudio(QMainWindow):
         self.scrub_bar.hide()
         self.sc_play.clicked.connect(lambda _=False: self.play_toggle(1))
         self.sc_slider.valueChanged.connect(lambda v: self.scrub_to(v / 1000.0, from_ui="bar"))
-        self.setCentralWidget(holder)
+        self.view_page, self.empty = holder, None
+        if ui_kit is None:                                   # a program older than this add-on: the view alone, as before
+            self.setCentralWidget(holder)
+            return
+        self.empty = ui_kit.EmptyState(
+            "Show a part or an assembly",
+            "Visualize makes lit pictures and videos of a model, with a sun, a floor and cameras. It works on its own copy, "
+            "so the original is never changed.\n\nYou can also drop a part (.gpd), an assembly (.gpa) or a Visualize project folder here.",
+            [("Import part or assembly...", self.import_source), ("Open Visualize project...", self.open_project_dialog)])
+        self.empty.setAcceptDrops(True)
+        self.empty.installEventFilter(self)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.empty)
+        self.stack.addWidget(holder)
+        self.setCentralWidget(self.stack)
+
+    def eventFilter(self, obj, ev):
+        """Files dropped on the guidance page are imported here (anywhere else the program opens them as their own tabs)."""
+        if obj is getattr(self, "empty", None) and ev.type() in (QEvent.Type.DragEnter, QEvent.Type.Drop):
+            paths = [u.toLocalFile() for u in ev.mimeData().urls() if u.isLocalFile()] if ev.mimeData().hasUrls() else []
+            good = [q for q in paths if self.can_take(q)]
+            if good:
+                ev.acceptProposedAction()
+                if ev.type() == QEvent.Type.Drop:
+                    QTimer.singleShot(0, lambda q=good[0]: self.take_path(q))       # after the drop is over (a message may be shown)
+                return True
+        return super().eventFilter(obj, ev)
+
+    @staticmethod
+    def can_take(path):
+        return bool(path) and (path.lower().endswith(MODEL_EXT) and os.path.isfile(path)
+                               or os.path.isfile(os.path.join(path, vp.MARKER)))
+
+    def take_path(self, path):
+        """A part, an assembly or a Visualize project folder, from a drop or a file dialog."""
+        if os.path.isdir(path):
+            sh = self.shell
+            if sh is not None and hasattr(sh, "open_project_folder"):
+                i = sh.find_tab(path)
+                if i is not None and sh.tabs.widget(i) is not self:
+                    sh.tabs.setCurrentIndex(i)                              # it is open already: go to it
+                    return True
+                if self.proj is not None:
+                    return sh.open_project_folder(path) is not None        # this tab is in use: the project gets its own tab
+            ok = self.open_any(path)
+            if ok and sh is not None and hasattr(sh, "note_recent"):
+                sh.note_recent(self)
+            return ok
+        return self.import_file(path)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        if getattr(self, "props_dock", None) is not None:    # coming back to the tab: the original may have been closed or opened meanwhile
+            self.show_state()
+
+    def show_state(self):
+        """The guidance page and nothing else while there is no model; the view, the panel and the bar's commands once there is one."""
+        have = self.proj is not None
+        if getattr(self, "stack", None) is not None:
+            self.stack.setCurrentWidget(self.view_page if have else self.empty)
+            self.props_dock.setVisible(have)
+        self.setEnabled_props(have)
+        how = self.original()[0] if have else None
+        for key, b in getattr(self, "bar_buttons", {}).items():
+            if key != "guide":
+                b.setVisible(have)                           # one place for each command: the guidance page has Import while it is up
+        b = getattr(self, "bar_buttons", {}).get("update")
+        if b is not None:
+            b.setEnabled(how is not None)
+            b.setToolTip("Reads the part / assembly again as it is now; the looks, lights and cameras stay." if how else
+                         "The original is not open and its file was not found. The project works on its own copy; Import source... takes another model.")
+        self.refresh_bar()
 
     def make_menus(self):
         def act(menu, text, fn, key=None):
@@ -531,8 +653,8 @@ class RenderStudio(QMainWindow):
         fm = self.menuBar().addMenu("File")
         emb = self.embedded
         if not emb:
-            act(fm, "Open model (part or assembly)...", self.open_model_dialog, "Ctrl+O")
-            act(fm, "Open Visualize project (folder)...", self.open_project_dialog)
+            act(fm, "Import part or assembly...", self.import_source, "Ctrl+O")
+            act(fm, "Open Visualize project...", self.open_project_dialog)
             fm.addSeparator()
         else:
             self.a_reread = act(fm, "Read the part / assembly again", self.refresh_model)
@@ -579,8 +701,12 @@ class RenderStudio(QMainWindow):
         self.bar_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
         lay.addWidget(self.bar_lbl, 1)
         self.bar_buttons = {}
+        b = QPushButton("Import source...")
+        b.setToolTip("Shows another part or assembly in this tab: one that is open, or a file. The sun, picture and output settings stay.")
+        b.clicked.connect(lambda _=False: self.import_source())
+        lay.addWidget(b)
+        self.bar_buttons["import"] = b
         b = QPushButton("Update from original")
-        b.setToolTip("Reads the part / assembly again as it is now (the cameras, looks and lights stay).")
         b.clicked.connect(self.refresh_model)
         lay.addWidget(b)
         self.bar_buttons["update"] = b
@@ -611,11 +737,15 @@ class RenderStudio(QMainWindow):
         lb = getattr(self, "bar_lbl", None)
         if lb is None:
             return
-        proj = getattr(self, "proj", None) or {}
-        src = proj.get("orig") or proj.get("source") or ""
-        name = os.path.basename(str(src)) if src else ""
-        lb.setText((f"of <b>{name}</b> (the copy in the project)" if getattr(self, "proj_path", None) else f"of <b>{name}</b>") if name
-                   else "Nothing loaded yet")
+        name = self.src_name if getattr(self, "proj", None) else ""
+        if not name:
+            lb.setText("No model yet")
+        elif getattr(self, "proj_path", None):
+            lb.setText(f"of <b>{name}</b> (the copy in the project)")
+        elif getattr(self, "snapshot", None):
+            lb.setText(f"of <b>{name}</b> (not saved yet)")
+        else:
+            lb.setText(f"of <b>{name}</b>")
 
     def make_props(self):
         host = QWidget()
@@ -631,11 +761,7 @@ class RenderStudio(QMainWindow):
         self.s_scene.form.addRow(note_label("Set up the cameras, looks and lights here. A simple, fast view."))
         self.src_lbl = QLabel("(nothing open)")
         self.src_lbl.setWordWrap(True)
-        b = QPushButton("Open model...")
-        b.clicked.connect(self.open_model_dialog)
         self.s_scene.form.addRow(self.src_lbl)
-        if not self.embedded:
-            self.s_scene.form.addRow(b)
         self.up_combo = QComboBox()
         self.up_combo.addItems(["+Z", "-Z", "+Y", "-Y", "+X", "-X"])
         self.up_combo.setToolTip("Which direction of the model is UP.  The floor is flat, perpendicular to it.  Change it to stand the model on "
@@ -847,7 +973,34 @@ class RenderStudio(QMainWindow):
         self.run_btns.append(self.b_render)
         f.addRow(self.b_render)
         f.addRow(note_label("The finished picture or video, ray traced. It is written to the output folder below."))
-        f.addRow(row(self.bar, self.b_stop))
+        self.run_row = QWidget()
+        rl = QHBoxLayout(self.run_row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(self.bar, 1)
+        rl.addWidget(self.b_stop)
+        self.run_row.hide()                                  # shown while a render runs
+        f.addRow(self.run_row)
+        self.res_box = QWidget()                             # the last picture or video: seen here, opened with one click
+        vl = QVBoxLayout(self.res_box)
+        vl.setContentsMargins(0, 2, 0, 2)
+        vl.setSpacing(4)
+        self.res_pic = QToolButton()
+        self.res_pic.setAutoRaise(True)
+        self.res_pic.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.res_pic.setToolTip("Open the picture")
+        self.res_pic.clicked.connect(lambda _=False: self.open_result())
+        self.res_lbl = QLabel("")
+        self.res_lbl.setWordWrap(True)
+        self.res_open = QPushButton("Open")
+        self.res_open.setToolTip("Opens the last picture or video in the program your computer uses for it.")
+        self.res_open.clicked.connect(lambda _=False: self.open_result())
+        vl.addWidget(self.res_pic, 0, Qt.AlignmentFlag.AlignHCenter)
+        hl = QHBoxLayout()
+        hl.addWidget(self.res_lbl, 1)
+        hl.addWidget(self.res_open)
+        vl.addLayout(hl)
+        self.res_box.hide()
+        f.addRow(self.res_box)
         f.addRow(self.log_btn)
         f.addRow(self.log)
         self.o_what = QComboBox()
@@ -934,6 +1087,7 @@ class RenderStudio(QMainWindow):
         self.log.setMaximumHeight(150)
         self.log.hide()
         self.log_btn = QPushButton("Show the log")
+        self.log_btn.setToolTip("What the renderer said during the last render.")
         self.log_btn.setCheckable(True)
         self.log_btn.toggled.connect(lambda on: (self.log.setVisible(on), self.log_btn.setText("Hide the log" if on else "Show the log")))
 
@@ -1112,7 +1266,7 @@ class RenderStudio(QMainWindow):
         a = self.proj["anim"]
         n = max(2, int(round(a["seconds"] * a["fps"])))
         if len(cams) < 2:
-            self.an_info.setText("<span style='color:#b00020'>Tick at least two cameras.</span>")
+            self.an_info.setText("<span style='color:#53647c'>No video path yet: tick at least two cameras in the list.</span>")
         else:
             self.an_info.setText(f"{n} frames from {len(cams)} cameras: " + " -> ".join(cams))
         self.timer.start()
@@ -1219,22 +1373,165 @@ class RenderStudio(QMainWindow):
         self.mark()
 
     # ================================================================ opening / saving
+    def open_tabs(self):
+        """[(label, tab)] of the parts and assemblies open in the program, the one last looked at first."""
+        if self.shell is None:
+            return []
+        out = []
+        for i in range(self.shell.tabs.count()):
+            w = self.shell.tabs.widget(i)
+            if hasattr(w, "asm") or (getattr(w, "doc", None) is not None and hasattr(w.doc, "features")):
+                saved = bool(getattr(w, "path", None))
+                out.append((f"{self.tab_name(w)}   ({'assembly' if hasattr(w, 'asm') else 'part'}{'' if saved else ', not saved yet'})", w))
+        first = self.src_tab if self.alive(self.src_tab) else getattr(self, "candidate", None)
+        out.sort(key=lambda t: t[1] is not first)
+        return out
+
+    def browse_model(self, parent=None):
+        p, _ = QFileDialog.getOpenFileName(parent or self, "Part or assembly to show", self.start_dir(), "Part or assembly (*.gpd *.gpa)")
+        return p
+
     def open_model_dialog(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Open model", self.start_dir(), "Part or assembly (*.gpd *.gpa)")
-        if p:
-            self.open_any(p)
+        p = self.browse_model()
+        return self.import_file(p) if p else False
+
+    def import_source(self):
+        """Choose the model: a part / assembly that is open in the program (as it is on screen, saved or not), or a file."""
+        tabs = self.open_tabs()
+        if not tabs:
+            return self.open_model_dialog()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Import source")
+        dlg.setMinimumWidth(440)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Show this part or assembly (Visualize works on its own copy):"))
+        lst = QListWidget()
+        for text, _w in tabs:
+            lst.addItem(text)
+        lst.setCurrentRow(0)
+        lst.setMaximumHeight(max(90, min(260, 24 * len(tabs) + 12)))
+        lst.itemDoubleClicked.connect(lambda _i: dlg.accept())
+        lay.addWidget(lst)
+        pick = {"file": None}
+        bb = QDialogButtonBox()
+        b_file = bb.addButton("Browse for a file...", QDialogButtonBox.ButtonRole.ActionRole)
+        b_ok = bb.addButton("Import", QDialogButtonBox.ButtonRole.AcceptRole)
+        bb.addButton(QDialogButtonBox.StandardButton.Cancel)
+        b_ok.setDefault(True)
+        if ui_kit is not None:
+            ui_kit.primary(b_ok)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+
+        def browse():
+            f = self.browse_model(dlg)
+            if f:
+                pick["file"] = f
+                dlg.accept()
+        b_file.clicked.connect(browse)
+        if not dlg.exec():
+            return False
+        if pick["file"]:
+            return self.import_file(pick["file"])
+        row_ = lst.currentRow()
+        return self.import_tab(tabs[row_][1]) if row_ >= 0 else False
+
+    def confirm_replace(self):
+        """Asked only when something would be lost: a saved project, or settings changed since the model came in."""
+        if self.proj is None or not (self.proj_path or self.dirty):
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle("Import source")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(f"Replace {self.src_name} with another model?")
+        box.setInformativeText("The sun, the picture and video settings and the output folder stay. The cameras, the looks, the floor and the "
+                               "spot light start again, because they depend on the size and the bodies of the model."
+                               + ("\n\nThe project's copy is replaced when you save." if self.proj_path else ""))
+        yes = box.addButton("Replace the model", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return box.clickedButton() is yes
+
+    def import_tab(self, w):
+        return self.import_model(lambda: self.load_from_widget(w), self.tab_name(w), tab=w)
+
+    def import_file(self, path):
+        if self.shell is not None:                           # the file is open: what is on screen is what the user means
+            i = self.shell.find_tab(path)
+            w = self.shell.tabs.widget(i) if i is not None else None
+            if w is not None and w is not self and (hasattr(w, "asm") or getattr(w, "doc", None) is not None):
+                return self.import_tab(w)
+        if not path.lower().endswith(MODEL_EXT):
+            QMessageBox.information(self, "Import source", f"{os.path.basename(path)} is not a part (.gpd) or an assembly (.gpa).")
+            return False
+
+        def read():
+            self.load_model(path)
+            self.orig_path = path
+        return self.import_model(read, os.path.basename(path))
+
+    def import_model(self, load, name, tab=None):
+        """Puts another model in this tab.  A first model simply appears; one that replaces another keeps the general settings (and the
+        looks of bodies with the same name).  Nothing changes when it cannot be read."""
+        had = self.proj is not None
+        if had and not self.confirm_replace():
+            return False
+        lose = had and bool(self.dirty or self.proj_path)     # there is work in this tab: the change must be saved
+        if had:
+            self.pull_from_controls()
+        keep = (copy.deepcopy(self.proj), self.bodies, self.meshes, self.src_name, self.snapshot, self.orig_path, self.src_tab)
+        try:
+            self.src_tab = tab
+            load()
+        except Exception as ex:
+            self.proj, self.bodies, self.meshes, self.src_name, self.snapshot, self.orig_path, self.src_tab = keep
+            self.refresh_source_label()
+            QMessageBox.warning(self, "Import source", f"Could not show {name}: {ex}")
+            return False
+        if had:
+            old = keep[0]
+            for k in KEPT_ON_IMPORT:
+                if k in old:
+                    self.proj[k] = old[k]
+            self.proj["appearance"].update({n: a for n, a in old.get("appearance", {}).items() if n in self.proj["appearance"]})
+            self.repack = True
+        self.finish_open()
+        if lose:
+            self.dirty = True
+            self.set_title()
+        try:
+            import recent
+            if self.orig_path:
+                recent.set_last_folder(self.orig_path)
+        except Exception:
+            pass
+        return True
 
     def open_project_dialog(self):
         p = QFileDialog.getExistingDirectory(self, "Open Visualize project (a .gpv folder)", self.start_dir())
-        if p:
-            self.open_any(p)
+        if not p:
+            return False
+        if not os.path.isfile(os.path.join(p, vp.MARKER)):
+            QMessageBox.information(self, "Open Visualize project", f"{os.path.basename(p)} is not a Visualize project: it has no {vp.MARKER} in it.\n\n"
+                                    "A Visualize project is a folder whose name ends in .gpv. To show a part or an assembly, use Import part or assembly...")
+            return False
+        return self.take_path(p)
 
     def start_dir(self):
-        return os.path.dirname(self.proj.get("source", "")) if self.proj and self.proj.get("source") else ""
+        """Where a file dialog opens: beside the project or its model, else where the user last opened something."""
+        for p in ((self.proj_path, self.orig_path, self.proj.get("source")) if self.proj else ()):
+            if p and os.path.isdir(os.path.dirname(os.path.abspath(p))):
+                return os.path.dirname(os.path.abspath(p))
+        try:
+            import recent
+            return recent.last_folder()
+        except Exception:
+            return ""
 
     def open_any(self, path):
         if not self.ask_save():
-            return
+            return False
         try:
             if os.path.isdir(path):
                 self.open_folder(path)
@@ -1244,20 +1541,21 @@ class RenderStudio(QMainWindow):
                 if src and not os.path.isabs(src):
                     src = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(path)), src))
                 if not src or not os.path.exists(src):
-                    QMessageBox.warning(self, "Open", f"The model of this render project was not found:\n{src}")
-                    return
+                    QMessageBox.warning(self, "Visualize", f"The model of this render project was not found:\n{src}")
+                    return False
                 self.load_model(src)
                 self.merge_project(proj)
                 self.proj_path = path
             else:
-                self.orig_path = path
                 self.load_model(path)
+                self.orig_path = path
                 self.proj_path = None
+                self.src_tab = None
         except Exception as ex:
-            import traceback
-            QMessageBox.warning(self, "Open", f"Could not open it: {ex}\n\n{traceback.format_exc()}")
-            return
+            QMessageBox.warning(self, "Visualize", f"Could not open {os.path.basename(path.rstrip('/' + os.sep))}: {ex}")
+            return False
         self.finish_open()
+        return True
 
     def finish_open(self, keep_cam=False):
         n = len(self.proj["cameras"])
@@ -1271,21 +1569,28 @@ class RenderStudio(QMainWindow):
         self.update_scrub_info()
         self.draw_scene(reset=not keep_cam)
         self.set_title()
-        self.statusBar().showMessage(f"{bodies_text(len(self.bodies))} loaded from {self.proj['source']}")
+        self.statusBar().showMessage(f"{self.src_name}: {bodies_text(len(self.bodies))}.")
+        self.show_state()
 
     def load_model(self, path):
-        self.statusBar().showMessage("Loading the model...")
+        self.statusBar().showMessage(f"Reading {os.path.basename(path)}...")
         QApplication.processEvents()
         self.set_bodies(rs.load_bodies(path), path)
+        self.snapshot = None
 
-    def set_bodies(self, bodies, path):
+    def set_bodies(self, bodies, path, name=None):
+        """The model to show: a new project (default looks, lights and cameras) around these bodies.  Nothing changes when there is no solid."""
         if not bodies:
-            raise ValueError("the file has no solid to draw (is every part hidden or empty?)")
-        self.bodies = bodies
-        self.meshes = [rs.mesh_of(b[1]) for b in bodies]
-        self.proj = rs.new_project(bodies, self.meshes, path)
-        self.proj["orig"] = self.orig_path or path
-        self.src_lbl.setText(f"<b>{os.path.basename(path)}</b><br>{bodies_text(len(bodies))}")
+            raise ValueError("there is no solid to show yet (a part needs at least one feature such as an extrude; an assembly needs a visible part)")
+        meshes = [rs.mesh_of(b[1]) for b in bodies]
+        self.bodies, self.meshes = bodies, meshes
+        self.proj = rs.new_project(bodies, meshes, path or "")
+        self.proj["orig"] = path or ""
+        self.src_name = name or os.path.basename(path or "") or "model"
+        self.refresh_source_label()
+
+    def refresh_source_label(self):
+        self.src_lbl.setText(f"<b>{self.src_name}</b><br>{bodies_text(len(self.bodies))}" if self.proj else "(nothing open)")
         self.refresh_bar()
 
     def source_text(self):
@@ -1293,6 +1598,8 @@ class RenderStudio(QMainWindow):
         w = self.src_tab if self.alive(self.src_tab) else None
         if w is not None:
             return (w.asm.to_json() if hasattr(w, "asm") else w.doc.to_json()), getattr(w, "path", None)
+        if self.snapshot:
+            return self.snapshot, None
         p = self.proj["source"]
         with open(p, encoding="utf-8") as f:
             return f.read(), (self.proj.get("orig") or p)
@@ -1305,10 +1612,11 @@ class RenderStudio(QMainWindow):
         folder = self.proj_path
         fresh = as_new or not folder
         if fresh:
-            if self.embedded and not as_new:
-                folder = vp.new_folder_name(self.proj.get("orig") or self.proj["source"])
+            model = self.proj.get("orig") or (self.proj["source"] if not self.snapshot else "")
+            if self.embedded and not as_new and model:
+                folder = vp.new_folder_name(model)                      # beside the part / assembly, named after it
             else:
-                start = vp.new_folder_name(self.proj.get("orig") or self.proj["source"])
+                start = vp.new_folder_name(model or os.path.join(self.start_dir(), os.path.splitext(self.src_name)[0] or "model"))
                 folder, _ = QFileDialog.getSaveFileName(self, "Save Visualize project (a folder)", start, "Visualize project (*.gpv)")
                 if not folder:
                     return False
@@ -1318,12 +1626,13 @@ class RenderStudio(QMainWindow):
             os.makedirs(folder, exist_ok=True)
             if fresh or self.repack or not os.path.isdir(os.path.join(folder, vp.SOURCE_DIR)):
                 text, orig = self.source_text()
-                main, missing = vp.pack_source(folder, text, orig)
+                main, missing = vp.pack_source(folder, text, orig, None if orig else (os.path.splitext(self.src_name)[0] or None))
                 if missing:
                     self.statusBar().showMessage("Not found, left out of the copy: " + ", ".join(missing))
                 self.proj["source"] = os.path.join(folder, main)
-                self.proj["orig"] = orig or self.proj.get("orig")
-                self.orig_path = self.proj["orig"]
+                self.proj["orig"] = orig or self.proj.get("orig") or ""
+                self.orig_path = self.proj["orig"] or None
+                self.snapshot = None                                    # the project has its own copy now
                 self.repack = False
             main_rel = os.path.relpath(self.proj["source"], folder).replace(os.sep, "/")
             vp.write(folder, self.proj, main_rel)
@@ -1335,12 +1644,13 @@ class RenderStudio(QMainWindow):
         self.update_output_label()
         self.set_title()
         self.statusBar().showMessage(f"Saved {folder}")
+        self.refresh_bar()
         return True
 
     def ask_save(self):
         if not self.dirty or self.proj is None or self.embedded:
             return True
-        r = QMessageBox.question(self, "Render project", "Save the changes to the render project first?",
+        r = QMessageBox.question(self, "Visualize", "Save the changes to the Visualize project first?",
                                  QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel)
         if r == QMessageBox.StandardButton.Cancel:
             return False
@@ -1934,7 +2244,7 @@ class RenderStudio(QMainWindow):
     def choose_folder(self):
         if self.proj is None:
             return
-        start = self.proj["output"].get("folder") or (os.path.join(self.proj_path, vp.OUTPUT_DIR) if self.proj_path else os.path.dirname(self.proj["source"]))
+        start = self.proj["output"].get("folder") or (os.path.join(self.proj_path, vp.OUTPUT_DIR) if self.proj_path else self.start_dir())
         d = QFileDialog.getExistingDirectory(self, "Folder for the pictures", start)
         if d:
             self.proj["output"]["folder"] = d
@@ -1978,8 +2288,9 @@ class RenderStudio(QMainWindow):
         if self.proj is None or self.busy:
             return
         if not mitsuba_ok():
-            QMessageBox.warning(self, "Render", "The renderer (Mitsuba) is not installed for this Python.\nRun run_render_studio.bat once, or:\n"
-                                f"    {sys.executable} -m pip install mitsuba")
+            QMessageBox.warning(self, "Render", "Rendering needs the Mitsuba package, which was not found." + (
+                                "\n\nIt comes with the Renderer add-on: open File > Add-ons, uninstall Renderer and install it again." if self.embedded else
+                                f"\n\nInstall it with:\n    {sys.executable} -m pip install mitsuba"))
             return
         self.pull_from_controls()
         p = self.proj
@@ -1988,8 +2299,9 @@ class RenderStudio(QMainWindow):
         p_use = p
         if video:
             if importlib.util.find_spec("imageio_ffmpeg") is None:
-                QMessageBox.warning(self, "Render", "Videos need imageio-ffmpeg.\nRun run_render_studio.bat once, or:\n"
-                                    f"    {sys.executable} -m pip install imageio-ffmpeg")
+                QMessageBox.warning(self, "Render", "Videos need the imageio-ffmpeg package, which was not found." + (
+                                    "\n\nIt comes with the Renderer add-on: open File > Add-ons, uninstall Renderer and install it again." if self.embedded else
+                                    f"\n\nInstall it with:\n    {sys.executable} -m pip install imageio-ffmpeg"))
                 return
             ac = [c for c in p["cameras"] if c.get("anim")]
             if len(ac) < 2:
@@ -2109,10 +2421,12 @@ class RenderStudio(QMainWindow):
         if ok and mode == "video_preview" and self.video_file and os.path.exists(self.video_file):
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.video_file))
         what = "video" if mode.startswith("video") else "picture(s)"
-        self.statusBar().showMessage(f"Done: {self.n_done} {what} saved in {self.run_folder}" if ok else
-                                     ("Stopped." if self.stop_asked else "The render did not finish (see the log below)."))
+        kept = not mode.endswith("preview")                # previews are only shown; nothing goes to the output folder
+        self.statusBar().showMessage((f"Done: {self.n_done} {what} saved in {self.run_folder}" if kept else "The preview is ready.") if ok else
+                                     ("Stopped." if self.stop_asked else "The render did not finish: the log says why."))
         if not ok and not self.stop_asked:
-            self.log.appendPlainText("(the renderer stopped; if the text above does not explain it, please send it to me)")
+            self.log.appendPlainText("(the renderer stopped; if the text above does not explain it, please report it together with this log)")
+            self.log_btn.setChecked(True)                    # the reason is in the log: show it
 
     def stop_render(self):
         if self.proc is None:
@@ -2134,6 +2448,9 @@ class RenderStudio(QMainWindow):
 
     def set_busy(self, on):
         self.busy = on
+        self.run_row.setVisible(on)
+        if on:
+            self.bar.setValue(0)
         for b in self.run_btns + self.run_btns_extra:
             b.setEnabled(not on)
         self.b_stop.setEnabled(on)
@@ -2144,29 +2461,65 @@ class RenderStudio(QMainWindow):
     def add_result(self, path):
         self.results.append(path)
         self.statusBar().showMessage(f"Saved {path}")
+        self.show_result(path)
+
+    def show_result(self, path):
+        """The last picture (or video) in the Render section: a small copy of a picture, its name, and Open."""
+        self.last_result = path
+        preview = os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(self.tmp)))
+        pm = QPixmap(path) if not path.lower().endswith(".mp4") else QPixmap()
+        if not pm.isNull():
+            w = max(200, min(380, self.props_host.width() - 40))
+            pm = pm.scaled(QSize(w, int(w * 0.75)), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            self.res_pic.setIcon(QIcon(pm))
+            self.res_pic.setIconSize(pm.size())
+        self.res_pic.setVisible(not pm.isNull())
+        self.res_lbl.setText(("Preview (not saved)" if preview else f"<b>{os.path.basename(path)}</b>") + ("" if not pm.isNull() or preview else "<br>video"))
+        self.res_box.show()
+
+    def open_result(self):
+        p = getattr(self, "last_result", None)
+        if p and os.path.exists(p):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(p))
 
     # ================================================================ guide
     def show_guide(self):
+        import vis_guide
         dlg = QDialog(self)
-        dlg.setWindowTitle("Render Studio - guide")
+        dlg.setWindowTitle("Visualize - guide")
         dlg.resize(760, 720)
         lay = QVBoxLayout(dlg)
-        box = QTextEdit()
-        box.setReadOnly(True)
-        try:
-            gp = next((q for q in (os.path.join(HERE, "docs", "README_render.txt"), os.path.join(HERE, "README_render.txt")) if os.path.exists(q)),
-                      os.path.join(HERE, "README_render.txt"))
-            with open(gp, "r", encoding="utf-8") as fh:
-                box.setPlainText(fh.read())
-        except OSError:
-            box.setPlainText("README_render.txt was not found next to the program.")
+        box = QTextBrowser()
+        box.setOpenExternalLinks(True)
+        box.setHtml(vis_guide.GUIDE)
         lay.addWidget(box)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        self.guide_dlg = dlg
         dlg.exec()
 
 
 def make_visualize(host, path=None):
-    """The tab factory of the add-on (see addon.json): `path` is a Visualize project folder."""
-    return RenderStudio(shell=host, folder=path) if path else RenderStudio(shell=host)
+    """The tab factory of the add-on (see addon.json): `path` is a Visualize project folder.  A new tab (File > New Visualize) shows the part
+    or assembly that is on screen, if there is one with a solid; otherwise it opens on the guidance page."""
+    if path:
+        return RenderStudio(shell=host, folder=path)
+    w = RenderStudio(shell=host)
+    try:
+        cur = host.cur()
+    except Exception:
+        cur = None
+    if cur is not None and (hasattr(cur, "asm") or (getattr(cur, "doc", None) is not None and hasattr(cur.doc, "features"))):
+        w.candidate = cur
+        try:
+            if rs.bodies_from_widget(cur):
+                w.src_tab = cur
+                w.load_from_widget(cur)
+                w.finish_open()
+        except Exception:
+            w.src_tab = None                                # it could not be shown: the guidance page offers the import instead
+    return w
 
 
 def main():

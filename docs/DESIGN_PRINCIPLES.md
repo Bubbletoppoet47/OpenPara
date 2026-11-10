@@ -23,6 +23,9 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 - Less-used commands (Open sketch for editing, Clear sketch) live in a small menu, not on the bar. Export lives on the page it belongs to (Assembly), not on the bar.
 - Heavy rebuilds are incremental: an edit rebuilds only what it touches, the rest (and its meshes) is reused; the Assembly page is built when it is opened.
 
+- **Visualize** has the same two commands (**Import source...**, **Update from original**) but no New project step: its folder is made at the first save or render, beside the model. A model must never be hard to get in: the part or assembly on screen is shown at once (ribbon, Add menu, File > New Visualize), saved or not; a tab with nothing to show opens on a guidance page (Import part or assembly..., Open Visualize project..., or drop a file); a new model replaces the old one and keeps the settings that do not depend on the model (sun, picture, video, output). Update from original reads the open tab, else the file itself - it never opens a tab to do so.
+- A command never refuses with "save first" or "open a part first" when the program can simply do the sensible thing (take the unsaved model as it is on screen; open the guidance page).
+
 ## 3. Results
 - Result text comes from the **one shared formatter** (`sim_report`), so 1D, 2D and 3D read the same: heading, chips, key/value tables, summary, solver block.
 - Numbers are shown to **5 significant figures**; units always follow the global system.

@@ -820,25 +820,29 @@ class AppShell(QMainWindow):
         return self.add_tab(sim_tab.SimWindow(kind, shell=self, src_tab=src))
 
     def add_render(self):
-        """A Visualize tab for the part or assembly that is on screen (or the model of the Visualize tab that is on screen)."""
+        """A Visualize tab for the part or assembly that is on screen, saved or not (or for the model of the Visualize tab that is on screen).
+        With nothing to show - no part on screen, or a part without a solid yet - the tab opens on its guidance page, which offers the import."""
         if not self.need_addon("render", "A render"):
             return None
         import render_studio
         src = self.cur()
         if isinstance(src, render_studio.RenderStudio):
-            src = src.source_widget()
+            src = src.original()[1] if src.original()[0] == "tab" else None
         is_asm = src is not None and hasattr(src, "asm")
         is_part = isinstance(src, pm_app.MainWindow)
-        if not (is_asm or is_part):
-            QMessageBox.information(self, "Renderer", "Open a part or an assembly first: a render shows the one that is on screen.")
-            return None
-        if not getattr(src, "path", None):
-            QMessageBox.information(self, "Renderer", "Save the part / assembly first (File > Save): the Visualize project is named after it and gets its own copy.")
-            return None
         try:
-            w = render_studio.RenderStudio(shell=self, src_widget=src)
+            if not (is_asm or is_part) or not render_studio.rs.bodies_from_widget(src):
+                w = render_studio.RenderStudio(shell=self)
+                w.candidate = src if (is_asm or is_part) else None
+                if is_asm or is_part:
+                    w.statusBar().showMessage("There is no solid to show yet: add a feature to the part (or a part to the assembly), then Import part or assembly...")
+            else:
+                with self.busy("Opening Visualize"):
+                    w = render_studio.RenderStudio(shell=self, src_widget=src)
         except Exception as ex:
-            QMessageBox.warning(self, "Renderer", f"Could not start the renderer window: {ex}")
+            import traceback
+            log_error(f"Could not start Visualize:\n{traceback.format_exc()}")
+            QMessageBox.warning(self, "Visualize", f"Could not start Visualize: {ex}\n\nThe details are in Help > Show the error log.")
             return None
         return self.add_tab(w)
 

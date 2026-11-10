@@ -324,7 +324,7 @@ def export_settings(proj):
 
 def import_settings(proj, d):
     if d.get("kind") != SETTINGS_KIND:
-        raise ValueError("this is not a Render Studio settings file")
+        raise ValueError("this is not a Visualize settings file")
     for k in GENERAL_KEYS:
         if k in d and isinstance(d[k], dict):
             proj[k] = {**proj.get(k, {}), **copy_json(d[k])}
@@ -338,7 +338,7 @@ def export_cameras(proj):
 
 def import_cameras(d):
     if d.get("kind") != CAMERAS_KIND:
-        raise ValueError("this is not a Render Studio cameras file")
+        raise ValueError("this is not a Visualize cameras file")
     return copy_json(d["cameras"])
 
 
