@@ -1,13 +1,10 @@
-"""The Parametric Studies add-on loaded the real way (a development add-on folder next to the installed Simulation add-on): the button appears under
+"""The Parametric Studies add-on loaded the real way (installed, like the Simulation add-on it works with): the button appears under
 Solve, creates the study tab in the shell, works for 1D FEA and CFD too, and disappears when the add-on is not there."""
 import os, sys, tempfile, shutil
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 UD = tempfile.mkdtemp(prefix="opara_ud_"); os.environ["OPARA_USER_DIR"] = UD
 os.environ["OPARA_CHANNEL"] = "release"; os.environ["OPARA_NO_UPDATE"] = "1"
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEV = tempfile.mkdtemp(prefix="opara_dev_")
-os.symlink(os.path.join(HERE, "dev_addons", "parametric"), os.path.join(DEV, "parametric"))
-os.environ["OPARA_DEV_ADDONS"] = DEV
 sys.path.insert(0, HERE)
 import addons
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -17,8 +14,10 @@ QMessageBox.warning = staticmethod(lambda *a, **k: None)
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 import pm_model as pm, sk_tools as sk, gpd_app, ext, sketcher_core as sc
 
-assert "parametric" in addons.dev_ids()
-assert addons.install("simulation") or addons.is_installed("simulation")
+open(os.path.join(UD, "addons.json"), "w").write('{"removed": ["partgen", "truss", "annotator", "annotator_gimble", "trainer"]}')   # not needed here
+addons.startup()
+assert "parametric" in addons.known() and not addons.is_dev("parametric") and addons.status("parametric") == "installed", "a released add-on now"
+assert addons.is_installed("simulation")
 addons.activate()
 import sim_tab, sim_project as sp
 assert ext.hooks("sim_study"), "the add-on registers the hook"

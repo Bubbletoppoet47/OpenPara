@@ -13,8 +13,10 @@ The core is **Sketch/Part and Assembly** (with STEP / STL exchange, units, setti
 
 - **Part Generator**: spur, helical, herringbone and internal ring gears with true involute teeth; a Gear systems tab sizes a train of up to three gears from centre distances or ratios, or a planetary sun / planet / ring set, and opens each gear as its own part.
 - **Truss Generator**: builds the members of a truss from the lines of a sketch (profile, longest length, angled end cuts) and writes a cut list.
+- **Simulation**: 1D FEA of frames and trusses, 2D FEA of flat parts (plane stress / strain, linear and nonlinear) and 2D CFD of the flow around a profile, on a sketch or a slice of a part or assembly; results can be saved as animations.
+- **Parametric Studies**: varies the inputs of a simulation project over a table of design points and records the outputs (CSV export).
 
-Parts that use the Part Generator keep their data without the add-on and say that they need it. Uninstalling an add-on never touches your files or your material library. Installing needs an internet connection; once installed an add-on works offline. Simulation and the renderer are not part of this version; they are being reworked and will return as add-ons.
+Parts that use the Part Generator keep their data without the add-on and say that they need it. Uninstalling an add-on never touches your files or your material library. Installing needs an internet connection; once installed an add-on works offline. The renderer (Visualize) is not part of this version yet; it is being reworked and will follow as an add-on.
 
 Built on [build123d](https://github.com/gumyr/build123d) (OpenCascade), PyQt6, pyvista / VTK.
 
@@ -45,7 +47,7 @@ Each `test_*.py` runs on its own, for example `QT_QPA_PLATFORM=offscreen python 
 
 ## Status
 
-Early and in active development. Not everything is tested on every machine (for example CUDA rendering and the OptiX denoiser).
+Early and in active development. Not everything is tested on every machine. The simulation tools are 1D and 2D: they are for understanding a design early, and do not replace a full 3D analysis, a design-code check or a test.
 
 ## License
 
@@ -65,21 +67,23 @@ follows the newest `dev-<version>` pre-release instead of the newest release.
 
 - Work on `dev`. Every push to `dev` runs `.github/workflows/playground.yml`, which builds `OpenPara-Playground-Setup-<version>.exe` and
   `OpenPara-Playground-app-<version>.zip` and publishes them as the pre-release `dev-<version>` (version = `version.py` + the run number,
-  e.g. `0.8.5.37`). The newest 10 are kept.
+  e.g. `0.8.6.37`). The newest 10 are kept.
 - Install the Playground once from that setup file. After that it offers new builds at start-up (Help > Check for updates), the same way a
   normal OpenPara offers releases.
 - A Playground build has two modes (Help > Playground mode; it asks to restart):
-  - **Testing** (the default): exactly what the next release would be. Only the add-ons in `addons_src/` (the ones that ship) are available,
-    so the menus match OpenPara.
-  - **Full dev**: no restrictions. It also loads `dev_addons/` (unreleased add-ons: 3D FEA of parametric parts (`solid_fea`), Parametric Studies (`parametric`), voxel/mesh FEA, mesh, circuits ...; Simulation was promoted to Testing in 0.8.5 and lives in `addons_src/simulation`) and `shared/` (code they
+  - **Testing** (the default): exactly what the next release would be. Only the add-ons that ship are available, so the menus match
+    OpenPara. Those are the add-ons in `addons_src/` except the ids in `addons.NOT_RELEASED` (now Visualize, `render`, and Motor Control,
+    `motor`): they are built for the Playground and offered there in Full dev mode only, and a release carries neither their files nor
+    their menus. Taking an id out of that list releases the add-on.
+  - **Full dev**: no restrictions. It also loads `dev_addons/` (unreleased add-ons: 3D FEA of parametric parts (`solid_fea`), voxel/mesh FEA, mesh, circuits ...; Simulation and Parametric Studies were released in 0.8.6 and live in `addons_src/`) and `shared/` (code they
     share).
   A release never contains `dev_addons/` or `shared/`.
 - Putting an add-on "in testing" means moving it from `dev_addons/<id>/` to `addons_src/<id>/` with an `id`, `version` and `requires` (its pip
   packages) in its `addon.json`, a line in `addons.CATALOG`, and the id in the release workflow's smoke test. From then on it is in Testing mode
   and in the next release.
 - On its first start a Playground offers to copy the settings and material library from OpenPara and to install the add-ons OpenPara offers.
-- To release: merge `dev` into `main`, raise `version.py`, and run the Release workflow as above. Users on the normal program never see
-  `dev-` pre-releases.
+- To release: raise `version.py` on `dev`, merge `dev` into `main`, and run the Release workflow as above (it builds the add-ons with
+  `tools/build_addons.py dist --release`). Users on the normal program never see `dev-` pre-releases.
 - What makes a build a Playground build is `channel.json` next to `channel.py` (written by the workflow); `OPARA_CHANNEL=playground` does the
   same for a source checkout.
 

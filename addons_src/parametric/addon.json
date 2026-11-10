@@ -1,0 +1,9 @@
+{
+ "id": "parametric",
+ "name": "Parametric Studies",
+ "version": "0.8.6",
+ "description": "Parametric studies of a simulation project (1D FEA, 2D FEA, 2D CFD): a design-point table, grid fill, outputs to record, early-exit conditions and a results table with CSV export. The study is saved inside the simulation's project folder (study/). Needs the Simulation add-on.",
+ "requires": [],
+ "tabs": [],
+ "extension": "study_ext"
+}

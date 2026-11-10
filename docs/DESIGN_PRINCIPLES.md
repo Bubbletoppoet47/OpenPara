@@ -5,7 +5,7 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 
 ## 1. How we work
 - **Confirm first, then build.** A request ending in "please confirm" gets a plan only. "Go ahead" means build, run the full test suite, push to `dev`, and report the release number.
-- **`main` is untouched** until a release is made on purpose. All work goes to `dev` (each push builds a `dev-0.8.5.N` pre-release; the maintainer runs the Release workflow).
+- **`main` is untouched** until a release is made on purpose. All work goes to `dev` (each push builds a `dev-<version>.N` pre-release; the maintainer runs the Release workflow).
 - **Parity rule.** A feature added to one simulation tab (1D FEA, 2D FEA, 3D FEA, CFD) is checked against the others. If it makes sense there, it is built there too, and looks the same.
 - **Every change has a test**, and the full suite passes before pushing. Tests draw things and assert on pixels or values, not only that nothing crashed.
 - **Say what is missing.** Limitations are listed in the report, not hidden.

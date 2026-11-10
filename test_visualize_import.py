@@ -4,7 +4,9 @@ from original reads the file itself; the guide exists; the Render section shows 
 import os, tempfile, shutil
 _ud = os.environ["OPARA_USER_DIR"] = tempfile.mkdtemp(prefix="opara_ud_")     # a fresh copy of the add-on from addons_src (the others are left out: no downloads)
 open(os.path.join(_ud, "addons.json"), "w").write('{"removed": ["partgen", "truss", "annotator", "annotator_gimble", "trainer", "simulation", "motor"]}')
-import addons; addons.startup()
+import addons
+addons.NOT_RELEASED = ()          # this test is about an add-on that is not in a normal OpenPara yet (see addons.NOT_RELEASED)
+addons.startup()
 import faulthandler; faulthandler.dump_traceback_later(250, exit=True)
 import json
 os.environ["QT_QPA_PLATFORM"] = "offscreen"

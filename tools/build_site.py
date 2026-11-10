@@ -159,12 +159,12 @@ home = f'''<section class="hero"><div class="wrap"><div class="say">
 <tr><th scope="row"><a href="features.html#partgen">Part Generator</a></th><td>Spur, helical, herringbone and ring gears, gear trains and planetary sets, from a few numbers.</td><td>Add-on</td></tr>
 <tr><th scope="row"><a href="features.html#truss">Truss Generator</a></th><td>Turns the lines of a sketch into members cut to length with angled ends, and exports the cut list.</td><td>Add-on</td></tr>
 <tr><th scope="row"><a href="features.html#simulation">Simulation</a></th><td>Frames and trusses (1D FEA), flat parts under load (2D FEA) and flow around a profile (2D CFD).</td><td>Add-on</td></tr>
-<tr><th scope="row"><a href="features.html#visualize">Visualize</a></th><td>Lit previews and ray-traced pictures and videos of a part or an assembly.</td><td>Add-on</td></tr>
+<tr><th scope="row"><a href="features.html#studies">Parametric Studies</a></th><td>Runs a simulation over a table of values, such as a load, a material or the size of a member, and records the results.</td><td>Add-on</td></tr>
 </tbody></table></div></section>
 
 <section><div class="wrap"><div class="intro"><h2>Test it before you build it</h2><p>The Simulation add-on works on a sketch or on a slice of a part, so a question about strength or flow can be answered while the design is still easy to change.</p></div>
 <div class="pair">{FEA_CLIP}{CFD_CLIP}</div>
-<p class="after">Both clips were drawn by OpenPara. <a href="features.html#simulation">What the solvers do</a>, and <a href="features.html#limits">what they do not</a>.</p></div></section>
+<p class="after">Both clips were drawn by OpenPara. A <a href="features.html#studies">parametric study</a> then runs the same simulation for a whole table of values. <a href="features.html#simulation">What the solvers do</a>, and <a href="features.html#limits">what they do not</a>.</p></div></section>
 
 <section><div class="wrap"><div class="split">
 <div><h2>Gears that fit the space you have</h2>
@@ -178,7 +178,7 @@ home = f'''<section class="hero"><div class="wrap"><div class="say">
 <div><h2>Want the details?</h2><p>Constraints, formulas, units and mates in one place, and a plain account of what has been checked and what has not.</p><p><a href="features.html#limits">Read what is checked</a></p></div></div></div></section>
 
 <section class="get-it"><div class="wrap"><div><h2>Get OpenPara</h2><p>Free to download. The installer needs no administrator rights.</p></div><a class="btn go" href="download.html">Go to the download</a></div></section>'''
-page("index.html", "OpenPara - free parametric CAD", "OpenPara is a free, open-source parametric CAD modeller for parts and assemblies, with add-ons for gears, trusses, simulation and rendering.", home, "home")
+page("index.html", "OpenPara - free parametric CAD", "OpenPara is a free, open-source parametric CAD modeller for parts and assemblies, with add-ons for gears, trusses, simulation and parametric studies.", home, "home")
 
 # ------------------------------------------------------------------ download
 dl = pagehead("Download", "Free. No account needed.") + f'''<section class="first"><div class="wrap"><div class="prose">
@@ -238,14 +238,18 @@ feat = pagehead("Features", "What is in OpenPara today.") + f'''<section class="
     "Any result can be saved as an animation (WebP, PNG, GIF or MP4)"],
     f'<div class="pair">{FEA_CLIP}{CFD_CLIP}</div>'
     + shot("ui-fea1d.webp", 1440, 860, "The 1D FEA tab with a roof truss coloured by stress and its deflected shape drawn dashed", "1D FEA of a roof truss under three loads: the von Mises stress in each member, and the deflected shape drawn dashed."))}
-{spec("visualize", "Visualize", "Add-on", [
-    "A live, lit preview of a part or an assembly",
-    "Ray-traced pictures and videos, with sun, lights, a floor and cameras",
-    "A Visualize project keeps its own copy of the model"])}
+{spec("studies", "Parametric Studies", "Add-on", [
+    "Works on any simulation project: 1D FEA, 2D FEA or 2D CFD. Start one with File &gt; New Parametric Study, or from the simulation that is on screen",
+    "Tick the inputs to vary: loads, material values, the sizes of a member's cross-section, a dimension of the part",
+    "A table of design points, one row for each case. Fill it by hand, as a range, or as a grid of every combination",
+    "Choose the outputs to record, such as the largest displacement, the largest stress and the factors of safety",
+    "A run can stop early when an output crosses a value you set, and can be stopped by hand; the cases already done are kept",
+    "Click a row of the results to see that case in the simulation tab; export the table as CSV",
+    "The study is saved inside the simulation's project folder"],
+    shot("ui-study.webp", 1440, 860, "The Parametric Study tab: inputs to vary on the left, the design points and the table of results on the right", "A study of the roof truss: one load taken from 4 kN to 40 kN in ten cases, with the displacement, stress and factors of safety of each."))}
 {spec("more", "More add-ons", "Add-ons", [
     "<b>Annotator</b>: draw boxes on photos and video frames to build an image dataset, and share it as a zip",
-    "<b>Trainer</b>: train a YOLO model on Annotator datasets, in the background",
-    "<b>Motor Control</b>: set up, calibrate and test a motor on an ODESC or ODrive-style board, with live plots"])}
+    "<b>Trainer</b>: train a YOLO model on Annotator datasets, in the background"])}
 {spec("open", "Open source", "GPL-3.0", [
     "Read the code, change it, share it",
     "Built on build123d (OpenCascade), PyQt6, and pyvista / VTK",
@@ -256,7 +260,7 @@ feat = pagehead("Features", "What is in OpenPara today.") + f'''<section class="
 <li>The gear geometry is checked against textbook values and against the real solids: meshing gears do not overlap, and a deliberately wrong spacing does. That is a geometry check, not a strength or life calculation.</li>
 <li>The simulation tools are 1D and 2D. They are for understanding a design early and comparing options. They do not replace a full 3D analysis, a design-code check or a test.</li>
 <li>OpenPara is young software under active development. Expect rough edges, and please report them.</li></ul></div></div></section>'''
-page("features.html", "Features - OpenPara", "Parametric parts and assemblies in one free program, with add-ons for gears, trusses, simulation and rendering.", feat)
+page("features.html", "Features - OpenPara", "Parametric parts and assemblies in one free program, with add-ons for gears, trusses, simulation and parametric studies.", feat)
 
 # ------------------------------------------------------------------ guides
 guides = pagehead("Guides", "Start where you are.") + f'''<section class="first"><div class="wrap"><div class="layout"><nav class="toc" aria-label="On this page"><a href="#first">Your first part</a><a href="#train">A gear train</a><a href="#planetary">A planetary set</a></nav>

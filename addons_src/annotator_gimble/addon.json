@@ -1,7 +1,7 @@
 {
  "id": "annotator_gimble",
  "name": "Gimble sessions for the Annotator",
- "version": "0.8.5",
+ "version": "0.8.6",
  "description": "Adds File > Import Gimble Session... to the Annotator: sessions recorded by the Gimble rig (camera + LiDAR) become sets of photos with their depth. Needs the Annotator add-on.",
  "requires": [],
  "tabs": [],

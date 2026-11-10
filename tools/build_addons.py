@@ -1,7 +1,8 @@
 """
-build_addons.py <out-dir> - zip every add-on in addons_src/ for the GitHub release and write addons-index.json (names, sizes, sha256).
+build_addons.py <out-dir> [--release] - zip the add-ons in addons_src/ for the GitHub release and write addons-index.json (names, sizes, sha256).
 The version inside each zipped addon.json is set to the program version (version.py), so an add-on always matches the release it came from.
-Run from the repository root.
+--release leaves out the add-ons that are not released yet (addons.NOT_RELEASED): a normal release does not carry them; a Playground build
+(no --release) carries every add-on.  Run from the repository root.
 """
 import hashlib
 import json
@@ -14,14 +15,23 @@ sys.path.insert(0, ROOT)
 import version
 
 
-def build(out):
+def not_released():
+    """addons.NOT_RELEASED, read from the file itself (this script also runs where the program's packages are not installed)."""
+    import ast
+    import re
+    text = open(os.path.join(ROOT, "addons.py"), encoding="utf-8").read()
+    return tuple(ast.literal_eval(re.search(r"^NOT_RELEASED\s*=\s*(\(.*?\))", text, re.M).group(1)))
+
+
+def build(out, release=False):
     os.makedirs(out, exist_ok=True)
     src = os.path.join(ROOT, "addons_src")
     index = {"core": version.__version__, "addons": {}}
+    skip = not_released() if release else ()
     for aid in sorted(os.listdir(src)):
         d = os.path.join(src, aid)
         mp = os.path.join(d, "addon.json")
-        if not os.path.isfile(mp):
+        if not os.path.isfile(mp) or aid in skip:
             continue
         m = json.load(open(mp, encoding="utf-8"))
         assert m["id"] == aid, (m["id"], aid)
@@ -45,6 +55,7 @@ def build(out):
 
 
 if __name__ == "__main__":
-    idx = build(sys.argv[1] if len(sys.argv) > 1 else "dist")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    idx = build(args[0] if args else "dist", release="--release" in sys.argv[1:])
     for a, e in idx["addons"].items():
         print(a, e["file"], e["bytes"], "bytes")

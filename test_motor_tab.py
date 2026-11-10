@@ -2,7 +2,9 @@
 import os, tempfile
 _ud = os.environ["OPARA_USER_DIR"] = tempfile.mkdtemp()
 open(os.path.join(_ud, "addons.json"), "w").write('{"removed": ["partgen", "truss", "annotator", "annotator_gimble", "trainer", "simulation", "render"]}')
-import addons; addons.startup()
+import addons
+addons.NOT_RELEASED = ()          # this test is about an add-on that is not in a normal OpenPara yet (see addons.NOT_RELEASED)
+addons.startup()
 import faulthandler; faulthandler.dump_traceback_later(250, exit=True)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PyQt6.QtWidgets import QApplication, QMessageBox

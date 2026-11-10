@@ -5,7 +5,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 UD = tempfile.mkdtemp(prefix="opara_ud_"); os.environ["OPARA_USER_DIR"] = UD
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIM = next(p for p in (os.path.join(HERE, "addons_src", "simulation"), os.path.join(HERE, "dev_addons", "simulation")) if os.path.isdir(p))
-PAR = os.path.join(HERE, "dev_addons", "parametric")
+PAR = os.path.join(HERE, "addons_src", "parametric")
 sys.path[:0] = [HERE, SIM, PAR, os.path.join(HERE, "shared")]
 from PyQt6.QtWidgets import QApplication, QMessageBox
 app = QApplication([])

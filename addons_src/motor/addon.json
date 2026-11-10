@@ -1,7 +1,7 @@
 {
  "id": "motor",
  "name": "Motor Control",
- "version": "0.8.5",
+ "version": "0.8.6",
  "description": "Motor Control: connect to an ODESC / ODrive-style motor board, set up and calibrate the motor and its Hall sensors or encoder, run tests, see live plots and what the sensor can do. A project is a folder (.motor).",
  "requires": [
   {

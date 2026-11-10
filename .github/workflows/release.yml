@@ -86,20 +86,21 @@ jobs:
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "packages ok")) { Report "import of a package failed (exit $LASTEXITCODE)" $out; exit 1 }
-          # 2. the add-ons: build the release files and install them from there (Part Generator, Truss Generator)
+          # 2. the add-ons: build the release files and install them from there (every add-on a normal OpenPara offers)
           New-Item -ItemType Directory -Force dist | Out-Null
-          python tools\build_addons.py dist
+          python tools\build_addons.py dist --release          # without the add-ons that are not released yet (addons.NOT_RELEASED)
           if ($LASTEXITCODE -ne 0) { throw "add-on build failed" }
           $dist = (Resolve-Path dist).Path
           Push-Location build\OpenPara\app
           $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_addons"
           $env:OPARA_ADDON_BASE = "file:///" + ($dist -replace "\\", "/") + "/"
-          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); addons.install('annotator'); addons.install('annotator_gimble'); addons.install('trainer'); addons.install('simulation'); addons.install('render'); addons.install('motor'); import gpd_app, partgen_ext, truss_tab; addons.activate(); import gmsh, sim_tab, physics_tab, beam_tab, cfd_tab, render_studio, motor_tab; assert all(addons.status(a)=='installed' for a in ('partgen','truss','annotator','annotator_gimble','trainer','simulation','render','motor')); print('add-ons ok')" 2>&1
+          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); addons.install('annotator'); addons.install('annotator_gimble'); addons.install('trainer'); addons.install('simulation'); addons.install('parametric'); import gpd_app, partgen_ext, truss_tab; addons.activate(); import gmsh, sim_tab, physics_tab, beam_tab, cfd_tab, study_ext, study_tab; assert all(addons.status(a)=='installed' for a in ('partgen','truss','annotator','annotator_gimble','trainer','simulation','parametric')); assert set(addons.known()) == {'partgen','truss','annotator','annotator_gimble','trainer','simulation','parametric'}, addons.known(); print('add-ons ok')" 2>&1
           Pop-Location
           Remove-Item Env:OPARA_ADDON_BASE
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "add-ons ok")) { Report "add-on install failed (exit $LASTEXITCODE)" $out; exit 1 }
+          foreach ($f in "addon-render.zip", "addon-motor.zip") { if (Test-Path "dist\$f") { throw "an add-on that is not released is in the release: $f" } }
           # 2b. the Annotator's AI packages (torch, torchvision, ultralytics, OpenCV ...) really load from the add-on folder, after Qt (as in the program)
           Push-Location build\OpenPara\app
           $out = & $py -c "import addons; addons.activate(); from PyQt6 import QtWidgets; import cv2, torch, torchvision; from ultralytics import YOLO; print('ai ok', torch.__version__)" 2>&1

@@ -1,7 +1,0 @@
-{
- "name": "Parametric Studies",
- "order": 3,
- "status": "workshopping",
- "description": "Parametric studies of a simulation project (1D FEA, 2D FEA, 2D CFD and any future simulation): a design-point table, grid fill, outputs to record, early-exit conditions, results table with CSV export. The study is saved inside the project folder (study/).",
- "extension": "study_ext"
-}

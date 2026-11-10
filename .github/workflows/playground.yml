@@ -2,7 +2,7 @@ name: Playground (dev build)
 
 # OpenPara Playground = the same program built from the dev branch, with its own name, data folder and update feed ("dev-<version>" pre-releases)
 # and with dev_addons/ + shared/ inside.  It publishes by itself on every push to dev; an installed Playground offers the newest build at start-up.
-# Version: the repository's version.py plus the run number, e.g. 0.8.5.37 (so it is newer than 0.8.5 and older than 0.8.6).
+# Version: the repository's version.py plus the run number, e.g. 0.8.6.37 (so it is newer than 0.8.6 and older than 0.8.7).
 on:
   push:
     branches: ["dev"]
@@ -110,9 +110,11 @@ jobs:
           Push-Location build\OpenPara\app
           $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_addons"
           $env:OPARA_ADDON_BASE = "file:///" + ($dist -replace "\\", "/") + "/"
-          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); addons.install('annotator'); addons.install('annotator_gimble'); addons.install('trainer'); addons.install('simulation'); addons.install('render'); addons.install('motor'); import gpd_app, partgen_ext, truss_tab; addons.activate(); import gmsh, sim_tab, physics_tab, beam_tab, cfd_tab, render_studio, motor_tab; assert all(addons.status(a)=='installed' for a in ('partgen','truss','annotator','annotator_gimble','trainer','simulation','render','motor')); print('add-ons ok')" 2>&1
+          $env:OPARA_PLAYGROUND_MODE = "full"          # the add-ons that are not released yet (Visualize, Motor Control) are offered only in Full dev mode
+          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); addons.install('annotator'); addons.install('annotator_gimble'); addons.install('trainer'); addons.install('simulation'); addons.install('parametric'); addons.install('render'); addons.install('motor'); import gpd_app, partgen_ext, truss_tab; addons.activate(); import gmsh, sim_tab, physics_tab, beam_tab, cfd_tab, study_ext, study_tab, render_studio, motor_tab; assert all(addons.status(a)=='installed' for a in ('partgen','truss','annotator','annotator_gimble','trainer','simulation','parametric','render','motor')); print('add-ons ok')" 2>&1
           Pop-Location
           Remove-Item Env:OPARA_ADDON_BASE
+          Remove-Item Env:OPARA_PLAYGROUND_MODE
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "add-ons ok")) { Report "add-on install failed (exit $LASTEXITCODE)" $out; exit 1 }

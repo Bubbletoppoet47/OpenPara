@@ -447,7 +447,7 @@ class AppShell(QMainWindow):
         out = [{"text": "New Part", "fn": lambda: self.new_part(), "tip": "A part: sketches, extrudes, revolves ...  (Ctrl+N)"},
                {"text": "New Assembly", "fn": self.new_assembly, "tip": "Parts put together with mates  (Ctrl+Shift+N)"},
                {"text": "Open...", "fn": self.open_dialog, "tip": "A part, an assembly or a file of an add-on  (Ctrl+O)"},
-               {"text": "Open Project Folder...", "fn": self.open_project_folder_dialog, "tip": "A simulation, Visualize, annotator ... project"}]
+               {"text": "Open Project Folder...", "fn": self.open_project_folder_dialog, "tip": "The project folder of a simulation, a truss or another add-on"}]
         for kind, spec in addons.tab_kinds().items():
             out.append({"text": "New " + spec.get("label", kind), "fn": lambda k=kind: self.new_addon_tab(k), "group": "addon",
                         "tip": addons.info(spec["aid"])["name"] + " add-on"})

@@ -12,7 +12,7 @@ os.environ["OPARA_ADDON_BASE"] = "file://" + REL
 SRC = addons.SRC_DIR
 addons.SRC_DIR = os.path.join(UD, "no_such_folder")                       # behave like the installed program: nothing ships inside
 
-assert addons.shipped() == {} and set(addons.known()) == {"partgen", "truss", "annotator", "annotator_gimble", "trainer", "simulation", "render", "motor"}
+assert addons.shipped() == {} and set(addons.known()) == {"partgen", "truss", "annotator", "annotator_gimble", "trainer", "simulation", "parametric"}, addons.known()
 # the catalog (what is shown before a download) equals the manifests
 for aid in addons.CATALOG:
     m = json.load(open(os.path.join(SRC, aid, "addon.json")))

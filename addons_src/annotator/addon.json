@@ -1,7 +1,7 @@
 {
  "id": "annotator",
  "name": "General Classification Annotator",
- "version": "0.8.5",
+ "version": "0.8.6",
  "description": "Draw boxes on photos and video frames, pick LiDAR distances, pre-label with YOLO models downloaded from GitHub, hand a dataset to someone as a zip (and merge theirs into yours), annotate from a tablet. An annotator project is a folder with its dataset inside.",
  "requires": [
   {

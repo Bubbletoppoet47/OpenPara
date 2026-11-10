@@ -60,4 +60,4 @@ def copy_settings():
 def addons_to_offer():
     """The add-ons a normal OpenPara offers (shipped ones) that are not installed here, in install order."""
     import addons
-    return [a for a in addons.CATALOG if not addons.is_installed(a)]
+    return [a for a in addons.CATALOG if addons.offered(a) and not addons.is_installed(a)]

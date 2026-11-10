@@ -53,7 +53,7 @@ open(os.path.join(paths.user_dir(), "settings.json"), "w").write("{mine}")      
 assert playground.copy_settings() == ["gpd_materials.json"]
 assert open(os.path.join(paths.user_dir(), "settings.json")).read() == "{mine}"
 assert open(os.path.join(nd, "gpd_materials.json")).read() == "[1]" and os.listdir(nd).count("gpd_materials.json") == 1      # the source is untouched
-assert playground.addons_to_offer() == list(addons.CATALOG)
+assert playground.addons_to_offer() == [a for a in addons.CATALOG if addons.offered(a)] and "simulation" in playground.addons_to_offer()
 
 # ---- the window: menus, the questions, the mode switch
 from PyQt6.QtWidgets import QApplication, QMessageBox

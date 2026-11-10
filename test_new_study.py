@@ -6,9 +6,6 @@ UD = tempfile.mkdtemp(prefix="opara_ud_"); os.environ["OPARA_USER_DIR"] = UD
 open(os.path.join(UD, "addons.json"), "w").write('{"removed": ["partgen", "truss", "annotator", "annotator_gimble", "trainer", "render", "motor"]}')          # the big add-ons are not needed here (no download, no disk)
 os.environ["OPARA_CHANNEL"] = "release"; os.environ["OPARA_NO_UPDATE"] = "1"
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEV = tempfile.mkdtemp(prefix="opara_dev_")
-os.symlink(os.path.join(HERE, "dev_addons", "parametric"), os.path.join(DEV, "parametric"))
-os.environ["OPARA_DEV_ADDONS"] = DEV
 sys.path.insert(0, HERE)
 import addons
 from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox

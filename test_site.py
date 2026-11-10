@@ -25,6 +25,8 @@ for pg in PAGES:
     t = open(os.path.join(DOCS, pg), encoding="utf-8").read()
     assert t.count(f"mailto:{MAIL}") >= 1, f"{pg}: the inquiries address is missing"
     assert "coming soon" not in t and "(coming)" not in t, f"{pg}: a placeholder is left"
+    for word in ("Visualize", "Motor Control", "ray-traced", "rendering"):       # not released yet (addons.NOT_RELEASED): the site shows what a download has
+        assert word not in t, f"{pg}: mentions {word}, which is not in a normal OpenPara yet"
     assert "<h1" in t and t.count("<h1") == 1, pg
     for ref in re.findall(r'(?:href|src|poster)="([^"]+)"', t):
         if re.match(r"(https?:|mailto:)", ref):
@@ -48,6 +50,10 @@ for v in ("fea-bracket", "cfd-wing"):
 home = open(os.path.join(DOCS, "index.html"), encoding="utf-8").read()
 assert f'id="foot-ver">{ns["VER"]}<' in home and ns["VER"], "the footer starts with the version of this copy"
 assert 'id="ver-btn"' in home and 'id="gear"' in home
+feat = open(os.path.join(DOCS, "features.html"), encoding="utf-8").read()
+for anchor in ("parts", "assemblies", "partgen", "truss", "simulation", "studies", "limits"):
+    assert f'id="{anchor}"' in feat, anchor
+assert "Parametric Studies" in home and "ui-study.webp" in feat
 dl = open(os.path.join(DOCS, "download.html"), encoding="utf-8").read()
 assert 'id="dl-exe"' in dl and 'id="dl-info"' in dl, "site.js fills these in"
 

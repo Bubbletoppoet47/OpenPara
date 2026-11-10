@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenPara - free parametric CAD</title><meta name="description" content="OpenPara is a free, open-source parametric CAD modeller for parts and assemblies, with add-ons for gears, trusses, simulation and rendering."><meta name="theme-color" content="#071f3a">
+<title>OpenPara - free parametric CAD</title><meta name="description" content="OpenPara is a free, open-source parametric CAD modeller for parts and assemblies, with add-ons for gears, trusses, simulation and parametric studies."><meta name="theme-color" content="#071f3a">
 <link rel="icon" type="image/svg+xml" href="assets/openpara-logo-small.svg"><link rel="apple-touch-icon" href="icon.png">
-<meta property="og:type" content="website"><meta property="og:title" content="OpenPara - free parametric CAD"><meta property="og:description" content="OpenPara is a free, open-source parametric CAD modeller for parts and assemblies, with add-ons for gears, trusses, simulation and rendering."><meta property="og:image" content="img/planetary.jpg">
+<meta property="og:type" content="website"><meta property="og:title" content="OpenPara - free parametric CAD"><meta property="og:description" content="OpenPara is a free, open-source parametric CAD modeller for parts and assemblies, with add-ons for gears, trusses, simulation and parametric studies."><meta property="og:image" content="img/planetary.jpg">
 <link rel="preload" href="assets/fonts/sofia-sans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/sofia-sans-condensed.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css"></head><body class="home">
@@ -12,7 +12,7 @@
 <main id="main"><section class="hero"><div class="wrap"><div class="say">
 <h1>Parametric CAD,<br>free for everyone.</h1>
 <p class="lede">OpenPara is an open-source modeller for parts and assemblies. Draw a sketch, give it dimensions, and build on it. Change a number later and everything that depends on it is rebuilt.</p>
-<div class="btns"><a class="btn go" href="download.html">Download for Windows <span id="ver-btn">(0.8.5)</span></a><a class="more" href="features.html">See what it does</a></div>
+<div class="btns"><a class="btn go" href="download.html">Download for Windows <span id="ver-btn">(0.8.6)</span></a><a class="more" href="features.html">See what it does</a></div>
 <p class="fine">No account and no subscription. Linux and macOS run it from source.</p></div>
 <figure class="sheet" id="gear">
 <svg viewBox="0 0 520 470" role="img" aria-labelledby="gear-title">
@@ -48,12 +48,12 @@
 <tr><th scope="row"><a href="features.html#partgen">Part Generator</a></th><td>Spur, helical, herringbone and ring gears, gear trains and planetary sets, from a few numbers.</td><td>Add-on</td></tr>
 <tr><th scope="row"><a href="features.html#truss">Truss Generator</a></th><td>Turns the lines of a sketch into members cut to length with angled ends, and exports the cut list.</td><td>Add-on</td></tr>
 <tr><th scope="row"><a href="features.html#simulation">Simulation</a></th><td>Frames and trusses (1D FEA), flat parts under load (2D FEA) and flow around a profile (2D CFD).</td><td>Add-on</td></tr>
-<tr><th scope="row"><a href="features.html#visualize">Visualize</a></th><td>Lit previews and ray-traced pictures and videos of a part or an assembly.</td><td>Add-on</td></tr>
+<tr><th scope="row"><a href="features.html#studies">Parametric Studies</a></th><td>Runs a simulation over a table of values, such as a load, a material or the size of a member, and records the results.</td><td>Add-on</td></tr>
 </tbody></table></div></section>
 
 <section><div class="wrap"><div class="intro"><h2>Test it before you build it</h2><p>The Simulation add-on works on a sketch or on a slice of a part, so a question about strength or flow can be answered while the design is still easy to change.</p></div>
 <div class="pair"><figure class="clip"><video autoplay loop muted playsinline preload="metadata" width="960" height="640" poster="video/fea-bracket.jpg" aria-label="Animation: the stress in a wall bracket grows as the load on its arm is raised"><source src="video/fea-bracket.mp4" type="video/mp4"><source src="video/fea-bracket.webm" type="video/webm"></video><figcaption>2D FEA. A steel wall bracket held at three bolt holes while the load on the end of its arm is raised to about 890 N. The colour is the von Mises stress; the bending is drawn larger than it is.</figcaption></figure><figure class="clip"><video autoplay loop muted playsinline preload="metadata" width="960" height="640" poster="video/cfd-wing.jpg" aria-label="Animation: tracer particles follow the air around a wing section"><source src="video/cfd-wing.mp4" type="video/mp4"><source src="video/cfd-wing.webm" type="video/webm"></video><figcaption>2D CFD. Air passing a wing section set at an angle. The colour is the speed of the air; the tracer particles show where it goes.</figcaption></figure></div>
-<p class="after">Both clips were drawn by OpenPara. <a href="features.html#simulation">What the solvers do</a>, and <a href="features.html#limits">what they do not</a>.</p></div></section>
+<p class="after">Both clips were drawn by OpenPara. A <a href="features.html#studies">parametric study</a> then runs the same simulation for a whole table of values. <a href="features.html#simulation">What the solvers do</a>, and <a href="features.html#limits">what they do not</a>.</p></div></section>
 
 <section><div class="wrap"><div class="split">
 <div><h2>Gears that fit the space you have</h2>
@@ -70,7 +70,7 @@
 <footer><div class="wrap"><div class="block">
 <div class="cell wide"><span class="k">Project</span><span class="v name"><img src="assets/openpara-logo-small.svg" width="26" height="26" alt="">OpenPara</span><span class="s">Free, open-source parametric CAD for hobbyists, students and engineers.</span></div>
 <div class="cell"><span class="k">Licence</span><span class="v"><a href="about.html#licence">GNU GPL v3</a></span><span class="s">Use it, study it, change it, share it.</span></div>
-<div class="cell"><span class="k">Version</span><span class="v" id="foot-ver">0.8.5</span><span class="s"><a href="https://github.com/Bubbletoppoet47/OpenPara/releases">All releases</a></span></div>
+<div class="cell"><span class="k">Version</span><span class="v" id="foot-ver">0.8.6</span><span class="s"><a href="https://github.com/Bubbletoppoet47/OpenPara/releases">All releases</a></span></div>
 <div class="cell wide"><span class="k">Pages</span><span class="links"><a href="download.html">Download</a><a href="features.html">Features</a><a href="guides.html">Guides</a><a href="about.html">About</a></span></div>
 <div class="cell"><span class="k">Source</span><span class="links"><a href="https://github.com/Bubbletoppoet47/OpenPara">GitHub</a><a href="https://github.com/Bubbletoppoet47/OpenPara/issues">Report a problem</a></span></div>
 <div class="cell"><span class="k">Inquiries</span><span class="links"><a href="mailto:inquiries.openpara@gmail.com">inquiries.openpara@gmail.com</a></span></div>

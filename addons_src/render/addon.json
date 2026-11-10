@@ -1,7 +1,7 @@
 {
  "id": "render",
  "name": "Renderer",
- "version": "0.8.5",
+ "version": "0.8.6",
  "description": "Visualize: Previs, a live lit Preview and ray-traced Renders (pictures and videos) of a part or assembly, with sun, lights, floor and cameras. A Visualize project is a folder (.gpv) with its own copy of the model.",
  "requires": [
   {

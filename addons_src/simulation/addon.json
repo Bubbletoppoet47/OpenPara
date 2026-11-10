@@ -1,7 +1,7 @@
 {
  "id": "simulation",
  "name": "Simulation (1D FEA, 2D FEA, 2D CFD)",
- "version": "0.8.5",
+ "version": "0.8.6",
  "description": "Frames and trusses (1D FEA), plane stress / strain FEA (2D FEA) and 2D CFD of a sketch or a slice of a part or assembly, with animation export. Each simulation is a project folder (.gpb, .gpf, .gpc) with its own copy of the part. Needs gmsh for meshing.",
  "requires": [
   {

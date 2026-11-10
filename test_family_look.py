@@ -7,12 +7,10 @@ UD = tempfile.mkdtemp(prefix="opara_ud_"); os.environ["OPARA_USER_DIR"] = UD
 open(os.path.join(UD, "addons.json"), "w").write('{"removed": ["partgen", "annotator", "annotator_gimble", "trainer", "motor"]}')          # the big add-ons are not needed here
 os.environ["OPARA_CHANNEL"] = "release"; os.environ["OPARA_NO_UPDATE"] = "1"
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEV = tempfile.mkdtemp(prefix="opara_dev_")
-os.symlink(os.path.join(HERE, "dev_addons", "parametric"), os.path.join(DEV, "parametric"))
-os.environ["OPARA_DEV_ADDONS"] = DEV
 sys.path.insert(0, HERE)
 import faulthandler; faulthandler.dump_traceback_later(280, exit=True)
 import addons
+addons.NOT_RELEASED = ()          # this test is about all the tabs, also Visualize, which is not in a normal OpenPara yet (see addons.NOT_RELEASED)
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QComboBox, QFileDialog, QInputDialog, QLabel, QMessageBox, QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget
 app = QApplication([])
@@ -209,6 +207,6 @@ st.items[pid].setCheckState(0, Qt.CheckState.Checked); settle()
 assert st.design_hint.isHidden() and st.design.columnCount() == 1
 study_act.trigger(); assert sh.cur() is st, "asked again from the study itself: it is shown"
 st.goto_sim(); assert sh.cur() is sims["beam"]
-import shutil; shutil.rmtree(UD, ignore_errors=True); shutil.rmtree(DEV, ignore_errors=True)
+import shutil; shutil.rmtree(UD, ignore_errors=True)
 print("OK family look")
 os._exit(0)

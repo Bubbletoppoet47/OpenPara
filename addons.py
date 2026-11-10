@@ -35,6 +35,11 @@ SRC_DIR = os.path.join(paths.CODE_DIR, "addons_src")
 MANIFEST = "addon.json"
 REPO = "Bubbletoppoet47/OpenPara"
 
+# Add-ons that are in addons_src/ (so the Playground builds and offers them) but are NOT part of a normal OpenPara yet.  A normal OpenPara -
+# and the Playground in Testing mode, which shows exactly what the next release is - does not know them: no menu, no ribbon tab, no download.
+# The Playground in Full dev mode offers them like any other add-on.  To release one, take its id out of this list.
+NOT_RELEASED = ("render", "motor")
+
 # what the dialog and the "install it?" questions show before anything is downloaded (tests keep it equal to addons_src/*/addon.json)
 CATALOG = {
     "partgen": {"name": "Part Generator",
@@ -60,6 +65,10 @@ CATALOG = {
                                   "assembly, with animation export. Each simulation is a project folder (.gpb, .gpf, .gpc) with its own copy of the part. "
                                   "Needs gmsh for meshing.",
                    "project_marker": {"marker": "simulation.json"}},
+    "parametric": {"name": "Parametric Studies",
+                   "description": "Parametric studies of a simulation project (1D FEA, 2D FEA, 2D CFD): a design-point table, grid fill, outputs "
+                                  "to record, early-exit conditions and a results table with CSV export. The study is saved inside the "
+                                  "simulation's project folder (study/). Needs the Simulation add-on."},
     "annotator_gimble": {"name": "Gimble sessions for the Annotator",
                          "description": "Adds File > Import Gimble Session... to the Annotator: sessions recorded by the Gimble rig (camera + LiDAR) "
                                         "become sets of photos with their depth. Needs the Annotator add-on."},
@@ -168,11 +177,21 @@ def is_dev(aid):
     return aid in dev_ids()
 
 
+def released(aid):
+    return aid not in NOT_RELEASED
+
+
+def offered(aid):
+    """True for an add-on this copy of the program offers: every released one, and the unreleased ones only in the Playground's Full dev mode."""
+    return released(aid) or channel.is_full_dev()
+
+
 def known():
-    """All add-on ids that can be installed: the catalog plus anything in the program folder (and the development folder, when set)."""
-    ids = list(CATALOG)
+    """All add-on ids that can be installed: the catalog plus anything in the program folder (and the development folder, when set) -
+    without the add-ons this copy does not offer (see NOT_RELEASED)."""
+    ids = [a for a in CATALOG if offered(a)]
     for a in list(shipped()) + dev_ids():
-        if a not in ids:
+        if a not in ids and (offered(a) or is_dev(a)):
             ids.append(a)
     return ids
 
@@ -181,7 +200,7 @@ def project_hint(folder):
     """The id of a catalog add-on that is NOT installed and whose project folder `folder` looks like (by its marker file), else None."""
     for aid, c in CATALOG.items():
         pm = c.get("project_marker")
-        if not pm or is_installed(aid):
+        if not pm or not offered(aid) or is_installed(aid):
             continue
         mk = os.path.join(folder, pm["marker"])
         if not os.path.isfile(mk):
@@ -339,7 +358,7 @@ def startup():
         _clean_leftovers()
         removed = set(_read_state()["removed"])
         for aid in shipped():
-            if aid in removed:
+            if aid in removed or not offered(aid):
                 continue
             if status(aid) in ("not installed", "update"):
                 try:

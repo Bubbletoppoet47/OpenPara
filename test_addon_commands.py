@@ -4,7 +4,7 @@ to another tab (depends_on) is closed with it."""
 import os, sys, json, tempfile
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 UD = tempfile.mkdtemp(prefix="opara_ud_"); os.environ["OPARA_USER_DIR"] = UD
-open(os.path.join(UD, "addons.json"), "w").write('{"removed": ["partgen", "truss", "annotator", "annotator_gimble", "trainer", "simulation", "render", "motor"]}')          # the big add-ons are not needed here (no download, no disk)
+open(os.path.join(UD, "addons.json"), "w").write('{"removed": ["partgen", "truss", "annotator", "annotator_gimble", "trainer", "simulation", "parametric", "render", "motor"]}')          # the big add-ons are not needed here (no download, no disk)
 os.environ["OPARA_NO_UPDATE"] = "1"
 DEV = tempfile.mkdtemp(prefix="opara_dev_"); os.environ["OPARA_DEV_ADDONS"] = DEV
 
