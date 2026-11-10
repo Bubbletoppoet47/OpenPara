@@ -6,8 +6,7 @@ UD = tempfile.mkdtemp(prefix="opara_ud_"); os.environ["OPARA_USER_DIR"] = UD
 os.environ["OPARA_CHANNEL"] = "release"; os.environ["OPARA_NO_UPDATE"] = "1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEV = tempfile.mkdtemp(prefix="opara_dev_")
-for n in ("parametric", "solid_fea"):
-    os.symlink(os.path.join(HERE, "dev_addons", n), os.path.join(DEV, n))
+os.symlink(os.path.join(HERE, "dev_addons", "solid_fea"), os.path.join(DEV, "solid_fea"))
 os.environ["OPARA_DEV_ADDONS"] = DEV
 sys.path.insert(0, HERE)
 import addons
@@ -18,7 +17,8 @@ QMessageBox.warning = staticmethod(lambda *a, **k: None)
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 import pm_model as pm, sk_tools as sk, gpd_app, ext
 
-assert {"solid_fea", "parametric"} <= set(addons.dev_ids())
+assert "solid_fea" in addons.dev_ids() and "parametric" in addons.known() and not addons.is_dev("parametric"), "Parametric Studies is a released add-on now"
+assert addons.is_installed("parametric"), "put in place from the program folder at start-up"
 assert addons.install("simulation") or addons.is_installed("simulation")
 addons.activate()
 assert "solid" in addons.tab_kinds() and addons.tab_kinds()["solid"]["project_folder"]["format"] == "openpara-sim-solid"

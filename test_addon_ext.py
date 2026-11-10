@@ -29,7 +29,7 @@ import partgen
 kind = next(iter(partgen.PART_TYPES))
 assert ext.present("partgen") and ext.feature("partgen") is not None
 w = pm_app.MainWindow()
-assert "Part Features" in tabs(w) and "Visualize" in tabs(w), tabs(w)
+assert "Part Features" in tabs(w) and "Simulation" in tabs(w) and "Visualize" not in tabs(w), tabs(w)     # Visualize is not released yet (addons.NOT_RELEASED)
 d = pm.Document()
 f = d.add(pm.new_feature("partgen", gen=kind, params={}, place={"plane": "Top"}))
 d.rebuild()
@@ -38,16 +38,19 @@ assert d.solid is not None and not str(d.status.get(f["id"])).startswith("error"
 saved = d.to_json()
 
 # ---- every optional add-on removed
-for aid in ("partgen", "truss", "simulation", "render"):
+for aid in ("partgen", "truss", "parametric", "simulation"):
     addons.uninstall(aid)
 addons.register_extensions(ext)
 assert not ext.present("partgen") and not ext.present("simulation") and not ext.present("render") and ext.feature("partgen") is None
 w2 = pm_app.MainWindow()
 t = tabs(w2)
-assert "Simulation" not in t and "Visualize" in t and "Part Features" in t, t
+assert "Simulation" not in t and "Visualize" not in t and "Part Features" in t, t
 a2 = assembly.AssemblyWindow()
 t = tabs(a2)
-assert "Simulation" not in t and "Visualize" in t, t
+assert "Simulation" not in t and "Visualize" not in t, t
+addons.NOT_RELEASED = ()                                 # where Visualize is offered (the Playground in Full dev mode) its ribbon tab is always there:
+assert "Visualize" in tabs(pm_app.MainWindow()) and "Visualize" in tabs(assembly.AssemblyWindow())      # without the add-on its button offers to install it
+addons.NOT_RELEASED = ("render", "motor")
 d2 = pm.Document.from_json(saved)
 d2.rebuild()
 fid = next(x["id"] for x in d2.features if x["kind"] == "partgen")

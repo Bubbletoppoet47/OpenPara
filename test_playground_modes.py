@@ -76,7 +76,8 @@ shell.addons_changed = lambda: done.append("changed")
 shell.restart_program = lambda: done.append("restart")
 gpd_app.AppShell.offer_first_run(shell)
 assert [t for t, _ in asked] == ["Welcome to the Playground", "Add-ons", "Settings copied"], asked
-assert done[:-1] == list(addons.CATALOG) and done[-1] == "changed", done
+assert done[:-1] == [a for a in addons.CATALOG if addons.offered(a)] and done[-1] == "changed", done        # what a normal OpenPara offers
+assert "parametric" in done and "render" not in done and "motor" not in done, done
 assert not playground.first_run_pending()
 assert os.path.exists(os.path.join(paths.user_dir(), "gpd_materials.json"))
 asked.clear(); done.clear()
