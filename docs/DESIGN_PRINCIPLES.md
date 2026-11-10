@@ -55,6 +55,21 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 - Anything that can be cut off, clipped or overlap in a narrow window is a bug: measure text, wrap or elide, and test at several widths.
 - Prefer one shared helper over three copies. If two tabs draw the same thing, it lives in one module.
 
+## 7b. The program window
+- **An empty window shows the start page**, never a blank: the program's own ways to start, then the documents and commands of the installed add-ons under their own heading, and the recent files. In a narrow window the two columns stack; nothing is cut off.
+- **Recent files** (`recent.py`) are noted by the window itself the first time a tab is seen with a path, so an add-on gets them for free. A path that is not there (an unplugged drive) stays in the list, greyed, and is only removed when the user says so. File windows start in the folder used last.
+- **The title bar names the document on screen**; menu entries that cannot do anything right now are greyed out. Undo / Redo are greyed only when the tab cannot undo at all, never by the undo history (a stale state would swallow Ctrl+Z).
+- **Window menu**: Next / Previous tab (Ctrl+Tab), Reopen closed tab (Ctrl+Shift+T), Close all, and the list of open tabs. Tabs have a right-click menu (close, close the others, save, copy the path, show in folder); a middle click closes; hovering shows the path.
+- **Save All** saves only what changed. **Exit asks once** for all unsaved documents (Save All / Discard / Cancel); a single one gets the usual question.
+- **Errors are text the user can copy in one click**, with the program version, mode and add-ons on top (`gpd_app.ErrorDialog`); every caught error also goes to `gpd_error.log` (Help > Show the error log). A message box that only says "could not ..." points there.
+- A file or project folder dropped on the window is opened. The window size and place are remembered.
+
+## 7c. Add-ons and the core
+- **The core knows nothing about what an add-on does.** An add-on puts its own commands in the menus with `ext.add_command(place, text, fn)` from `register(ext)` (places: `file.new`, `file`, `add`, `view`, `help`); `file.new` commands are also buttons on the start page. Do not add an add-on's menu entry to `gpd_app.py`.
+- **One broken add-on never stops the program** or the other add-ons: its error is kept (`addons.load_errors()`), shown once after start-up, on the start page and in File > Add-ons (Details...).
+- **Tab lifetime**: a closed tab is deleted by Qt. Never keep a closed tab and reuse it (check it is alive, or forget it in `shutdown()`). A tab that cannot live without another one says so with `depends_on()`; the window closes it first. Background work is stopped in `shutdown()` (a closed tab gets no `closeEvent`), and `can_close()` asks before a run is interrupted.
+- File > Add-ons says for every add-on **what it adds** (read from its manifest by `addons.adds`), its state, and its load error. Playground add-ons are used where they are: no Install / Uninstall.
+
 ## 8. Known gaps (so they are not rediscovered)
 - Splines: a spline END can be made tangent to a line, an arc or another spline (Tangent tool; the end point must be shared, so add Coincident too). No tangent at interior fit points, no point-on-spline constraint, no trim / fillet / offset.
 - 3D FEA: no transparent animation export; results are not saved in the project.
@@ -62,3 +77,5 @@ ask, then add the decision below so it is only decided once. Keep entries short 
 - "Update from original" clears supports and loads in 1D / 2D.
 - Assembly mates: exact first moves ("snaps", registry `am.SNAPS` / `@snap(type)`) put a free part straight onto a mate's closed-form answer; the numeric fit then only verifies / finishes. Concentric is the first; add a type by registering one function.
 - Mate panel: nine full-width icon buttons (mate_icons.py) in the style of the FEA panel buttons; Faces / Edges / Points are icon toggles.
+- Start page: no thumbnails of the recent documents, no pinning. The Add menu entries of Simulation and Visualize are still made by the core (`gpd_app.build_menus`), because add-ons of an older version would lose them; new add-ons use `ext.add_command`.
+- Tab commands (right-click, Window menu) work on whole tabs only; tabs cannot be split side by side.

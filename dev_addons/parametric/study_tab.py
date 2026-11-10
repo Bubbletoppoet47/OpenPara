@@ -921,8 +921,47 @@ class StudyTab(QWidget):
         self.dirty = False
         return True
 
+    def depends_on(self):
+        """The simulation tab this study belongs to: the program window closes the study first when that tab is closed."""
+        return self.sw
+
+    def can_close(self):
+        """Asked by the program window before the tab is closed: a run in progress is stopped only when the user agrees."""
+        if not self.running():
+            return True
+        if QMessageBox.question(self, "Close", "A study is running. Stop it and close? The cases finished so far are kept."
+                                ) != QMessageBox.StandardButton.Yes:
+            return False
+        self.halt_now()
+        return True
+
+    def halt_now(self):
+        """Stops a run at once (the case being solved is dropped), records what was finished and frees the simulation tab again."""
+        w = self.worker
+        if w is None:
+            return
+        w.stop = True
+        if self.threaded:
+            for sig in (w.progress, w.case_done, w.all_done):
+                try:
+                    sig.disconnect()
+                except TypeError:
+                    pass
+            w.wait(5000)
+        self.on_all_done(True)
+
+    def shutdown(self):
+        """The tab is being closed (the program window calls this; a closed tab gets no closeEvent)."""
+        try:
+            self.halt_now()
+        except Exception:
+            self.worker = None
+        try:
+            import study_ext
+            study_ext.forget(self)
+        except Exception:
+            pass
+
     def closeEvent(self, ev):
-        if self.worker is not None:
-            self.worker.stop = True
-            self.worker.wait(3000)
+        self.shutdown()
         super().closeEvent(ev)

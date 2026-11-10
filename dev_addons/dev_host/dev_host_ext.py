@@ -18,10 +18,13 @@ class DevHost:
             fm.addAction("Send this tab's mesh to a new Mesh FEA tab", lambda: self.send_current("tet"))
 
     def has_tab(self, w):
-        return self.tabs.indexOf(w) >= 0
+        try:
+            return self.tabs.indexOf(w) >= 0
+        except RuntimeError:                             # a tab that was closed: Qt has deleted it
+            return False
 
     def title_of(self, w):
-        i = self.tabs.indexOf(w)
+        i = self.tabs.indexOf(w) if self.has_tab(w) else -1
         t = self.tabs.tabText(i) if i >= 0 else "(closed)"
         return t[:-2] if t.endswith(" *") else t
 

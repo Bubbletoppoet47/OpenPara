@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 import urllib.request
 import zipfile
 
@@ -69,6 +70,9 @@ CATALOG = {
                                "add-on, and torch, ultralytics and (to be practical) a GPU in the Python you train with. A training project is a "
                                ".training folder."},
 }
+
+
+LOAD_ERRORS = {}             # {add-on id: traceback text}: add-ons whose extension module failed at the last register_extensions
 
 
 # files the program opens through an add-on although the add-on has no document tab of its own: extension -> (add-on id, name in the Open dialog)
@@ -195,8 +199,8 @@ def project_hint(folder):
 
 def info(aid):
     """{'name','description'} for the dialogs."""
-    m = shipped().get(aid) or CATALOG.get(aid) or {"name": aid, "description": ""}
-    return {"name": m["name"], "description": m["description"]}
+    m = shipped().get(aid) or CATALOG.get(aid) or installed_manifest(aid) or {"name": aid, "description": ""}     # (a Playground add-on has only its own manifest)
+    return {"name": m["name"], "description": m.get("description", "")}
 
 
 def target_version():
@@ -351,13 +355,45 @@ def register_extensions(ext):
     after an add-on was installed or removed."""
     ext.FEATURES.clear()
     ext.HOOKS.clear()
+    ext.COMMANDS.clear()
+    LOAD_ERRORS.clear()
     for aid in known():
         on = is_active(aid)
         ext.mark_present(aid, on)
         m = installed_manifest(aid) if on else None
         if m and m.get("extension"):
-            mod = importlib.import_module(m["extension"])
-            mod.register(ext)
+            try:                                          # one add-on that cannot load never stops the program or the other add-ons
+                mod = importlib.import_module(m["extension"])
+                mod.register(ext)
+            except Exception:
+                LOAD_ERRORS[aid] = traceback.format_exc()
+                sys.stderr.write(f"add-on {aid}: could not be loaded:\n{LOAD_ERRORS[aid]}\n")
+
+
+def load_errors():
+    """{add-on id: error text} of the add-ons whose extension could not be loaded at the last register_extensions (shown in File > Add-ons)."""
+    return dict(LOAD_ERRORS)
+
+
+def adds(aid):
+    """Short plain lines saying what the add-on puts into the program, read from its manifest (the installed one, else the shipped one):
+    its document tabs, the files and project folders it opens, whether it extends other windows, and how many packages it downloads."""
+    m = installed_manifest(aid) or shipped().get(aid) or {}
+    out = []
+    tabs = [t for t in m.get("tabs", []) if t.get("in_program") is not False]
+    if tabs:
+        out.append("File > New " + ", ".join(t.get("label", t["kind"]) for t in tabs))
+    types = sorted({ft for t in tabs for ft in t.get("file_types", [])})
+    if types:
+        out.append("opens " + " ".join(types) + " files")
+    if any(t.get("project_folder") for t in tabs):
+        out.append("opens its project folders")
+    if m.get("extension"):
+        out.append("adds to other windows")
+    n = len(m.get("requires", []))
+    if n:
+        out.append(f"downloads {n} package{'s' if n != 1 else ''}")
+    return out
 
 
 def tab_kinds():

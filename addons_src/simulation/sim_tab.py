@@ -241,11 +241,11 @@ class SimWindow(QWidget):
 
     def candidate_ok(self):
         c = self.candidate
-        try:
+        try:                                             # the part's tab may have been closed since: Qt has deleted it, touching it raises
             c.title()
+            if self.shell is not None and self.shell.tabs.indexOf(c) < 0:
+                return False
         except RuntimeError:
-            return False
-        if self.shell is not None and self.shell.tabs.indexOf(c) < 0:
             return False
         return self.kind != "beam" or not hasattr(c, "asm")
 

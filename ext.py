@@ -9,6 +9,13 @@ the core still opens and saves the files that use it (the data stays in the file
     build(doc, feature, solid) -> solid          rebuilds the feature (raise pm_model.ModelError for a problem)
     panel(window, form, feature)                  fills the property panel of the feature
     edit(window, feature_or_None)                 opens the add-on's window to make (None) or change the feature
+
+What else an add-on can plug into (all from its  register(ext)):
+    ext.add_command(place, text, fn)              a command in the program window's File / Add / View / Help menu (and the start page)
+    ext.add_hook(name, fn)                        a button another add-on's window offers (e.g. "sim_study")
+    ext.add_menu_item(menu, text, fn)             an item in the menu of another add-on's window (e.g. "annotator.file")
+    ext.add_shell_mixin(cls)                      helpers its tabs expect from the program window
+A tab of an add-on may offer:  title(), path, is_dirty(), save(), can_close(), shutdown(), depends_on() (the tab it belongs to: closed with it).
 """
 OPTIONAL = {
     "partgen": ("Part Generator", "gears (spur, helical, herringbone) and other parts made from a few parameters"),
@@ -22,6 +29,8 @@ MENU_ITEMS = {}              # {menu name: [(text, fn(window))]}: items an add-o
 MODEL_TRAINERS = {}          # {model type key: spec}: model types an add-on adds to the Trainer (see add_model_trainer)
 SHELL_MIXINS = []           # classes an add-on adds to the program window (gpd_app.AppShell) to give its tabs the helpers they use
 HOOKS = {}                  # {hook name: [fn]}: places where an add-on adds to a window of another add-on, e.g. "sim_study" (see add_hook)
+COMMANDS = {}               # {place: [{"text", "fn", "key", "tip"}]}: commands an add-on puts in the program window's menus (see add_command)
+PLACES = ("file.new", "file", "add", "view", "help")
 installer = None            # set by the shell: installer(addon_id, parent) offers to install / enable an add-on
 
 
@@ -47,6 +56,26 @@ def add_hook(name, fn):
 
 def hooks(name):
     return list(HOOKS.get(name, []))
+
+
+def add_command(place, text, fn, key=None, tip=None):
+    """An add-on puts a command in a menu of the program window.  place: "file.new" (with New Part / New Assembly; also a button on the start
+    page), "file" (with Import / Export), "add" (the Add menu: things made from the document on screen), "view" or "help".
+    fn(shell) runs it (shell is the program window: shell.cur() is the tab on screen, shell.add_tab(widget) shows a new one).
+    key: an optional shortcut such as "Ctrl+Alt+P".  tip: one short line for the status bar and the start page.
+    Registered again every time the add-ons change, so call it from register(ext); the same place + text is listed once."""
+    if place not in PLACES:
+        raise ValueError(f"add_command: unknown place '{place}' (one of {', '.join(PLACES)})")
+    items = COMMANDS.setdefault(place, [])
+    for it in items:
+        if it["text"] == text:
+            it.update(fn=fn, key=key, tip=tip)
+            return
+    items.append({"text": text, "fn": fn, "key": key, "tip": tip})
+
+
+def commands(place):
+    return list(COMMANDS.get(place, []))
 
 
 def add_shell_mixin(cls):

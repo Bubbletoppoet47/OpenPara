@@ -2,6 +2,7 @@
 import os, sys, tempfile, time
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 UD = tempfile.mkdtemp(prefix="opara_ud_"); os.environ["OPARA_USER_DIR"] = UD
+open(os.path.join(UD, "addons.json"), "w").write('{"removed": ["partgen", "truss", "annotator", "annotator_gimble", "trainer", "render", "motor"]}')          # the big add-ons are not needed here (no download, no disk)
 os.environ["OPARA_CHANNEL"] = "release"; os.environ["OPARA_NO_UPDATE"] = "1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEV = tempfile.mkdtemp(prefix="opara_dev_")

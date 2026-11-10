@@ -11,7 +11,8 @@ import channel
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
-from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QStackedWidget,
+                             QTabWidget, QVBoxLayout, QWidget)
 
 SPLASH = None
 APP = None               # kept alive here: if the QApplication were dropped, Qt would delete the card with it
@@ -73,13 +74,21 @@ class AppShell(QMainWindow):
         self.tabs.setDocumentMode(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self.tab_changed)
-        self.blank = QLabel("No document open.\n\nFile  >  New Part,  New Assembly  or  Open...")
-        self.blank.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.blank.setStyleSheet("color:#808080; font-size:15px;")
+        import start_page
+        self.acts = {}                                # the menu entries that are greyed out when they do not apply (see update_window)
+        self.closed = []                              # paths of the tabs closed in this session, newest last (Window > Reopen closed tab)
+        self._recent_seen = set()                     # paths noted in the recent list during this session (see note_recent)
+        self.blank = self.start = start_page.StartPage(self)          # shown while no document is open: ways to start, recent files
         self.stack = QStackedWidget()
         self.stack.addWidget(self.blank)
         self.stack.addWidget(self.tabs)
         self.setCentralWidget(self.stack)
+        self.setAcceptDrops(True)                     # a file or a project folder dropped on the window is opened
+        bar = self.tabs.tabBar()
+        bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        bar.customContextMenuRequested.connect(self.tab_menu)
+        bar.installEventFilter(self)                  # a middle click on a tab closes it
+        self.restore_window()
         self.add_gl_anchor()
         self._busy_depth = 0
         self._busy_veil = None
@@ -159,6 +168,106 @@ class AppShell(QMainWindow):
     def show_stack(self):
         self.stack.setCurrentWidget(self.tabs if self.tabs.count() else self.blank)
 
+    # ------------------------------------------------------------------ the window itself: size, drops, the tab strip
+    WINDOW_FILE = "window.json"
+
+    def restore_window(self):
+        """The size and place the window had when it was last closed (only when it still fits a screen that is connected)."""
+        import json
+        import paths
+        try:
+            with open(os.path.join(paths.user_dir(), self.WINDOW_FILE), encoding="utf-8") as f:
+                d = json.load(f)
+            w, h, x, y = int(d["w"]), int(d["h"]), int(d["x"]), int(d["y"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return
+        if not (400 <= w <= 20000 and 300 <= h <= 20000):
+            return
+        self.resize(w, h)
+        from PyQt6.QtCore import QRect
+        frame = QRect(x, y, w, h)
+        if any(s.availableGeometry().intersected(frame).width() > 200 and s.availableGeometry().intersected(frame).height() > 150
+               for s in QApplication.screens()):
+            self.move(x, y)
+        if d.get("max"):
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+
+    def save_window(self):
+        import json
+        import paths
+        try:
+            g = self.normalGeometry() if self.isMaximized() else self.geometry()
+            with open(os.path.join(paths.user_dir(), self.WINDOW_FILE), "w", encoding="utf-8") as f:
+                json.dump({"w": g.width(), "h": g.height(), "x": g.x(), "y": g.y(), "max": bool(self.isMaximized())}, f)
+        except OSError:
+            pass
+
+    @staticmethod
+    def dropped_paths(mime):
+        return [u.toLocalFile() for u in mime.urls() if u.isLocalFile() and u.toLocalFile()] if mime.hasUrls() else []
+
+    def dragEnterEvent(self, ev):
+        if self.dropped_paths(ev.mimeData()):
+            ev.acceptProposedAction()
+
+    def dropEvent(self, ev):
+        paths_ = self.dropped_paths(ev.mimeData())
+        if paths_:
+            ev.acceptProposedAction()
+            QTimer.singleShot(0, lambda: [self.open_path(p) for p in paths_ if os.path.exists(p)])     # after the drop is over (a question may be asked)
+
+    def eventFilter(self, obj, ev):
+        from PyQt6.QtCore import QEvent
+        if obj is self.tabs.tabBar() and ev.type() == QEvent.Type.MouseButtonRelease and ev.button() == Qt.MouseButton.MiddleButton:
+            i = obj.tabAt(ev.position().toPoint())
+            if i >= 0:
+                self.close_tab(i)
+                return True
+        return super().eventFilter(obj, ev)
+
+    def tab_actions(self, i):
+        """[(text, fn)] of the right-click menu of tab i (None = a separator)."""
+        w = self.tabs.widget(i)
+        if w is None:
+            return []
+        out = [("Close", lambda: self.close_tab(self.tabs.indexOf(w))),
+               ("Close the other tabs", lambda: self.close_tabs(keep=w)),
+               ("Close all tabs", lambda: self.close_tabs())]
+        if self.saveable(w):
+            out += [None, ("Save", lambda: self.save_widget(w))]
+        p = getattr(w, "path", None)
+        if isinstance(p, str) and p:
+            import start_page
+            out += [None, ("Copy the path", lambda: QApplication.clipboard().setText(os.path.abspath(p))),
+                    ("Show in folder", lambda: start_page.show_in_folder(p))]
+        return out
+
+    def tab_menu(self, pos):
+        from PyQt6.QtWidgets import QMenu
+        bar = self.tabs.tabBar()
+        i = bar.tabAt(pos)
+        if i < 0:
+            return
+        m = QMenu(self)
+        for it in self.tab_actions(i):
+            if it is None:
+                m.addSeparator()
+            else:
+                m.addAction(it[0], it[1])
+        m.exec(bar.mapToGlobal(pos))
+
+    def close_tabs(self, keep=None):
+        """Closes every tab (but `keep`), asking about unsaved changes; stops at the first Cancel.  True when all were closed."""
+        for w in [self.tabs.widget(i) for i in range(self.tabs.count())]:
+            i = self.tabs.indexOf(w)
+            if w is keep or i < 0:                     # (a tab that belonged to another one is already gone)
+                continue
+            if keep is not None and keep in self.dependents(w):
+                continue                                  # the tab that is kept needs this one
+            if not self.close_tab(i):
+                return False
+        return True
+
     # ------------------------------------------------------------------ menus
     def build_menus(self):
         mb = self.menuBar()
@@ -177,25 +286,28 @@ class AppShell(QMainWindow):
         kinds = addons.tab_kinds()
         for kind, spec in kinds.items():
             add(fm, "New " + spec.get("label", kind), lambda k=kind: self.new_addon_tab(k))
-        if ext.present("simulation") and ext.hooks("sim_study"):
-            add(fm, "New Parametric Study...", self.new_param_study)
+        self.addon_commands(fm, "file.new", add)                                     # what add-ons put with the New entries
         fm.addSeparator()
         add(fm, "Open...", self.open_dialog, "Ctrl+O")
         add(fm, "Open Project Folder...", self.open_project_folder_dialog)          # always there: it offers the add-on that opens the folder
-        add(fm, "Save", lambda: self.cur_call("save"), "Ctrl+S")
-        add(fm, "Save As...", lambda: self.cur_call("save", True), "Ctrl+Shift+S")
+        self.recent_menu = fm.addMenu("Open Recent")
+        self.recent_menu.aboutToShow.connect(self.fill_recent_menu)
+        self.acts["save"] = add(fm, "Save", lambda: self.cur_call("save"), "Ctrl+S")
+        self.acts["save_as"] = add(fm, "Save As...", lambda: self.cur_call("save", True), "Ctrl+Shift+S")
+        self.acts["save_all"] = add(fm, "Save All", self.save_all, "Ctrl+Alt+S")
         fm.addSeparator()
         add(fm, "Import STEP...", self.import_step)
-        add(fm, "Export (STEP, STL)...", self.export_file)
+        self.acts["export"] = add(fm, "Export (STEP, STL)...", self.export_file)
+        self.addon_commands(fm, "file", add)
         fm.addSeparator()
         add(fm, "Add-ons...", self.addons_dialog)
         add(fm, "Units...", self.units_dialog)
         add(fm, "Settings...", self.settings_dialog)
         fm.addSeparator()
-        add(fm, "Close Tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
+        self.acts["close"] = add(fm, "Close Tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
         add(fm, "Exit", self.close)
         self.add_acts = {}
-        if ext.present("simulation") or ext.present("render"):               # only when a simulation / renderer add-on is installed
+        if ext.present("simulation") or ext.present("render") or ext.commands("add"):          # only when an add-on has something to add
             am = mb.addMenu("&Add")
             if ext.present("render"):
                 add(am, "Visualize: Preview / Render (lit view, pictures and videos)", lambda: self.add_render())
@@ -203,17 +315,28 @@ class AppShell(QMainWindow):
             if ext.present("simulation"):
                 for kind, text in (("beam", "1D FEA (frames and trusses) - of a part"), ("fea", "2D FEA"), ("cfd", "2D CFD")):
                     self.add_acts[kind] = add(am, text, lambda k=kind: self.add_sim(k))
+            if ext.commands("add") and am.actions():
+                am.addSeparator()
+            self.addon_commands(am, "add", add)
         em = mb.addMenu("&Edit")
-        add(em, "Undo", lambda: self.cur_call("do_undo"), "Ctrl+Z")
-        add(em, "Redo", lambda: self.cur_call("do_redo"), "Ctrl+Y")
-        add(em, "Rebuild", self.rebuild, "Ctrl+B")
+        self.acts["undo"] = add(em, "Undo", lambda: self.cur_call("do_undo"), "Ctrl+Z")
+        self.acts["redo"] = add(em, "Redo", lambda: self.cur_call("do_redo"), "Ctrl+Y")
+        self.acts["rebuild"] = add(em, "Rebuild", self.rebuild, "Ctrl+B")
         vm = mb.addMenu("&View")
-        add(vm, "Zoom to Fit", self.zoom_fit, "F")
+        self.acts["zoom_fit"] = add(vm, "Zoom to Fit", self.zoom_fit, "F")
         self.flip_act = QAction("Zoom: wheel toward you = in", self)
         self.flip_act.setCheckable(True)
         self.flip_act.setChecked(True)
         self.flip_act.toggled.connect(self.flip_changed)
         vm.addAction(self.flip_act)
+        self.addon_commands(vm, "view", add)
+        wm = self.window_menu = mb.addMenu("&Window")
+        self.acts["next"] = add(wm, "Next tab", lambda: self.step_tab(1), "Ctrl+Tab")
+        self.acts["prev"] = add(wm, "Previous tab", lambda: self.step_tab(-1), "Ctrl+Shift+Tab")
+        self.acts["reopen"] = add(wm, "Reopen closed tab", self.reopen_closed, "Ctrl+Shift+T")
+        self.acts["close_all"] = add(wm, "Close all tabs", lambda: self.close_tabs())
+        self.window_sep = wm.addSeparator()               # below it: the open tabs, filled when the menu opens
+        wm.aboutToShow.connect(self.fill_window_menu)
         hm = mb.addMenu("&Help")
         add(hm, "Check for updates...", lambda: self.updates.check_now())
         self.auto_upd = QAction("Check for updates at start-up", self)
@@ -222,6 +345,8 @@ class AppShell(QMainWindow):
         self.auto_upd.toggled.connect(lambda on: self.updates.set_auto(on))
         hm.addAction(self.auto_upd)
         add(hm, "Open the data folder", self.open_data_folder)
+        add(hm, "Show the error log...", self.show_error_log)
+        self.addon_commands(hm, "help", add)
         if channel.is_playground():
             hm.addSeparator()
             grp = QActionGroup(self)
@@ -234,6 +359,172 @@ class AppShell(QMainWindow):
                 hm.addAction(a)
         hm.addSeparator()
         add(hm, "About " + channel.app_name(), lambda: self.updates.about())
+        self.update_window()
+
+    # ------------------------------------------------------------------ the window follows the tab on screen
+    def update_window(self):
+        """The title bar names the document on screen, and the menu entries that cannot do anything right now are greyed out.  (Undo and Redo
+        only look at whether the tab can undo at all: greying them by the undo history could swallow a Ctrl+Z pressed right after an edit.)"""
+        w = self.cur() if self.tabs.count() else None
+        i = self.tabs.currentIndex()
+        title = channel.title()
+        if w is not None and i >= 0:
+            title = f"{self.tabs.tabText(i)} - {title}"
+        if self.windowTitle() != title:
+            self.setWindowTitle(title)
+        n = self.tabs.count()
+        can = {"save": callable(getattr(w, "save", None)), "save_as": callable(getattr(w, "save", None)), "save_all": any(self.saveable(self.tabs.widget(k)) for k in range(n)),
+               "export": w is not None, "close": n > 0, "close_all": n > 0, "next": n > 1, "prev": n > 1, "reopen": bool(self.closed),
+               "undo": callable(getattr(w, "do_undo", None)), "redo": callable(getattr(w, "do_redo", None)),
+               "rebuild": w is not None and (hasattr(w, "refresh_parts") or hasattr(w, "update_all")),
+               "zoom_fit": w is not None and getattr(w, "plotter", None) is not None}
+        for name, a in self.acts.items():
+            try:
+                if name in can and a.isEnabled() != bool(can[name]):
+                    a.setEnabled(bool(can[name]))
+            except RuntimeError:
+                pass                                      # (an entry of a menu that was rebuilt)
+
+    def step_tab(self, d):
+        n = self.tabs.count()
+        if n > 1:
+            self.tabs.setCurrentIndex((self.tabs.currentIndex() + d) % n)
+
+    def reopen_closed(self):
+        """Opens the file / project folder of the tab that was closed last (and is not open again already)."""
+        while self.closed:
+            p = self.closed.pop()
+            if os.path.exists(p) and self.find_tab(p) is None:
+                w = self.open_path(p)
+                self.update_window()
+                return w
+        self.update_window()
+        return None
+
+    def fill_window_menu(self):
+        """The open tabs under the separator of the Window menu: a click shows one; the one on screen is ticked."""
+        m = self.window_menu
+        acts = m.actions()
+        for a in acts[acts.index(self.window_sep) + 1:]:
+            m.removeAction(a)
+        for i in range(self.tabs.count()):
+            t = self.tabs.tabText(i).replace("&", "&&")
+            a = m.addAction((f"&{i + 1}  " if i < 9 else "") + t)
+            a.setCheckable(True)
+            a.setChecked(i == self.tabs.currentIndex())
+            w = self.tabs.widget(i)
+            a.triggered.connect(lambda _c=False, w=w: self.tabs.setCurrentWidget(w))
+        self.window_sep.setVisible(self.tabs.count() > 0)
+
+    def save_all(self):
+        """Saves every document that has unsaved changes (one without a file yet is shown and asks for its name).  Returns how many were saved."""
+        done = 0
+        for w in [self.tabs.widget(i) for i in range(self.tabs.count())]:
+            if not self.saveable(w) or not self.tab_dirty(w):
+                continue
+            if not getattr(w, "path", None):
+                self.tabs.setCurrentWidget(w)             # the name window is about the document that is on screen
+            if not self.save_widget(w):
+                break                                     # cancelled or failed: stop here, nothing else is touched
+            done += 1
+        self.refresh_titles()
+        self.statusBar().showMessage(f"Saved {done} document{'s' if done != 1 else ''}." if done else "Nothing to save.", 6000)
+        return done
+
+    def addon_commands(self, menu, place, add):
+        """The commands add-ons registered for this place of the menus (ext.add_command).  A command gets the program window; an error in it is
+        shown like any other, it never takes the window down."""
+        for c in ext.commands(place):
+            a = add(menu, c["text"], lambda c=c: c["fn"](self), c.get("key"))
+            if c.get("tip"):
+                a.setStatusTip(c["tip"])
+
+    def start_actions(self):
+        """What the start page offers: [{"text", "fn", "tip", "group"}] - the program's own ways to start, then (group "addon") the documents
+        and commands of the installed add-ons, the same things as the top of the File menu."""
+        out = [{"text": "New Part", "fn": lambda: self.new_part(), "tip": "A part: sketches, extrudes, revolves ...  (Ctrl+N)"},
+               {"text": "New Assembly", "fn": self.new_assembly, "tip": "Parts put together with mates  (Ctrl+Shift+N)"},
+               {"text": "Open...", "fn": self.open_dialog, "tip": "A part, an assembly or a file of an add-on  (Ctrl+O)"},
+               {"text": "Open Project Folder...", "fn": self.open_project_folder_dialog, "tip": "A simulation, Visualize, annotator ... project"}]
+        for kind, spec in addons.tab_kinds().items():
+            out.append({"text": "New " + spec.get("label", kind), "fn": lambda k=kind: self.new_addon_tab(k), "group": "addon",
+                        "tip": addons.info(spec["aid"])["name"] + " add-on"})
+        for c in ext.commands("file.new"):
+            out.append({"text": c["text"], "fn": lambda c=c: c["fn"](self), "tip": c.get("tip"), "group": "addon"})
+        return out
+
+    # ------------------------------------------------------------------ recent files
+    def kind_label(self, w):
+        """What a tab is, in a word or two, for the recent list: Part, Assembly, or the label of the add-on's document (+ "project" for a folder)."""
+        if isinstance(w, pm_app.MainWindow):
+            return "Part"
+        if hasattr(w, "asm"):
+            return "Assembly"
+        spec = addons.tab_kinds().get(getattr(w, "kind", None))
+        label = spec.get("label", "") if spec else ""
+        p = getattr(w, "path", None)
+        return (label + " project").strip() if isinstance(p, str) and os.path.isdir(p) else label
+
+    def note_recent(self, w):
+        """A tab that has a file or a project folder goes to the top of the recent list the first time it is seen with that path (so a new
+        document appears when it is first saved, and a project made by an add-on needs nothing from the add-on)."""
+        p = getattr(w, "path", None)
+        if not isinstance(p, str) or not p:
+            return
+        try:
+            key = os.path.normcase(os.path.abspath(p))
+            if key in self._recent_seen or not os.path.exists(p):
+                return
+            import recent
+            self._recent_seen.add(key)
+            recent.add(p, self.kind_label(w))
+            recent.set_last_folder(p)
+        except Exception:
+            pass                                          # never worth an error
+
+    def open_recent(self, path):
+        import recent
+        if not os.path.exists(path):
+            r = QMessageBox.question(self, "Open Recent", f"{path}\n\nis not there right now (moved, renamed, or on a drive that is not connected).\n\n"
+                                     "Remove it from the list?")
+            if r == QMessageBox.StandardButton.Yes:
+                recent.remove(path)
+            return None
+        w = self.open_path(path)
+        if w is not None:
+            self._recent_seen.discard(os.path.normcase(os.path.abspath(path)))          # opened again: back to the top of the list
+            self.note_recent(w)
+        return w
+
+    def fill_recent_menu(self):
+        import recent
+        m = self.recent_menu
+        m.clear()
+        its = recent.items()
+        for k, it in enumerate(its):
+            a = m.addAction((f"&{k + 1}  " if k < 9 else "") + it["name"].replace("&", "&&") + (f"   ({it['kind']})" if it["kind"] else "")
+                            + ("   - not found" if it["missing"] else ""))
+            a.setToolTip(it["path"])
+            a.setStatusTip(it["path"])
+            a.triggered.connect(lambda _c=False, p=it["path"]: self.open_recent(p))
+        if not its:
+            a = m.addAction("Nothing opened yet")
+            a.setEnabled(False)
+        else:
+            m.addSeparator()
+            m.addAction("Clear the list", lambda: (recent.clear(), self.start.fill_recent()))
+
+    def show_error_log(self):
+        show_error_text(self, None)
+
+    def report_addon_errors(self):
+        """After the start: say once which add-ons could not be loaded (they are off for this session; everything else works)."""
+        errs = addons.load_errors()
+        if errs:
+            names = ", ".join(addons.info(a)["name"] for a in errs)
+            show_error_text(self, "\n\n".join(f"=== {addons.info(a)['name']} ({a}) ===\n{t}" for a, t in errs.items()), title="Add-ons",
+                            head=f"These add-ons could not be loaded and are switched off for now: {names}.\nEverything else works. "
+                                 "Updating or reinstalling them in File > Add-ons usually fixes it.")
 
     def settings_dialog(self):
         import settings_dialog
@@ -330,6 +621,7 @@ class AppShell(QMainWindow):
     def tab_changed(self, _i):
         w = self.cur()
         if w is None:
+            self.update_window()
             return
         if getattr(w, "nav", None) is not None:
             self.flip_act.blockSignals(True)
@@ -338,12 +630,14 @@ class AppShell(QMainWindow):
         if hasattr(w, "refresh_parts"):
             w.refresh_parts()                     # parts may have been edited in another tab
         self.refresh_titles()
+        self.update_window()
 
     # ------------------------------------------------------------------ documents
     def add_tab(self, w):
         i = self.tabs.addTab(w, w.title())
         self.tabs.setCurrentIndex(i)
         self.show_stack()
+        self.note_recent(w)
         return w
 
     def need_addon(self, aid, what):
@@ -454,6 +748,7 @@ class AppShell(QMainWindow):
         """Menus and buttons that depend on an add-on follow it: the core is told again which add-ons are there, the menus are rebuilt."""
         addons.register_extensions(ext)
         self.build_menus()
+        self.start.refresh()                              # the start page offers what the installed add-ons offer
         for i in range(self.tabs.count()):
             w = self.tabs.widget(i)
             if hasattr(w, "update_all") and hasattr(w, "refresh_tree"):
@@ -487,38 +782,6 @@ class AppShell(QMainWindow):
             QMessageBox.information(self, "Add", "1D FEA works on a sketch of a part. An assembly can only be used for 2D, through a slice.")
             return None
         return self.add_tab(sim_tab.SimWindow(kind, shell=self, src_tab=src))
-
-    def new_param_study(self):
-        """File > New Parametric Study: which simulation, where to save the project, which part to study, and the study opens (its tab says
-        what is still missing, such as the sketch, the supports or the loads)."""
-        if not self.need_addon("simulation", "A parametric study"):
-            return None
-        if not ext.hooks("sim_study"):
-            QMessageBox.information(self, "Parametric study", "The Parametric Studies add-on is not loaded. Install or enable it, then restart.")
-            return None
-        import sim_tab
-        names = {"1D FEA (frames and trusses) - of a part": "beam", "2D FEA": "fea", "2D CFD": "cfd"}
-        pick, ok = QInputDialog.getItem(self, "New Parametric Study", "What do you want to study?", list(names), 0, False)
-        if not ok:
-            return None
-        kind = names[pick]
-        src = self.cur()
-        if isinstance(src, sim_tab.SimWindow):
-            src = None
-        if not (src is not None and (hasattr(src, "asm") or isinstance(src, pm_app.MainWindow))) or (kind == "beam" and hasattr(src, "asm")):
-            src = None                                   # nothing suitable on screen: the import window offers the open parts and a file browser
-        w = sim_tab.SimWindow(kind, shell=self, src_tab=src)
-        self.add_tab(w)
-        if not w.import_source():                        # asks where to save the project, then which part or assembly to copy into it
-            if not w.project_ok():
-                self.close_tab(self.tabs.indexOf(w))
-            return None
-        try:
-            return w.open_study()
-        except Exception:
-            import traceback
-            QMessageBox.warning(self, "Parametric study", "The study could not be opened:\n\n" + traceback.format_exc())
-            return None
 
     def add_render(self):
         """A Visualize tab for the part or assembly that is on screen (or the model of the Visualize tab that is on screen)."""
@@ -565,7 +828,9 @@ class AppShell(QMainWindow):
                 w.host = self
             w.kind = kind
         except Exception as ex:
-            QMessageBox.warning(self, "Open", f"Could not start {spec.get('label', kind)}: {ex}")
+            import traceback
+            log_error(f"Could not start {spec.get('label', kind)} (add-on {spec.get('aid', '?')}):\n{traceback.format_exc()}")
+            QMessageBox.warning(self, "Open", f"Could not start {spec.get('label', kind)}: {ex}\n\nThe details are in Help > Show the error log.")
             return None
         self.tab_counts[kind] = self.tab_counts.get(kind, 0) + 1
         name = title or (os.path.basename(path.rstrip("/\\")) if path else f"{spec.get('short', spec.get('label', kind))} {self.tab_counts[kind]}")
@@ -574,7 +839,8 @@ class AppShell(QMainWindow):
         return self.add_tab(w)
 
     def open_project_folder_dialog(self):
-        folder = QFileDialog.getExistingDirectory(self, "Open Project Folder", "")
+        import recent
+        folder = QFileDialog.getExistingDirectory(self, "Open Project Folder", recent.last_folder())
         if folder:
             self.open_project_folder(folder)
 
@@ -649,7 +915,8 @@ class AppShell(QMainWindow):
         return ";;".join(parts)
 
     def open_dialog(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Open", "", self.open_filter())
+        import recent
+        files, _ = QFileDialog.getOpenFileNames(self, "Open", recent.last_folder(), self.open_filter())
         for f in files:
             self.open_path(f)
 
@@ -719,13 +986,26 @@ class AppShell(QMainWindow):
                 t = w.title()
             if self.tabs.tabText(i) != t:
                 self.tabs.setTabText(i, t)
+            p = getattr(w, "path", None)
+            if isinstance(p, str) and p and self.tabs.tabToolTip(i) != p:
+                self.tabs.setTabToolTip(i, p)             # hovering a tab says where its file is
+            self.note_recent(w)                           # a document saved under a (new) name, a project folder just made
+        self.update_window()
 
     def close_tab(self, i):
         w = self.tabs.widget(i)
         if w is None:
             return False
+        for d in self.dependents(w):                     # e.g. the parametric study of a simulation: it cannot live without its simulation tab
+            if not self.close_tab(self.tabs.indexOf(d)):
+                return False
+        i = self.tabs.indexOf(w)
         if not self.confirm_close(w):
             return False
+        p = getattr(w, "path", None)
+        if isinstance(p, str) and p and os.path.exists(p):
+            self.closed.append(p)                         # Window > Reopen closed tab
+            del self.closed[:-20]
         self.tabs.removeTab(i)
         if hasattr(w, "shutdown"):
             try:
@@ -734,11 +1014,58 @@ class AppShell(QMainWindow):
                 pass
         w.deleteLater()
         self.show_stack()
+        self.update_window()
         return True
 
-    def confirm_close(self, w):
+    def confirm_exit(self):
+        """Before the program closes: tabs with work running are asked first; then ONE question for all the documents with unsaved changes
+        (Save All / Discard / Cancel) instead of one question per document.  A single unsaved document gets the usual question."""
+        tabs = [self.tabs.widget(i) for i in range(self.tabs.count())]
+        for w in tabs:
+            ask = getattr(w, "can_close", None)
+            if callable(ask) and not ask():
+                return False
+        dirty = [w for w in tabs if self.tab_dirty(w)]
+        if len(dirty) == 1:
+            return self.confirm_close(dirty[0], asked=True)
+        if len(dirty) > 1:
+            names = "\n".join("   " + w.title() for w in dirty[:12]) + (f"\n   ... and {len(dirty) - 12} more" if len(dirty) > 12 else "")
+            r = QMessageBox.question(self, "Exit", f"{len(dirty)} documents have unsaved changes:\n\n{names}\n\nSave them before closing?",
+                                     QMessageBox.StandardButton.SaveAll | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel)
+            if r == QMessageBox.StandardButton.Cancel:
+                return False
+            if r == QMessageBox.StandardButton.SaveAll:
+                for w in dirty:
+                    if not getattr(w, "path", None):
+                        self.tabs.setCurrentWidget(w)
+                    if not self.save_widget(w):
+                        return False                      # a save that was cancelled or failed keeps the program open
+        return True
+
+    def is_open(self, w):
+        """True when `w` is one of the open tabs.  Safe for a tab that was closed (Qt deletes it; touching a deleted tab raises): add-ons use
+        this before they reuse a tab they remembered."""
+        try:
+            return w is not None and self.tabs.indexOf(w) >= 0
+        except RuntimeError:
+            return False
+
+    def dependents(self, w):
+        """The open tabs that say they belong to tab `w` (a tab of an add-on may offer  depends_on() -> the tab it cannot live without)."""
+        out = []
+        for i in range(self.tabs.count()):
+            t = self.tabs.widget(i)
+            fn = getattr(t, "depends_on", None)
+            try:
+                if t is not w and callable(fn) and fn() is w:
+                    out.append(t)
+            except Exception:
+                pass
+        return out
+
+    def confirm_close(self, w, asked=False):
         ask = getattr(w, "can_close", None)               # a tab with work running in the background asks for itself
-        if callable(ask) and not ask():
+        if not asked and callable(ask) and not ask():
             return False
         try:
             dirty = w.is_dirty()
@@ -755,10 +1082,9 @@ class AppShell(QMainWindow):
         return True
 
     def closeEvent(self, ev):
-        for i in range(self.tabs.count()):
-            if not self.confirm_close(self.tabs.widget(i)):
-                ev.ignore()
-                return
+        if not self.confirm_exit():
+            ev.ignore()
+            return
         for i in range(self.tabs.count()):
             if hasattr(self.tabs.widget(i), "shutdown"):
                 try:
@@ -768,33 +1094,129 @@ class AppShell(QMainWindow):
         for i in range(self.tabs.count()):
             self.tabs.widget(i).saved_json = getattr(self.tabs.widget(i), "saved_json", None)
         unitctl.off_change(self.units_changed)
+        self.save_window()
         ev.accept()
+
+
+ERROR_LOG = "gpd_error.log"
+
+
+def log_error(text):
+    """Appends an error text to gpd_error.log in the data folder (Help > Show the error log)."""
+    import datetime
+    try:
+        import paths
+        with open(os.path.join(paths.user_dir(), ERROR_LOG), "a", encoding="utf-8") as fh:
+            fh.write(f"--- {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n{text}\n")
+    except OSError:
+        pass
+
+
+def error_log_tail(max_chars=60000):
+    """The newest part of gpd_error.log ("" when there is none)."""
+    try:
+        import paths
+        with open(os.path.join(paths.user_dir(), ERROR_LOG), encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return ""
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+        text = "(older entries left out)\n" + text[text.find("\n--- ") + 1:] if "\n--- " in text else text
+    return text
+
+
+def program_info():
+    """One line that says which program this is (it goes on top of a copied error, so a report always carries the version)."""
+    try:
+        import platform
+        import version
+        on = [a for a in addons.known() if addons.is_active(a)]
+        return (f"{channel.app_name()} {version.__version__}" + (f" ({channel.mode()} mode)" if channel.is_playground() else "")
+                + f" - Python {platform.python_version()} on {platform.system()} {platform.release()} - add-ons: {', '.join(on) or 'none'}")
+    except Exception:
+        return channel.app_name()
+
+
+class ErrorDialog(QDialog):
+    """An error (or the error log) as text that can be read, selected and copied in one click, with the program version on top."""
+    def __init__(self, parent=None, text=None, title="Error", head=None):
+        super().__init__(parent)
+        self.setWindowTitle(title if text is not None else "Error log")
+        self.resize(760, 460)
+        lay = QVBoxLayout(self)
+        if text is None:
+            text = error_log_tail()
+            head = head or ("Errors the program caught, newest at the bottom (gpd_error.log in the data folder)." if text
+                            else "No errors have been logged.")
+        self.head = QLabel(head or "")
+        self.head.setWordWrap(True)
+        lay.addWidget(self.head)
+        self.text = program_info() + "\n\n" + text if text else ""
+        self.view = QPlainTextEdit()
+        self.view.setReadOnly(True)
+        self.view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.view.setStyleSheet("font-family: Consolas, 'DejaVu Sans Mono', monospace; font-size: 11px;")
+        self.view.setPlainText(self.text)
+        self.view.moveCursor(self.view.textCursor().MoveOperation.End)
+        self.view.setVisible(bool(self.text))
+        lay.addWidget(self.view, 1)
+        row = QHBoxLayout()
+        self.b_copy = QPushButton("Copy")
+        self.b_copy.setEnabled(bool(self.text))
+        self.b_copy.clicked.connect(self.copy)
+        row.addWidget(self.b_copy)
+        self.b_folder = QPushButton("Open the data folder")
+        self.b_folder.clicked.connect(self.open_folder)
+        row.addWidget(self.b_folder)
+        self.note = QLabel("")
+        self.note.setStyleSheet("color:#2e7d32;")
+        row.addWidget(self.note)
+        row.addStretch(1)
+        self.b_close = QPushButton("Close")
+        self.b_close.setDefault(True)
+        self.b_close.clicked.connect(self.accept)
+        row.addWidget(self.b_close)
+        lay.addLayout(row)
+
+    def copy(self):
+        QApplication.clipboard().setText(self.text)
+        self.note.setText("Copied - paste it into your message.")
+
+    def open_folder(self):
+        import paths
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(paths.user_dir()))
+
+
+def show_error_text(parent, text, title="Error", head=None):
+    """Shows an error text (None: the error log) in the copyable window.  Tests replace this function."""
+    dlg = ErrorDialog(parent, text, title, head)
+    dlg.exec()
+    return dlg
 
 
 def install_excepthook():
     """A Python error inside a button / menu handler would close a PyQt6 program at once; show it (and write it to gpd_error.log) instead."""
-    import datetime
     import traceback
+
+    showing = [False]
 
     def hook(et, ev, tb):
         text = "".join(traceback.format_exception(et, ev, tb))
-        try:
-            import paths
-            with open(os.path.join(paths.user_dir(), "gpd_error.log"), "a", encoding="utf-8") as fh:
-                fh.write(f"--- {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n{text}\n")
-        except OSError:
-            pass
+        log_error(text)
         sys.stderr.write(text)
+        if showing[0]:                                    # an error while the error window is open (a redraw that keeps failing): logged, not stacked
+            return
+        showing[0] = True
         try:
-            box = QMessageBox(QApplication.activeWindow())
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Error")
-            box.setText("Something went wrong in the last action (the program keeps running).\n"
-                        "Please send me this text; it is also saved in gpd_error.log (Help > Open the data folder).")
-            box.setDetailedText(text)
-            box.exec()
+            show_error_text(QApplication.activeWindow(), text, head="Something went wrong in the last action (the program keeps running).\n"
+                            "Press Copy and send me the text; it is also kept in Help > Show the error log.")
         except Exception:
             pass
+        finally:
+            showing[0] = False
     sys.excepthook = hook
 
 
@@ -813,7 +1235,7 @@ def main():
     if SPLASH is not None:
         SPLASH.finish(w)                              # the card goes away when the window is up
     w.updates.check_later()
-    QTimer.singleShot(2500, lambda: (w.offer_first_run(), w.offer_addon_updates()))          # one after the other, never two questions at once
+    QTimer.singleShot(2500, lambda: (w.report_addon_errors(), w.offer_first_run(), w.offer_addon_updates()))          # one after the other, never two questions at once
     sys.exit(app.exec())
 
 if __name__ == "__main__":
