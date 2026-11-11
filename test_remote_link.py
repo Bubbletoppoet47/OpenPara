@@ -234,7 +234,7 @@ link.delete(link.join(D, "new"), recursive=True); assert not os.path.exists(os.p
 try:
     link.download(link.join(D, "nope.bin"), os.path.join(D, "x.bin")); raise SystemExit("downloaded a file that is not there")
 except RL.RemoteError as e:
-    assert "No such file" in str(e), str(e)
+    assert "No such file" in str(e) or "cannot find the file" in str(e), str(e)          # the other system's own words (Linux / Windows)
 assert not os.path.exists(os.path.join(D, "x.bin")) and not os.path.exists(os.path.join(D, "x.bin.part"))
 assert link.stat(link.join(D, "nope.bin"))["exists"] is False and link.stat(big)["size"] == os.path.getsize(big)
 assert link.read_file(big)[:100] == open(big, "rb").read()[:100]
@@ -268,9 +268,12 @@ assert not os.path.exists(os.path.join(D, "stopped2.bin")) and not os.path.exist
 
 # ---- commands
 py = sys.executable
-assert link.run(f'"{py}" -c "print(6*7)"') == (0, "42\n")
-code, out = link.run(f'"{py}" -c "import sys; print(\'out\'); sys.stderr.write(\'err\\n\'); sys.exit(3)"'); assert code == 3 and "out" in out and "err" in out
-assert link.run(f'"{py}" -c "import os; print(os.getcwd())"', cwd=D)[1].strip() == os.path.realpath(D) or link.run("pwd", cwd=D)[1].strip() == D
+def run(cmd, **kw):
+    code, out = link.run(cmd, **kw)
+    return code, out.replace("\r\n", "\n")
+assert run(f'"{py}" -c "print(6*7)"') == (0, "42\n")
+code, out = run(f'"{py}" -c "import sys; print(\'out\'); sys.stderr.write(\'err\\n\'); sys.exit(3)"'); assert code == 3 and "out" in out and "err" in out
+assert os.path.samefile(run(f'"{py}" -c "import os; print(os.getcwd())"', cwd=D)[1].strip(), D), "a command runs in the folder it was given"
 got, done = [], threading.Event()
 rid = link.spawn(f'"{py}" -u -c "import sys; print(\'ready\'); sys.stdout.flush(); print(sys.stdin.readline().strip().upper())"',
                  on_out=got.append, on_done=lambda code, stopped: (got.append((code, stopped)), done.set()))

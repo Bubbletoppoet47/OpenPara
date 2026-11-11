@@ -103,9 +103,11 @@ keyboard and mouse, copies files to and from it and runs commands there: a Raspb
   the port to the internet. Both sides prove the code with SPAKE2 (a wrong guess or a listener gets nothing to test codes against), the
   rest is encrypted and checked, five wrong codes lock an address out for five minutes, and every connection is logged on the other
   computer. It is built from standard parts but has had no security review.
-- What is tested: the whole path on Linux with an X11 desktop (`test_remote_link.py`, `test_remote_tab.py`). The Windows back end (GDI
-  screen, SendInput) and the Wayland back end (`grim` + `/dev/uinput`, for Raspberry Pi OS) are written but have not run on real machines;
-  the Playground build prints what `--check` finds on its Windows runner. A Mac can only be reached for files and commands.
+- What is tested: the whole path on Linux with an X11 desktop (`test_remote_link.py`, `test_remote_tab.py`). On Windows the Playground
+  build runs `--check` and that test on its build machine and prints the result (for information): there the screen is read and a key is
+  sent, and the connection, files and wrong-code handling pass, but nobody has yet watched a Windows desktop being used through it. The
+  Wayland back end (`grim` + `/dev/uinput`, for Raspberry Pi OS) is written but has not run on a real machine. A Mac can only be reached
+  for files and commands.
 
 **Gimble connection** (`addons_src/gimble_link/`, the Annotator's File menu: Gimble: Send a Model / Download Recordings / Status) works
 through that helper on the Gimble rig's Raspberry Pi, so the thumb drive stays in the Pi. It finds the Gimble folder (the one with
