@@ -262,5 +262,5 @@ assert isinstance(tab, RT.RemoteTab) and tab.host is sh and sh.tabs.tabText(sh.t
 hp.stop()
 for d in (_ud, D, os.environ["OPRH_CONFIG_DIR"]):
     shutil.rmtree(d, ignore_errors=True)
-print("OK remote tab")
+print("OK remote tab", flush=True)
 os._exit(0)

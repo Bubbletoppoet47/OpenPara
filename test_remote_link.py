@@ -382,11 +382,11 @@ if os.environ.get("DISPLAY") and sys.platform.startswith("linux") and not H.is_w
     assert xi.lookup("a")[1] is False and xi.lookup("A")[1] is True and xi.lookup("Return")[1] is None and xi.lookup("no such key") is None
     assert xi.lookup("€") is not None, "a character the layout has no key for gets a spare key"
     H.apply_events(xi, [{"t": "key", "key": "Shift", "down": True}, {"t": "key", "key": "Shift", "down": False}, {"t": "wheel", "dy": 1}], w, h)
-    print("X11 back ends: ok")
+    print("X11 back ends: ok", flush=True)
 else:
-    print("X11 back ends: skipped (no X11 desktop here)")
+    print("X11 back ends: skipped (no X11 desktop here)", flush=True)
 
 for d in (CFG, D, os.environ["OPARA_USER_DIR"], os.environ["OPRH_CONFIG_DIR"]):
     shutil.rmtree(d, ignore_errors=True)
-print("OK remote link")
+print("OK remote link", flush=True)
 os._exit(0)

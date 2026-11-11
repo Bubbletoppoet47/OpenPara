@@ -224,5 +224,5 @@ dlg.close()
 assert snapshot(PI) == BEFORE, "nothing of the Gimble's own files and recordings was changed"
 for d in (_ud, T, os.environ["OPRH_CONFIG_DIR"]):
     shutil.rmtree(d, ignore_errors=True)
-print("OK gimble link")
+print("OK gimble link", flush=True)
 os._exit(0)
