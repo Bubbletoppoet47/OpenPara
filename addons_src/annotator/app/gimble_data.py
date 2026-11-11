@@ -64,8 +64,11 @@ def read_labels(path, nc):
 
 
 def read_list(path):
+    """The image paths of one side of an export: a list file (train.txt, one path per line) or a folder of pictures."""
     if not path or not os.path.exists(path):
         return []
+    if os.path.isdir(path):
+        return [os.path.join(path, fn) for fn in sorted(os.listdir(path)) if fn.lower().endswith(IMG_EXT)]
     with open(path, encoding="utf-8") as f:
         return [ln.strip() for ln in f if ln.strip()]
 
@@ -128,6 +131,8 @@ class Source:
         if bad:
             raise ValueError(f"--no-distance names classes that are not being trained: {bad}. Training: {self.names}")
         self._remap = {self.export_names.index(n): i for i, n in enumerate(self.names)}
+        base = y.get("path")                 # an Ultralytics-style yaml (the Trainer's frozen copy) gives its folders relative to "path"
+        self.base = self.root if not base else (base if os.path.isabs(base) else os.path.join(self.root, base))
         self.train_files = read_list(self._p(y.get("train")))
         self.val_files = read_list(self._p(y.get("val")))
         self.dists = read_distances(os.path.join(self.root, "distances.csv"))
@@ -148,7 +153,7 @@ class Source:
     def _p(self, p):
         if not p:
             return None
-        return p if os.path.isabs(p) else os.path.join(self.root, p)
+        return p if os.path.isabs(p) else os.path.join(self.base, p)
 
     def samples(self, split):
         """list of dict(path, rows, dist, mask_all) for 'train' or 'val'."""

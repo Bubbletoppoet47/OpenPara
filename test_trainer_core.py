@@ -131,7 +131,16 @@ sys.exit(jc.finish(job, best, {{"epoch": 2, "total_epochs": 3, "map50": 0.5, "ma
 ''')
 ext.add_model_trainer("fake", label="Fake", script=fake, sizes=("n", "s"), default_size="n", models_key="assist")
 mt = tc.model_types()
-assert "fake" in mt and mt["yolo"]["label"].startswith("YOLO") and "not pretrained" in mt["yolo_scratch"]["label"] and not mt["yolo"]["from_scratch"] and mt["yolo_scratch"]["from_scratch"]
+assert "fake" in mt and mt["yolo"]["label"] == "Classes + boxes  (pretrained)" and "not pretrained" in mt["yolo_scratch"]["label"] and not mt["yolo"]["from_scratch"] and mt["yolo_scratch"]["from_scratch"]
+# the two kinds: classes + boxes (saved with the Assist models) and classes + boxes + distance (saved with the Scratch models)
+assert list(mt)[:4] == ["yolo", "yolo_scratch", "yolo_distance", "yolo_distance_scratch"], list(mt)
+for k in ("yolo", "yolo_scratch"):
+    assert not mt[k]["distance"] and mt[k]["models_key"] == "assist" and mt[k]["script"] == tc.HELPER_SCRIPT
+for k in ("yolo_distance", "yolo_distance_scratch"):
+    assert mt[k]["distance"] and mt[k]["models_key"] == "scratch" and mt[k]["script"] == tc.DISTANCE_SCRIPT and os.path.isfile(tc.DISTANCE_SCRIPT)
+    assert mt[k]["label"].startswith("Classes + boxes + distance  (") and mt[k]["default_size"] == "n"
+assert mt["yolo_distance"]["pretrained"] == "yolo26{size}.pt" and not mt["yolo_distance"]["from_scratch"]
+assert mt["yolo_distance_scratch"]["pretrained"] is None and mt["yolo_distance_scratch"]["from_scratch"] and not mt["fake"]["distance"]
 assert tc.default_me()["name"] and not tc.default_me().get("name", "").count(" ")
 job = tp.start_run("Tester", python=sys.executable, type="fake", size="n", epochs=3, classes=None)
 txt = ""

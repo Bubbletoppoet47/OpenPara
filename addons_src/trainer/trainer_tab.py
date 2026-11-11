@@ -11,7 +11,8 @@ import threading
 import time
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                             QListWidget,
                              QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QSplitter, QTableWidget,
                              QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -30,13 +31,18 @@ HINTS = {
     "noise": "Adds random grain, like a camera in low light. Higher numbers are grainier.",
     "jpeg": "Re-saves the picture at lower JPEG quality so it picks up compression blocks. Lower numbers look worse (100 = no loss).",
     "count": "How many distorted versions are made of each training picture. 3 copies means about 4 times as many training pictures, and every epoch takes about 4 times as long.",
-    "type": "YOLO (pretrained) starts from weights that already know general shapes: it trains quickly and works with fewer pictures. YOLO (not pretrained) starts from random numbers: it needs many more pictures and epochs.",
+    "type": "All of these are YOLO models. Classes + boxes: the model finds objects and says what they are. "
+            "Classes + boxes + distance: it also estimates how far away each object is, in metres. It learns that from the LiDAR distances picked on "
+            "boxes in the Annotator (boxes without one still teach class and position), and it is the kind the Gimble uses to show distance. "
+            "Pretrained starts from weights that already know general shapes: it trains quickly and works with fewer pictures. "
+            "Not pretrained starts from random numbers: it needs many more pictures and epochs.",
     "size": "Bigger models can be more accurate but are slower to train and run, and need more GPU memory. n = nano (smallest), s = small, m = medium, l = large.",
     "epochs": "One epoch is one pass over all the training pictures. More epochs train longer; it usually helps until the validation score stops improving.",
     "patience": "Training ends early when the validation score has not improved for this many epochs.",
     "batch": "How many pictures the GPU handles at once. Higher is faster but needs more GPU memory. If training runs out of memory, lower it.",
     "imgsz": "Every picture is resized to this many pixels wide before training. Bigger sizes find small objects better but need more GPU memory and time. 640 is the usual choice.",
-    "continue": "Train further from a model you already made (here or in the annotator's models, or a .pt file). It keeps its size and must know the same classes you have ticked.",
+    "continue": "Train further from a model you already made (here or in the annotator's models, or a .pt file). It keeps its size and its kind "
+                "(with or without distance) and must know the same classes you have ticked.",
     "name": "Optional name for the finished model. It is shown in the annotator's AI model box with the size and date. Left empty, it is named after you.",
     "python": "The Python that runs the training. It needs torch (the CUDA build, for your GPU) and ultralytics.",
 }
@@ -245,8 +251,12 @@ class TrainerTab(QWidget):
                      lambda: self.data_info.text().split("\n")[0])
         self.sets_table = QTableWidget(0, 4)
         self.sets_table.setHorizontalHeaderLabels(["Set", "Pictures", "Annotated", "Use as"])
-        self.sets_table.horizontalHeader().setStretchLastSection(True)
-        self.sets_table.setColumnWidth(0, 200)
+        hh = self.sets_table.horizontalHeader()                    # the set's name takes what is left; "Use as" is never cut off
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for c in (1, 2):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.sets_table.setColumnWidth(3, 120)
         self.sets_table.verticalHeader().setVisible(False)
         self.sets_table.setMinimumHeight(120)
         gv.addWidget(self.sets_table)
@@ -534,15 +544,26 @@ class TrainerTab(QWidget):
             warn = "\nNo validation pictures: mark at least one set as Validation."
         elif s["train"] == 0:
             warn = "\nNo training pictures: keep at least one set as Training."
-        self.data_info.setText(f"{s['train']} training and {s['val']} validation pictures.\nBoxes in training - {tr}\nBoxes in validation - {va}{warn}")
+        dist = ""
+        wants = bool(tc.model_types().get(self.type_box.currentData() or "yolo", {}).get("distance"))
+        if wants or s["dist"]["train"] or s["dist"]["val"]:
+            dist = f"\nBoxes with a distance - training: {s['dist']['train']}, validation: {s['dist']['val']}"
+        if wants and not warn:
+            if s["dist"]["train"] == 0:
+                warn = ("\nNone of the training boxes has a distance, so a distance model cannot be trained from this data. "
+                        "Pick distances in the Annotator (on pictures recorded with LiDAR), or choose a \"Classes + boxes\" model type.")
+            elif s["dist"]["val"] == 0:
+                warn = "\nNo validation box has a distance: the model still learns distance, but its distance error cannot be scored."
+        self.data_info.setText(f"{s['train']} training and {s['val']} validation pictures.\nBoxes in training - {tr}\nBoxes in validation - {va}{dist}{warn}")
         self.refresh_bar()
 
     def refresh_models(self):
         self.models_list.clear()
         for v in self.tp.list_models():
             sc = v.get("scores") or {}
-            self.models_list.addItem(f"{self.ml.short_label(v)}   {time.strftime('%Y-%m-%d %H:%M', time.localtime(v['ts']))}"
-                                     + (f"   mAP50 {sc['map50']}" if "map50" in sc else ""))
+            kind = "classes + boxes + distance" if tc.is_distance_checkpoint(v["path"]) else "classes + boxes"
+            self.models_list.addItem(f"{self.ml.mr.SIZE_NAMES.get(v['size'], '?')}   {kind}   {time.strftime('%Y-%m-%d %H:%M', time.localtime(v['ts']))}"
+                                     + (f"   mAP50 {sc['map50']}" if "map50" in sc else "") + self.ml.distance_text(sc))
 
     # ------------------------------------------------------------------ settings changes
     def _role_changed(self, sid, role):
@@ -573,6 +594,7 @@ class TrainerTab(QWidget):
             return
         self._fill_sizes()
         self._model_changed()
+        self._summary()
 
     def _model_changed(self):
         if self._loading:
@@ -593,7 +615,8 @@ class TrainerTab(QWidget):
                 for v in self.ml.list_versions(d, key):
                     if v["path"] not in seen:
                         seen.add(v["path"])
-                        self.cont_box.addItem(f"{v['file'][:-3]}   ({label})", v["path"])
+                        kind = ", with distance" if tc.is_distance_checkpoint(v["path"]) else ""
+                        self.cont_box.addItem(f"{v['file'][:-3]}   ({label}{kind})", v["path"])
         if want and want not in seen:
             self.cont_box.addItem(os.path.basename(want), want)
         i = self.cont_box.findData(want) if want else -1
@@ -608,14 +631,33 @@ class TrainerTab(QWidget):
 
     def _continue_changed(self):
         self._continue_enable()
+        self._type_follows_model()
         self._model_changed()
 
+    def _type_follows_model(self):
+        """A model is continued as the kind it is: choosing a distance model switches the type to a distance type, and the other way round."""
+        path = self.cont_box.currentData() if self.cont_on.isChecked() else None
+        cur = self.type_box.currentData()
+        spec = tc.model_types().get(cur or "", {})
+        if self._loading or not path or not os.path.isfile(path) or spec.get("script") not in (tc.HELPER_SCRIPT, tc.DISTANCE_SCRIPT):
+            return
+        want = tc.type_for_checkpoint(path, cur)
+        if want != cur:
+            self._loading = True
+            try:
+                self.type_box.setCurrentIndex(max(0, self.type_box.findData(want)))
+                self._fill_sizes()
+            finally:
+                self._loading = False
+            self._summary()
+
     def browse_model(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Model to continue from", "", "YOLO model (*.pt)")
+        path, _ = QFileDialog.getOpenFileName(self, "Model to continue from", "", "Model (*.pt)")
         if path:
             path = os.path.normpath(path)
             self._fill_continue(path)
             self.cont_on.setChecked(True)
+            self._type_follows_model()
             self._model_changed()
 
     def clear_distortions(self):

@@ -120,9 +120,17 @@ through that helper on the Gimble rig's Raspberry Pi, so the thumb drive stays i
 `gimble_pi.py` and `gimble_detect.py`), converts a model of the Annotator's Models folder (Assist or Scratch) to `gimble_model.onnx` +
 `gimble_model.json` in a job of its own (`gimble_export_job.py`; the converted model is compared with the original before it is sent)
 and puts it in `model/`; the model that was there moves to `model/previous/` and can be put back. An Assist model has no distance, so the
-Pi shows no distance of its own for it (the LiDAR distance still shows). Recordings are copied from `dataset/` and test videos from
+Pi shows no distance of its own for it (the LiDAR distance still shows); a model that gives distance is trained with one of the Trainer's
+"Classes + boxes + distance" types (below) and is listed under Scratch. Recordings are copied from `dataset/` and test videos from
 `test_videos/` (files already on the PC are skipped). It needs the Annotator's packages (torch, ultralytics) and downloads onnx and
 onnxruntime.
+
+**Trainer: two kinds of model** (`addons_src/trainer/`). "Classes + boxes" trains a stock YOLO model (`train_helper_job.py`, saved in
+`Models/Assist`). "Classes + boxes + distance" trains the same detector with a distance head (`train_distance_job.py`, the model of
+`annotator/app/gimble_model.py`, saved in `Models/Scratch`): it learns the distance in metres from the LiDAR distances picked on boxes in
+the Annotator, which travel in the dataset zip and into the run's frozen copy (`distances.csv`); boxes without a distance still teach
+class and position. Both kinds can start from the pretrained YOLO26 weights or from random weights, and "Continue from existing model"
+goes on from a model as the kind it is. A distance model's saved scores include its median distance error on the validation boxes.
 
 - Models are listed from every Annotator Models folder on the PC: OpenPara's and the Playground's (they keep separate data folders), in
   `Assist/`, `Scratch/` and directly in `Models/`; "Choose a file..." takes any `.pt`.

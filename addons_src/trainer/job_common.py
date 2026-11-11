@@ -51,6 +51,9 @@ def best_info(save_dir):
         return None
 
 
+SCORE_KEYS = ("map50", "map50_95", "dist_median_err", "dist_within_20", "dist_mae_m")       # what is kept with a saved model
+
+
 def publish(job, best_pt, scores=None):
     """Saves best_pt as a new version in every models folder of the job.  Returns the list of saved paths."""
     import model_library as ml
@@ -74,11 +77,13 @@ def finish(job, best_pt, info=None):
         print("Training ended without a usable best.pt.", flush=True)
         write_result(job, ok=False, message="Training ended without a usable model.")
         return 1
-    scores = {k: info[k] for k in ("map50", "map50_95") if info and k in info} or None
+    import model_library as ml
+    scores = {k: info[k] for k in SCORE_KEYS if info and k in info} or None
     saved = publish(job, best_pt, scores)
     write_result(job, ok=True, best=best_pt, info=info, saved=saved, finished=time.time())
     if info:
-        print(f"\nDone. Best epoch {info['epoch']} of {info['total_epochs']}: mAP50 {info['map50']}, mAP50-95 {info['map50_95']}", flush=True)
+        print(f"\nDone. Best epoch {info['epoch']} of {info['total_epochs']}: mAP50 {info['map50']}, mAP50-95 {info['map50_95']}"
+              + ml.distance_text(info, ", "), flush=True)
     for p in saved:
         print(f"Saved as a new model version: {p}", flush=True)
     return 0

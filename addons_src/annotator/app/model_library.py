@@ -170,7 +170,17 @@ def describe(v):
     sc = v.get("scores") or {}
     if sc.get("map50_95") is not None:
         parts.append(f"mAP50-95 {sc['map50_95']}")
+    if distance_text(sc):
+        parts.append(distance_text(sc, ""))
     return " - ".join(parts)
+
+
+def distance_text(scores, lead="   "):
+    """'   distance error 12%' for a model that was scored on distance (the median error on the validation boxes), else ''."""
+    try:
+        return f"{lead}distance error {float(scores['dist_median_err']) * 100:.0f}%"
+    except (KeyError, TypeError, ValueError):
+        return ""
 
 
 def short_label(v):

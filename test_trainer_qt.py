@@ -91,7 +91,12 @@ assert not w.findChildren(tt.QGroupBox), "no grey group boxes"
 assert "font-weight:600" in w.btn_train.styleSheet() and w.btn_train.text() == "Start training"
 assert w.panel_scroll.viewport().width() >= w.panel.minimumSizeHint().width(), "the left panel shows its contents whole"
 assert w.type_box.findData("fake") >= 0 and w.type_box.findData("yolo") >= 0 and w.type_box.findData("yolo_scratch") >= 0
-assert [w.type_box.itemText(i) for i in range(2)] == ["YOLO  (pretrained)", "YOLO  (not pretrained: random starting weights)"]
+assert [w.type_box.itemText(i) for i in range(4)] == ["Classes + boxes  (pretrained)", "Classes + boxes  (not pretrained)",
+                                                       "Classes + boxes + distance  (pretrained)", "Classes + boxes + distance  (not pretrained)"]
+# every type's name is shown whole in the type box, and the table's last column is not cut off
+fm = w.type_box.fontMetrics()
+assert max(fm.horizontalAdvance(w.type_box.itemText(i)) for i in range(4)) + 40 <= w.type_box.width(), w.type_box.width()
+assert w.sets_table.columnWidth(3) >= 110 and not w.sets_table.horizontalScrollBar().isVisible()
 import re
 labels = {b.text() for b in w.findChildren(tt.QPushButton)}
 assert "Export master zip..." not in labels and "My name..." not in labels and "Import dataset zip..." in labels
@@ -145,7 +150,7 @@ wait(lambda: w.job is None)
 pump(6)
 assert "fake training ['cup', 'bottle', 'can']" in w.log.toPlainText() and "epoch 2" in w.log.toPlainText()
 assert "Finished" in w.run_label.text() and w.btn_train.isEnabled() and not w.btn_stop.isEnabled()
-assert w.models_list.count() == 1 and "mAP50 0.6" in w.models_list.item(0).text()
+assert w.models_list.count() == 1 and "mAP50 0.6" in w.models_list.item(0).text() and "Nano   classes + boxes   20" in w.models_list.item(0).text()
 vs = ml.list_versions(tc.annotator_models_dir(), "assist")
 assert len(vs) == 1 and vs[0]["classes"] == ["cup", "bottle", "can"] and vs[0]["trainer"] == "Beach_v1" and "Beach_v1" in vs[0]["file"], vs
 # continue from existing model: the box lists it, ticking it greys out type and size, and the run carries its path
@@ -153,6 +158,33 @@ w._fill_continue(); assert w.cont_box.count() >= 1
 w.cont_on.setChecked(True); assert w.cont_row.isEnabled() and not w.size_box.isEnabled() and not w.type_box.isEnabled()
 assert os.path.basename(w.tp.settings["model"]["continue_from"]) == vs[0]["file"]
 w.cont_on.setChecked(False); assert w.size_box.isEnabled() and w.tp.settings["model"]["continue_from"] is None
+# ---- the two kinds of model.  A distance type shows how many boxes carry a distance, and says so when none does (this data has none)
+w.type_box.setCurrentIndex(w.type_box.findData("yolo_distance"))
+assert w.size_box.currentData() == "n" and w.tp.settings["model"]["type"] == "yolo_distance"
+assert "Boxes with a distance - training: 0, validation: 0" in w.data_info.text() and "cannot be trained from this data" in w.data_info.text(), w.data_info.text()
+MSG.clear(); w.start()
+assert not w.running() and MSG and "has a distance" in MSG[-1][1] and "Classes + boxes" in MSG[-1][1], MSG
+w.type_box.setCurrentIndex(w.type_box.findData("yolo"))
+assert "Boxes with a distance" not in w.data_info.text() and "cannot be trained" not in w.data_info.text()
+# a model is continued as the kind it is: picking a distance model switches the type to a distance type, a plain one switches it back
+import pickle, zipfile
+def fake_pt(path, distance):
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("archive/data.pkl", pickle.dumps({"format": "gimble-det-dist-v1"} if distance else {"model": "yolo"}))
+    return path
+os.makedirs(ml.folder_path(w.tp.models_dir, "scratch"), exist_ok=True)
+vdist = ml.save_version(w.tp.models_dir, "scratch", fake_pt(os.path.join(TMP, "d.pt"), True), "n", "Tester", classes=["cup", "bottle", "can"])
+w._fill_continue()
+labels = {w.cont_box.itemData(i): w.cont_box.itemText(i) for i in range(w.cont_box.count())}
+assert labels[vdist].endswith("(this project, with distance)") and not labels[vs[0]["path"]].endswith("with distance)"), labels
+w.cont_box.setCurrentIndex(w.cont_box.findData(vdist)); w.cont_on.setChecked(True)
+assert w.type_box.currentData() == "yolo_distance" and w.tp.settings["model"]["type"] == "yolo_distance" and not w.type_box.isEnabled()
+assert "Boxes with a distance" in w.data_info.text()
+w.cont_box.setCurrentIndex(w.cont_box.findData(vs[0]["path"]))
+assert w.type_box.currentData() == "yolo" and w.tp.settings["model"]["type"] == "yolo" and "Boxes with a distance" not in w.data_info.text()
+w.cont_on.setChecked(False)
+os.remove(vdist); os.remove(ml.info_path(vdist)); w._fill_continue(); w.refresh_models()
+w.type_box.setCurrentIndex(w.type_box.findData("fake")); assert w.tp.settings["model"]["type"] == "fake" and w.size_box.currentData() == "n"
 # ---- stop
 os.environ["FAKE_SLEEP"] = "3"; os.environ["FAKE_EPOCHS"] = "40"
 w.start(); wait(lambda: "epoch 0" in w.log.toPlainText())

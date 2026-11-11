@@ -25,6 +25,10 @@ addons.register_extensions(ext); addons.register_extensions(ext)
 items = [t for t, _f in ext.MENU_ITEMS.get("annotator.file", [])]
 assert items == ["Gimble: Send a Model...", "Gimble: Download Recordings...", "Gimble: Status..."], items      # once, also after registering again
 import importlib
+# a model is converted at the picture size it was trained at (the Trainer lets you choose one), 640 when the file does not say
+import gimble_export_job as GE
+assert [GE.picture_size(a, t) for a, t in ((0, None), (0, 320), (0, [480, 640]), (416, 640), (0, 100), (0, 333), (0, "x"), (0, 5000))] == \
+    [640, 320, 640, 416, 160, 320, 640, 1280]
 old_fn = dict(ext.MENU_ITEMS["annotator.file"])["Gimble: Status..."]
 importlib.reload(GX); GX.register(ext)                       # the add-on's code loaded anew (an update while the program runs): still once each
 items = [t for t, _f in ext.MENU_ITEMS["annotator.file"]]

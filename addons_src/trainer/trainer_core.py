@@ -6,7 +6,12 @@ A training project (a ".training" folder, marker training.json):
     data/           a normal annotator dataset (annotator_core.Project): the zips you import are MERGED into it with the same code the
                     annotator uses, so a master zip made in either program can be handed to the other
     models/         Assist/ Scratch/  every model this project trained (as dated versions, the annotator's Models folder layout)
-    runs/<id>/      one folder per training run: dataset/ (the frozen copy it trains on), job.json, log.txt, result.json, the Ultralytics output
+    runs/<id>/      one folder per training run: dataset/ (the frozen copy it trains on), job.json, log.txt, result.json, the training output
+
+Two kinds of model can be trained (model_types()):
+    classes + boxes              a stock Ultralytics YOLO model                                  -> models/Assist
+    classes + boxes + distance   the same detector with a distance head (gimble_model.GimbleNet)  -> models/Scratch
+The distance kind learns from the LiDAR distances picked per box in the annotator; the frozen copy carries them in distances.csv.
 
 Distortions are made only for TRAINING pictures; pictures of sets marked Validation are never distorted (the annotator's rule).
 A run trains on a frozen copy of the data, so importing or editing while it runs changes nothing about that run.
@@ -25,6 +30,8 @@ ANNOTATOR_APP = os.path.join(os.path.dirname(HERE), "annotator", "app")
 MARKER = "training.json"
 FORMAT = "openpara-training"
 HELPER_SCRIPT = os.path.join(HERE, "train_helper_job.py")
+DISTANCE_SCRIPT = os.path.join(HERE, "train_distance_job.py")
+DISTANCE_FORMAT = b"gimble-det-dist"        # what a classes + boxes + distance checkpoint carries inside (gimble_model.MODEL_FORMAT)
 
 DISTORTION_TYPES = [   # key, label, range key, low limit, high limit, decimals, neutral value (the type "off")
     ("brightness", "Brightness", "brightness", 0.1, 3.0, 2, (1.0, 1.0)),
@@ -78,12 +85,17 @@ def untitled_dir():
 # ---------------------------------------------------------------- model types
 
 def model_types():
-    """{key: spec}: the two built-in YOLO types plus what add-ons registered with ext.add_model_trainer."""
+    """{key: spec}: the built-in types plus what add-ons registered with ext.add_model_trainer.
+    Built in: classes + boxes (stock YOLO) and classes + boxes + distance (YOLO with a distance head), each pretrained or from random weights.
+    A spec with distance=True trains a model that also outputs a distance per box and is saved with the Scratch models."""
     common = {"script": HELPER_SCRIPT, "sizes": ("n", "s", "m", "l"), "default_size": "m", "models_key": "assist", "needs": [],
-              "pretrained": "yolo26{size}.pt", "fallback": "yolo11{size}.pt"}
-    out = {"yolo": dict(common, label="YOLO  (pretrained)", from_scratch=False),
-           "yolo_scratch": dict(common, label="YOLO  (not pretrained: random starting weights)", from_scratch=True,
-                                pretrained="yolo26{size}.yaml", fallback="yolo11{size}.yaml")}
+              "pretrained": "yolo26{size}.pt", "fallback": "yolo11{size}.pt", "distance": False}
+    dist = dict(common, script=DISTANCE_SCRIPT, models_key="scratch", distance=True, default_size="n", fallback=None)
+    out = {"yolo": dict(common, label="Classes + boxes  (pretrained)", from_scratch=False),                 # labels short enough for the type box
+           "yolo_scratch": dict(common, label="Classes + boxes  (not pretrained)", from_scratch=True,
+                                pretrained="yolo26{size}.yaml", fallback="yolo11{size}.yaml"),
+           "yolo_distance": dict(dist, label="Classes + boxes + distance  (pretrained)", from_scratch=False),
+           "yolo_distance_scratch": dict(dist, label="Classes + boxes + distance  (not pretrained)", from_scratch=True, pretrained=None)}
     try:
         import ext
         for k, spec in ext.MODEL_TRAINERS.items():
@@ -93,10 +105,35 @@ def model_types():
             sp.setdefault("default_size", sp["sizes"][0])
             sp.setdefault("models_key", "assist")
             sp.setdefault("needs", [])
+            sp.setdefault("distance", False)
             out[k] = sp
     except ImportError:
         pass
     return out
+
+
+def is_distance_checkpoint(path):
+    """True when this .pt is a classes + boxes + distance model.  Read without torch: a .pt is a zip whose pickle names the format."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            for n in z.namelist():
+                if n.endswith("data.pkl"):
+                    with z.open(n) as f:
+                        return DISTANCE_FORMAT in f.read(4 << 20)
+    except (OSError, zipfile.BadZipFile, KeyError):
+        pass
+    return False
+
+
+def type_for_checkpoint(path, current="yolo"):
+    """The model type that can continue this .pt: a distance model needs a distance type and a plain YOLO model a plain one.
+    `current` is kept when it already fits."""
+    types = model_types()
+    want = is_distance_checkpoint(path)
+    if current in types and bool(types[current].get("distance")) == want:
+        return current
+    return "yolo_distance" if want else "yolo"
 
 
 def default_me():
@@ -214,22 +251,31 @@ def probe_all(paths, progress=None):
 
 
 def checkpoint_info(python, path):
-    """{'size', 'classes'} of a .pt model, from its info file next to it, else by loading it in the training Python."""
+    """{'size', 'classes', 'distance'} of a .pt model, from its info file next to it, else by loading it in the training Python."""
     ac, dz, sz, ml = libs()
     inf = ml.read_info(path) or {}
+    distance = is_distance_checkpoint(path)
     if inf.get("size") and inf.get("classes"):
-        return {"size": inf["size"], "classes": list(inf["classes"])}
-    code = ("import json,re,sys\nfrom ultralytics import YOLO\nm=YOLO(sys.argv[1]);y=m.model.yaml\nn=m.names\n"
-            "sc=y.get('scale') or (re.search(r'yolo\\d+([nslmx])',str(y.get('yaml_file',''))) or [None,None])[1]\n"
-            "print('CKPT'+json.dumps({'size':sc,'classes':[n[k] for k in sorted(n)] if isinstance(n,dict) else list(n)}))\n")
+        return {"size": inf["size"], "classes": list(inf["classes"]), "distance": distance}
+    if distance:
+        code = ("import json,re,sys,torch\nck=torch.load(sys.argv[1],map_location='cpu',weights_only=False)\n"
+                "m=re.search(r'yolo\\d+([nslmx])',str(ck.get('cfg','')))\n"
+                "print('CKPT'+json.dumps({'size':m.group(1) if m else None,'classes':list(ck['names'])}))\n")
+    else:
+        code = _YOLO_CKPT
     try:
         r = subprocess.run([python, "-c", code, path], capture_output=True, text=True, timeout=180)
         for line in r.stdout.splitlines():
             if line.startswith("CKPT"):
-                return json.loads(line[4:])
+                return dict(json.loads(line[4:]), distance=distance)
     except (OSError, subprocess.SubprocessError, ValueError):
         pass
     raise ValueError(f"Could not read the size and classes of {os.path.basename(path)} with {python}. Is it a YOLO .pt model?")
+
+
+_YOLO_CKPT = ("import json,re,sys\nfrom ultralytics import YOLO\nm=YOLO(sys.argv[1]);y=m.model.yaml\nn=m.names\n"
+              "sc=y.get('scale') or (re.search(r'yolo\\d+([nslmx])',str(y.get('yaml_file',''))) or [None,None])[1]\n"
+              "print('CKPT'+json.dumps({'size':sc,'classes':[n[k] for k in sorted(n)] if isinstance(n,dict) else list(n)}))\n")
 
 
 def env_text(info):
@@ -254,6 +300,15 @@ def distortion_ranges(d):
             r[rk] = neutral
     r["blur_chance"] = float(d.get("blur_chance", 0.5)) if d["types"].get("blur", True) else 0.0
     return r
+
+
+def _pick_m(pk):
+    """The distance in metres of a per-box pick ({"distance_m", "u", "v"} or None), or None when it has none."""
+    try:
+        m = float(pk["distance_m"])
+    except (TypeError, KeyError, ValueError):
+        return None
+    return m if m > 0 and m == m and m != float("inf") else None
 
 
 def _merge(base, new):
@@ -353,17 +408,21 @@ class TrainingProject:
         return [i for i in self.data.list_images() if self.data.is_annotated(i)]
 
     def summary(self, classes=None):
-        """Counts for the window: pictures and boxes per class on each side, for the chosen classes (None = all)."""
+        """Counts for the window: pictures and boxes per class on each side, for the chosen classes (None = all).
+        'dist' is how many of those boxes carry a LiDAR distance (what a classes + boxes + distance model learns distance from)."""
         names = list(self.data.classes)
         use = [c for c in names if classes is None or c in classes]
         idx = {names.index(c): n for n, c in enumerate(use)}
-        out = {"classes": use, "train": 0, "val": 0, "unsplit": 0, "boxes": {"train": [0] * len(use), "val": [0] * len(use)}}
+        out = {"classes": use, "train": 0, "val": 0, "unsplit": 0, "boxes": {"train": [0] * len(use), "val": [0] * len(use)},
+               "dist": {"train": 0, "val": 0}}
         for i in self.annotated_ids():
             side = "val" if self.data.is_val_image(i) else "train"
             out[side] += 1
-            for b in self.data.get_boxes(i):
+            boxes = self.data.get_boxes(i)
+            for b, pk in zip(boxes, self.data.get_distances(i, len(boxes))):
                 if b[0] in idx:
                     out["boxes"][side][idx[b[0]]] += 1
+                    out["dist"][side] += _pick_m(pk) is not None
         return out
 
     # ---- distortions (training pictures only)
@@ -396,38 +455,50 @@ class TrainingProject:
     # ---- the frozen copy a run trains on
     def freeze(self, dest, classes=None, distortions=False):
         """Writes an Ultralytics-style dataset into dest from the data as it is NOW (pictures are hard-linked or copied).
-        Returns (data_yaml, {'train', 'val', 'classes'}).  Distorted copies go to train only."""
+        Returns (data_yaml, {'train', 'val', 'classes', 'dist': {'train', 'val'}}).  Distorted copies go to train only.
+        distances.csv lists every box that has a LiDAR distance (a distorted copy keeps its picture's distances: only its colours changed)."""
         d = self.data
         names = list(d.classes)
         use = [c for c in names if classes is None or c in classes]
         remap = {names.index(c): n for n, c in enumerate(use)}
         if os.path.isdir(dest):
             shutil.rmtree(dest)
-        counts = {"train": 0, "val": 0}
+        counts = {"train": 0, "val": 0, "dist": {"train": 0, "val": 0}}
         for split in ("train", "val"):
             os.makedirs(os.path.join(dest, "images", split))
             os.makedirs(os.path.join(dest, "labels", split))
+        dist_rows = []
 
-        def put(split, name, src, boxes):
+        def put(split, name, src, boxes, picks):
             try:
                 os.link(src, os.path.join(dest, "images", split, name + ".jpg"))
             except OSError:
                 shutil.copyfile(src, os.path.join(dest, "images", split, name + ".jpg"))
             with open(os.path.join(dest, "labels", split, name + ".txt"), "w", encoding="utf-8") as f:
-                for c, xc, yc, w, h in boxes:
+                for (c, xc, yc, w, h), pk in zip(boxes, picks):
                     if c in remap:
                         f.write(f"{remap[c]} {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}\n")
+                        m = _pick_m(pk)
+                        if m is not None:                      # the same 6 decimals as the label file: boxes are matched by their numbers
+                            dist_rows.append((split, name, remap[c], use[remap[c]], f"{xc:.6f}", f"{yc:.6f}", f"{w:.6f}", f"{h:.6f}", f"{m:.3f}"))
+                            counts["dist"][split] += 1
             counts[split] += 1
 
         for i in self.annotated_ids():
             split = "val" if d.is_val_image(i) else "train"
             boxes = d.get_boxes(i)
-            put(split, i, d.image_path(i), boxes)
+            picks = d.get_distances(i, len(boxes))
+            put(split, i, d.image_path(i), boxes, picks)
             if distortions and split == "train":               # validation pictures are never distorted
                 for v in d.manifest["distortions"].get(i, []):
                     p = os.path.join(d.dist_images_dir, v + ".jpg")
                     if os.path.exists(p):
-                        put("train", v, p, boxes)
+                        put("train", v, p, boxes, picks)
+        import csv
+        with open(os.path.join(dest, "distances.csv"), "w", newline="", encoding="utf-8") as f:
+            wr = csv.writer(f)
+            wr.writerow(["split", "image", "class_id", "class", "xc", "yc", "w", "h", "distance_m"])
+            wr.writerows(dist_rows)
         yaml_path = os.path.join(dest, "data.yaml")
         with open(yaml_path, "w", encoding="utf-8") as f:
             f.write(f"path: {dest.replace(os.sep, '/')}\ntrain: images/train\nval: images/val\nnc: {len(use)}\nnames:\n")
@@ -460,16 +531,18 @@ class TrainingProject:
         m = dict(s["model"])
         m.update({k: v for k, v in overrides.items() if v is not None})
         types = model_types()
-        spec = types.get(m["type"])
-        if spec is None:
+        if m["type"] not in types:
             raise ValueError(f"Unknown model type: {m['type']}")
         python = python or s.get("python") or train_python()
         prev = None
         if m.get("continue_from"):
             if not os.path.isfile(m["continue_from"]):
                 raise ValueError(f"The model to continue from is not there: {m['continue_from']}")
+            if types[m["type"]]["script"] in (HELPER_SCRIPT, DISTANCE_SCRIPT):
+                m["type"] = type_for_checkpoint(m["continue_from"], m["type"])     # a model is continued as the kind it is
             prev = checkpoint_info(python, m["continue_from"])
             m["size"] = prev["size"] or m["size"]
+        spec = types[m["type"]]
         if m["size"] not in spec["sizes"]:
             m["size"] = spec["default_size"]
         names = [c for c in self.data.classes if m.get("classes") is None or c in m["classes"]]
@@ -492,12 +565,20 @@ class TrainingProject:
         if counts["val"] == 0:
             shutil.rmtree(run_dir, ignore_errors=True)
             raise ValueError("There are no validation pictures. Mark at least one fully annotated set as Validation (the scores come from it).")
+        if spec.get("distance") and counts["dist"]["train"] == 0:
+            shutil.rmtree(run_dir, ignore_errors=True)
+            raise ValueError("None of the training boxes" + (" of the ticked classes" if m.get("classes") else "") + " has a distance, so the distance part "
+                             "of this model has nothing to learn from.\n\nDistances come from LiDAR recordings: in the Annotator, pick the distance "
+                             "of a box on a picture that has depth, then make the dataset zip again.\n\n"
+                             "To train without distance, choose a \"Classes + boxes\" model type.")
         job = {"data_yaml": yaml_path, "run_dir": run_dir, "type": m["type"], "size": m["size"], "epochs": int(m["epochs"]),
                "patience": int(m["patience"]), "batch": int(m["batch"]), "imgsz": int(m["imgsz"]), "workers": 2, "device": None,
                "classes": counts["classes"], "counts": {"train": counts["train"], "val": counts["val"]},
+               "distance": bool(spec.get("distance")), "dist_counts": counts["dist"], "dist_gain": 2.0, "lr": None,
                "start_weights": m["continue_from"] if prev else None, "based_on": os.path.basename(m["continue_from"]) if prev else None,
                "from_scratch": bool(spec.get("from_scratch")),
                "pretrained": spec.get("pretrained", "yolo26{size}.pt"), "fallback": spec.get("fallback", "yolo11{size}.pt"),
+               "cfg": spec.get("cfg", "yolo26{size}.yaml"),
                "models_key": spec["models_key"], "models_dirs": [self.models_dir, annotator_models_dir()],
                "trainer": (m.get("name") or "").strip() or me_name or "trainer", "lib_dir": ANNOTATOR_APP}
         with open(os.path.join(run_dir, "job.json"), "w", encoding="utf-8") as f:

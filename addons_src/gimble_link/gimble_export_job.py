@@ -45,7 +45,8 @@ def load(weights, app):
                 logd = net.dist(preds["one2one"]["feats"], rois, (img.shape[2], img.shape[3]))
                 return det[:, :6], torch.exp(logd).clamp(gm.D_MIN, gm.D_MAX)
         names = model.names
-        extra = dict(round=ck.get("round"), epoch=ck.get("epoch"), map50=ck.get("map50"), map=ck.get("map"), dist_median_rel_err=ck.get("dist_med_rel"))
+        extra = dict(round=ck.get("round"), epoch=ck.get("epoch"), map50=ck.get("map50"), map=ck.get("map"), dist_median_rel_err=ck.get("dist_med_rel"),
+                     imgsz=ck.get("imgsz"))
         return "scratch", Scratch(model).eval(), names, extra
 
     from ultralytics import YOLO
@@ -89,7 +90,18 @@ def load(weights, app):
             return det, det[:, 4] * 0.0
     names = yolo.names
     names = [names[k] for k in sorted(names)] if isinstance(names, dict) else list(names)
-    return "assist", Assist(net).eval(), names, {}
+    trained = (getattr(yolo, "ckpt", None) or {}).get("train_args") or {}
+    return "assist", Assist(net).eval(), names, {"imgsz": trained.get("imgsz")}
+
+
+def picture_size(asked, trained):
+    """The picture size the Pi will use: the one asked for, else the one the model was trained at, else 640 (a multiple of 32, 160 ... 1280).
+    A model looks for objects at the pixel sizes it was trained on, so it is run at its own size."""
+    try:
+        s = int(asked or (max(trained) if isinstance(trained, (list, tuple)) else trained) or 640)
+    except (TypeError, ValueError):
+        s = 640
+    return max(160, min(1280, int(round(s / 32)) * 32))
 
 
 def main():
@@ -97,7 +109,7 @@ def main():
     ap.add_argument("--weights", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--app", default="")
-    ap.add_argument("--imgsz", type=int, default=640)
+    ap.add_argument("--imgsz", type=int, default=0, help="picture size on the Pi; 0 = the size the model was trained at (640 when it does not say)")
     ap.add_argument("--label", default="")
     ap.add_argument("--paths", default="", help="folders to look for packages in (the program's own list), joined with the path separator")
     a = ap.parse_args()
@@ -121,7 +133,7 @@ def main():
         say("error", text=f"{os.path.basename(a.weights)} could not be read as a model ({type(e).__name__}: {e}).")
         return 2
     names = [names[k] for k in sorted(names)] if isinstance(names, dict) else list(names)
-    S = a.imgsz
+    S = picture_size(a.imgsz, extra.get("imgsz"))
     os.makedirs(a.out, exist_ok=True)
     onnx_path = os.path.join(a.out, "gimble_model.onnx")
     dummy = torch.rand(1, 3, S, S)
