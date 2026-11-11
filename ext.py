@@ -84,9 +84,14 @@ def add_shell_mixin(cls):
 
 
 def add_menu_item(menu, text, fn):
+    """An add-on puts an item in the menu of another add-on's window ("annotator.file").  fn(window) runs it.  The same menu + text is
+    listed once: registering again (after add-ons were installed or updated, which loads their code anew) replaces the function."""
     items = MENU_ITEMS.setdefault(menu, [])
-    if (text, fn) not in items:
-        items.append((text, fn))
+    for i, (t, _f) in enumerate(items):
+        if t == text:
+            items[i] = (text, fn)
+            return
+    items.append((text, fn))
 
 
 def add_model_trainer(key, **spec):

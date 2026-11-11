@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Gimble - Test model
+Comment=Run the trained model live; REC VIDEO records the test
+Exec=bash -c 'S=$(find /media /mnt /run/media "$HOME" -maxdepth 6 -ipath "*/app/gimble_detect.py" 2>/dev/null | head -n1); if [ -n "$S" ]; then cd "$(dirname "$S")/.." && mkdir -p logs && python3 "$S" 2>>logs/gimble_log.txt; else DISPLAY=:0 xmessage "Could not find the Gimble programs (app/gimble_detect.py) on any drive. Is the thumb drive plugged in?" 2>/dev/null; fi'
+Icon=applications-science
+Terminal=false
+Categories=Utility;

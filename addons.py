@@ -383,6 +383,7 @@ def register_extensions(ext):
     ext.FEATURES.clear()
     ext.HOOKS.clear()
     ext.COMMANDS.clear()
+    ext.MENU_ITEMS.clear()                # (an add-on that was removed takes its items with it; none is listed twice)
     LOAD_ERRORS.clear()
     for aid in known():
         on = is_active(aid)

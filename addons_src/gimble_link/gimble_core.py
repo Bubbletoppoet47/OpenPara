@@ -10,6 +10,11 @@ changed: this only puts files where they already look, and reads what they alrea
     send_model(link, folder, onnx, json)  puts them in <folder>/model/ ; the model that was there is kept in model/previous/
     sessions(link, folder)                the recordings in <folder>/dataset/
     download_sessions(...)                copies recordings to this PC (files already here are left alone, so it can be continued)
+    test_videos / download_videos         the videos recorded in Test model, with their tables of predictions
+    update_programs(link, folder)         puts the Gimble programs this OpenPara carries (pi/) on the Gimble; start_program starts one
+
+The Gimble's own programs live in this add-on's  pi/  folder (pi/app/*.py, the launchers, the read-me): that is their source.  On the
+drive they are in <folder>/app/; settings/, model/, dataset/, test_videos/, calibration_data/ and logs/ are next to it.
 """
 import json
 import os
@@ -23,6 +28,7 @@ import remote_link as RL
 HERE = os.path.dirname(os.path.abspath(__file__))
 ANNOTATOR_APP = os.path.join(os.path.dirname(HERE), "annotator", "app")
 JOB = os.path.join(HERE, "gimble_export_job.py")
+PI_DIR = os.path.join(HERE, "pi")                    # the Gimble's own programs, as this OpenPara carries them (see update_programs)
 ROOTS = ("/media", "/mnt", "/run/media", "~")
 KINDS = {"assist": "Assist", "scratch": "Scratch"}
 SIZE_NAMES = {"n": "Nano", "s": "Small", "m": "Medium", "l": "Large", "x": "Extra large"}
@@ -68,31 +74,60 @@ def save_settings(**kw):
 
 # ---------------------------------------------------------------- the models on this PC
 
+def data_folders():
+    """[(name, folder)] of the data folders trained models can be in: this program's own, and the one of the other OpenPara on this PC
+    (OpenPara and OpenPara Playground never share a folder, but a model trained in one is wanted in the other)."""
+    own = os.path.abspath(user_dir())
+    out = [(os.path.basename(own), own)]
+    for name in ("OpenPara", "OpenPara Playground"):
+        d = os.path.join(os.path.dirname(own), name)
+        if os.path.isdir(d) and os.path.abspath(d) != own:
+            out.append((name, d))
+    return out
+
+
+def model_folders():
+    """[(where, Models folder)]: every Annotator Models folder there is on this PC, this program's first."""
+    return [(name, os.path.join(d, "Annotator", "Models")) for name, d in data_folders()]
+
+
+def model_entry(pt, kind=None, where=""):
+    """What is known about one .pt file (its info file next to it says size, classes, kind), or None when it cannot be read."""
+    info = {}
+    try:
+        with open(os.path.splitext(pt)[0] + ".json", encoding="utf-8") as fh:
+            info = json.load(fh) or {}
+    except (OSError, ValueError):
+        pass
+    try:
+        ts = float(info.get("created") or os.path.getmtime(pt))
+    except (OSError, TypeError, ValueError):
+        return None
+    size = info.get("size")
+    if kind is None and info.get("kind") in KINDS:
+        kind = info["kind"]
+    name = SIZE_NAMES.get(size) or os.path.splitext(os.path.basename(pt))[0][:24]
+    return {"path": pt, "kind": kind, "file": os.path.basename(pt), "size": size, "ts": ts, "classes": info.get("classes"), "where": where,
+            "label": f"{name} {time.strftime('%Y-%m-%d %H:%M', time.localtime(ts))}"}
+
+
 def list_models(folder=None):
-    """[{'path', 'kind', 'file', 'size', 'ts', 'classes', 'label'}], newest first, of the Annotator's Models/Assist and Models/Scratch."""
-    folder = folder or models_dir()
-    out = []
-    for kind, sub in KINDS.items():
-        d = os.path.join(folder, sub)
-        if not os.path.isdir(d):
-            continue
-        for f in os.listdir(d):
-            if not f.lower().endswith(".pt"):
+    """[{'path', 'kind' ('assist' | 'scratch' | None = told when it is sent), 'file', 'size', 'ts', 'classes', 'label', 'where'}], newest
+    first: the .pt files of every Models folder on this PC - in Assist/, in Scratch/, and lying directly in Models/."""
+    out, seen = [], set()
+    for where, mdir in ([("", folder)] if folder else model_folders()):
+        for kind, sub in list(KINDS.items()) + [(None, "")]:
+            d = os.path.join(mdir, sub) if sub else mdir
+            if not os.path.isdir(d):
                 continue
-            pt = os.path.join(d, f)
-            info = {}
-            try:
-                with open(os.path.splitext(pt)[0] + ".json", encoding="utf-8") as fh:
-                    info = json.load(fh) or {}
-            except (OSError, ValueError):
-                pass
-            try:
-                ts = float(info.get("created") or os.path.getmtime(pt))
-            except (OSError, TypeError, ValueError):
-                continue
-            size = info.get("size")
-            label = f"{SIZE_NAMES.get(size, 'Model')} {time.strftime('%Y-%m-%d %H:%M', time.localtime(ts))}"
-            out.append({"path": pt, "kind": kind, "file": f, "size": size, "ts": ts, "classes": info.get("classes"), "label": label})
+            for f in sorted(os.listdir(d)):
+                pt = os.path.join(d, f)
+                if not f.lower().endswith(".pt") or not os.path.isfile(pt) or os.path.normcase(pt) in seen:
+                    continue
+                seen.add(os.path.normcase(pt))
+                m = model_entry(pt, kind, where)
+                if m:
+                    out.append(m)
     out.sort(key=lambda m: (m["ts"], m["file"]), reverse=True)
     return out
 
@@ -100,20 +135,99 @@ def list_models(folder=None):
 # ---------------------------------------------------------------- the Gimble folder on the Pi
 
 def find_gimble(link):
-    """The folder of the Gimble programs on that computer; GimbleError in plain words when it is not there."""
+    """The Gimble folder on that computer (the one with dataset/ and model/); GimbleError in plain words when it is not there.
+    The programs are in its app/ folder (the tidy layout), or directly in it (the layout before)."""
     try:
-        hits = link.find("gimble_detect.py", ROOTS, depth=5)
+        hits = link.find("gimble_detect.py", ROOTS, depth=6)
     except RL.LinkClosed:
         raise
     except RL.RemoteError as e:
         raise GimbleError(f"Could not look for the Gimble folder on {link.label()}: {e}")
     sep = link.info.get("sep") or "/"
-    for p in hits:
-        folder = p.rsplit(sep, 1)[0]
+    folders = [p.rsplit(sep, 1)[0] for p in hits if f"{sep}old{sep}" not in p]
+    folders.sort(key=lambda f: not f.endswith(sep + "app"))             # the tidy layout first: its old copies may still lie next to it
+    for folder in folders:
         if link.stat(link.join(folder, "gimble_pi.py")).get("exists"):
-            return folder
+            return folder.rsplit(sep, 1)[0] if folder.endswith(sep + "app") else folder
     raise GimbleError(f"The Gimble folder was not found on {link.label()}. Is the thumb drive with Gimble_Pi plugged into it? "
                       "(It is looked for in /media, /mnt and the home folder.)")
+
+
+def programs_dir(link, folder):
+    """Where the Gimble's programs are: <folder>/app in the tidy layout, else the folder itself."""
+    app = link.join(folder, "app")
+    return app if link.stat(link.join(app, "gimble_pi.py")).get("exists") else folder
+
+
+def programs_version(link, folder):
+    """The version of the programs on the Gimble ('2.0'), or None for the ones from before they had a version."""
+    path = link.join(folder, "app", "VERSION")
+    try:
+        if link.stat(path).get("exists"):
+            return link.read_file(path, 1000).decode("utf-8", "replace").strip() or None
+    except RL.RemoteError:
+        pass
+    return None
+
+
+def my_programs_version():
+    try:
+        with open(os.path.join(PI_DIR, "app", "VERSION"), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _vkey(v):
+    return tuple(int(p) if p.isdigit() else 0 for p in str(v or "0").split("."))
+
+
+def programs_outdated(st):
+    """True when this OpenPara carries newer Gimble programs than the Gimble has."""
+    return _vkey(st.get("programs")) < _vkey(my_programs_version())
+
+
+def update_programs(link, folder, progress=None, stop=None):
+    """Puts this OpenPara's Gimble programs on the Gimble: app/ (the programs), the launchers and the read-me.  Settings, calibration,
+    the model, recordings and videos are not part of it and are never written.  Afterwards the files of the old layout are moved out of
+    the main folder (to old/before_tidy/, by the Gimble's own tidy).  Returns (files sent, files tidied away or None)."""
+    files = []
+    for dp, dn, fn in os.walk(PI_DIR):
+        dn[:] = sorted(d for d in dn if d != "__pycache__")
+        for f in sorted(fn):
+            if f.endswith((".pyc", ".bat")):                       # the .bat is the same tidy for a drive that sits in a Windows PC
+                continue
+            full = os.path.join(dp, f)
+            files.append((os.path.relpath(full, PI_DIR).replace(os.sep, "/"), full, os.path.getsize(full)))
+    if not any(r == "app/gimble_pi.py" for r, _f, _s in files):
+        raise GimbleError("This OpenPara does not carry the Gimble programs (the add-on's pi folder is missing).")
+    total = sum(sz for _r, _f, sz in files)
+    done = 0
+    for rel, full, size in files:
+        link.upload(full, link.join(folder, *rel.split("/")), (lambda d, _t, b=done, r=rel: progress(b + d, total, r)) if progress else None, stop)
+        done += size
+    tidied = None
+    if link.info.get("commands"):
+        try:
+            code, text = link.run(f'python3 "{link.join(folder, "app", "gimble_tidy.py")}"', cwd=folder, timeout=60)
+            if code == 0 and text.strip().startswith("moved"):
+                tidied = int(text.split()[1])
+        except (RL.RemoteError, ValueError, IndexError):
+            pass
+    return len(files), tidied
+
+
+def start_program(link, folder, which="test"):
+    """Starts a Gimble program on the Gimble's own screen: 'test' (Test model), 'record' (Record data) or 'menu' (the start screen).
+    GimbleError when one is running already (the camera can only be used by one)."""
+    script = {"test": "gimble_detect.py", "record": "gimble_pi.py", "menu": "gimble_menu.py"}[which]
+    st = status(link, folder)
+    if st["running"]:
+        raise GimbleError(f"{', '.join(st['running'])} is running on the Gimble. Close it there first (QUIT), then start this again.")
+    path = link.join(programs_dir(link, folder), script)
+    if not link.stat(path).get("exists"):
+        raise GimbleError(f"{script} is not on the Gimble. Update the Gimble's programs first (the Status page).")
+    return link.launch(f'python3 "{path}"', cwd=folder)
 
 
 def read_json(link, path):
@@ -128,12 +242,14 @@ def read_json(link, path):
 def status(link, folder):
     """{'computer', 'folder', 'model' (the json it holds, or None), 'model_time', 'model_mb', 'sessions', 'free_gb', 'running': [names]}"""
     out = {"computer": link.label(), "folder": folder, "model": None, "model_time": None, "model_mb": None, "sessions": 0, "free_gb": None,
-           "running": []}
+           "running": [], "programs": None, "videos": 0}
     out["model"] = read_json(link, link.join(folder, "model", "gimble_model.json"))
     st = link.stat(link.join(folder, "model", "gimble_model.onnx"))
     if st.get("exists"):
         out["model_time"], out["model_mb"] = st.get("mtime"), round(st.get("size", 0) / 1e6, 1)
     out["sessions"] = len(sessions(link, folder))
+    out["programs"] = programs_version(link, folder)
+    out["videos"] = len(test_videos(link, folder))
     try:
         out["free_gb"] = round(link.disk(folder)["free"] / 1e9, 1)
     except RL.RemoteError:
@@ -141,8 +257,8 @@ def status(link, folder):
     if link.info.get("commands") and link.info.get("platform", "").startswith("linux"):
         try:
             # a Python that was started with one of the two programs (not an editor that has the file open)
-            _code, text = link.run("pgrep -af 'python[^ ]* +[^ ]*gimble_(pi|detect)\\.py' || true", timeout=10)
-            out["running"] = sorted({n for n in ("gimble_pi.py", "gimble_detect.py") if n in text})
+            _code, text = link.run("pgrep -af 'python[^ ]* +[^ ]*gimble_(pi|detect|menu)\\.py' || true", timeout=10)
+            out["running"] = sorted({n for n in ("gimble_pi.py", "gimble_detect.py", "gimble_menu.py") if n in text})
         except RL.RemoteError:
             pass
     return out
@@ -162,11 +278,18 @@ def status_text(st):
         lines.append("Model on it:  a model file is there, but its description (gimble_model.json) is missing.")
     else:
         lines.append("Model on it:  none yet.")
-    lines.append(f"Recordings on it:  {st['sessions']}")
+    lines.append(f"Recordings on it:  {st['sessions']}" + (f"      Test videos:  {st['videos']}" if st.get("videos") else ""))
+    mine = my_programs_version()
+    if st.get("programs"):
+        lines.append(f"Gimble programs on it:  version {st['programs']}" + (f"  (this OpenPara carries {mine}: Update the Gimble's programs)"
+                                                                           if programs_outdated(st) else ""))
+    else:
+        lines.append("Gimble programs on it:  the layout from before the tidy-up" + (f"  (this OpenPara carries version {mine}: Update the "
+                                                                                   "Gimble's programs)" if mine else ""))
     if st["free_gb"] is not None:
         lines.append(f"Free space on that drive:  {st['free_gb']} GB")
     if st["running"]:
-        lines.append("Running there now:  " + ", ".join(st["running"]) + "  (Detect reads a new model when it is started again)")
+        lines.append("Running there now:  " + ", ".join(st["running"]) + "  (Test model reads a new model when it is started again)")
     return "\n".join(lines)
 
 
@@ -262,6 +385,24 @@ def sessions(link, folder):
     if not link.stat(d).get("exists"):
         return []
     return [{"name": name, "path": link.join(d, name)} for name, is_dir, _s, _m in link.ls(d)["entries"] if is_dir]
+
+
+def test_videos(link, folder):
+    """[{'name', 'path', 'size'}] of the videos recorded in Test model on the Gimble (test_videos/), oldest first."""
+    d = link.join(folder, "test_videos")
+    if not link.stat(d).get("exists"):
+        return []
+    return [{"name": name, "path": link.join(d, name), "size": size} for name, is_dir, size, _m in link.ls(d)["entries"]
+            if not is_dir and name.lower().endswith((".mp4", ".avi"))]
+
+
+def download_videos(link, folder, local_root, progress=None, stop=None):
+    """Copies test_videos/ (the videos, and the tables of predictions next to them) into local_root/test_videos; what is already here
+    with the same size is left alone.  Returns (files copied, files already here)."""
+    d = link.join(folder, "test_videos")
+    if not link.stat(d).get("exists"):
+        return 0, 0
+    return link.download_tree(d, os.path.join(local_root, "test_videos"), progress, stop)
 
 
 def is_local_session(path):

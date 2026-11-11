@@ -120,8 +120,17 @@ through that helper on the Gimble rig's Raspberry Pi, so the thumb drive stays i
 `gimble_pi.py` and `gimble_detect.py`), converts a model of the Annotator's Models folder (Assist or Scratch) to `gimble_model.onnx` +
 `gimble_model.json` in a job of its own (`gimble_export_job.py`; the converted model is compared with the original before it is sent)
 and puts it in `model/`; the model that was there moves to `model/previous/` and can be put back. An Assist model has no distance, so the
-Pi shows 0.0 m for it. Recordings are copied from `dataset/` (files already on the PC are skipped). The Gimble's own programs are never
-changed. It needs the Annotator's packages (torch, ultralytics) and downloads onnx and onnxruntime.
+Pi shows no distance of its own for it (the LiDAR distance still shows). Recordings are copied from `dataset/` and test videos from
+`test_videos/` (files already on the PC are skipped). It needs the Annotator's packages (torch, ultralytics) and downloads onnx and
+onnxruntime.
+
+- Models are listed from every Annotator Models folder on the PC: OpenPara's and the Playground's (they keep separate data folders), in
+  `Assist/`, `Scratch/` and directly in `Models/`; "Choose a file..." takes any `.pt`.
+- **The Gimble's own programs live in `addons_src/gimble_link/pi/`** (that is their source): `app/` (start screen `gimble_menu.py`,
+  Record data `gimble_pi.py`, Test model `gimble_detect.py` with REC VIDEO, calibration, viewer; `gimble_paths.py` is the one place that
+  says where things are on the drive), the three launchers and the read-me. "Update the Gimble's programs" on the Status page sends them
+  to the Gimble and moves the files of the old layout to `old/before_tidy/`; settings, the model and everything recorded are never
+  written. Raise `pi/app/VERSION` with every change. `test_gimble_programs.py` runs them with a stand-in camera, LiDAR and model.
 
 
 ## For contributors

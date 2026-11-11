@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Gimble
+Comment=Start screen: record data, test the model, calibrate
+Exec=bash -c 'S=$(find /media /mnt /run/media "$HOME" -maxdepth 6 -ipath "*/app/gimble_menu.py" 2>/dev/null | head -n1); if [ -n "$S" ]; then cd "$(dirname "$S")/.." && mkdir -p logs && python3 "$S" 2>>logs/gimble_log.txt; else DISPLAY=:0 xmessage "Could not find the Gimble programs (app/gimble_menu.py) on any drive. Is the thumb drive plugged in?" 2>/dev/null; fi'
+Icon=camera-video
+Terminal=false
+Categories=Utility;

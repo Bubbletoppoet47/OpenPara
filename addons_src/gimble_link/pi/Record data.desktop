@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Gimble - Record data
+Comment=Camera + LiDAR, saved to dataset/ for training
+Exec=bash -c 'S=$(find /media /mnt /run/media "$HOME" -maxdepth 6 -ipath "*/app/gimble_pi.py" 2>/dev/null | head -n1); if [ -n "$S" ]; then cd "$(dirname "$S")/.." && mkdir -p logs && python3 "$S" 2>>logs/gimble_log.txt; else DISPLAY=:0 xmessage "Could not find the Gimble programs (app/gimble_pi.py) on any drive. Is the thumb drive plugged in?" 2>/dev/null; fi'
+Icon=media-record
+Terminal=false
+Categories=Utility;

@@ -52,6 +52,8 @@ def make_dialog(win):
             self.found = []
             self.poster = RT.Poster()
             self.models, self.sess = [], []
+            self.extra_models = []              # model files added with Choose a file (not in a Models folder)
+            self.st = None                      # the Gimble's last status
             self._build()
             self.fill_computers()
             self.fill_models()
@@ -93,6 +95,11 @@ def make_dialog(win):
             self.refresh_btn = QPushButton("Refresh")
             self.refresh_btn.clicked.connect(self.refresh_status)
             row.addWidget(self.refresh_btn)
+            self.programs_btn = QPushButton("Update the Gimble's programs...")
+            self.programs_btn.setToolTip("Sends the Gimble programs this OpenPara carries (start screen, Record data, Test model with video "
+                                         "recording ...) to the Gimble. Settings, calibration, the model and everything recorded stay as they are.")
+            self.programs_btn.clicked.connect(self.update_programs)
+            row.addWidget(self.programs_btn)
             row.addStretch(1)
             sl.addLayout(row)
             self.pages.addTab(sp, "Status")
@@ -101,26 +108,36 @@ def make_dialog(win):
             mp = QWidget()
             ml = QVBoxLayout(mp)
             self.model_tree = QTreeWidget()
-            self.model_tree.setHeaderLabels(["Model", "Kind", "Classes", "File"])
+            self.model_tree.setHeaderLabels(["Model", "Kind", "Classes", "From", "File"])
             self.model_tree.setRootIsDecorated(False)
-            self.model_tree.setColumnWidth(0, 190)
-            self.model_tree.setColumnWidth(1, 170)
-            self.model_tree.setColumnWidth(2, 150)
+            self.model_tree.setColumnWidth(0, 170)
+            self.model_tree.setColumnWidth(1, 165)
+            self.model_tree.setColumnWidth(2, 110)
+            self.model_tree.setColumnWidth(3, 130)
             self.model_tree.itemSelectionChanged.connect(self.update_ui)
             ml.addWidget(self.model_tree, 1)
-            ml.addWidget(ui_kit.note("The trained models on this PC, newest first. An Assist model finds boxes only, so the Gimble shows its "
-                                     "distance as 0.0 m (the LiDAR distance beside it still shows). The model that was on the Gimble is kept "
-                                     "one step back. Start Detect again on the Gimble to use the new one."))
+            ml.addWidget(ui_kit.note("The trained models on this PC, newest first: from OpenPara's and the Playground's Models folders, and "
+                                     "any .pt you add with Choose a file. A model that finds boxes only (the Trainer's models) shows the "
+                                     "LiDAR distance on the Gimble but no distance of its own. The model that was on the Gimble is kept "
+                                     "one step back. Start Test model again on the Gimble to use the new one."))
             row = QHBoxLayout()
             self.send_btn = ui_kit.primary(QPushButton("Send to the Gimble"))
             self.send_btn.clicked.connect(self.send_model)
             self.back_btn = QPushButton("Put the previous model back")
             self.back_btn.clicked.connect(self.restore_previous)
+            self.start_btn = QPushButton("Start Test model on the Gimble")
+            self.start_btn.setToolTip("Starts the Test model program on the Gimble's own screen (as its TEST MODEL button does).")
+            self.start_btn.clicked.connect(self.start_test)
+            self.file_btn = QPushButton("Choose a file...")
+            self.file_btn.setToolTip("Any trained model file (.pt) on this PC, wherever it is.")
+            self.file_btn.clicked.connect(self.choose_model)
             self.reload_btn = QPushButton("Refresh list")
             self.reload_btn.clicked.connect(self.fill_models)
             row.addWidget(self.send_btn)
             row.addWidget(self.back_btn)
+            row.addWidget(self.start_btn)
             row.addStretch(1)
+            row.addWidget(self.file_btn)
             row.addWidget(self.reload_btn)
             ml.addLayout(row)
             self.pages.addTab(mp, "Send a model")
@@ -151,9 +168,14 @@ def make_dialog(win):
             self.import_btn = QPushButton("Import into this project...")
             self.import_btn.setToolTip("Opens Import Gimble Session with the folder above.")
             self.import_btn.clicked.connect(self.import_now)
+            self.videos_btn = QPushButton("Download test videos")
+            self.videos_btn.setToolTip("The videos recorded in Test model (REC VIDEO), with their tables of predictions, into "
+                                       "test_videos in the folder above. What is already here is left alone.")
+            self.videos_btn.clicked.connect(self.download_videos)
             row.addWidget(self.get_btn)
             row.addWidget(self.import_btn)
             row.addStretch(1)
+            row.addWidget(self.videos_btn)
             rl.addLayout(row)
             self.pages.addTab(rp, "Recordings")
 
@@ -193,6 +215,10 @@ def make_dialog(win):
             self.refresh_btn.setEnabled(on and idle)
             self.send_btn.setEnabled(on and idle and bool(self.model_tree.selectedItems()))
             self.back_btn.setEnabled(on and idle)
+            self.start_btn.setEnabled(on and idle)
+            self.file_btn.setEnabled(idle)
+            self.programs_btn.setEnabled(on and idle)
+            self.videos_btn.setEnabled(on and idle)
             self.get_btn.setEnabled(on and idle and bool(self.sess))
             self.import_btn.setEnabled(idle)
             self.job_row.setVisible(not idle)
@@ -372,7 +398,40 @@ def make_dialog(win):
 
         # ---------------------------------------------------------------- status
         def show_status(self, st):
+            self.st = st
             self.status_lbl.setText(GC.status_text(st))
+            new = GC.programs_outdated(st)
+            self.programs_btn.setText("Update the Gimble's programs..." if new else "Send the Gimble's programs again...")
+            (ui_kit.primary if new else (lambda b: b.setStyleSheet("")))(self.programs_btn)
+
+        def update_programs(self):
+            st = getattr(self, "st", None) or {}
+            mine, theirs = GC.my_programs_version(), st.get("programs")
+            if st.get("running"):
+                QMessageBox.information(self, "Gimble", f"{', '.join(st['running'])} is running on the Gimble. Close it there first (QUIT), "
+                                        "then press Refresh and try again.")
+                return
+            r = QMessageBox.question(
+                self, "Update the Gimble's programs",
+                f"Send the Gimble programs version {mine} to {self.link.label()}?\n\n"
+                + (f"It has version {theirs} now." if theirs else "It has the programs from before the tidy-up now; they are moved to "
+                   "old/before_tidy/ on the drive, not deleted.")
+                + "\n\nOnly the programs, the launchers and the read-me are written. The calibration and settings, the model, the "
+                  "recordings (dataset), the test videos and the calibration captures are not touched.")
+            if r != QMessageBox.StandardButton.Yes:
+                return
+            link, folder = self.link, self.folder
+
+            def work(progress, stop, step):
+                n, tidied = GC.update_programs(link, folder, progress, stop)
+                return n, tidied, GC.status(link, folder)
+
+            def done(r):
+                n, tidied, st2 = r
+                self.show_status(st2)
+                self.say(f"The Gimble has the programs version {st2.get('programs')} now ({n} files sent"
+                         + (f", {tidied} old files moved to old/before_tidy" if tidied else "") + "). Start it with 'Gimble' on the drive.", "good")
+            self.run("Updating the Gimble's programs", work, done)
 
         def refresh_status(self):
             link, folder = self.link, self.folder
@@ -381,21 +440,51 @@ def make_dialog(win):
 
         # ---------------------------------------------------------------- models
         def fill_models(self):
-            self.models = GC.list_models()
+            self.models = GC.list_models() + [m for m in self.extra_models if os.path.isfile(m["path"])]
+            self.models.sort(key=lambda m: m["ts"], reverse=True)
             self.model_tree.clear()
+            kinds = {"assist": "Assist (boxes only)", "scratch": "Scratch (boxes + distance)", None: "read when it is sent"}
             for m in self.models:
                 cls = m["classes"] or []
-                it = QTreeWidgetItem([m["label"], "Assist (boxes only)" if m["kind"] == "assist" else "Scratch (boxes + distance)",
-                                      ", ".join(str(c) for c in cls[:4]) + (" ..." if len(cls) > 4 else ""), m["file"]])
+                it = QTreeWidgetItem([m["label"], kinds.get(m["kind"], kinds[None]),
+                                      ", ".join(str(c) for c in cls[:4]) + (" ..." if len(cls) > 4 else ""), m.get("where") or "", m["file"]])
                 it.setData(0, Qt.ItemDataRole.UserRole, m)
+                for col in range(5):
+                    it.setToolTip(col, m["path"])
                 self.model_tree.addTopLevelItem(it)
             if self.models:
                 self.model_tree.setCurrentItem(self.model_tree.topLevelItem(0))
             else:
-                it = QTreeWidgetItem(["No trained model yet", "", "", GC.models_dir()])
+                it = QTreeWidgetItem(["No trained model found", "", "", "", "Train one in the Trainer, or use Choose a file..."])
                 it.setDisabled(True)
+                it.setToolTip(0, "Looked in:\n" + "\n".join(d for _w, d in GC.model_folders()))
                 self.model_tree.addTopLevelItem(it)
             self.update_ui()
+
+        def choose_model(self):
+            start = next((d for _w, d in GC.model_folders() if os.path.isdir(d)), os.path.expanduser("~"))
+            path, _ = QFileDialog.getOpenFileName(self, "Choose a trained model", GC.load_settings().get("model_folder") or start,
+                                                  "Trained models (*.pt)")
+            if not path:
+                return
+            path = os.path.abspath(path)
+            GC.save_settings(model_folder=os.path.dirname(path))
+            m = GC.model_entry(path, None, "chosen file")
+            if m is None:
+                self.say(f"{os.path.basename(path)} cannot be read.", "bad")
+                return
+            self.extra_models = [e for e in self.extra_models if os.path.normcase(e["path"]) != os.path.normcase(path)] + [m]
+            self.fill_models()
+            for i in range(self.model_tree.topLevelItemCount()):
+                d = self.model_tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole)
+                if d and os.path.normcase(d["path"]) == os.path.normcase(path):
+                    self.model_tree.setCurrentItem(self.model_tree.topLevelItem(i))
+            self.say(f"Added {os.path.basename(path)} to the list.")
+
+        def start_test(self):
+            link, folder = self.link, self.folder
+            self.run("Starting Test model on the Gimble", lambda p, s, step: GC.start_program(link, folder, "test"),
+                     lambda pid: self.say("Test model is starting on the Gimble's screen. REC VIDEO there records the test.", "good"))
 
         def send_model(self):
             items = self.model_tree.selectedItems()
@@ -420,8 +509,8 @@ def make_dialog(win):
                 self.show_status(st)
                 running = "gimble_detect.py" in st.get("running", [])
                 self.say(f"Sent {m['label']} ({res['mb']} MB) to the Gimble. " +
-                         ("Detect is running there: close it and start it again to use the new model." if running else
-                          "Start Detect on the Gimble to use it."), "good")
+                         ("Test model is running there: close it and start it again to use the new model." if running else
+                          "Start Test model on the Gimble to use it (the button here, or TEST MODEL on its screen)."), "good")
             self.run(f"{m['label']}:", work, done)
 
         def restore_previous(self):
@@ -479,6 +568,18 @@ def make_dialog(win):
                 self.say(f"Downloaded {len(picked)} recording{'s' if len(picked) != 1 else ''} to {dest}  "
                          f"({r[0]} files copied" + (f", {r[1]} were already here" if r[1] else "") + ").", "good")
             self.run("Downloading", lambda progress, stop, step: GC.download_sessions(link, picked, dest, progress, stop), done)
+
+        def download_videos(self):
+            dest, link, folder = self.dest(), self.link, self.folder
+            GC.save_settings(recordings=dest)
+
+            def done(r):
+                if r == (0, 0):
+                    self.say("There are no test videos on the Gimble yet. REC VIDEO in Test model records one.")
+                else:
+                    self.say(f"Test videos are in {os.path.join(dest, 'test_videos')}  ({r[0]} files copied"
+                             + (f", {r[1]} were already here" if r[1] else "") + ").", "good")
+            self.run("Downloading test videos", lambda progress, stop, step: GC.download_videos(link, folder, dest, progress, stop), done)
 
         def import_now(self):
             try:
