@@ -30,6 +30,7 @@ counted and the address is locked out for a while.  It is written from standard 
 import argparse
 import ctypes
 import ctypes.util
+import errno
 import getpass
 import hashlib
 import hmac
@@ -47,7 +48,7 @@ import time
 import zlib
 
 PROTO = 1
-HELPER_VERSION = "1.0"
+HELPER_VERSION = "1.1"
 PORT = 47800
 DISCOVERY_PORT = 47801
 MAGIC = b"OPRH1"
@@ -379,20 +380,80 @@ def log(text):
         pass
 
 
-def local_addresses():
+SO_BINDTODEVICE = 25
+
+
+def interfaces():
+    """The network ports of this computer as [(number, name)], e.g. [(1, 'lo'), (2, 'eth0'), (3, 'wlan0')] (Linux); [] where they
+    cannot be listed."""
+    if not sys.platform.startswith("linux"):
+        return []
+    try:
+        return list(socket.if_nameindex())
+    except (OSError, AttributeError):
+        return []
+
+
+def interface_addresses():
+    """[(port name, IPv4 address, netmask)] of the network ports that have an address (Linux, without the loopback); [] elsewhere."""
+    names = [n for _i, n in interfaces()]
+    if not names:
+        return []
+    import fcntl
     out = []
-    for target in ("192.168.1.1", "10.0.0.1", "8.8.8.8"):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        for name in names:
+            req = struct.pack("256s", name.encode("utf-8")[:15])
+            try:
+                ip = socket.inet_ntoa(fcntl.ioctl(s.fileno(), 0x8915, req)[20:24])            # SIOCGIFADDR
+                mask = socket.inet_ntoa(fcntl.ioctl(s.fileno(), 0x891b, req)[20:24])          # SIOCGIFNETMASK
+            except OSError:
+                continue
+            if not ip.startswith("127."):
+                out.append((name, ip, mask))
+    finally:
+        s.close()
+    return out
+
+
+def local_addresses():
+    """This computer's addresses on its networks.  The one its normal traffic uses (the Wi-Fi of a Raspberry Pi whose wired port goes to
+    an instrument) comes first: that is the one to type on the other computer."""
+    out = []
+    for target in ("8.8.8.8", "192.168.1.1", "10.0.0.1"):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             s.connect((target, 9))
             ip = s.getsockname()[0]
-            if ip not in out and not ip.startswith("127."):
+            if ip not in out and not ip.startswith("127.") and target == "8.8.8.8":
                 out.append(ip)
         except OSError:
             pass
         finally:
             s.close()
+    for _name, ip, _mask in interface_addresses():
+        if ip not in out:
+            out.append(ip)
+    if not out:                                                       # no default route, and not Linux: what a nearby address would use
+        for target in ("192.168.1.1", "10.0.0.1"):
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect((target, 9))
+                ip = s.getsockname()[0]
+                if ip not in out and not ip.startswith("127.") and ip != "0.0.0.0":
+                    out.append(ip)
+            except OSError:
+                pass
+            finally:
+                s.close()
     return out
+
+
+def describe_addresses():
+    """'192.168.1.57 (wlan0), 192.168.1.2 (eth0)' - the address to use first."""
+    names = {ip: name for name, ip, _m in interface_addresses()}
+    return ", ".join(ip + (f" ({names[ip]})" if ip in names else "") for ip in local_addresses())
 
 
 # ====================================================================================================== the screen
@@ -1150,7 +1211,15 @@ class Session(threading.Thread):
         self.reply(h["id"], name=hp.cfg.get("name") or socket.gethostname(), platform=sys.platform, system=platform.system(),
                    release=platform.release(), machine=platform.machine(), user=getpass.getuser(), home=os.path.expanduser("~"),
                    sep=os.sep, python=platform.python_version(), helper=HELPER_VERSION, screen=screen, input=inp,
-                   jpeg=hp.jpeg is not None, files=self.allowed("files"), commands=self.allowed("commands"))
+                   jpeg=hp.jpeg is not None, files=self.allowed("files"), commands=self.allowed("commands"),
+                   script=os.path.abspath(__file__), pid=os.getpid())
+
+    def op_restart(self, h, payload):
+        """Starts this helper again from its file (after OpenPara put a newer one in its place)."""
+        self.need("commands", "Running commands")
+        self.need("files", "Changing files")
+        self.reply(h["id"], ok=True)
+        threading.Timer(0.3, self.helper.restart).start()
 
     # ---- screen
     def op_frame(self, h, payload):
@@ -1431,8 +1500,8 @@ class Helper:
         self.inp_lock = threading.Lock()
         self.size = (1, 1)
         self.jpeg = jpeg_encoder()
-        self.srv = None
-        self.udp = None
+        self.listeners = {}                  # network port (number, name), or None for "all" -> (TCP listener, UDP socket or None)
+        self.per_port = False
         self.running = False
 
     def grab(self):
@@ -1449,77 +1518,162 @@ class Helper:
                 self.inp = make_input()
             return self.inp
 
-    def start(self):
-        self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        if os.name != "nt":
-            self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.srv.bind((self.bind, self.port))
-        self.port = self.srv.getsockname()[1]
-        self.srv.listen(8)
-        self.running = True
-        threading.Thread(target=self.accept_loop, daemon=True).start()
+    # ---- listening.  On Linux there is one listener per network port (Wi-Fi, wired ...), each tied to its port, so that an answer leaves
+    # through the port the question came in by.  Without that, a computer with two ports in the same address range (a Raspberry Pi on a
+    # 192.168.1.x Wi-Fi whose wired port has 192.168.1.2 for an instrument) answers through the wrong one and nobody can connect.
+    def _tcp(self, dev=None):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if os.name != "nt":
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if dev:
+                s.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, dev.encode("utf-8") + b"\0")
+            s.bind(("0.0.0.0" if dev else self.bind, self.port))
+            s.listen(8)
+            s.settimeout(1.0)
+        except OSError:
+            s.close()
+            raise
+        self.port = s.getsockname()[1]
+        return s
+
+    def _udp(self, dev=None):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if dev:
+                s.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, dev.encode("utf-8") + b"\0")
+            s.bind(("0.0.0.0", int(self.cfg.get("discovery_port", DISCOVERY_PORT))))
+            s.settimeout(1.0)
+        except OSError:
+            s.close()
+            raise
+        return s
+
+    def _open(self, key=None):
+        """Starts listening on one network port (key = (number, name)), or on all of them at once (None)."""
+        dev = key[1] if key else None
+        srv = self._tcp(dev)
+        udp = None
         if self.discovery:
             try:
-                self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                self.udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                self.udp.bind(("0.0.0.0", int(self.cfg.get("discovery_port", DISCOVERY_PORT))))
-                threading.Thread(target=self.discovery_loop, daemon=True).start()
+                udp = self._udp(dev)
             except OSError:
-                self.udp = None                  # another helper answers searches already; connecting by address still works
-        return self
+                udp = None                       # another helper answers searches already; connecting by address still works
+        self.listeners[key] = (srv, udp)
+        threading.Thread(target=self.accept_loop, args=(srv,), daemon=True).start()
+        if udp is not None:
+            threading.Thread(target=self.discovery_loop, args=(udp,), daemon=True).start()
 
-    def accept_loop(self):
-        while self.running:
-            try:
-                sock, addr = self.srv.accept()
-            except OSError:
-                break
-            if not self.running:
-                sock.close()
-                break
-            if len(self.sessions) >= 8 or threading.active_count() > 64:      # also: not an endless pile of half-open connections
-                sock.close()
-                continue
-            try:
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            except OSError:
-                pass
-            Session(self, sock, addr).start()
-
-    def discovery_loop(self):
-        while self.running:
-            try:
-                data, addr = self.udp.recvfrom(256)
-            except OSError:
-                break
-            if data.strip() == DISCOVER:
-                ans = {"oprh": PROTO, "name": self.cfg.get("name") or socket.gethostname(), "platform": sys.platform, "port": self.port,
-                       "helper": HELPER_VERSION}
-                try:
-                    self.udp.sendto(json.dumps(ans).encode("utf-8"), addr)
-                except OSError:
-                    pass
-
-    def stop(self):
-        self.running = False
-        for s, kind in ((self.srv, socket.SOCK_STREAM), (self.udp, socket.SOCK_DGRAM)):
+    def _close(self, key):
+        for s in self.listeners.pop(key, ()):
             if s is None:
                 continue
-            try:                                 # a thread that waits in accept() / recvfrom() is woken, so nothing is taken after this
-                port = s.getsockname()[1]
-                k = socket.socket(socket.AF_INET, kind)
-                k.settimeout(1)
-                if kind == socket.SOCK_STREAM:
-                    k.connect(("127.0.0.1" if self.bind == "0.0.0.0" else self.bind, port))
-                else:
-                    k.sendto(b"bye", ("127.0.0.1", port))
-                k.close()
+            try:
+                s.shutdown(socket.SHUT_RDWR)         # wakes a thread that waits on it (Linux); elsewhere its one-second wait ends it
             except OSError:
                 pass
             try:
                 s.close()
             except OSError:
                 pass
+
+    def start(self):
+        self.listeners = {}
+        self.running = True
+        self.per_port = False
+        ports = interfaces() if self.bind == "0.0.0.0" else []
+        for key in ports:
+            try:
+                self._open(key)
+            except PermissionError:                  # an old system that does not let a normal program do this: one listener for all
+                for k in list(self.listeners):
+                    self._close(k)
+                break
+            except OSError as e:
+                if e.errno == errno.EADDRINUSE:      # the port number is taken (the helper is running already): said by the caller
+                    for k in list(self.listeners):
+                        self._close(k)
+                    raise
+                continue                             # this one network port cannot be listened on (it just went away): the others can
+        self.per_port = bool(self.listeners)
+        if self.per_port:
+            threading.Thread(target=self.watch_ports, daemon=True).start()
+        else:
+            self._open(None)
+        return self
+
+    def watch_ports(self):
+        """A network port that appears later (a USB Wi-Fi stick, a phone's tethering) gets its listener; one that is gone loses it."""
+        while self.running:
+            time.sleep(5.0)
+            if not self.running:
+                break
+            now = set(interfaces())
+            for key in [k for k in self.listeners if k not in now]:
+                self._close(key)
+            for key in now:
+                if key not in self.listeners and self.running:
+                    try:
+                        self._open(key)
+                    except OSError:
+                        pass
+
+    def accept_loop(self, srv):
+        while self.running:
+            try:
+                sock, addr = srv.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if not self.running:
+                sock.close()
+                break
+            if len(self.sessions) >= 8 or threading.active_count() > 96:      # also: not an endless pile of half-open connections
+                sock.close()
+                continue
+            try:
+                sock.settimeout(None)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass
+            Session(self, sock, addr).start()
+
+    def discovery_loop(self, udp):
+        while self.running:
+            try:
+                data, addr = udp.recvfrom(256)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if data.strip() == DISCOVER:
+                ans = {"oprh": PROTO, "name": self.cfg.get("name") or socket.gethostname(), "platform": sys.platform, "port": self.port,
+                       "helper": HELPER_VERSION}
+                try:
+                    udp.sendto(json.dumps(ans).encode("utf-8"), addr)
+                except OSError:
+                    pass
+
+    def restart(self):
+        """Ends this helper and starts the one in its file a moment later, on its own (so it survives this one ending)."""
+        code = "import subprocess, sys, time; time.sleep(1.5); subprocess.Popen([sys.executable, sys.argv[1]])"
+        kw = {"creationflags": 0x00000008 | 0x00000200} if os.name == "nt" else {"start_new_session": True}
+        try:
+            subprocess.Popen([sys.executable or "python3", "-c", code, os.path.abspath(__file__)], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
+        except OSError as e:
+            log(f"could not start again after an update ({e}); still running the old helper")
+            return
+        log("starting again (the helper file was updated)")
+        self.stop()
+        os._exit(0)
+
+    def stop(self):
+        self.running = False
+        for key in list(self.listeners):
+            self._close(key)
         for sess in list(self.sessions):
             sess.cleanup()
 
@@ -1636,7 +1790,7 @@ def check():
     except Exception as e:  # noqa: BLE001
         print(f"Keyboard and mouse: NOT available - {e if isinstance(e, RemoteError) else type(e).__name__ + ': ' + str(e)}")
     print("Moving pictures: " + ("JPEG (light)" if jpeg_encoder() else "exact only - installing OpenCV or Pillow here makes video much lighter"))
-    print("Addresses:", ", ".join(local_addresses()) or "none (not on a network?)")
+    print("Addresses:", describe_addresses() or "none (not on a network?)", " - type the first one into OpenPara")
     return size
 
 
@@ -1713,7 +1867,7 @@ def main(argv=None):
     except OSError as e:
         log(f"Could not start: port {cfg.get('port', PORT)} is in use (is the helper already running?)  [{e}]")
         return 1
-    ips = ", ".join(local_addresses()) or "unknown"
+    ips = describe_addresses() or "unknown"
     log(f"OpenPara Remote helper {HELPER_VERSION} is running on {socket.gethostname()}  -  address {ips}, port {hp.port}.  Ctrl+C stops it.")
     try:
         while True:

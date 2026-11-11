@@ -54,9 +54,16 @@ class Link:
             sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
         except socket.gaierror:
             raise RemoteError(f"No computer called '{self.host}' was found. Check the name, or use its address (numbers like 192.168.1.42).")
-        except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError) as e:
-            raise RemoteError(f"{self.host} does not answer on port {self.port}. Is the helper running there, and are both computers on the "
-                              f"same network?  ({getattr(e, 'strerror', None) or e})")
+        except ConnectionRefusedError:
+            raise RemoteError(f"{self.host} does not answer on port {self.port}: that computer was reached, but no helper is listening "
+                              "there. Is the helper running there (and on this port)?")
+        except (TimeoutError, socket.timeout):
+            raise RemoteError(f"{self.host} does not answer on port {self.port} (timed out): nothing came back at all. Is the helper "
+                              f"running there, and is that its address on this network? {where_am_i(self.host)} Networks for guests, "
+                              "some phone hotspots and campus Wi-Fi keep devices apart; a firewall on that computer can block the port too.")
+        except OSError as e:
+            raise RemoteError(f"{self.host} does not answer on port {self.port} ({getattr(e, 'strerror', None) or e}). Is the helper "
+                              f"running there, and are both computers on the same network? {where_am_i(self.host)}")
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sock.settimeout(60)                 # the other side may be asking its person to allow this
@@ -157,6 +164,25 @@ class Link:
             return self.next_msg(q, timeout)
         finally:
             self.end_stream(rid)
+
+    # ---------------------------------------------------------------- the helper itself
+    def helper_outdated(self):
+        """True when the helper on that computer is older than the one this OpenPara carries."""
+        def key(v):
+            return tuple(int(p) if p.isdigit() else 0 for p in str(v or "0").split("."))
+        return key(self.info.get("helper")) < key(H.HELPER_VERSION)
+
+    def update_helper(self):
+        """Puts this OpenPara's helper file in place of the one that runs there and starts it again.  The connection ends; connect again
+        after a few seconds.  The access code and the settings there stay as they are."""
+        script = self.info.get("script")
+        if not script:
+            raise RemoteError("The helper on that computer is too old to be replaced from here. Put the new file there by hand this once "
+                              "(Get the helper), and run it with --install.")
+        if not (self.info.get("files") and self.info.get("commands")):
+            raise RemoteError("Copying files or running commands is switched off on that computer, so its helper cannot be replaced from here.")
+        self.upload(helper_path(), script)
+        self.request("restart")
 
     # ---------------------------------------------------------------- screen, keyboard and mouse
     def frame(self, full=False, lossy=True, quality=70, wait=0.5):
@@ -392,40 +418,75 @@ class Link:
         return self.request("exec", cmd=cmd, cwd=cwd, detach=True)[0].get("pid")
 
 
+def my_addresses():
+    """This PC's own addresses on its networks."""
+    out = list(H.local_addresses())
+    try:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+            if ip not in out and not ip.startswith("127."):
+                out.append(ip)
+    except OSError:
+        pass
+    return out
+
+
+def where_am_i(host):
+    """A sentence that compares this PC's address with the one asked for: most 'no answer' cases are two different address ranges."""
+    mine = my_addresses()
+    if not mine:
+        return "This PC does not seem to be on a network."
+    parts = str(host).split(".")
+    if len(parts) == 4 and all(p.isdigit() for p in parts):
+        near = [ip for ip in mine if ip.split(".")[:3] == parts[:3]]
+        if not near:
+            return (f"This PC is at {', '.join(mine)}, which is a different address range from {host}: they are not on the same network, "
+                    "or that is the address of another network port of that computer.")
+        return f"(This PC is at {near[0]}, in the same range.)"
+    return f"(This PC is at {', '.join(mine)}.)"
+
+
 # ---------------------------------------------------------------- finding helpers on the network
 
 def discover(timeout=1.5, port=H.DISCOVERY_PORT, extra=()):
-    """[{'host', 'port', 'name', 'platform', 'helper'}] of the helpers that answer a search on this network (and at the `extra` addresses)."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    s.settimeout(0.25)
-    targets = {"255.255.255.255"} | set(extra)
-    for ip in H.local_addresses():
-        targets.add(ip.rsplit(".", 1)[0] + ".255")
+    """[{'host', 'port', 'name', 'platform', 'helper'}] of the helpers that answer a search on this network (and at the `extra` addresses).
+    The question goes out through every network adapter of this PC (Wi-Fi, wired, a virtual one), not only the first."""
+    import select
+    socks = []
+    for ip in [None] + my_addresses():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            if ip:
+                s.bind((ip, 0))
+            targets = {"255.255.255.255"} | (set(extra) if ip is None else {ip.rsplit(".", 1)[0] + ".255"})
+            for t in targets:
+                try:
+                    s.sendto(H.DISCOVER, (t, port))
+                except OSError:
+                    pass
+            socks.append(s)
+        except OSError:
+            s.close()
     found = {}
     try:
-        for t in targets:
-            try:
-                s.sendto(H.DISCOVER, (t, port))
-            except OSError:
-                pass
         end = time.time() + timeout
-        while time.time() < end:
-            try:
-                data, addr = s.recvfrom(2048)
-            except socket.timeout:
-                continue
-            except OSError:
-                break
-            try:
-                a = json.loads(data.decode("utf-8"))
-                if a.get("oprh"):
-                    found[(addr[0], int(a["port"]))] = {"host": addr[0], "port": int(a["port"]), "name": str(a.get("name", addr[0]))[:60],
-                                                        "platform": str(a.get("platform", "")), "helper": str(a.get("helper", ""))}
-            except (ValueError, KeyError, TypeError):
-                pass
+        while time.time() < end and socks:
+            ready, _w, _x = select.select(socks, [], [], 0.25)
+            for s in ready:
+                try:
+                    data, addr = s.recvfrom(2048)
+                except OSError:
+                    continue
+                try:
+                    a = json.loads(data.decode("utf-8"))
+                    if a.get("oprh"):
+                        found[(addr[0], int(a["port"]))] = {"host": addr[0], "port": int(a["port"]), "name": str(a.get("name", addr[0]))[:60],
+                                                            "platform": str(a.get("platform", "")), "helper": str(a.get("helper", ""))}
+                except (ValueError, KeyError, TypeError):
+                    pass
     finally:
-        s.close()
+        for s in socks:
+            s.close()
     one = {}                                  # a helper that answered on two addresses (two network cards, or this PC itself) is listed once
     for d in found.values():
         key = (d["name"], d["port"])

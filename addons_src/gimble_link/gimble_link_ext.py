@@ -285,6 +285,8 @@ def make_dialog(win):
                     self.fill_computers()
                 self.update_ui()
                 self.say(err, "bad")
+                self.status_lbl.setText("Could not connect to the Gimble.\n\n" + err)        # the whole reason, where there is room to read it
+                self.pages.setCurrentIndex(0)
                 return
             self.link, self.folder = link, folder
             link.on_closed = lambda why: self.poster.post(lambda: self.link_closed(link, why))

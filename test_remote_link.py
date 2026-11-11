@@ -343,6 +343,85 @@ found = RL.discover(1.0, port=udp_port, extra=["127.0.0.1"])
 assert [(f["name"], f["port"], f["helper"]) for f in found] == [("Test Pi", hp6.port, H.HELPER_VERSION)], found       # once, whatever address answered
 hp6.stop()
 
+# ---- a computer with two network ports in the same address range (the Gimble's Pi: Wi-Fi 192.168.1.x, and 192.168.1.2 on the wired port for
+# the LiDAR).  The helper listens on each port by itself, so its answer leaves by the port the question came in; with one listener for all,
+# the answer went out of the wired port and every connection from the Wi-Fi side timed out.
+import subprocess
+assert H.HELPER_VERSION == "1.1"
+if sys.platform.startswith("linux"):
+    hp8 = H.Helper(cfg, port=0, discovery=False).start()            # all network ports, as the helper normally runs
+    assert hp8.per_port and "lo" in [k[1] for k in hp8.listeners], hp8.listeners
+    l8 = RL.Link("127.0.0.1", hp8.port, "ABCD-EFGH-JKMN").connect(); assert l8.info["name"] == "Test Pi"; l8.close()
+    hp8.stop(); time.sleep(0.2)
+    try:
+        RL.Link("127.0.0.1", hp8.port, "ABCD-EFGH-JKMN", timeout=2).connect(); raise SystemExit("still listening after stop")
+    except RL.RemoteError as e:
+        assert "no helper is listening" in str(e), str(e)
+    for name, ip, mask in H.interface_addresses():
+        assert name and ip.count(".") == 3 and mask.count(".") == 3 and not ip.startswith("127.")
+    assert all(ip in H.describe_addresses() for ip in H.local_addresses())
+have_ip = sys.platform.startswith("linux") and os.geteuid() == 0 and shutil.which("ip") and subprocess.run(["ip", "netns", "list"], capture_output=True).returncode == 0
+if have_ip:
+    tag = str(os.getpid() % 100000)
+    PI, PC, LD = "oppi" + tag, "oppc" + tag, "opld" + tag
+    def sh(cmd):
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        assert r.returncode == 0, (cmd, r.stderr)
+        return r.stdout
+    lab_cfg = tempfile.mkdtemp(prefix="opara_rh3_")
+    hproc = None
+    try:
+        for n in (PI, PC, LD):
+            sh(f"ip netns add {n} && ip -n {n} link set lo up")
+        sh(f"ip link add wl netns {PI} type veth peer name eth0 netns {PC} && ip link add et netns {PI} type veth peer name eth0 netns {LD}")
+        sh(f"ip -n {PI} addr add 192.168.1.57/24 dev wl noprefixroute && ip -n {PI} link set wl up && "
+           f"ip -n {PI} addr add 192.168.1.2/24 dev et noprefixroute && ip -n {PI} link set et up && "
+           f"ip -n {PI} route add 192.168.1.0/24 dev et src 192.168.1.2 metric 100 && "             # the wired port is preferred, as on the Pi
+           f"ip -n {PI} route add 192.168.1.0/24 dev wl src 192.168.1.57 metric 600 && ip -n {PI} route add default via 192.168.1.1 dev wl metric 600")
+        sh(f"ip -n {PC} addr add 192.168.1.10/24 dev eth0 && ip -n {PC} link set eth0 up && ip -n {LD} addr add 192.168.1.62/24 dev eth0 && ip -n {LD} link set eth0 up")
+        env = dict(os.environ, OPRH_CONFIG_DIR=lab_cfg)
+        subprocess.run([sys.executable, H.__file__, "--code", "LABCODE12345", "--name", "Lab Pi", "--status"], env=env, capture_output=True)
+        hproc = subprocess.Popen(["ip", "netns", "exec", PI, sys.executable, H.__file__], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        first = hproc.stdout.readline()
+        assert "address 192.168.1.57 (wl), 192.168.1.2 (et)" in first, first       # the Wi-Fi address first: that is the one to type
+        client = ("import sys; sys.path.insert(0, %r); import remote_link as RL; "
+                  "print('SEARCH', [(d['name'], d['host']) for d in RL.discover(1.5)]); "
+                  "l = RL.Link(sys.argv[1], code='LABCODE12345', timeout=4).connect(); print('CONNECTED', l.label(), l.run('echo hi')); l.close()") % os.path.dirname(H.__file__)
+        for ns, addr in ((PC, "192.168.1.57"), (PC, "192.168.1.2"), (LD, "192.168.1.2")):
+            r = subprocess.run(["ip", "netns", "exec", ns, sys.executable, "-c", client, addr], capture_output=True, text=True, timeout=60)
+            assert "CONNECTED Lab Pi (0, 'hi\\n')" in r.stdout, (ns, addr, r.stdout, r.stderr[-400:])
+            if ns == PC:
+                assert "SEARCH [('Lab Pi', '192.168.1.57')]" in r.stdout, r.stdout       # found by searching, at its Wi-Fi address
+        print("two network ports in one address range: ok", flush=True)
+    finally:
+        if hproc is not None:
+            hproc.kill()
+        for n in (PI, PC, LD):
+            subprocess.run(["ip", "netns", "del", n], capture_output=True)
+        shutil.rmtree(lab_cfg, ignore_errors=True)
+else:
+    print("two network ports in one address range: skipped (needs Linux, root and 'ip netns')", flush=True)
+
+# ---- no answer at all: the message says where this PC is, because two different address ranges are the usual reason
+real_cc = RL.socket.create_connection
+def no_answer(*a, **k):
+    raise RL.socket.timeout("timed out")
+RL.socket.create_connection = no_answer
+RL.my_addresses = lambda: ["10.0.0.5"]
+try:
+    RL.Link("192.168.1.2", code="ABCD-EFGH-JKMN").connect(); raise SystemExit("connected to nothing")
+except RL.RemoteError as e:
+    m = str(e)
+    assert "does not answer on port 47800 (timed out)" in m and "This PC is at 10.0.0.5, which is a different address range from 192.168.1.2" in m, m
+    assert "helper running" in m and "keep devices apart" in m
+RL.my_addresses = lambda: ["192.168.1.10"]
+try:
+    RL.Link("192.168.1.2", code="ABCD-EFGH-JKMN").connect(); raise SystemExit("connected to nothing")
+except RL.RemoteError as e:
+    assert "(This PC is at 192.168.1.10, in the same range.)" in str(e), str(e)
+assert RL.where_am_i("raspberrypi.local") == "(This PC is at 192.168.1.10.)"
+RL.socket.create_connection = real_cc
+
 # ---- the saved computers
 assert RL.load_computers() == []
 RL.remember("Pi", "192.168.1.9"); RL.remember("Laptop", "192.168.1.7", 47800, "CODE1234")

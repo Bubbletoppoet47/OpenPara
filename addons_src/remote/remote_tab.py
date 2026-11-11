@@ -48,6 +48,7 @@ First time (you need to see that computer's screen once, or a second screen plug
      (Windows: use  python  instead of  python3.  If Windows asks whether Python may be reached on private networks, answer Allow.)
   2. Restart that computer (or log out and in). From then on the helper runs by itself.
   3. In OpenPara: File > New Remote Computer, Search this network, pick the computer and type the access code.
+     If the search finds nothing, use Add by address: the helper says its address when it starts (and with --check); use the first one.
 
 Both computers have to be on the same network: your home Wi-Fi, or a hotspot both are joined to.
 
@@ -63,6 +64,11 @@ Good to know
     permission that --install sets up (restart once). If the picture stays black, switch the desktop to X11:
     sudo raspi-config > Advanced Options > Wayland > X11.
 """
+
+
+EMPTY_TITLE = "See and use another computer from here"
+EMPTY_TEXT = ("The other computer runs a small helper program and has an access code. Put the helper on it (Get the helper), start it there "
+              "once, then search this network and connect with the code. Both computers must be on the same Wi-Fi or hotspot.")
 
 
 class Poster(QObject):
@@ -321,6 +327,9 @@ class RemoteTab(QWidget):
         self.history, self.hist_i = [], 0
         self.frames = 0
         self.connecting = False
+        self.updating = 0                   # > 0 while the other computer's helper is being replaced: tries left to connect again
+        self.was_updating = False
+        self.current = None
         self.parent_dir = None
         self.screen_on = False              # the Screen page is the one being looked at (read by the frame thread)
         self.fast = True
@@ -404,6 +413,12 @@ class RemoteTab(QWidget):
         self.quality.currentIndexChanged.connect(lambda _i: setattr(self, "fast", self.quality.currentData() == "fast"))
         row.addWidget(self.quality, 1)
         ll.addLayout(row)
+        self.update_btn = QPushButton("Update its helper")
+        self.update_btn.setToolTip("The helper on that computer is older than this OpenPara's. This sends the new one over and starts it "
+                                   "there; the connection comes back after a few seconds. The access code stays the same.")
+        self.update_btn.clicked.connect(self.update_helper)
+        self.update_btn.hide()
+        ll.addWidget(self.update_btn)
         self.helper_btn = QPushButton("Get the helper...")
         self.helper_btn.setToolTip("Saves the helper program and its instructions to a folder or USB drive, for the other computer.")
         self.helper_btn.clicked.connect(self.save_helper)
@@ -411,11 +426,7 @@ class RemoteTab(QWidget):
         split.addWidget(left)
 
         self.stack = QStackedWidget()
-        self.empty = ui_kit.EmptyState(
-            "See and use another computer from here",
-            "The other computer runs a small helper program and has an access code. Put the helper on it (Get the helper), start it there "
-            "once, then search this network and connect with the code. Both computers must be on the same Wi-Fi or hotspot.",
-            [("Search this network", self.search), ("Get the helper...", self.save_helper)])
+        self.empty = ui_kit.EmptyState(EMPTY_TITLE, EMPTY_TEXT, [("Search this network", self.search), ("Get the helper...", self.save_helper)])
         self.stack.addWidget(self.empty)
         self.pages = QTabWidget()
         self.pages.currentChanged.connect(self.on_page)
@@ -684,6 +695,7 @@ class RemoteTab(QWidget):
     def start_connect(self, d, code, keep=False):
         self.connecting = True
         self.say(f"Connecting to {d.get('name') or d['host']} ...")
+        self.empty.set_text(EMPTY_TITLE, EMPTY_TEXT)
         self.update_ui()
         link = RL.Link(d["host"], d.get("port", RL.PORT), code)
 
@@ -697,9 +709,17 @@ class RemoteTab(QWidget):
 
     def connect_done(self, link, d, code, keep, err):
         self.connecting = False
+        if err and self.updating:                          # the new helper is not up yet: try again shortly
+            self.update_ui()
+            self.say("Waiting for the helper there to start again ...")
+            QTimer.singleShot(2500, self.reconnect_after_update)
+            return
+        was_updating, self.was_updating = self.was_updating, False
         if err:
             self.update_ui()
             self.say(err, "bad")
+            if "does not answer" in err or "did not get through" in err:      # the whole reason, where there is room to read it
+                self.empty.set_text(f"Could not connect to {d.get('name') or d['host']}", err)
             if "access code" in err.lower() and "many" not in err.lower():
                 if d.get("code"):                           # a remembered code that no longer works is dropped
                     RL.remember(d.get("name") or d["host"], d["host"], d.get("port", RL.PORT))
@@ -712,6 +732,8 @@ class RemoteTab(QWidget):
         info = link.info
         RL.remember(info.get("name") or d.get("name") or d["host"], d["host"], d.get("port", RL.PORT), code if (keep or d.get("code")) else None)
         self.refresh_list()
+        self.current = (dict(d), code, bool(keep or d.get("code")))       # for connecting again by itself after its helper was updated
+        self.update_btn.setVisible(link.helper_outdated())
         self.repeat_keys = info.get("platform") == "win32"
         self.cwd = info.get("home")
         self.rdir = info.get("home") or ""
@@ -719,7 +741,11 @@ class RemoteTab(QWidget):
         self.show_info()
         self.update_ui()
         self.retitle()
-        self.say(f"Connected to {link.label()}.", "good")
+        if was_updating:
+            self.updating = 0
+            self.say(f"Connected to {link.label()} again; its helper is now version {info.get('helper')}.", "good")
+        else:
+            self.say(f"Connected to {link.label()}.", "good")
         self.view.clear()
         self.frames = 0
         threading.Thread(target=self.frame_loop, args=(link,), daemon=True).start()
@@ -748,6 +774,8 @@ class RemoteTab(QWidget):
             link.on_closed = None
             link.close()
         self.cmd_id = None
+        self.updating, self.was_updating = 0, False
+        self.update_btn.hide()
         self.info_lbl.setText("")
         self.update_ui()
         self.retitle()
@@ -758,9 +786,46 @@ class RemoteTab(QWidget):
         self.link = None
         self.cmd_id = None
         self.info_lbl.setText("")
+        self.update_btn.hide()
         self.update_ui()
         self.retitle()
-        self.say(why, "bad")
+        if self.updating:
+            self.say("The helper there is starting again ...")
+            QTimer.singleShot(3000, self.reconnect_after_update)
+        else:
+            self.say(why, "bad")
+
+    # ============================================================================ a newer helper for the other computer
+    def update_helper(self):
+        if not self.connected() or self.updating or self.job is not None:
+            return
+        r = QMessageBox.question(self, "Update its helper",
+                                 f"Send this OpenPara's helper (version {RL.H.HELPER_VERSION}) to {self.link.label()} in place of the one "
+                                 f"running there (version {self.link.info.get('helper')}), and start it again?\n\nThe connection ends "
+                                 "for a few seconds and comes back by itself. The access code stays the same.")
+        if r != QMessageBox.StandardButton.Yes:
+            return
+        link = self.link
+        self.updating, self.was_updating = 5, True         # tries to connect again
+        self.say("Sending the new helper ...")
+
+        def work():
+            try:
+                link.update_helper()
+            except RL.RemoteError as e:
+                self.poster.post(lambda e=e: self.update_failed(str(e)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def update_failed(self, err):
+        self.updating, self.was_updating = 0, False
+        self.say(err, "bad")
+
+    def reconnect_after_update(self):
+        if not self.updating or self.connected() or self.connecting or not self.current:
+            return
+        self.updating -= 1
+        d, code, keep = self.current
+        self.start_connect(d, code, keep)
 
     # ============================================================================ the screen
     def on_page(self, _i=None):

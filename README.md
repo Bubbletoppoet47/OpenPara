@@ -98,7 +98,13 @@ keyboard and mouse, copies files to and from it and runs commands there: a Raspb
   and makes the helper start with every login; `--check` says what works there (screen, keyboard and mouse); `--new-code`, `--uninstall`,
   `--ask`, `--no-input`, `--no-files`, `--no-commands`, `--no-screen` do what they say.
 - Both computers must be on the same network (home Wi-Fi, or a hotspot both joined). "Search this network" finds helpers; "Add by address"
-  works where a network blocks searching. Ports: TCP 47800, UDP 47801.
+  works where a network blocks searching. Ports: TCP 47800, UDP 47801. The helper says its addresses when it starts and with `--check`;
+  the first one is the one to type.
+- On Linux the helper listens on every network port by itself, so an answer leaves through the port the question came in by. This matters
+  for the Gimble's Pi: its wired port has 192.168.1.2 for the LiDAR, and on a Wi-Fi that also uses 192.168.1.x a single listener answered
+  through the wired port, so nothing could connect (helper 1.0; fixed in 1.1, `test_remote_link.py` rebuilds that network).
+- When the helper on the other computer is older than OpenPara's, the tab offers "Update its helper": the new file is sent over, started
+  there, and the tab connects again. Helper 1.0 cannot do this yet, so it has to be replaced by hand once.
 - Whoever has the access code has full control of that account, so it is for computers of your own on a network you trust; never forward
   the port to the internet. Both sides prove the code with SPAKE2 (a wrong guess or a listener gets nothing to test codes against), the
   rest is encrypted and checked, five wrong codes lock an address out for five minutes, and every connection is logged on the other

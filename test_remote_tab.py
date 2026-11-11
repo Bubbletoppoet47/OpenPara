@@ -241,9 +241,56 @@ wait(lambda: w.link is None, what="lost connection")
 assert "was lost" in w.status.text() and w.stack.currentWidget() is w.empty and w.title() == "Remote Computer" and w.connect_btn.text() == "Connect"
 w.connect_selected(); wait(lambda: not w.connecting)
 assert not w.connected() and "does not answer" in w.status.text() and "helper running" in w.status.text(), w.status.text()
+assert w.empty.title.text() == "Could not connect to Bench Pi" and "no helper is listening" in w.empty.text.text(), "the whole reason is where it can be read"
 hp = H.Helper(cfg, port=hp.port, bind="127.0.0.1", discovery=False); hp.screen, hp.inp, hp.jpeg = FakeScreen(), FakeInput(), None; hp.start()
 n = len(notes); w.connect_selected(); wait(w.connected, what="reconnect"); assert len(notes) == n, "the remembered code was used"
+assert w.empty.title.text() == RT.EMPTY_TITLE, "the earlier problem is not shown any more"
 wait(same, what="picture after reconnect")
+
+# ---- an older helper on the other computer: offered an update, sent over, started again there, and the tab connects again by itself
+import subprocess, socket as _socket
+assert w.update_btn.isHidden(), "the helper there is the current one: nothing to update"
+w.toggle_connect()
+OLD = os.path.join(D, "old_helper"); os.makedirs(OLD)
+old_src = open(H.__file__, encoding="utf-8").read().replace(f'HELPER_VERSION = "{H.HELPER_VERSION}"', 'HELPER_VERSION = "0.9"')
+assert 'HELPER_VERSION = "0.9"' in old_src
+open(os.path.join(OLD, "openpara_remote_helper.py"), "w", encoding="utf-8").write(old_src)
+k = _socket.socket(); k.bind(("127.0.0.1", 0)); free_port = k.getsockname()[1]; k.close()
+env = dict(os.environ, OPRH_CONFIG_DIR=os.path.join(D, "old_cfg"))
+subprocess.run([sys.executable, os.path.join(OLD, "openpara_remote_helper.py"), "--code", "OLDCODE12345", "--name", "Old laptop", "--port", str(free_port), "--status"],
+               env=env, capture_output=True)
+proc = subprocess.Popen([sys.executable, os.path.join(OLD, "openpara_remote_helper.py")], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+try:
+    RL.remember("Old laptop", "127.0.0.1", free_port, "OLDCODE12345"); w.refresh_list()
+    for i in range(w.list.count()):
+        if w.list.item(i).data(Qt.ItemDataRole.UserRole)["port"] == free_port:
+            w.list.setCurrentRow(i)
+    for _ in range(40):                                   # until that program listens
+        try:
+            _socket.create_connection(("127.0.0.1", free_port), timeout=0.5).close(); break
+        except OSError:
+            time.sleep(0.25)
+    w.connect_selected(); wait(w.connected, what="connect to the old helper")
+    assert w.link.info["helper"] == "0.9" and w.link.helper_outdated() and not w.update_btn.isHidden()
+    n = len(ASK); w.update_helper()
+    assert len(ASK) == n + 1 and "version 0.9" in ASK[-1] and H.HELPER_VERSION in ASK[-1] and "access code stays the same" in ASK[-1]
+    wait(lambda: w.link is None, 20, "the old helper ends")
+    assert "starting again" in w.status.text()
+    wait(lambda: w.connected() and not w.updating, 40, "connected again after the update")
+    assert w.link.info["helper"] == H.HELPER_VERSION and w.update_btn.isHidden() and f"its helper is now version {H.HELPER_VERSION}" in w.status.text()
+    assert open(os.path.join(OLD, "openpara_remote_helper.py"), encoding="utf-8").read() == open(H.__file__, encoding="utf-8").read()
+    assert RL.load_computers()[0].get("code") == "OLDCODE12345", "the remembered code is kept"
+    pid = w.link.info["pid"]; assert pid != proc.pid
+    w.toggle_connect()
+finally:
+    proc.kill()
+    try:
+        os.kill(pid, 15)
+    except (NameError, OSError):
+        pass
+w.remove_selected()
+assert w.list.count() == 1 and "Bench Pi" in w.list.item(0).text()
+w.list.setCurrentRow(0); w.connect_selected(); wait(w.connected, what="back to the first computer")
 
 # ---- Disconnect; closing the tab ends the connection
 w.toggle_connect(); assert not w.connected() and w.status.text() == "Disconnected." and w.list.isEnabled()
