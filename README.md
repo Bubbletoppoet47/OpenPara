@@ -72,9 +72,9 @@ follows the newest `dev-<version>` pre-release instead of the newest release.
   normal OpenPara offers releases.
 - A Playground build has two modes (Help > Playground mode; it asks to restart):
   - **Testing** (the default): exactly what the next release would be. Only the add-ons that ship are available, so the menus match
-    OpenPara. Those are the add-ons in `addons_src/` except the ids in `addons.NOT_RELEASED` (now Visualize, `render`, and Motor Control,
-    `motor`): they are built for the Playground and offered there in Full dev mode only, and a release carries neither their files nor
-    their menus. Taking an id out of that list releases the add-on.
+    OpenPara. Those are the add-ons in `addons_src/` except the ids in `addons.NOT_RELEASED` (now Visualize, `render`; Motor Control,
+    `motor`; Remote Computer, `remote`; and the Gimble connection, `gimble_link`): they are built for the Playground and offered there in
+    Full dev mode only, and a release carries neither their files nor their menus. Taking an id out of that list releases the add-on.
   - **Full dev**: no restrictions. It also loads `dev_addons/` (unreleased add-ons: 3D FEA of parametric parts (`solid_fea`), voxel/mesh FEA, mesh, circuits ...; Simulation and Parametric Studies were released in 0.8.6 and live in `addons_src/`) and `shared/` (code they
     share).
   A release never contains `dev_addons/` or `shared/`.
@@ -86,6 +86,34 @@ follows the newest `dev-<version>` pre-release instead of the newest release.
   `tools/build_addons.py dist --release`). Users on the normal program never see `dev-` pre-releases.
 - What makes a build a Playground build is `channel.json` next to `channel.py` (written by the workflow); `OPARA_CHANNEL=playground` does the
   same for a source checkout.
+
+
+## Remote Computer and the Gimble connection (Playground, Full dev mode)
+
+**Remote Computer** (`addons_src/remote/`, File > New Remote Computer) shows the screen of another computer on your network, uses its
+keyboard and mouse, copies files to and from it and runs commands there: a Raspberry Pi, or a laptop whose screen is broken.
+
+- The other computer runs one file, `openpara_remote_helper.py` (Python 3.8+, standard library only). "Get the helper..." in the tab saves
+  it with a read-me to a folder or USB drive. On that computer: `python3 openpara_remote_helper.py --install` shows an **access code** once
+  and makes the helper start with every login; `--check` says what works there (screen, keyboard and mouse); `--new-code`, `--uninstall`,
+  `--ask`, `--no-input`, `--no-files`, `--no-commands`, `--no-screen` do what they say.
+- Both computers must be on the same network (home Wi-Fi, or a hotspot both joined). "Search this network" finds helpers; "Add by address"
+  works where a network blocks searching. Ports: TCP 47800, UDP 47801.
+- Whoever has the access code has full control of that account, so it is for computers of your own on a network you trust; never forward
+  the port to the internet. Both sides prove the code with SPAKE2 (a wrong guess or a listener gets nothing to test codes against), the
+  rest is encrypted and checked, five wrong codes lock an address out for five minutes, and every connection is logged on the other
+  computer. It is built from standard parts but has had no security review.
+- What is tested: the whole path on Linux with an X11 desktop (`test_remote_link.py`, `test_remote_tab.py`). The Windows back end (GDI
+  screen, SendInput) and the Wayland back end (`grim` + `/dev/uinput`, for Raspberry Pi OS) are written but have not run on real machines;
+  the Playground build prints what `--check` finds on its Windows runner. A Mac can only be reached for files and commands.
+
+**Gimble connection** (`addons_src/gimble_link/`, the Annotator's File menu: Gimble: Send a Model / Download Recordings / Status) works
+through that helper on the Gimble rig's Raspberry Pi, so the thumb drive stays in the Pi. It finds the Gimble folder (the one with
+`gimble_pi.py` and `gimble_detect.py`), converts a model of the Annotator's Models folder (Assist or Scratch) to `gimble_model.onnx` +
+`gimble_model.json` in a job of its own (`gimble_export_job.py`; the converted model is compared with the original before it is sent)
+and puts it in `model/`; the model that was there moves to `model/previous/` and can be put back. An Assist model has no distance, so the
+Pi shows 0.0 m for it. Recordings are copied from `dataset/` (files already on the PC are skipped). The Gimble's own programs are never
+changed. It needs the Annotator's packages (torch, ultralytics) and downloads onnx and onnxruntime.
 
 
 ## For contributors

@@ -100,7 +100,7 @@ jobs:
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "add-ons ok")) { Report "add-on install failed (exit $LASTEXITCODE)" $out; exit 1 }
-          foreach ($f in "addon-render.zip", "addon-motor.zip") { if (Test-Path "dist\$f") { throw "an add-on that is not released is in the release: $f" } }
+          foreach ($f in "addon-render.zip", "addon-motor.zip", "addon-remote.zip", "addon-gimble_link.zip") { if (Test-Path "dist\$f") { throw "an add-on that is not released is in the release: $f" } }
           # 2b. the Annotator's AI packages (torch, torchvision, ultralytics, OpenCV ...) really load from the add-on folder, after Qt (as in the program)
           Push-Location build\OpenPara\app
           $out = & $py -c "import addons; addons.activate(); from PyQt6 import QtWidgets; import cv2, torch, torchvision; from ultralytics import YOLO; print('ai ok', torch.__version__)" 2>&1

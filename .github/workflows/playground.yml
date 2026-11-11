@@ -110,14 +110,21 @@ jobs:
           Push-Location build\OpenPara\app
           $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_addons"
           $env:OPARA_ADDON_BASE = "file:///" + ($dist -replace "\\", "/") + "/"
-          $env:OPARA_PLAYGROUND_MODE = "full"          # the add-ons that are not released yet (Visualize, Motor Control) are offered only in Full dev mode
-          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); addons.install('annotator'); addons.install('annotator_gimble'); addons.install('trainer'); addons.install('simulation'); addons.install('parametric'); addons.install('render'); addons.install('motor'); import gpd_app, partgen_ext, truss_tab; addons.activate(); import gmsh, sim_tab, physics_tab, beam_tab, cfd_tab, study_ext, study_tab, render_studio, motor_tab; assert all(addons.status(a)=='installed' for a in ('partgen','truss','annotator','annotator_gimble','trainer','simulation','parametric','render','motor')); print('add-ons ok')" 2>&1
+          $env:OPARA_PLAYGROUND_MODE = "full"          # the add-ons that are not released yet (Visualize, Motor Control, Remote Computer, Gimble connection) are offered only in Full dev mode
+          $out = & $py -c "import addons; addons.install('partgen'); addons.install('truss'); addons.install('annotator'); addons.install('annotator_gimble'); addons.install('trainer'); addons.install('simulation'); addons.install('parametric'); addons.install('render'); addons.install('motor'); addons.install('remote'); addons.install('gimble_link'); import gpd_app, partgen_ext, truss_tab; addons.activate(); import gmsh, sim_tab, physics_tab, beam_tab, cfd_tab, study_ext, study_tab, render_studio, motor_tab, remote_tab, remote_link, openpara_remote_helper, gimble_core, gimble_link_ext, onnx, onnxruntime; assert all(addons.status(a)=='installed' for a in ('partgen','truss','annotator','annotator_gimble','trainer','simulation','parametric','render','motor','remote','gimble_link')); print('add-ons ok')" 2>&1
           Pop-Location
           Remove-Item Env:OPARA_ADDON_BASE
           Remove-Item Env:OPARA_PLAYGROUND_MODE
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "add-ons ok")) { Report "add-on install failed (exit $LASTEXITCODE)" $out; exit 1 }
+          # 2a. for information only (never fails the build): what the Remote helper can do on this Windows, and its own test
+          $out = & $py addons_src\remote\openpara_remote_helper.py --check 2>&1
+          Write-Host "---- Remote helper --check on Windows ----"
+          Write-Host ($out | Out-String)
+          $out = & $py test_remote_link.py 2>&1
+          Write-Host "---- test_remote_link.py on Windows (last lines) ----"
+          Write-Host (($out | Select-Object -Last 12) | Out-String)
           # 2b. the Annotator's AI packages (torch, torchvision, ultralytics, OpenCV ...) really load from the add-on folder, after Qt (as in the program)
           Push-Location build\OpenPara\app
           $out = & $py -c "import addons; addons.activate(); from PyQt6 import QtWidgets; import cv2, torch, torchvision; from ultralytics import YOLO; print('ai ok', torch.__version__)" 2>&1

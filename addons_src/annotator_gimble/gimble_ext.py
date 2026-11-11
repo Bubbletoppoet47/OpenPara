@@ -3,14 +3,16 @@ depth/), or the dataset folder holding several of them.  Re-importing only adds 
 disturbed.  The annotator keeps no Gimble code of its own except the reader in annotator_core (Project.import_gimble_session)."""
 
 
-def import_gimble_session(win):
+def import_gimble_session(win, path=None):
+    """path: a session folder or a folder of sessions to import without asking for one (the Gimble connection add-on gives the folder it
+    downloaded the recordings to)."""
     import os
     import threading
     import annotator_core as ac
     import qtk
     if not win.ensure_saved("Importing a session puts a copy of its photos in the project."):
         return
-    path = qtk.ask_dir(win, "Select a Gimble session folder (or the dataset folder)")
+    path = path or qtk.ask_dir(win, "Select a Gimble session folder (or the dataset folder)")
     if not path:
         return
     if ac.is_gimble_session(path):

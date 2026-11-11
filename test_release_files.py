@@ -16,7 +16,7 @@ import addons, version
 sys.path.insert(0, os.path.join(HERE, "tools"))
 import build_addons
 pg = open(os.path.join(HERE, ".github", "workflows", "playground.yml"), encoding="utf-8").read()
-assert build_addons.not_released() == addons.NOT_RELEASED == ("render", "motor")
+assert build_addons.not_released() == addons.NOT_RELEASED == ("render", "motor", "remote", "gimble_link")
 released = sorted(a for a in os.listdir(os.path.join(HERE, "addons_src")) if a not in addons.NOT_RELEASED)
 assert released == ["annotator", "annotator_gimble", "parametric", "partgen", "simulation", "trainer", "truss"], released
 out = tempfile.mkdtemp(prefix="opara_work_")
@@ -25,7 +25,7 @@ try:
     assert sorted(idx["addons"]) == released and idx["core"] == version.__version__
     assert sorted(f for f in os.listdir(os.path.join(out, "rel")) if f.endswith(".zip")) == [f"addon-{a}.zip" for a in released]
     full = build_addons.build(os.path.join(out, "all"))
-    assert set(full["addons"]) == set(released) | {"render", "motor"}, "a Playground build carries every add-on"
+    assert set(full["addons"]) == set(released) | {"render", "motor", "remote", "gimble_link"}, "a Playground build carries every add-on"
     for a in released:                                   # each manifest is complete (the dialog and the installer read it) and says this version
         import zipfile
         m = json.loads(zipfile.ZipFile(os.path.join(out, "rel", f"addon-{a}.zip")).read("addon.json"))

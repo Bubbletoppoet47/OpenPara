@@ -1,0 +1,38 @@
+{
+ "id": "gimble_link",
+ "name": "Gimble connection for the Annotator",
+ "version": "0.8.6",
+ "description": "Adds File > Gimble to the Annotator: send a trained model to the Gimble rig's Raspberry Pi in the form its Detect program reads, download its recordings and see its status, over the network. Needs the Annotator and Remote Computer add-ons, and the Remote helper running on the Pi. Playground only.",
+ "requires": [
+  {
+   "pip": "onnx==1.23.2",
+   "import": "onnx"
+  },
+  {
+   "pip": "onnxruntime==1.31.1",
+   "import": "onnxruntime"
+  },
+  {
+   "pip": "protobuf==7.36.2",
+   "import": "google.protobuf"
+  },
+  {
+   "pip": "ml_dtypes==0.6.0",
+   "import": "ml_dtypes"
+  },
+  {
+   "pip": "flatbuffers==25.12.19",
+   "import": "flatbuffers"
+  },
+  {
+   "pip": "packaging==26.3",
+   "import": "packaging"
+  },
+  {
+   "pip": "typing_extensions==4.16.0",
+   "import": "typing_extensions"
+  }
+ ],
+ "tabs": [],
+ "extension": "gimble_link_ext"
+}

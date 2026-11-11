@@ -1,0 +1,19 @@
+{
+ "id": "remote",
+ "name": "Remote Computer",
+ "version": "0.8.6",
+ "description": "See the screen of another computer on your network, use its keyboard and mouse, copy files to and from it and run commands there - a Raspberry Pi, or a laptop whose screen is broken. The other computer runs a small helper program and has an access code. Playground only.",
+ "requires": [],
+ "tabs": [
+  {
+   "kind": "remote",
+   "label": "Remote Computer",
+   "short": "Remote",
+   "module": "remote_tab",
+   "factory": "make_tab",
+   "args": [
+    "host"
+   ]
+  }
+ ]
+}

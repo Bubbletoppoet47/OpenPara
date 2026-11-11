@@ -71,11 +71,13 @@ PICKS.update({
                     '<circle class="a" cx="6.500" cy="7" r="1.400"/><circle class="a" cx="19" cy="17" r="1.400"/>', 'ai'),
     'tab_motor': ('<circle class="b" cx="12" cy="12" r="8.500"/><circle class="a" cx="12" cy="12" r="2.200"/>'
                   '<path class="n" d="M12 3.500v4M12 16.500v4M3.500 12h4M16.500 12h4"/>', 'cfg'),
+    'tab_remote': ('<rect class="b" x="2.500" y="4" width="19" height="13" rx="1.500"/><path class="l" d="M8 20.500h8M12 17v3.500"/>'
+                   '<path class="a" d="M10 7.500l5.500 3.800-2.500.500-1.100 2.400z"/>', 'cfg'),
 })
 # the kind of a document tab (its manifest "kind"; "part" / "assembly" for the program's own) -> icon key.  A manifest may name another with "icon".
 TAB_KIND = {"part": "tab_part", "assembly": "assembly", "truss": "tab_truss", "visualize": "render", "render": "render", "beam": "tab_beam", "fea": "tab_fea",
             "cfd": "tab_cfd", "study": "tab_study", "tet": "tab_tet", "voxel": "tab_voxel", "solid": "tab_solid", "mesh": "tab_mesh",
-            "annotator": "tab_annotator", "trainer": "tab_trainer", "motor": "tab_motor"}
+            "annotator": "tab_annotator", "trainer": "tab_trainer", "motor": "tab_motor", "remote": "tab_remote"}
 
 
 def for_tab(kind, key=None):
