@@ -10,6 +10,7 @@ import job_common as jc  # noqa: E402
 
 def main():
     job = jc.load_job()
+    print("Loading PyTorch and Ultralytics ...", flush=True)        # the first line at once: importing them takes a while
     from ultralytics import YOLO
     size = job["size"]
     start = job.get("start_weights")

@@ -12,6 +12,7 @@ import time
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                             QProgressBar,
                              QListWidget,
                              QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QSplitter, QTableWidget,
                              QTableWidgetItem, QVBoxLayout, QWidget)
@@ -125,6 +126,9 @@ class TrainerTab(QWidget):
         self.job = None
         self.env = None
         self._bg = False
+        self._prep = None                                      # while a run is being prepared: {'stop', 'stage', 'done', 'total', 't0', ...}
+        self._closed = False
+        self._distort_pictures = 0
         self._loading = False
         self.ac, self.dz, self.sz, self.ml = tc.libs()
         self.cfg = self.sz.load_config()
@@ -153,6 +157,10 @@ class TrainerTab(QWidget):
     def running(self):
         return self.job is not None and self.job.poll() is None
 
+    def preparing(self):
+        """True between pressing Start training and the training program starting (distorted copies, the run's copy of the data)."""
+        return self._prep is not None
+
     def can_close(self):
         if self.running():
             r = QMessageBox.question(self, "Training is running", "A model is still training. Closing this tab stops it and nothing is saved from the run.\n\nStop training and close?",
@@ -160,6 +168,9 @@ class TrainerTab(QWidget):
             if r != QMessageBox.StandardButton.Yes:
                 return False
             self.job.stop()
+        if self.preparing():
+            QMessageBox.information(self, "Please wait", "The training data is still being prepared. Press Cancel to stop that, then close the tab.")
+            return False
         if self._bg:
             QMessageBox.information(self, "Please wait", "An import or export is still running. Close the tab when it has finished.")
             return False
@@ -167,6 +178,9 @@ class TrainerTab(QWidget):
 
     def shutdown(self):
         self.timer.stop()
+        self._closed = True
+        if self._prep:
+            self._prep["stop"] = True                          # the preparation thread ends at its next picture
         if self.running():
             self.job.stop()
         if self.temp_root:
@@ -176,7 +190,7 @@ class TrainerTab(QWidget):
         """Gives an unsaved project its folder (everything is copied there); Save As copies a saved one."""
         if self.temp_root is None and not as_new:
             return True
-        if self.running() or self._bg:
+        if self.running() or self._bg or self.preparing():
             QMessageBox.information(self, "Save", "Wait for the training / import to finish, then save.")
             return False
         start = (self.path or "Trainer") if as_new else "Trainer.training"
@@ -310,6 +324,9 @@ class TrainerTab(QWidget):
         form.addRow(hint("count"))
         dv.addWidget(self.dist_box)
         dv.addWidget(ui_kit.note("Copies are made when training starts (and again if you change these settings). Validation pictures are never distorted."))
+        self.dist_note = QLabel("")                            # how much work the next start has: the copies still to make
+        self.dist_note.setWordWrap(True)
+        dv.addWidget(self.dist_note)
         btn = QPushButton("Delete the distorted copies")
         btn.clicked.connect(self.clear_distortions)
         dv.addWidget(btn)
@@ -410,7 +427,12 @@ class TrainerTab(QWidget):
             row.addWidget(b)
         row.addStretch(1)
         rv.addLayout(row)
+        self.prep_bar = QProgressBar()                         # shown while a run is being prepared (before the training program starts)
+        self.prep_bar.setTextVisible(True)
+        self.prep_bar.setVisible(False)
+        rv.addWidget(self.prep_bar)
         self.run_label = QLabel("")
+        self.run_label.setWordWrap(True)
         rv.addWidget(self.run_label)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -533,6 +555,8 @@ class TrainerTab(QWidget):
         chosen = self._chosen_classes()
         s = self.tp.summary(chosen)
         total = len(self.tp.annotated_ids())
+        self._distort_pictures = s["distort_pictures"]
+        self._dist_note()
         if not total:
             self.data_info.setText("No pictures yet. Import a dataset zip made by the Annotator (or another Trainer): Import dataset zip... above.")
             self.refresh_bar()
@@ -588,6 +612,20 @@ class TrainerTab(QWidget):
         self.tp.set_settings({"distortions": {"enabled": self.dist_on.isChecked(), "count": self.dist_count.value(), "ranges": ranges,
                                               "blur_chance": self.dist_spins["blur_chance"].value(),
                                               "types": {k: c.isChecked() for k, c in self.dist_checks.items()}}})
+        self._dist_note()
+
+    def _dist_note(self):
+        """Says what the next start has to make, so a long wait is known before Start training is pressed."""
+        p = self.tp.distortion_plan(self._distort_pictures)
+        if not p["enabled"] or not p["pictures"]:
+            self.dist_note.setText("")
+        elif p["to_make"] == 0:
+            self.dist_note.setText(f"All {p['pictures'] * p['count']:,} copies are made ({p['pictures']:,} training pictures x {p['count']}). "
+                                   "The next training starts without making any.")
+        else:
+            some = f" {p['ready']:,} pictures already have theirs." if p["ready"] else ""
+            self.dist_note.setText(f"The next training first makes {p['to_make']:,} copies ({p['pictures'] - p['ready']:,} training pictures x {p['count']}).{some} "
+                                   "That can take minutes; it shows its progress and can be cancelled, and it is only done once.")
 
     def _type_changed(self):
         if self._loading:
@@ -661,12 +699,16 @@ class TrainerTab(QWidget):
             self._model_changed()
 
     def clear_distortions(self):
+        if self.preparing() or self.running():
+            QMessageBox.information(self, "Distorted copies", "Wait for the training to finish (or stop it) first.")
+            return
         if QMessageBox.question(self, "Distorted copies", "Delete all distorted copies? They are made again when the next training starts.") \
                 == QMessageBox.StandardButton.Yes:
             self.tp.clear_distortions()
             self.tp.meta.pop("distortion_sig", None)
             self.tp.save()
             self.status.setText("Distorted copies deleted.")
+            self._dist_note()
 
     def _ensure_me(self):
         if not self.me:
@@ -828,10 +870,12 @@ class TrainerTab(QWidget):
         else:
             self.env_label.setStyleSheet("")
         self.env_label.setText(text)
-        self.btn_train.setEnabled(not self.running())
+        self.btn_train.setEnabled(not self.running() and not self.preparing())
 
     def start(self):
-        if self.running() or self._bg:
+        """Prepares the run in a background thread (the distorted copies and the run's copy of the data can take minutes), showing what
+        it is doing; the window stays usable and Cancel ends it.  Then the training program starts."""
+        if self.running() or self._bg or self.preparing():
             return
         if self.env is None or self.env["problems"]:
             QMessageBox.warning(self, "Training", tc.env_text(self.env) if self.env else "No usable Python yet. Wait for the scan to finish, or use Browse... to pick one.")
@@ -840,26 +884,140 @@ class TrainerTab(QWidget):
         if not me:
             return
         self._model_changed()
-        try:
-            with self._busy("Preparing the training data"):
-                job = self.tp.start_run(me["name"], python=self.env["python"])
-        except ValueError as e:
-            QMessageBox.warning(self, "Training", str(e))
-            return
-        except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(self, "Training", f"Could not start training:\n\n{e}")
-            return
-        self.job = job
+        prep = self._prep = {"stop": False, "stage": "", "done": 0, "total": 0, "t0": time.time(), "stage_t0": time.time(), "first": None,
+                             "finished": [], "count": int(self.tp.settings["distortions"]["count"])}
+        python = self.env["python"]
+
+        def progress(stage, done, total):                      # called from the thread: only notes the numbers, _tick shows them
+            if stage != prep["stage"]:
+                if prep["total"]:                              # the stage that just ended, for a line in the log
+                    prep["finished"].append((prep["stage"], prep["total"], time.time() - prep["stage_t0"]))
+                prep.update(stage=stage, stage_t0=time.time(), first=None, done=0, total=0)
+            if prep["first"] is None and total:
+                prep["first"] = done                           # where this stage began (copies made by an earlier start are not timed)
+            prep["done"], prep["total"] = done, total
+
+        def run():
+            try:
+                job = self.tp.start_run(me["name"], progress_cb=progress, python=python, stop=lambda: prep["stop"])
+            except BaseException as e:  # noqa: BLE001
+                err = e
+                self.post(lambda: self._prep_failed(prep, err))
+                return
+            self.post(lambda: self._prep_done(prep, job))
+
         self.log.clear()
+        self.log.appendPlainText("Preparing the training data ...")
+        self._prep_view(True)
+        self._prep_show()
+        threading.Thread(target=run, daemon=True).start()
+
+    def _prep_view(self, on):
+        """The window while a run is being prepared: the left panel and the bar's commands wait, Stop is Cancel, the bar shows."""
+        self.panel.setEnabled(not on)
+        for b in self.bar_buttons:
+            b.setEnabled(not on)
+        self.py_box.setEnabled(not on)
+        self.btn_train.setEnabled(not on and not self.running())
+        self.btn_stop.setText("Cancel" if on else "Stop")
+        self.btn_stop.setEnabled(on or self.running())
+        self.prep_bar.setVisible(on)
+
+    @staticmethod
+    def _dur(secs):
+        secs = int(round(secs))
+        return f"{secs} s" if secs < 60 else f"{secs // 60} min {secs % 60:02d} s" if secs < 3600 else f"{secs // 3600} h {secs % 3600 // 60:02d} min"
+
+    def _prep_text(self, p):
+        """(text, done, total) for the stage the preparation is in; total 0 = no count to show."""
+        stage, done, total = p["stage"], p["done"], p["total"]
+        if stage == "model":
+            return "Reading the model to continue from ...", 0, 0
+        if stage == "distortions":
+            if not total:
+                return "Looking which training pictures still need distorted copies ...", 0, 0
+            text = f"Making distorted copies: {done:,} of {total:,} training pictures ({p['count']} copies each)"
+            made, secs = done - (p["first"] or 0), time.time() - p["stage_t0"]
+            if made >= 5 and secs >= 3 and done < total:
+                text += f" - about {self._dur((total - done) * secs / made)} left"
+            return text, done, total
+        if stage == "copy":
+            return (f"Putting the run's copy of the data together: {done:,} of {total:,} pictures" if total
+                    else "Putting the run's copy of the data together ..."), done, total
+        if stage == "start":
+            return "Starting the training program ...", 0, 0
+        return "Preparing the training data ...", 0, 0
+
+    def _prep_show(self):
+        p = self._prep
+        if p is None:
+            return
+        text, done, total = self._prep_text(p)
+        if p["stop"]:
+            text = "Cancelling ..."
+        self._prep_log(p)
+        self.prep_bar.setRange(0, total if total else 0)       # 0, 0 = a moving bar: busy, nothing to count
+        if total:
+            self.prep_bar.setValue(done)
+            self.prep_bar.setFormat(f"{done * 100 // total}%")
+        self.run_label.setText(text)
+
+    def _prep_log(self, p):
+        """A line in the log for every stage that has ended since the last look."""
+        while p["finished"]:
+            stage, total, secs = p["finished"].pop(0)
+            if stage == "distortions":
+                self.log.appendPlainText(f"Distorted copies ready for {total:,} training pictures ({self._dur(secs)}).")
+            elif stage == "copy":
+                self.log.appendPlainText(f"The run's copy of the data is ready: {total:,} pictures ({self._dur(secs)}).")
+
+    def _prep_end(self, prep):
+        if self._prep is not prep:
+            return False
+        self._prep = None
+        if self._closed:
+            return False
+        self._prep_view(False)
+        self._dist_note()
+        return True
+
+    def _prep_done(self, prep, job):
+        if not self._prep_end(prep):
+            job.stop()                                         # the tab was closed meanwhile
+            return
+        self._prep_log(prep)
+        self.job = job
         self.btn_train.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.run_label.setText(f"Training ... ({os.path.basename(job.run_dir)})")
+        self.log.appendPlainText(f"Prepared in {self._dur(time.time() - prep['t0'])}. The training program is starting "
+                                 "(loading PyTorch takes a moment before its first lines appear).\n")
+
+    def _prep_failed(self, prep, err):
+        if not self._prep_end(prep):
+            return
+        if isinstance(err, tc.Cancelled):
+            self.run_label.setText("Cancelled before training started. Distorted copies that were made are kept, so the next start goes on from there.")
+            self.log.appendPlainText("Cancelled.")
+            return
+        self.run_label.setText("Training did not start.")
+        self.log.appendPlainText(f"Training did not start: {err}")
+        if isinstance(err, ValueError):
+            QMessageBox.warning(self, "Training", str(err))
+        else:
+            QMessageBox.critical(self, "Training", f"Could not start training:\n\n{err}")
 
     def stop(self):
-        if self.running():
+        if self.preparing():
+            self._prep["stop"] = True
+            self.btn_stop.setEnabled(False)
+            self._prep_show()
+        elif self.running():
             self.job.stop()
 
     def _tick(self):
+        if self._prep is not None:
+            self._prep_show()
         if self.job is None:
             return
         text = self.job.read_log()

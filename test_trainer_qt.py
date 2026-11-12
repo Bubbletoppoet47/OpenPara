@@ -143,9 +143,20 @@ m = w.tp.settings["model"]; assert m["type"] == "fake" and m["size"] == "n" and 
 
 # ---- train: the window stays usable, the log fills, the model is saved and the annotator's list gets it
 os.environ["FAKE_SLEEP"] = "0.3"; os.environ["FAKE_EPOCHS"] = "3"
+# before the start, the Distortions step says how much the start has to make
+assert "The next training first makes 8 copies (4 training pictures x 2)" in w.dist_note.text(), w.dist_note.text()
 w.start()
-assert w.running() and not w.btn_train.isEnabled() and w.btn_stop.isEnabled() and host.cards[-1] == "Preparing the training data"
+# the run is prepared in the background (distorted copies, the run's copy of the data): the window is not blocked, it shows a bar,
+# Stop reads Cancel and the steps of the left panel wait
+assert w.preparing() and not w.running() and not w.btn_train.isEnabled() and w.btn_stop.isEnabled() and w.btn_stop.text() == "Cancel"
+assert not w.panel.isEnabled() and not w.prep_bar.isHidden() and not all(b.isEnabled() for b in w.bar_buttons)
+wait(lambda: w.running())
+assert not w.preparing() and w.btn_stop.text() == "Stop" and w.btn_stop.isEnabled() and not w.btn_train.isEnabled()
+assert w.panel.isEnabled() and w.prep_bar.isHidden() and all(b.isEnabled() for b in w.bar_buttons)
 assert sum(1 for v in w.tp.data.manifest["distortions"].values() if v) == 4        # training pictures only
+lg = w.log.toPlainText()
+assert "Distorted copies ready for 4 training pictures" in lg and "The run's copy of the data is ready:" in lg and "Prepared in" in lg, lg
+assert "All 8 copies are made (4 training pictures x 2)" in w.dist_note.text(), w.dist_note.text()
 wait(lambda: w.job is None)
 pump(6)
 assert "fake training ['cup', 'bottle', 'can']" in w.log.toPlainText() and "epoch 2" in w.log.toPlainText()
@@ -162,8 +173,9 @@ w.cont_on.setChecked(False); assert w.size_box.isEnabled() and w.tp.settings["mo
 w.type_box.setCurrentIndex(w.type_box.findData("yolo_distance"))
 assert w.size_box.currentData() == "n" and w.tp.settings["model"]["type"] == "yolo_distance"
 assert "Boxes with a distance - training: 0, validation: 0" in w.data_info.text() and "cannot be trained from this data" in w.data_info.text(), w.data_info.text()
-MSG.clear(); w.start()
+MSG.clear(); w.start(); wait(lambda: not w.preparing())
 assert not w.running() and MSG and "has a distance" in MSG[-1][1] and "Classes + boxes" in MSG[-1][1], MSG
+assert w.run_label.text() == "Training did not start." and w.btn_train.isEnabled() and w.panel.isEnabled() and w.btn_stop.text() == "Stop"
 w.type_box.setCurrentIndex(w.type_box.findData("yolo"))
 assert "Boxes with a distance" not in w.data_info.text() and "cannot be trained" not in w.data_info.text()
 # a model is continued as the kind it is: picking a distance model switches the type to a distance type, a plain one switches it back
@@ -185,6 +197,44 @@ assert w.type_box.currentData() == "yolo" and w.tp.settings["model"]["type"] == 
 w.cont_on.setChecked(False)
 os.remove(vdist); os.remove(ml.info_path(vdist)); w._fill_continue(); w.refresh_models()
 w.type_box.setCurrentIndex(w.type_box.findData("fake")); assert w.tp.settings["model"]["type"] == "fake" and w.size_box.currentData() == "n"
+# ---- a long preparation: the window keeps working, shows how far it is and how long is left, and Cancel ends it
+real_start = w.tp.start_run
+seen = {"stops": 0}
+def slow_start(me_name, progress_cb=None, python=None, stop=None, **kw):
+    progress_cb("distortions", 0, 0)
+    for k in range(40, 2000):                                 # 40 pictures already had their copies
+        if stop():
+            seen["stops"] += 1
+            raise tc.Cancelled()
+        progress_cb("distortions", k, 2000); time.sleep(0.02)
+    raise SystemExit("was not cancelled")
+w.tp.start_run = slow_start
+w.start(); t0 = time.time()
+assert w.preparing() and w.run_label.text() == "Preparing the training data ..."
+from PyQt6.QtCore import QTimer
+ticks = []
+tm = QTimer(); tm.timeout.connect(lambda: ticks.append(time.time())); tm.start(50)       # the window's own events keep running meanwhile
+wait(lambda: "left" in w.run_label.text(), 30)
+tm.stop()
+assert len(ticks) >= 20 and max(b - a for a, b in zip(ticks, ticks[1:])) < 1.0, (len(ticks), ticks[:3])
+txt = w.run_label.text()
+assert txt.startswith("Making distorted copies: ") and "of 2,000 training pictures (2 copies each) - about " in txt, txt
+assert 0 < w.prep_bar.value() < 2000 and w.prep_bar.maximum() == 2000 and w.prep_bar.format().endswith("%")
+assert w.can_close() is False and MSG[-1][1].startswith("The training data is still being prepared") and w.save() is False
+n_runs = len(os.listdir(w.tp.runs_dir))
+w.btn_stop.click()
+assert "Cancelling" in w.run_label.text() and not w.btn_stop.isEnabled()
+wait(lambda: not w.preparing(), 20)
+assert seen["stops"] == 1 and not w.running() and w.job is None and "Cancelled before training started" in w.run_label.text()
+assert w.btn_train.isEnabled() and w.panel.isEnabled() and w.prep_bar.isHidden() and w.btn_stop.text() == "Stop" and not w.btn_stop.isEnabled()
+assert len(os.listdir(w.tp.runs_dir)) == n_runs and w.log.toPlainText().rstrip().endswith("Cancelled.")
+# something going wrong while preparing is told, and the window is usable again
+def broken_start(me_name, progress_cb=None, python=None, stop=None, **kw):
+    progress_cb("copy", 3, 10); raise OSError("disk full")
+w.tp.start_run = broken_start
+MSG.clear(); w.start(); wait(lambda: not w.preparing())
+assert MSG and "disk full" in MSG[-1][1] and w.btn_train.isEnabled() and w.panel.isEnabled() and "did not start" in w.run_label.text()
+w.tp.start_run = real_start
 # ---- stop
 os.environ["FAKE_SLEEP"] = "3"; os.environ["FAKE_EPOCHS"] = "40"
 w.start(); wait(lambda: "epoch 0" in w.log.toPlainText())

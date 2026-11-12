@@ -274,10 +274,12 @@ def distort_image(pil_img, rng, ranges=None):
     sigma_lo, sigma_hi = r['noise_sigma']
     sigma = rng.uniform(sigma_lo, sigma_hi)
     if sigma > 0:
-        arr = np.asarray(img).astype(np.float32)
-        noise = rng.normal(0, sigma, arr.shape)
-        arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
-        img = Image.fromarray(arr)
+        arr = np.asarray(img).astype(np.float32)             # single precision, in place: the noise is the slowest step of a copy
+        noise = rng.standard_normal(arr.shape, dtype=np.float32)
+        noise *= sigma
+        arr += noise
+        np.clip(arr, 0, 255, out=arr)
+        img = Image.fromarray(arr.astype(np.uint8))
 
     q_lo, q_hi = r['jpeg_quality']
     quality = int(rng.integers(q_lo, q_hi + 1))
@@ -1597,7 +1599,7 @@ class Project:
 
     # -- distortion ------------------------------------------------------
 
-    def generate_distortions(self, img_id, n_variants, ranges=None, seed=None):
+    def generate_distortions(self, img_id, n_variants, ranges=None, seed=None, save=True, sync_labels=True):
         """Creates n_variants photometrically-distorted copies of img_id,
         each with a label file identical to the source's (copied, not
         recomputed - correct precisely because these transforms never
@@ -1611,34 +1613,48 @@ class Project:
         label file would silently train on the wrong answer. Re-copying a
         label file is cheap (a few lines of text), so doing it on every
         call - even when nothing else changes - costs effectively
-        nothing."""
+        nothing.
+
+        save=False leaves writing the manifest to the caller (a sweep over
+        thousands of pictures must not rewrite the whole manifest after
+        each one). sync_labels=False skips the re-sync, for a caller that
+        does not read the variants' label files (the Trainer writes its
+        labels from the source boxes)."""
         if self.is_val_image(img_id):
             return []       # validation images are never augmented
         existing = self.manifest['distortions'].get(img_id, [])
         src_boxes = self.get_boxes(img_id)
-        for variant_id in existing:
-            save_label_file(os.path.join(self.dist_labels_dir, f"{variant_id}.txt"), src_boxes)
+        if sync_labels:
+            for variant_id in existing:
+                save_label_file(os.path.join(self.dist_labels_dir, f"{variant_id}.txt"), src_boxes)
 
         need = n_variants - len(existing)
         if need <= 0:
             return existing
 
-        rng = np.random.default_rng(seed)
-        src_img = Image.open(self.image_path(img_id)).convert('RGB')
+        new_ids = list(existing) + self._make_variants(img_id, len(existing), n_variants, src_boxes, ranges, seed)
+        self.manifest['distortions'][img_id] = new_ids
+        if save:
+            self.save_manifest()
+        return new_ids
 
-        new_ids = list(existing)
-        for i in range(len(existing), n_variants):
+    def _make_variants(self, img_id, first, n_variants, src_boxes, ranges=None, seed=None):
+        """Writes the distorted copies number first ... n_variants-1 of one picture (image + label file) and returns their ids.
+        Touches nothing but those files, so several pictures can be done at the same time; the caller records the ids."""
+        rng = np.random.default_rng(seed)
+        with Image.open(self.image_path(img_id)) as im:
+            src_img = im.convert('RGB')
+        made = []
+        for i in range(first, n_variants):
             variant_id = f"{img_id}_dist{i}"
             distorted = distort_image(src_img, rng, ranges)
             distorted.save(os.path.join(self.dist_images_dir, f"{variant_id}.jpg"), quality=90)
             save_label_file(os.path.join(self.dist_labels_dir, f"{variant_id}.txt"), src_boxes)
-            new_ids.append(variant_id)
+            made.append(variant_id)
+        return made
 
-        self.manifest['distortions'][img_id] = new_ids
-        self.save_manifest()
-        return new_ids
-
-    def ensure_all_distortions(self, n_variants=DEFAULT_DISTORTION_COUNT, ranges=None, progress_cb=None):
+    def ensure_all_distortions(self, n_variants=DEFAULT_DISTORTION_COUNT, ranges=None, progress_cb=None, stop=None,
+                               sync_labels=True, workers=None):
         """Sweeps every HUMAN-CONFIRMED (annotated) image with at least one
         box and makes sure it has n_variants distorted copies, re-syncing
         labels along the way (see generate_distortions). Skips images with
@@ -1659,13 +1675,77 @@ class Project:
         calls this after every box edit instead of exposing a manual
         button, and export_dataset() below calls it once more as a final
         safety net. Pass progress_cb(done, total) to report progress on a
-        sweep that can process hundreds of images."""
-        targets = [img_id for img_id in self.list_images()
-                   if self.is_annotated(img_id) and self.get_boxes(img_id) and not self.is_val_image(img_id)]
-        for n, img_id in enumerate(targets, 1):
-            self.generate_distortions(img_id, n_variants, ranges=ranges)
+        sweep that can process hundreds of images.
+
+        The pictures that still need copies are done several at a time
+        (the image work runs outside Python's lock), and the manifest is
+        written every few seconds and at the end - not after every
+        picture, which made a sweep over thousands of pictures spend most
+        of its time rewriting the manifest. stop() returning True ends the
+        sweep early: what was made is recorded and kept, so the next sweep
+        goes on from there. Returns False when it was stopped, else True."""
+        import concurrent.futures as cf
+        targets, todo = 0, []
+        for img_id in self.list_images():
+            if not self.is_annotated(img_id) or self.is_val_image(img_id):
+                continue
+            boxes = self.get_boxes(img_id)
+            if not boxes:
+                continue
+            targets += 1
+            existing = self.manifest['distortions'].get(img_id, [])
+            if sync_labels:
+                for variant_id in existing:
+                    save_label_file(os.path.join(self.dist_labels_dir, f"{variant_id}.txt"), boxes)
+            if len(existing) < n_variants:
+                todo.append((img_id, list(existing), boxes))
+        done = targets - len(todo)
+        if progress_cb:
+            progress_cb(done, targets)
+        if not todo:
+            return True
+        workers = workers or max(1, min(8, (os.cpu_count() or 2) - 1))       # leaves a core for the window
+        changed, stopped, last_save = False, False, time.time()
+        feed = iter(todo)
+        pending = {}
+        ex = cf.ThreadPoolExecutor(max_workers=workers)
+
+        def record(fut):
+            nonlocal done, changed
+            img_id, existing, _b = pending.pop(fut)
+            try:
+                made = fut.result()
+            except Exception as e:  # noqa: BLE001
+                raise RuntimeError(f"Could not make the distorted copies of picture {img_id}: {e}") from e
+            self.manifest['distortions'][img_id] = existing + made
+            changed = True
+            done += 1
             if progress_cb:
-                progress_cb(n, len(targets))
+                progress_cb(done, targets)
+
+        try:
+            while True:
+                while not stopped and len(pending) < workers * 2:
+                    item = next(feed, None)
+                    if item is None:
+                        break
+                    pending[ex.submit(self._make_variants, item[0], len(item[1]), n_variants, item[2], ranges)] = item
+                if not pending:
+                    break
+                for fut in cf.wait(list(pending), return_when=cf.FIRST_COMPLETED)[0]:
+                    record(fut)
+                if changed and time.time() - last_save > 10:
+                    self.save_manifest()
+                    last_save = time.time()
+                if stop and not stopped and stop():
+                    stopped = True                       # the few pictures already being worked on are finished and recorded
+        finally:
+            ex.shutdown(wait=True, cancel_futures=True)
+            for fut in [f for f in pending if f.done() and not f.cancelled() and f.exception() is None]:
+                record(fut)
+            if changed:
+                self.save_manifest()
+        return not stopped
 
     # -- export ------------------------------------------------------------
 

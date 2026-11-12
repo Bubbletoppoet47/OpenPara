@@ -112,6 +112,10 @@ def model_types():
     return out
 
 
+class Cancelled(Exception):
+    """Raised by the preparation of a run when the user stopped it before the training program started."""
+
+
 def is_distance_checkpoint(path):
     """True when this .pt is a classes + boxes + distance model.  Read without torch: a .pt is a zip whose pickle names the format."""
     import zipfile
@@ -250,7 +254,7 @@ def probe_all(paths, progress=None):
     return sorted(infos, key=lambda i: (not i["ok"], not i["cuda"], paths.index(i["python"]) if i["python"] in paths else 99))
 
 
-def checkpoint_info(python, path):
+def checkpoint_info(python, path, stop=None):
     """{'size', 'classes', 'distance'} of a .pt model, from its info file next to it, else by loading it in the training Python."""
     ac, dz, sz, ml = libs()
     inf = ml.read_info(path) or {}
@@ -264,8 +268,18 @@ def checkpoint_info(python, path):
     else:
         code = _YOLO_CKPT
     try:
-        r = subprocess.run([python, "-c", code, path], capture_output=True, text=True, timeout=180)
-        for line in r.stdout.splitlines():
+        kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+        proc = subprocess.Popen([python, "-c", code, path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True, **kw)
+        t0 = time.time()
+        while proc.poll() is None:                      # loading torch takes seconds: stay stoppable meanwhile
+            if (stop and stop()) or time.time() - t0 > 180:
+                proc.kill()
+                proc.wait()
+                if stop and stop():
+                    raise Cancelled()
+                break
+            time.sleep(0.1)
+        for line in proc.stdout.read().splitlines():
             if line.startswith("CKPT"):
                 return dict(json.loads(line[4:]), distance=distance)
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -409,16 +423,18 @@ class TrainingProject:
 
     def summary(self, classes=None):
         """Counts for the window: pictures and boxes per class on each side, for the chosen classes (None = all).
-        'dist' is how many of those boxes carry a LiDAR distance (what a classes + boxes + distance model learns distance from)."""
+        'dist' is how many of those boxes carry a LiDAR distance (what a classes + boxes + distance model learns distance from);
+        'distort_pictures' is how many training pictures have a box of any class (those get distorted copies)."""
         names = list(self.data.classes)
         use = [c for c in names if classes is None or c in classes]
         idx = {names.index(c): n for n, c in enumerate(use)}
         out = {"classes": use, "train": 0, "val": 0, "unsplit": 0, "boxes": {"train": [0] * len(use), "val": [0] * len(use)},
-               "dist": {"train": 0, "val": 0}}
+               "dist": {"train": 0, "val": 0}, "distort_pictures": 0}
         for i in self.annotated_ids():
             side = "val" if self.data.is_val_image(i) else "train"
             out[side] += 1
             boxes = self.data.get_boxes(i)
+            out["distort_pictures"] += side == "train" and bool(boxes)      # the pictures that get distorted copies (distortion_plan)
             for b, pk in zip(boxes, self.data.get_distances(i, len(boxes))):
                 if b[0] in idx:
                     out["boxes"][side][idx[b[0]]] += 1
@@ -437,26 +453,47 @@ class TrainingProject:
                     pass
         d.save_manifest()
 
-    def prepare_distortions(self, progress_cb=None):
+    def _distortion_sig(self):
+        s = self.settings["distortions"]
+        return json.dumps([distortion_ranges(s), s["count"]], sort_keys=True, default=list)
+
+    def distortion_plan(self, pictures):
+        """What the next start has to make: {'enabled', 'count', 'pictures', 'ready', 'to_make'} for `pictures` training pictures with
+        boxes (summary()['distort_pictures']).  'ready' = pictures that already have their copies under the settings as they are now;
+        'to_make' = copies still to make.  Read from the picture list only (no files are opened), so it can follow every click."""
+        s = self.settings["distortions"]
+        count = int(s["count"])
+        if not s["enabled"]:
+            return {"enabled": False, "count": count, "pictures": pictures, "ready": 0, "to_make": 0}
+        ready = 0
+        if self.meta.get("distortion_sig") == self._distortion_sig():
+            ready = sum(1 for i, v in self.data.manifest["distortions"].items() if len(v) >= count and not self.data.is_val_image(i))
+        ready = min(ready, pictures)
+        return {"enabled": True, "count": count, "pictures": pictures, "ready": ready, "to_make": (pictures - ready) * count}
+
+    def prepare_distortions(self, progress_cb=None, stop=None):
         """Makes the distorted copies the settings ask for (replacing earlier ones if the settings changed).  Validation sets get none.
-        Returns the number of training pictures that have copies."""
+        Returns the number of training pictures that have copies.  progress_cb(done, total) counts training pictures;
+        stop() returning True ends it early with Cancelled (the copies made so far are kept, so the next start goes on from there)."""
         s = self.settings["distortions"]
         if not s["enabled"]:
             return 0
-        ranges = distortion_ranges(s)
-        sig = json.dumps([ranges, s["count"]], sort_keys=True, default=list)
+        sig = self._distortion_sig()
         if self.meta.get("distortion_sig") != sig:
             self.clear_distortions()
             self.meta["distortion_sig"] = sig
             self.save()
-        self.data.ensure_all_distortions(int(s["count"]), ranges, progress_cb)
+        # sync_labels=False: freeze() writes every copy's labels from its picture's boxes, the copies' own label files are not read here
+        if not self.data.ensure_all_distortions(int(s["count"]), distortion_ranges(s), progress_cb, stop=stop, sync_labels=False):
+            raise Cancelled()
         return sum(1 for i, v in self.data.manifest["distortions"].items() if v and not self.data.is_val_image(i))
 
     # ---- the frozen copy a run trains on
-    def freeze(self, dest, classes=None, distortions=False):
+    def freeze(self, dest, classes=None, distortions=False, progress_cb=None, stop=None):
         """Writes an Ultralytics-style dataset into dest from the data as it is NOW (pictures are hard-linked or copied).
         Returns (data_yaml, {'train', 'val', 'classes', 'dist': {'train', 'val'}}).  Distorted copies go to train only.
-        distances.csv lists every box that has a LiDAR distance (a distorted copy keeps its picture's distances: only its colours changed)."""
+        distances.csv lists every box that has a LiDAR distance (a distorted copy keeps its picture's distances: only its colours changed).
+        progress_cb(done, total) counts the source pictures; stop() returning True ends it with Cancelled."""
         d = self.data
         names = list(d.classes)
         use = [c for c in names if classes is None or c in classes]
@@ -484,7 +521,12 @@ class TrainingProject:
                             counts["dist"][split] += 1
             counts[split] += 1
 
-        for i in self.annotated_ids():
+        ids = self.annotated_ids()
+        for k, i in enumerate(ids):
+            if stop and k % 20 == 0 and stop():
+                raise Cancelled()
+            if progress_cb:
+                progress_cb(k, len(ids))
             split = "val" if d.is_val_image(i) else "train"
             boxes = d.get_boxes(i)
             picks = d.get_distances(i, len(boxes))
@@ -524,9 +566,17 @@ class TrainingProject:
         return best
 
     # ---- runs
-    def start_run(self, me_name, progress_cb=None, python=None, **overrides):
+    def start_run(self, me_name, progress_cb=None, python=None, stop=None, **overrides):
         """Freezes the data and starts the training script in the background.  Returns a Job.
-        overrides replace values of the saved model settings (type, size, epochs, classes, continue_from, name ...)."""
+        overrides replace values of the saved model settings (type, size, epochs, classes, continue_from, name ...).
+
+        This can take minutes (the distorted copies of thousands of pictures), so a window calls it in a thread:
+            progress_cb(stage, done, total)   stage is "model" (reading the model to continue from), "distortions" (training pictures
+                                              done), "copy" (pictures put into the run's frozen copy) or "start"; total 0 = not counted
+            stop()                            returning True ends it with Cancelled; nothing is left of the run, the copies made are kept"""
+        def tell(stage, done=0, total=0):
+            if progress_cb:
+                progress_cb(stage, done, total)
         s = self.settings
         m = dict(s["model"])
         m.update({k: v for k, v in overrides.items() if v is not None})
@@ -540,7 +590,8 @@ class TrainingProject:
                 raise ValueError(f"The model to continue from is not there: {m['continue_from']}")
             if types[m["type"]]["script"] in (HELPER_SCRIPT, DISTANCE_SCRIPT):
                 m["type"] = type_for_checkpoint(m["continue_from"], m["type"])     # a model is continued as the kind it is
-            prev = checkpoint_info(python, m["continue_from"])
+            tell("model")
+            prev = checkpoint_info(python, m["continue_from"], stop)
             m["size"] = prev["size"] or m["size"]
         spec = types[m["type"]]
         if m["size"] not in spec["sizes"]:
@@ -551,14 +602,21 @@ class TrainingProject:
                              + "\n\nbut the classes ticked here are:\n    " + ", ".join(names)
                              + "\n\nThey must be the same, in the same order. Tick exactly those classes, or untick \"Continue from existing model\".")
         if s["distortions"]["enabled"]:
-            self.prepare_distortions(progress_cb)
+            tell("distortions")
+            self.prepare_distortions(lambda d, t: tell("distortions", d, t), stop)
         run_id = time.strftime("%Y%m%d_%H%M%S") + f"_{m['type']}_{m['size']}"
         run_dir, n = os.path.join(self.runs_dir, run_id), 1
         while os.path.exists(run_dir):
             n += 1
             run_dir = os.path.join(self.runs_dir, f"{run_id}_{n}")
         os.makedirs(run_dir)
-        yaml_path, counts = self.freeze(os.path.join(run_dir, "dataset"), m.get("classes"), s["distortions"]["enabled"])
+        try:
+            tell("copy")
+            yaml_path, counts = self.freeze(os.path.join(run_dir, "dataset"), m.get("classes"), s["distortions"]["enabled"],
+                                            lambda d, t: tell("copy", d, t), stop)
+        except BaseException:
+            shutil.rmtree(run_dir, ignore_errors=True)          # nothing is left of a run that did not start
+            raise
         if counts["train"] == 0:
             shutil.rmtree(run_dir, ignore_errors=True)
             raise ValueError("There are no training pictures. Import a dataset and keep at least one set as Training.")
@@ -583,6 +641,10 @@ class TrainingProject:
                "trainer": (m.get("name") or "").strip() or me_name or "trainer", "lib_dir": ANNOTATOR_APP}
         with open(os.path.join(run_dir, "job.json"), "w", encoding="utf-8") as f:
             json.dump(job, f, indent=2)
+        if stop and stop():
+            shutil.rmtree(run_dir, ignore_errors=True)
+            raise Cancelled()
+        tell("start")
         return Job.start(run_dir, spec["script"], python, cwd=self.cache_dir)
 
 

@@ -98,6 +98,45 @@ assert r["noise_sigma"] == (0.0, 0.0) and r["jpeg_quality"] == (100, 100) and r[
 dest = os.path.join(TMP, "frozen")
 y, c = tp.freeze(dest, None, True)
 assert (c["train"], c["val"]) == (4 * 4, 4), c
+# ---- what a start has to make is known beforehand, from the picture list alone
+assert tp.summary()["distort_pictures"] == 4
+assert tp.distortion_plan(4) == {"enabled": True, "count": 3, "pictures": 4, "ready": 4, "to_make": 0}
+tp.set_settings({"distortions": {"count": 4}})
+assert tp.distortion_plan(4) == {"enabled": True, "count": 4, "pictures": 4, "ready": 0, "to_make": 16}       # other settings: all are made again
+# ---- making the copies reports its progress, can be stopped, and goes on from where it stopped
+saves = []
+real_save = tp.data.save_manifest
+tp.data.save_manifest = lambda: (saves.append(1), real_save())[1]
+prog = []
+try:
+    tp.prepare_distortions(lambda d, t: prog.append((d, t)), stop=lambda: len(prog) >= 2); raise SystemExit("should have stopped")
+except tc.Cancelled:
+    pass
+have = sum(1 for v in tp.data.manifest["distortions"].values() if len(v) == 4)
+assert prog[0] == (0, 4) and 1 <= have < 4 and prog[-1] == (have, 4), (prog, have)
+assert len(os.listdir(tp.data.dist_images_dir)) == have * 4                    # what was made is recorded and kept
+assert json.load(open(tp.data.manifest_path))["distortions"] == tp.data.manifest["distortions"]
+assert tp.distortion_plan(4)["ready"] == have and tp.distortion_plan(4)["to_make"] == (4 - have) * 4
+mt0 = {f: os.path.getmtime(os.path.join(tp.data.dist_images_dir, f)) for f in os.listdir(tp.data.dist_images_dir)}
+prog.clear(); n_saves = len(saves)
+assert tp.prepare_distortions(lambda d, t: prog.append((d, t))) == 4
+assert prog[0] == (have, 4) and prog[-1] == (4, 4) and len(os.listdir(tp.data.dist_images_dir)) == 16
+assert all(os.path.getmtime(os.path.join(tp.data.dist_images_dir, f)) == t for f, t in mt0.items())      # the kept ones were not made again
+assert len(saves) - n_saves <= 2, "the picture list is written at the end, not after every picture"
+tp.data.save_manifest = real_save
+prog.clear(); assert tp.prepare_distortions(lambda d, t: prog.append((d, t))) == 4 and prog == [(4, 4)]     # nothing left to make
+# a picture that cannot be read says which one
+bad = sorted(k for k, v in tp.data.manifest["distortions"].items() if v)[0]
+tp.set_settings({"distortions": {"count": 5}})
+keep = open(tp.data.image_path(bad), "rb").read()
+open(tp.data.image_path(bad), "wb").write(b"not a picture")
+try:
+    tp.prepare_distortions(); raise SystemExit("should fail")
+except RuntimeError as e:
+    assert bad in str(e) and "distorted copies" in str(e), e
+open(tp.data.image_path(bad), "wb").write(keep)
+assert tp.prepare_distortions() == 4 and all(len(v) == 5 for v in tp.data.manifest["distortions"].values() if v)   # the others were kept, this one follows
+tp.set_settings({"distortions": {"count": 3}}); tp.prepare_distortions()
 assert not [f for f in os.listdir(os.path.join(dest, "images", "val")) if "_dist" in f]
 assert len([f for f in os.listdir(os.path.join(dest, "images", "train")) if "_dist" in f]) == 12
 txt = open(y).read(); assert "nc: 3" in txt and "0: " in txt
@@ -165,6 +204,30 @@ time.sleep(1.1)                                     # the version names are per 
 # without "continue", nothing is carried over
 jobx = tp.start_run("Tester", python=sys.executable, type="fake", size="n", epochs=3); jobx.stop()
 assert json.load(open(os.path.join(jobx.run_dir, "job.json")))["start_weights"] is None
+# ---- starting a run tells each stage, and a stop before the training program leaves nothing of the run behind
+stages = []
+was_on = tp.settings["distortions"]["enabled"]
+tp.set_settings({"distortions": {"enabled": True}})
+n_ann, n_tr = len(tp.annotated_ids()), tp.summary()["distort_pictures"]
+n_runs = len(os.listdir(tp.runs_dir))
+jobp = tp.start_run("Tester", progress_cb=lambda st, d, t: stages.append((st, d, t)), python=sys.executable, type="fake", size="n", epochs=1); jobp.stop()
+names = [st for st, _d, _t in stages]
+assert [n for i, n in enumerate(names) if i == 0 or names[i - 1] != n] == ["distortions", "copy", "start"], names
+assert ("distortions", n_tr, n_tr) in stages and ("copy", 0, n_ann) in stages and stages[-1] == ("start", 0, 0), stages
+n_runs += 1
+for when in ("distortions", "copy", "start"):
+    hit = []
+    def stop_at(st, d, t, when=when):
+        if st == when:
+            hit.append(1)
+    try:
+        tp.start_run("Tester", progress_cb=stop_at, python=sys.executable, stop=lambda: bool(hit), type="fake", size="n", epochs=1).stop()
+        assert when == "start", when                                             # once the program is starting there is nothing left to cancel
+        n_runs += 1
+    except tc.Cancelled:
+        assert when != "start"
+    assert len(os.listdir(tp.runs_dir)) == n_runs, (when, os.listdir(tp.runs_dir))
+tp.set_settings({"distortions": {"enabled": was_on}})
 # continuing needs the same classes
 try:
     tp.start_run("Tester", python=sys.executable, type="fake", continue_from=vs[0]["path"], classes=["cup"]); raise SystemExit("should refuse")

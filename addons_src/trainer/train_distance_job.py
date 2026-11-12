@@ -178,6 +178,7 @@ def fail(job, message):
 
 def main():
     job = jc.load_job()
+    print("Loading PyTorch and Ultralytics ...", flush=True)        # the first line at once: importing them takes a while
     import torch
     from torch.utils.data import DataLoader
     import gimble_data as gd
@@ -191,6 +192,7 @@ def main():
     start = job.get("start_weights")
     pretrained = None if (start or job.get("from_scratch")) else (job.get("pretrained") or "").format(size=size) or None
 
+    print("Reading the training data ...", flush=True)
     src = gd.Source(job["data_yaml"], use_people=False, classes=job.get("classes") or None)
     info = src.summary()
     if info["n_train"] == 0 or info["n_val"] == 0:

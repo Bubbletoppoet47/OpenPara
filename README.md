@@ -131,6 +131,8 @@ onnxruntime.
 the Annotator, which travel in the dataset zip and into the run's frozen copy (`distances.csv`); boxes without a distance still teach
 class and position. Both kinds can start from the pretrained YOLO26 weights or from random weights, and "Continue from existing model"
 goes on from a model as the kind it is. A distance model's saved scores include its median distance error on the validation boxes.
+Pressing Start training prepares the run in the background (the distorted copies of the training pictures, then the run's own copy of
+the data): the window shows a bar, how far it is, the time left, and Cancel; the copies are made once and kept, also after a cancel.
 
 - Models are listed from every Annotator Models folder on the PC: OpenPara's and the Playground's (they keep separate data folders), in
   `Assist/`, `Scratch/` and directly in `Models/`; "Choose a file..." takes any `.pt`.
