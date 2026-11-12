@@ -115,6 +115,28 @@ y3, c3 = tp.freeze(os.path.join(TMP, "frozen3"), None, True)
 assert c3["train"] == 36 and c3["dist"] == {"train": 54, "val": 12}, c3
 tp.set_settings({"distortions": {"enabled": False}})
 
+# ---- the label file of a picture.  On Windows the frozen copy's paths mix both separators (the yaml's "path" has /, the joins add \\):
+# the label file must still be found, or the training program sees pictures without a single box
+import gimble_data as gd
+WIN = "/\\"
+assert gd.label_path_for("D:/T 1.training/runs/x/dataset\\images/train\\a.jpg", WIN) == "D:/T 1.training/runs/x/dataset\\labels/train\\a.txt"
+assert gd.label_path_for("D:\\run\\dataset\\images\\train\\a.jpg", WIN) == "D:\\run\\dataset\\labels\\train\\a.txt"
+assert gd.label_path_for("D:/run/dataset/images/val/a.b.png", WIN) == "D:/run/dataset/labels/val/a.b.txt"
+assert gd.label_path_for("D:/images/proj/dataset\\images/train\\a.jpg", WIN) == "D:/images/proj/dataset\\labels/train\\a.txt"     # the last one only
+assert gd.label_path_for("/data/images/train/a.jpg") == "/data/labels/train/a.txt" and gd.label_path_for("/data/my_images/a.jpg") == "/data/my_images/a.txt"
+# the training program reads the same boxes and distances from a frozen copy that the Trainer counted when it made it
+job = tp.start_run("Tester", python=sys.executable, type="yolo_distance", size="n", epochs=1)
+jj = job_of(job); job.stop()
+try:
+    import yaml  # noqa: F401  (comes with Ultralytics; the count is compared wherever it is there)
+    info = gd.Source(jj["data_yaml"], use_people=False, classes=jj["classes"]).summary()
+    assert info["train_dist_boxes"] == jj["dist_counts"]["train"] == 18 and info["val_dist_boxes"] == jj["dist_counts"]["val"] == 12, info
+    rows = sum(1 for ln in open(os.path.join(job.run_dir, "dataset", "distances.csv")) if ln.startswith("train,"))
+    assert rows == 18 and info["train_counts"] == [12, 12] and info["val_counts"] == [8, 8], (info, rows)      # every box, and its distance
+    assert info["first_label"] and os.path.isfile(info["first_label"]), info
+except ImportError:
+    print("no PyYAML here: the frozen copy is not read back with the training program's reader")
+
 # ---- which kind a model file is, without torch
 pd, po, py = os.path.join(TMP, "two.pt"), os.path.join(TMP, "old.pt"), os.path.join(TMP, "plain.pt")
 fake_pt(pd, "two"); fake_pt(po, "old"); fake_pt(py, "plain")

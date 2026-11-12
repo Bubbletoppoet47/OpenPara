@@ -277,8 +277,19 @@ def main():
     info = src.summary()
     if info["n_train"] == 0 or info["n_val"] == 0:
         return fail(job, "The training data has no " + ("training" if info["n_train"] == 0 else "validation") + " pictures.")
+    print(f"Training       : {info['n_train']} pictures   boxes: " + ", ".join(f"{n}={c}" for n, c in zip(src.names, info["train_counts"])))
+    print(f"Validation     : {info['n_val']} pictures   boxes: " + ", ".join(f"{n}={c}" for n, c in zip(src.names, info["val_counts"])))
+    print(f"Distance boxes : {info['train_dist_boxes']} training / {info['val_dist_boxes']} validation", flush=True)
+    want = (job.get("dist_counts") or {}).get("train")
+    if sum(info["train_counts"]) == 0:
+        return fail(job, "The training program found no boxes at all in the run's copy of the data, so nothing can be trained. "
+                         f"It looked for label files like: {info['first_label']}")
     if info["train_dist_boxes"] == 0:
-        return fail(job, "None of the training boxes has a distance, so the distance model has nothing to learn from.")
+        return fail(job, "None of the training boxes has a distance, so the distance model has nothing to learn from."
+                    + (f" The Trainer counted {want} when it made the run's copy, so they were lost on the way: please report this." if want else ""))
+    if want is not None and want != info["train_dist_boxes"]:
+        print(f"NOTE: the Trainer counted {want} training boxes with a distance when it made the run's copy; the training program reads "
+              f"{info['train_dist_boxes']}.", flush=True)
     if start and det_names != list(src.names):
         return fail(job, f"The model to continue from knows {det_names}, but this run trains {src.names}. They must be the same.")
     device = torch.device(job.get("device") or ("cuda" if torch.cuda.is_available() else "cpu"))

@@ -27,8 +27,12 @@ import random
 
 import cv2
 import numpy as np
-import torch
-from torch.utils.data import Dataset
+try:
+    import torch
+    from torch.utils.data import Dataset
+except ImportError:              # the readers (Source and what it uses) work without torch; only the dataset and collate need it
+    torch = None
+    Dataset = object
 
 IMG_EXT = (".jpg", ".jpeg", ".png", ".bmp")
 
@@ -45,9 +49,15 @@ def names_list(names):
     return list(names or [])
 
 
-def label_path_for(img_path):
-    p = img_path.replace(f"{os.sep}images{os.sep}", f"{os.sep}labels{os.sep}").replace("/images/", "/labels/")
-    return os.path.splitext(p)[0] + ".txt"
+def label_path_for(img_path, seps=None):
+    """The label file of a picture: the LAST folder named "images" on its path becomes "labels", and the ending .txt.
+    On Windows a path often mixes both separators (D:/run/dataset\\images/train\\a.jpg), so there either one bounds a folder name."""
+    import re
+    sep = "[" + re.escape(seps or ("/\\" if os.name == "nt" else "/")) + "]"
+    found = list(re.finditer(f"(?<={sep})images(?={sep})", img_path))
+    if found:
+        img_path = img_path[:found[-1].start()] + "labels" + img_path[found[-1].end():]
+    return os.path.splitext(img_path)[0] + ".txt"
 
 
 def read_labels(path, nc):
@@ -68,9 +78,9 @@ def read_list(path):
     if not path or not os.path.exists(path):
         return []
     if os.path.isdir(path):
-        return [os.path.join(path, fn) for fn in sorted(os.listdir(path)) if fn.lower().endswith(IMG_EXT)]
+        return [os.path.normpath(os.path.join(path, fn)) for fn in sorted(os.listdir(path)) if fn.lower().endswith(IMG_EXT)]
     with open(path, encoding="utf-8") as f:
-        return [ln.strip() for ln in f if ln.strip()]
+        return [os.path.normpath(ln.strip()) for ln in f if ln.strip()]
 
 
 def read_distances(csv_path):
@@ -188,6 +198,7 @@ class Source:
         ctr, ndtr = cnt(tr)
         cva, ndva = cnt(va)
         return dict(n_train=len(tr), n_people_only=sum(s["people_only"] for s in tr),
+                    first_label=label_path_for(self.train_files[0]) if self.train_files else None,
                     n_val=len(va), train_counts=ctr, val_counts=cva,
                     train_dist_boxes=ndtr, val_dist_boxes=ndva)
 
