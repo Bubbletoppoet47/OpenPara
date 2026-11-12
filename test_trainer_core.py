@@ -170,16 +170,16 @@ sys.exit(jc.finish(job, best, {{"epoch": 2, "total_epochs": 3, "map50": 0.5, "ma
 ''')
 ext.add_model_trainer("fake", label="Fake", script=fake, sizes=("n", "s"), default_size="n", models_key="assist")
 mt = tc.model_types()
-assert "fake" in mt and mt["yolo"]["label"] == "Classes + boxes  (pretrained)" and "not pretrained" in mt["yolo_scratch"]["label"] and not mt["yolo"]["from_scratch"] and mt["yolo_scratch"]["from_scratch"]
-# the two kinds: classes + boxes (saved with the Assist models) and classes + boxes + distance (saved with the Scratch models)
-assert list(mt)[:4] == ["yolo", "yolo_scratch", "yolo_distance", "yolo_distance_scratch"], list(mt)
-for k in ("yolo", "yolo_scratch"):
-    assert not mt[k]["distance"] and mt[k]["models_key"] == "assist" and mt[k]["script"] == tc.HELPER_SCRIPT
-for k in ("yolo_distance", "yolo_distance_scratch"):
-    assert mt[k]["distance"] and mt[k]["models_key"] == "scratch" and mt[k]["script"] == tc.DISTANCE_SCRIPT and os.path.isfile(tc.DISTANCE_SCRIPT)
-    assert mt[k]["label"].startswith("Classes + boxes + distance  (") and mt[k]["default_size"] == "n"
-assert mt["yolo_distance"]["pretrained"] == "yolo26{size}.pt" and not mt["yolo_distance"]["from_scratch"]
-assert mt["yolo_distance_scratch"]["pretrained"] is None and mt["yolo_distance_scratch"]["from_scratch"] and not mt["fake"]["distance"]
+# the two kinds: classes + boxes (saved with the Assist models) and classes + boxes + distance (saved with the Scratch models).
+# Both start from random weights: nothing pretrained is offered, and a new model is built from its description (a .yaml), not from weights
+assert "fake" in mt and list(mt)[:2] == ["yolo", "yolo_distance"] and len([k for k in mt if k.startswith("yolo")]) == 2, list(mt)
+assert mt["yolo"]["label"] == "Classes + boxes" and mt["yolo_distance"]["label"] == "Classes + boxes + distance"
+assert not mt["yolo"]["distance"] and mt["yolo"]["models_key"] == "assist" and mt["yolo"]["script"] == tc.HELPER_SCRIPT
+assert mt["yolo_distance"]["distance"] and mt["yolo_distance"]["models_key"] == "scratch" and mt["yolo_distance"]["script"] == tc.DISTANCE_SCRIPT
+assert os.path.isfile(tc.DISTANCE_SCRIPT) and not mt["fake"]["distance"]
+for k in ("yolo", "yolo_distance"):
+    assert mt[k]["cfg"] == "yolo26{size}.yaml" and mt[k]["fallback"] == "yolo11{size}.yaml" and "pretrained" not in mt[k] and mt[k]["default_size"] == "m"
+assert not any("pretrained" in str(v).lower() or ".pt" in str(v) for k in ("yolo", "yolo_distance") for v in mt[k].values()), mt
 assert tc.default_me()["name"] and not tc.default_me().get("name", "").count(" ")
 job = tp.start_run("Tester", python=sys.executable, type="fake", size="n", epochs=3, classes=None)
 txt = ""
@@ -236,10 +236,19 @@ except ValueError as e:
 job2 = tp.start_run("Tester", python=sys.executable, type="fake", epochs=3, continue_from=vs[0]["path"], name="Beach_v2")
 cfg = json.load(open(os.path.join(job2.run_dir, "job.json")))
 assert cfg["start_weights"] == vs[0]["path"] and cfg["based_on"] == vs[0]["file"] and cfg["size"] == "n" and cfg["trainer"] == "Beach_v2", cfg
-# from-scratch type flags the job
+# a new model is built from its description with random weights: the job names no weights to start from
+js = tp.start_run("Tester", python=sys.executable, type="yolo", size="s", epochs=1)
+jc_ = json.load(open(os.path.join(js.run_dir, "job.json"))); js.stop()
+assert jc_["cfg"] == "yolo26{size}.yaml" and jc_["fallback"].endswith(".yaml") and jc_["start_weights"] is None and "pretrained" not in jc_, jc_
+assert not jc_["distance_only"]
+# a project saved by an earlier version with a type that is gone opens as the type that is left
+for old, new in (("yolo_scratch", "yolo"), ("yolo_distance_scratch", "yolo_distance"), ("helper", "yolo")):
+    tp.set_settings({"model": {"type": old}})
+    assert tp.settings["model"]["type"] == new, (old, tp.settings["model"]["type"])
 js = tp.start_run("Tester", python=sys.executable, type="yolo_scratch", size="s", epochs=1)
 jc_ = json.load(open(os.path.join(js.run_dir, "job.json"))); js.stop()
-assert jc_["from_scratch"] and jc_["pretrained"].endswith(".yaml") and jc_["start_weights"] is None, jc_
+assert jc_["type"] == "yolo", jc_
+tp.set_settings({"model": {"type": "yolo"}})
 # the Pythons it can offer
 ps = tc.find_pythons(); assert sys.executable in ps
 assert "CPU-only" in " ".join(tc.check_env(sys.executable)["warnings"]) or not tc.check_env(sys.executable)["torch"]

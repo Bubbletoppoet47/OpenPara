@@ -1,171 +1,39 @@
-"""train_distance_job.py - trains a classes + boxes + distance model (the Trainer's "Classes + boxes + distance" types).
+"""train_distance_job.py - trains a "Classes + boxes + distance" model for the Trainer: two models, one after the other.
 
 Run by the Trainer as   python train_distance_job.py <run>/job.json .   No Qt here.
 
-The model is gimble_model.GimbleNet: the YOLO26 detector with a small distance head on the same body, so one network gives the class, the
-box and the distance in metres of every object.  It is what the Gimble runs and what the annotator's Scratch models are.
+    Stage 1   the detector   a stock Ultralytics YOLO model (train_helper_job.train_detector), from random weights or continued.
+                             Scored on the validation pictures: mAP.  With "distance_only" the detector of the model to continue from is
+                             kept exactly as it is and this stage trains nothing.
+    Stage 2   the distance   distance_model.DistanceNet, from random weights or continued.  It never sees the detector: it learns from
+                             the LABELLED boxes that carry a LiDAR distance, and is scored on the labelled validation boxes.  So its
+                             score says how good the distance model is, whatever the detector does.
+                             A second, smaller one that sees only the box and the class is trained next to it as the reference: it says
+                             how much looking at the picture adds.  Whichever is better on validation is kept.
+    Stage 3   together       the detector's own boxes go to the distance model, on the validation pictures.  The difference from the
+                             stage 2 score is what imperfect boxes cost.
 
-    data        the run's frozen copy: pictures + label files, and distances.csv with the LiDAR distance of every box that has one
-    distance    learned only from boxes that carry a distance; every other box still teaches class and position
-    start       a new model starts from the pretrained YOLO26 detector weights (the distance head is new) or from random weights;
-                "Continue from existing model" goes on from a model of this kind, as its next round
-    scores      mAP on the validation pictures, and the distance error measured on the validation boxes that have a distance
-    result      <run>/train/weights/best.pt (the best epoch, EMA weights), saved as a new version with the Scratch models
-
-The checkpoints are not stock Ultralytics .pt files (see gimble_model.save_checkpoint).
+The result is ONE file: the detector's .pt with the distance model added (distance_model.attach), saved with the Scratch models.  Every
+program that reads a YOLO model still reads it as a detector; the Annotator and the Gimble read both parts.
+If stage 2 fails after a detector was trained, the detector is saved on its own as a Classes + boxes model, so the hours are not lost.
 """
 import csv
 import math
 import os
-import shutil
 import sys
 import time
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import job_common as jc  # noqa: E402
+import train_helper_job as thj  # noqa: E402
 
-WEIGHT_DECAY = 0.0005
-LR_RANDOM, LR_PRETRAINED, LR_CONTINUE = 0.002, 0.001, 0.0007     # random weights take big steps; learned weights gentler ones
-
-COLS = ["epoch", "train/box_loss", "train/cls_loss", "train/dfl_loss", "train/dist_loss",
-        "val/box_loss", "val/cls_loss", "val/dfl_loss", "val/dist_loss",
-        "metrics/mAP50", "metrics/mAP50-95", "dist/median_rel_err", "dist/within_20pct", "dist/mae_m", "fitness", "lr"]
-
-
-# ---------------------------------------------------------------- scores
-
-def _ap(rec, prec):
-    import numpy as np
-    mr = np.array([0.0] + list(rec) + [1.0])
-    mp = np.array([1.0] + list(prec) + [0.0])
-    for i in range(len(mp) - 2, -1, -1):
-        mp[i] = max(mp[i], mp[i + 1])
-    x = np.linspace(0, 1, 101)
-    idx = np.searchsorted(mr, x, side="left")
-    return float(np.mean([mp[i] if i < len(mp) else 0.0 for i in idx]))
-
-
-def compute_map(dets, gts, nc):
-    """dets: per image (n,6) [x1,y1,x2,y2,conf,cls]; gts: per image (m,5) [cls,x1,y1,x2,y2].
-    Returns (map50, map50_95, per-class mAP50-95 list with None for classes absent from the labels).
-    A detection counts as right when it overlaps a not yet matched label of its class by at least the threshold (0.5 ... 0.95);
-    detections are taken best confidence first, each taking the label it overlaps most."""
-    import numpy as np
-    import torch
-    from torchvision.ops import box_iou
-    thr = np.linspace(0.5, 0.95, 10)
-    per, per50 = [None] * nc, [None] * nc
-    for c in range(nc):
-        ngt = sum(int((g[:, 0] == c).sum()) for g in gts if len(g))
-        if ngt == 0:
-            continue
-        conf, where, ious = [], [], {}                       # where: (image, row in that image's overlap table)
-        for i, d in enumerate(dets):
-            if not len(d):
-                continue
-            sel = d[d[:, 5] == c]
-            if not len(sel):
-                continue
-            g = gts[i]
-            gc = g[g[:, 0] == c][:, 1:5] if len(g) else np.zeros((0, 4), np.float32)
-            ious[i] = (box_iou(torch.as_tensor(sel[:, :4]).float(), torch.as_tensor(gc).float()).numpy()
-                       if len(gc) else np.zeros((len(sel), 0), np.float32))
-            conf.extend(float(x) for x in sel[:, 4])
-            where.extend((i, r) for r in range(len(sel)))
-        if not conf:
-            per[c], per50[c] = 0.0, 0.0
-            continue
-        order = np.argsort(-np.asarray(conf), kind="stable")
-        top = np.array([ious[i][r].max() if ious[i].shape[1] else 0.0 for i, r in where])     # no label near: wrong at every threshold
-        ap_t = []
-        for t in thr:
-            used = {i: np.zeros(m.shape[1], bool) for i, m in ious.items()}
-            tp = np.zeros(len(order))
-            for k, e in enumerate(order):
-                if top[e] < t:
-                    continue
-                i, r = where[e]
-                cand = np.where(used[i] | (ious[i][r] < t), -1.0, ious[i][r])
-                j = int(cand.argmax())
-                if cand[j] > 0:
-                    used[i][j] = True
-                    tp[k] = 1
-            ctp, cfp = np.cumsum(tp), np.cumsum(1 - tp)
-            ap_t.append(_ap(ctp / ngt, ctp / np.maximum(ctp + cfp, 1e-9)))
-        per[c], per50[c] = float(np.mean(ap_t)), ap_t[0]
-    v = [x for x in per if x is not None]
-    v50 = [x for x in per50 if x is not None]
-    return (float(sum(v50) / len(v50)) if v50 else 0.0, float(sum(v) / len(v)) if v else 0.0, per)
-
-
-def evaluate(model, loader, device, nc, S):
-    """mAP + distance accuracy on the validation pictures.  Distance is scored on the labelled boxes (the distance head alone)."""
-    import numpy as np
-    import torch
-    model.eval()
-    dets, gts, rel, mae = [], [], [], []
-    for batch in loader:
-        batch = {k: v.to(device) for k, v in batch.items()}
-        img = batch["img"].float() / 255
-        out = model.infer(img, conf=0.001, max_det=300)
-        B = img.shape[0]
-        xyxy_all = torch.cat([batch["bboxes"][:, :2] - batch["bboxes"][:, 2:] / 2,
-                              batch["bboxes"][:, :2] + batch["bboxes"][:, 2:] / 2], 1) * S
-        boxes, ds = [], []
-        for b in range(B):
-            m = batch["batch_idx"] == b
-            gts.append(torch.cat([batch["cls"][m].reshape(-1, 1), xyxy_all[m]], 1).cpu().numpy())
-            dets.append(out[b][:, :6].cpu().numpy())
-            boxes.append(xyxy_all[m])
-            ds.append(batch["dist"][m].cpu())
-        for p, t in zip(model.distance_for_boxes(img, boxes), ds):
-            ok = torch.isfinite(t)
-            if ok.any():
-                rel.extend(((p[ok] - t[ok]).abs() / t[ok]).tolist())
-                mae.extend((p[ok] - t[ok]).abs().tolist())
-    m50, m, per = compute_map(dets, gts, nc)
-    res = dict(map50=m50, map=m, per_class=per, n_dist=len(rel))
-    if rel:
-        a = np.array(rel)
-        res.update(dist_med_rel=float(np.median(a)), dist_within20=float((a <= 0.2).mean()), dist_mae=float(np.mean(mae)))
-    else:
-        res.update(dist_med_rel=float("nan"), dist_within20=float("nan"), dist_mae=float("nan"))
-    return res
-
-
-def val_losses(model, loader, device, dist_gain):
-    import torch
-    model.train()          # the loss needs the training-style outputs; the batch-norm statistics stay frozen
-    for m in model.modules():
-        if isinstance(m, (torch.nn.BatchNorm2d, torch.nn.Dropout)):
-            m.eval()
-    tot = dict(box_loss=0.0, cls_loss=0.0, dfl_loss=0.0, dist_loss=0.0)
-    n = 0
-    with torch.no_grad():
-        for batch in loader:
-            batch = {k: v.to(device) for k, v in batch.items()}
-            batch["img"] = batch["img"].float() / 255
-            _, items = model.forward_train(batch, dist_gain=dist_gain, jitter=0.0)
-            B = batch["img"].shape[0]
-            for k in tot:
-                tot[k] += items.get(k, 0.0) * B
-            n += B
-    return {k: v / max(n, 1) for k, v in tot.items()}
-
-
-# ---------------------------------------------------------------- starting weights
-
-def load_pretrained(model, weights):
-    """Copies the pretrained YOLO detector weights into the model's detector: everything whose shape is the same (the body and the box
-    branch; the per-class outputs only when the class count happens to match).  The distance head stays new.  Returns (copied, total)."""
-    from ultralytics import YOLO
-    src = YOLO(weights).model.float().state_dict()
-    own = model.det.state_dict()
-    take = {k: v for k, v in src.items() if k in own and own[k].shape == v.shape}
-    model.det.load_state_dict(take, strict=False)
-    return len(take), len(own)
+LR_NEW, LR_CONTINUE, WEIGHT_DECAY = 0.002, 0.0005, 0.0001
+JITTER = 0.05                 # training boxes are moved and resized by up to this share of their size: a detector's boxes are never exact
+FOUND_CONF, FOUND_IOU = 0.25, 0.5
+COLS = ["epoch", "train/dist_loss", "val/median_rel_err", "val/within_20pct", "val/mae_m", "val/boxes_only_median_rel_err", "lr"]
 
 
 def fail(job, message):
@@ -174,178 +42,309 @@ def fail(job, message):
     return 1
 
 
-# ---------------------------------------------------------------- main
+def pct(x):
+    return "-" if x != x else f"{x * 100:.0f}%"
+
+
+def boxes_of(batch, S, jitter=0.0):
+    """(rois (N, 5), classes (N,), metres (N,)) of the boxes of a batch that carry a distance."""
+    import torch
+    d = batch["dist"]
+    ok = torch.isfinite(d)
+    xywh = batch["bboxes"][ok] * S
+    if jitter > 0 and len(xywh):
+        xywh = xywh + (torch.rand_like(xywh) * 2 - 1) * jitter * xywh[:, 2:].repeat(1, 2)
+    xyxy = torch.cat([xywh[:, :2] - xywh[:, 2:] / 2, xywh[:, :2] + xywh[:, 2:] / 2], 1)
+    return torch.cat([batch["batch_idx"][ok].view(-1, 1).float(), xyxy], 1), batch["cls"][ok].view(-1), d[ok]
+
+
+def score_labelled(nets, loader, device, S):
+    """{name: (scores, predictions, truths, classes)} of each net on the labelled boxes of a loader."""
+    import torch
+    out = {k: ([], [], []) for k in nets}
+    for net in nets.values():
+        net.eval()
+    with torch.no_grad():
+        for batch in loader:
+            batch = {k: v.to(device) for k, v in batch.items()}
+            rois, cls, d = boxes_of(batch, S)
+            if not len(rois):
+                continue
+            img = batch["img"].float() / 255
+            for k, net in nets.items():
+                out[k][0].extend(net.metres(img, rois, cls).tolist())
+                out[k][1].extend(d.tolist())
+                out[k][2].extend(cls.tolist())
+    import distance_model as dm
+    return {k: (dm.distance_scores(p, t), p, t, c) for k, (p, t, c) in out.items()}
+
+
+def train_distance(job, src, device, prev, save_dir):
+    """Stage 2.  Returns (the kept DistanceNet, info dict)."""
+    import torch
+    import torch.nn.functional as F
+    from torch.utils.data import DataLoader
+    import distance_model as dm
+    import gimble_data as gd
+    S, bs, epochs, patience, workers = int(job["imgsz"]), int(job["batch"]), int(job["epochs"]), int(job["patience"]), int(job.get("workers", 2))
+    tr = [s for s in src.samples("train") if any(d == d for d in s["dist"])]
+    va = [s for s in src.samples("val") if any(d == d for d in s["dist"])]
+    n_tr, n_va = sum(d == d for s in tr for d in s["dist"]), sum(d == d for s in va for d in s["dist"])
+    tl = DataLoader(gd.GimbleDataset(tr, src.nc, S, train=True), batch_size=bs, shuffle=True, num_workers=workers, collate_fn=gd.collate,
+                    pin_memory=device.type == "cuda", persistent_workers=workers > 0)
+    vl = DataLoader(gd.GimbleDataset(va, src.nc, S, train=False), batch_size=bs, shuffle=False, num_workers=workers, collate_fn=gd.collate) if va else None
+    logs = [math.log(min(max(d, dm.D_MIN), dm.D_MAX)) for s in tr for d in s["dist"] if d == d]
+    usual = math.exp(sum(logs) / len(logs))
+    nets = {"picture": dm.DistanceNet(src.nc, True, start_m=usual), "boxes": dm.DistanceNet(src.nc, False, start_m=usual)}
+    continued = None
+    if prev is not None:
+        if prev["config"].get("nc") == src.nc and list(prev.get("names") or []) == list(src.names):
+            continued = "picture" if prev["config"].get("use_picture", True) else "boxes"
+            nets[continued] = dm.net_of(prev)
+        else:
+            print("The distance model of the model to continue from was made for other classes: a new one is started.")
+    for net in nets.values():
+        net.to(device)
+    lrs = {k: LR_CONTINUE if k == continued else LR_NEW for k in nets}
+    opts = {k: torch.optim.AdamW(net.parameters(), lr=lrs[k], weight_decay=WEIGHT_DECAY) for k, net in nets.items()}
+    nb = max(1, len(tl))
+    warm = max(nb, 20)
+
+    def factor(ep, it):
+        cos = ((1 - math.cos(math.pi * ep / max(epochs, 1))) / 2) * (0.01 - 1) + 1
+        step = ep * nb + it
+        return cos * (step / warm if step < warm else 1.0)
+
+    print(f"Distance boxes : {n_tr} training (in {len(tr)} pictures) / {n_va} validation (in {len(va)} pictures)")
+    print("Start          : " + ("continuing the distance model of " + os.path.basename(job.get("start_weights") or "") if continued
+                                 else "new, random weights") + f"   (usual training distance {usual:.1f} m)")
+    print(f"Schedule       : up to {epochs} epochs, patience {patience}, batch {bs} pictures, picture size {S}, device {device}")
+    if not va:
+        print("NOTE: no validation box has a distance - the distance error cannot be scored, so the last epoch is kept.")
+    print("", flush=True)
+
+    os.makedirs(save_dir, exist_ok=True)
+    resfile = os.path.join(save_dir, "results.csv")
+    with open(resfile, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(COLS)
+    best = {k: dict(err=float("inf"), epoch=0, state=None, scores=None, rows=None) for k in nets}
+    done, t0 = 0, time.time()
+    for ep in range(epochs):
+        for net in nets.values():
+            net.train()
+        tot, cnt = 0.0, 0
+        for it, batch in enumerate(tl):
+            batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
+            rois, cls, d = boxes_of(batch, S, JITTER)
+            if not len(rois):                                   # the zoom of this batch cut every distance box at the picture's edge
+                continue
+            img = batch["img"].float() / 255
+            target = torch.log(d.clamp(dm.D_MIN, dm.D_MAX))
+            for k, net in nets.items():
+                for g in opts[k].param_groups:
+                    g["lr"] = lrs[k] * factor(ep, it)
+                loss = F.smooth_l1_loss(net(img, rois, cls), target, beta=0.1)
+                if not torch.isfinite(loss):
+                    opts[k].zero_grad(set_to_none=True)
+                    continue
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(net.parameters(), 10.0)
+                opts[k].step()
+                opts[k].zero_grad(set_to_none=True)
+                if k == "picture":
+                    tot += float(loss.detach()) * len(rois)
+                    cnt += len(rois)
+        done = ep + 1
+        tr_loss = tot / max(cnt, 1)
+        if vl is not None:
+            res = score_labelled(nets, vl, device, S)
+            for k in nets:
+                sc = res[k][0]
+                if sc["median"] < best[k]["err"]:
+                    best[k].update(err=sc["median"], epoch=ep + 1, scores=sc, rows=res[k][1:],
+                                   state={n: v.detach().cpu().clone() for n, v in nets[k].state_dict().items()})
+            sp, sb = res["picture"][0], res["boxes"][0]
+            row = [ep + 1, tr_loss, sp["median"], sp["within20"], sp["mae"], sb["median"], lrs["picture"] * factor(ep, nb - 1)]
+            text = (f"validation: median error {pct(sp['median'])} (within 20%: {pct(sp['within20'])}, off by {sp['mae']:.2f} m on average)"
+                    f"   [box and class alone: {pct(sb['median'])}]")
+        else:
+            for k in nets:
+                best[k].update(epoch=ep + 1, state={n: v.detach().cpu().clone() for n, v in nets[k].state_dict().items()})
+            row = [ep + 1, tr_loss, "", "", "", "", lrs["picture"] * factor(ep, nb - 1)]
+            text = "validation: no boxes with a distance"
+        with open(resfile, "a", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow([f"{x:.6g}" if isinstance(x, float) else x for x in row])
+        print(f"distance epoch {ep + 1}/{epochs}  train loss {tr_loss:.4f} | {text}  [{(time.time() - t0) / 60:.1f} min]", flush=True)
+        if vl is not None and ep + 1 - max(b["epoch"] for b in best.values()) >= patience:
+            print(f"No improvement for {patience} epochs - stopping early.", flush=True)
+            break
+
+    keep = "boxes" if vl is not None and best["boxes"]["err"] < best["picture"]["err"] else "picture"
+    other = "picture" if keep == "boxes" else "boxes"
+    net = nets[keep].cpu()
+    if best[keep]["state"] is not None:
+        net.load_state_dict(best[keep]["state"])
+    net.eval()
+    info = {"dist_inputs": keep, "dist_epoch": best[keep]["epoch"], "dist_total_epochs": done, "distance_boxes": {"train": n_tr, "val": n_va}}
+    sc = best[keep]["scores"]
+    print("")
+    if sc:
+        import numpy as np
+        info.update(dist_median_err=round(sc["median"], 4), dist_within_20=round(sc["within20"], 4), dist_mae_m=round(sc["mae"], 3))
+        if best[other]["scores"]:
+            info["dist_other_err"] = round(best[other]["scores"]["median"], 4)
+        what = {"picture": "the one that looks at the picture", "boxes": "the one that sees only the box and the class"}
+        print(f"Distance model kept: {what[keep]} (best epoch {best[keep]['epoch']} of {done}).")
+        print(f"  On the labelled validation boxes: median error {pct(sc['median'])}, within 20%: {pct(sc['within20'])}, "
+              f"off by {sc['mae']:.2f} m on average ({sc['n']} boxes).")
+        if best[other]["scores"]:
+            print(f"  {what[other].capitalize()} reached {pct(best[other]['scores']['median'])}.")
+        print("  By distance: " + ",  ".join(f"{label}: {pct(m)} ({n})" for label, n, m in sc["bins"] if n))
+        p, t, c = (np.asarray(x, float) for x in best[keep]["rows"])
+        per = [(name, int((c == i).sum()), float(np.median(np.abs(p - t)[c == i] / t[c == i])) if (c == i).any() else float("nan"))
+               for i, name in enumerate(src.names)]
+        print("  By class:    " + ",  ".join(f"{name}: {pct(m)} ({n})" for name, n, m in per if n), flush=True)
+    else:
+        print(f"Distance model kept: the last epoch ({done}); it could not be scored.", flush=True)
+    return net, info
+
+
+def score_together(two, src, device, S, bs, workers):
+    """Stage 3: the detector's own boxes go to the distance model, on the validation pictures that have a box with a distance.
+    Returns {'boxes', 'found', 'scores'}: a labelled box counts as found when a detection of its class overlaps it by FOUND_IOU or more."""
+    import torch
+    from torch.utils.data import DataLoader
+    from torchvision.ops import box_iou
+    import distance_model as dm
+    import gimble_data as gd
+    va = [s for s in src.samples("val") if any(d == d for d in s["dist"])]
+    if not va:
+        return {"boxes": 0, "found": 0, "scores": dm.distance_scores([], [])}
+    vl = DataLoader(gd.GimbleDataset(va, src.nc, S, train=False), batch_size=bs, shuffle=False, num_workers=workers, collate_fn=gd.collate)
+    two.to(device)
+    pred, true, total = [], [], 0
+    for batch in vl:
+        batch = {k: v.to(device) for k, v in batch.items()}
+        img = batch["img"].float() / 255
+        out = two.infer(img, conf=FOUND_CONF)
+        xywh = batch["bboxes"] * S
+        xyxy = torch.cat([xywh[:, :2] - xywh[:, 2:] / 2, xywh[:, :2] + xywh[:, 2:] / 2], 1)
+        for b in range(img.shape[0]):
+            m = (batch["batch_idx"] == b) & torch.isfinite(batch["dist"])
+            det, used = out[b], set()
+            total += int(m.sum())
+            for box, c, d in zip(xyxy[m], batch["cls"][m].view(-1), batch["dist"][m]):
+                if not len(det):
+                    break
+                iou = box_iou(box[None], det[:, :4])[0]
+                iou[det[:, 5] != c] = 0
+                for j in used:
+                    iou[j] = 0
+                j = int(iou.argmax())
+                if float(iou[j]) >= FOUND_IOU:
+                    used.add(j)
+                    pred.append(float(det[j, 6]))
+                    true.append(float(d))
+    return {"boxes": total, "found": len(true), "scores": dm.distance_scores(pred, true)}
+
 
 def main():
     job = jc.load_job()
     print("Loading PyTorch and Ultralytics ...", flush=True)        # the first line at once: importing them takes a while
     import torch
-    from torch.utils.data import DataLoader
+    import distance_model as dm
     import gimble_data as gd
-    import gimble_model as gm
+    import model_library as ml
 
-    gm.check_ultralytics()
-    size = job["size"]
-    imgsz, batch_size, epochs, patience = int(job["imgsz"]), int(job["batch"]), int(job["epochs"]), int(job["patience"])
-    workers = int(job.get("workers", 2))
-    dist_gain = float(job.get("dist_gain") or 2.0)
     start = job.get("start_weights")
-    pretrained = None if (start or job.get("from_scratch")) else (job.get("pretrained") or "").format(size=size) or None
+    only = bool(job.get("distance_only")) and bool(start)
+    prev, round_no = None, 1
+    if start:
+        try:
+            ck, prev = dm.read(start)
+            if not (isinstance(ck, dict) and "model" in ck):
+                raise ValueError("it is not a YOLO model file")
+            det_names = dm.names_of(ck)
+            del ck
+        except Exception as e:  # noqa: BLE001
+            return fail(job, f"Could not continue from {os.path.basename(start)}: {e}\nA model of the earlier kind (one network for boxes and "
+                             "distance) can be used but not trained further: train a new Classes + boxes + distance model.")
+        if prev is not None:
+            round_no = int(prev.get("round") or 0) + 1
 
     print("Reading the training data ...", flush=True)
     src = gd.Source(job["data_yaml"], use_people=False, classes=job.get("classes") or None)
     info = src.summary()
     if info["n_train"] == 0 or info["n_val"] == 0:
         return fail(job, "The training data has no " + ("training" if info["n_train"] == 0 else "validation") + " pictures.")
-
-    device = torch.device(job.get("device") or ("cuda" if torch.cuda.is_available() else "cpu"))
-    round_no = 1
-    if start:
-        try:
-            model, ck = gm.load_checkpoint(start)
-        except Exception as e:  # noqa: BLE001
-            return fail(job, f"Could not continue from {os.path.basename(start)}: {e}\n"
-                             "A classes + boxes + distance model can only be continued from a model of the same kind.")
-        if list(model.names) != list(src.names):
-            return fail(job, f"The model to continue from knows {model.names}, but this run trains {src.names}. They must be the same.")
-        round_no = int(ck.get("round", 0)) + 1
-        how = f"CONTINUE (round {round_no}) from {start}"
-    else:
-        cfg = (job.get("cfg") or "yolo26{size}.yaml").format(size=size)
-        model = gm.GimbleNet(src.names, cfg=cfg)
-        how = f"NEW {cfg}, random starting weights"
-        if pretrained:
-            try:
-                got, total = load_pretrained(model, pretrained)
-            except Exception as e:  # noqa: BLE001
-                return fail(job, f"Could not get the pretrained weights {pretrained}: {e}\n"
-                                 "They are downloaded the first time, so this needs an internet connection once. Without one, choose the "
-                                 "\"not pretrained\" type (random starting weights).")
-            if got < total // 2:
-                return fail(job, f"The pretrained weights {pretrained} do not fit this model ({got} of {total} parts matched). Nothing was trained.")
-            how = f"NEW {cfg}, detector started from the pretrained {pretrained} ({got} of {total} parts; the distance head is new)"
-    lr = float(job.get("lr") or (LR_CONTINUE if start else LR_PRETRAINED if pretrained else LR_RANDOM))
-
-    print("=== Plan ===")
-    print(f"Classes        : {src.names}")
-    print(f"Training       : {info['n_train']} pictures   boxes: " + ", ".join(f"{n}={c}" for n, c in zip(src.names, info["train_counts"])))
-    print(f"Validation     : {info['n_val']} pictures   boxes: " + ", ".join(f"{n}={c}" for n, c in zip(src.names, info["val_counts"])))
-    print(f"Distance boxes : {info['train_dist_boxes']} training / {info['val_dist_boxes']} validation")
-    print(f"Model          : {how}")
-    print(f"Schedule       : {epochs} epochs, patience {patience}, lr {lr}, batch {batch_size}, picture size {imgsz}, device {device}")
-    if device.type == "cpu":
-        print("NOTE: no GPU found - training on the CPU is very slow.")
     if info["train_dist_boxes"] == 0:
-        print("WARNING: no distances in the training data - the distance part will not learn this run.")
-    if info["val_dist_boxes"] == 0:
-        print("NOTE: the validation pictures have no distances - the distance error cannot be scored this run.")
-    print("", flush=True)
+        return fail(job, "None of the training boxes has a distance, so the distance model has nothing to learn from.")
+    if start and det_names != list(src.names):
+        return fail(job, f"The model to continue from knows {det_names}, but this run trains {src.names}. They must be the same.")
+    device = torch.device(job.get("device") or ("cuda" if torch.cuda.is_available() else "cpu"))
+    S, bs, workers = int(job["imgsz"]), int(job["batch"]), int(job.get("workers", 2))
 
-    model.set_epochs(epochs)
-    model.to(device)
-    save_dir = os.path.join(job["run_dir"], "train")
-    wdir = os.path.join(save_dir, "weights")
-    os.makedirs(wdir, exist_ok=True)
-    best_path = os.path.join(wdir, "best.pt")
+    print("\n=== Stage 1 of 3: the detector (classes + boxes) ===", flush=True)
+    if only:
+        det_pt = start
+        kept = (ml.read_info(start) or {}).get("scores") or {}
+        det_info = {k: kept[k] for k in ("map50", "map50_95") if kept.get(k) is not None} or None
+        print(f"Kept as it is: {os.path.basename(start)}" + (f"  (mAP50 {det_info['map50']}, mAP50-95 {det_info.get('map50_95')})" if det_info and "map50" in det_info else ""))
+        print("Nothing is trained in this stage.", flush=True)
+    else:
+        det_pt, det_info = thj.train_detector(job)
+        if not os.path.exists(det_pt):
+            return jc.finish(job, None)
+        if device.type == "cuda":
+            torch.cuda.empty_cache()                                # what the detector's training held on the GPU
+        if det_info:
+            print(f"\nDetector: best epoch {det_info['epoch']} of {det_info['total_epochs']}, mAP50 {det_info['map50']}, mAP50-95 {det_info['map50_95']}", flush=True)
 
-    train_ds = gd.GimbleDataset(src.samples("train"), src.nc, imgsz, train=True)
-    val_ds = gd.GimbleDataset(src.samples("val"), src.nc, imgsz, train=False)
-    tl = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=workers, collate_fn=gd.collate,
-                    drop_last=len(train_ds) > batch_size, pin_memory=device.type == "cuda", persistent_workers=workers > 0)
-    vl = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=workers, collate_fn=gd.collate)
+    out = dict(det_info or {})
+    try:
+        print("\n=== Stage 2 of 3: the distance model, on the labelled boxes ===", flush=True)
+        net, dinfo = train_distance(job, src, device, prev, os.path.join(job["run_dir"], "distance"))
+        out.update(dinfo, round=round_no)
 
-    decay = [p for p in model.parameters() if p.ndim > 1]
-    no_decay = [p for p in model.parameters() if p.ndim <= 1]
-    opt = torch.optim.AdamW([dict(params=decay, weight_decay=WEIGHT_DECAY), dict(params=no_decay, weight_decay=0.0)], lr=lr)
-    nb = len(tl)
-    warm = max(nb, 50) if start else max(3 * nb, 100)
+        print("\n=== Stage 3 of 3: the two models together ===", flush=True)
+        ck, _ = dm.read(det_pt)
+        two = dm.TwoModel(dm.Detector(ck.get("ema") or ck["model"]), net, src.names)
+        del ck
+        tog = score_together(two, src, device, S, bs, workers)
+        if tog["boxes"]:
+            out["dist_found"] = round(tog["found"] / tog["boxes"], 4)
+            print(f"The detector found {tog['found']} of the {tog['boxes']} validation boxes that have a distance "
+                  f"(confidence {FOUND_CONF} or more, the right class, overlapping by {FOUND_IOU} or more).")
+            sc = tog["scores"]
+            if sc["n"]:
+                out["dist_median_err_detected"] = round(sc["median"], 4)
+                print(f"Distance from the detector's own boxes: median error {pct(sc['median'])}, within 20%: {pct(sc['within20'])}, "
+                      f"off by {sc['mae']:.2f} m on average" + (f"   (from the labelled boxes it was {pct(out['dist_median_err'])})" if "dist_median_err" in out else ""))
+                print("  By distance: " + ",  ".join(f"{label}: {pct(m)} ({n})" for label, n, m in sc["bins"] if n), flush=True)
+            else:
+                print("So the distance from the detector's own boxes cannot be scored: the detector is what needs work.", flush=True)
+        else:
+            print("The validation pictures have no box with a distance, so there is nothing to score here.", flush=True)
 
-    def lr_at(ep, it):
-        cos = ((1 - math.cos(math.pi * ep / max(epochs, 1))) / 2) * (0.01 - 1) + 1
-        step = ep * nb + it
-        return lr * cos * (step / warm if step < warm else 1.0)
-
-    from ultralytics.utils.torch_utils import ModelEMA
-    model.det.criterion = model.det.init_criterion()
-    model.det.criterion.updates = 0
-    ema = ModelEMA(model)
-    use_amp = device.type == "cuda"
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
-
-    resfile = os.path.join(save_dir, "results.csv")
-    with open(resfile, "w", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerow(COLS)
-
-    best_fit, best_ep, done, t0 = -1.0, 0, 0, time.time()
-    for ep in range(epochs):
-        model.train()
-        tot = dict(box_loss=0.0, cls_loss=0.0, dfl_loss=0.0, dist_loss=0.0)
-        cnt = 0
-        for it, batch in enumerate(tl):
-            batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-            batch["img"] = batch["img"].float() / 255
-            for g in opt.param_groups:
-                g["lr"] = lr_at(ep, it)
-            with torch.autocast(device.type, enabled=use_amp):
-                loss, items = model.forward_train(batch, dist_gain=dist_gain)
-            if not torch.isfinite(loss):
-                print("  (skipped a batch with a non-finite loss)", flush=True)
-                opt.zero_grad(set_to_none=True)
-                continue
-            scaler.scale(loss).backward()
-            scaler.unscale_(opt)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)
-            scaler.step(opt)
-            scaler.update()
-            opt.zero_grad(set_to_none=True)
-            ema.update(model)
-            B = batch["img"].shape[0]
-            for k in tot:
-                tot[k] += items.get(k, 0.0) * B
-            cnt += B
-        model.det.criterion.update()
-        tr = {k: v / max(cnt, 1) for k, v in tot.items()}
-
-        vloss = val_losses(model, vl, device, dist_gain)
-        ev = evaluate(ema.ema, vl, device, src.nc, imgsz)
-        fit = 0.1 * ev["map50"] + 0.9 * ev["map"]
-        if ev["n_dist"]:
-            fit += 0.1 * (1.0 - min(ev["dist_med_rel"], 1.0))
-        row = [ep + 1, tr["box_loss"], tr["cls_loss"], tr["dfl_loss"], tr["dist_loss"],
-               vloss["box_loss"], vloss["cls_loss"], vloss["dfl_loss"], vloss["dist_loss"],
-               ev["map50"], ev["map"], ev["dist_med_rel"], ev["dist_within20"], ev["dist_mae"], fit, opt.param_groups[0]["lr"]]
-        with open(resfile, "a", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow([f"{x:.6g}" if isinstance(x, float) else x for x in row])
-        tmp = os.path.join(wdir, "last.tmp")
-        gm.save_checkpoint(tmp, ema.ema, round=round_no, epoch=ep + 1, fitness=fit, map50=ev["map50"], map=ev["map"],
-                           dist_med_rel=ev["dist_med_rel"], imgsz=imgsz, pretrained=pretrained, based_on=job.get("based_on"))
-        os.replace(tmp, os.path.join(wdir, "last.pt"))
-        if fit > best_fit:
-            best_fit, best_ep = fit, ep + 1
-            shutil.copy2(os.path.join(wdir, "last.pt"), os.path.join(wdir, "best.tmp"))
-            os.replace(os.path.join(wdir, "best.tmp"), best_path)
-        done = ep + 1
-        dtxt = (f"  distance: median error {ev['dist_med_rel'] * 100:.0f}% (within 20%: {ev['dist_within20'] * 100:.0f}%)"
-                if ev["n_dist"] else "")
-        print(f"epoch {ep + 1}/{epochs}  train box {tr['box_loss']:.3f} cls {tr['cls_loss']:.3f} dist {tr['dist_loss']:.3f} | "
-              f"val mAP50 {ev['map50']:.3f} mAP50-95 {ev['map']:.3f}{dtxt}  [{(time.time() - t0) / 60:.1f} min]", flush=True)
-        if ep + 1 - best_ep >= patience:
-            print(f"No improvement for {patience} epochs - stopping early (best epoch {best_ep}).", flush=True)
-            break
-
-    if not os.path.exists(best_path):
-        return jc.finish(job, None)
-    fin = evaluate(gm.load_checkpoint(best_path)[0].to(device), vl, device, src.nc, imgsz)
-    print("\nPer-class mAP50-95 on validation:")
-    for name, v in zip(src.names, fin["per_class"]):
-        print(f"  {name:18s} {'(no validation boxes)' if v is None else f'{v:.3f}'}")
-    out = {"epoch": best_ep, "total_epochs": done, "map50": round(float(fin["map50"]), 4), "map50_95": round(float(fin["map"]), 4),
-           "round": round_no, "distance_boxes": {"train": info["train_dist_boxes"], "val": info["val_dist_boxes"]}}
-    if fin["n_dist"]:
-        out.update(dist_median_err=round(float(fin["dist_med_rel"]), 4), dist_within_20=round(float(fin["dist_within20"]), 4),
-                   dist_mae_m=round(float(fin["dist_mae"]), 3))
-    return jc.finish(job, best_path, out)
+        out_pt = os.path.join(job["run_dir"], "model.pt")
+        dm.attach(det_pt, out_pt, net, names=list(src.names), round=round_no, epoch=out.get("epoch"), map50=out.get("map50"),
+                  map=out.get("map50_95"), dist_med_rel=out.get("dist_median_err"), dist_med_rel_detected=out.get("dist_median_err_detected"),
+                  imgsz=S, inputs=out["dist_inputs"], based_on=job.get("based_on"), created=time.time())
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        if only:
+            return fail(job, f"\nThe distance model could not be trained ({type(e).__name__}: {e}). Nothing was saved from this run.")
+        warning = (f"The distance model could not be trained ({type(e).__name__}: {e}). The detector that was trained is saved on its own, "
+                   "as a Classes + boxes model: continue from it with the Classes + boxes + distance type to add the distance model.")
+        print("\n" + warning, flush=True)
+        return jc.finish(dict(job, models_key="assist"), det_pt, det_info, warning=warning)
+    return jc.finish(job, out_pt, out)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        code = main()
+    except Exception as e:  # noqa: BLE001
+        print(f"\nTraining failed ({type(e).__name__}: {e}).", flush=True)
+        code = 1
+    sys.exit(code)

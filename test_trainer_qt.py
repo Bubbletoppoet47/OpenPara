@@ -90,9 +90,11 @@ assert [(s.number, s.title) for s in w.sections] == [(1, "Data"), (2, "Distortio
 assert not w.findChildren(tt.QGroupBox), "no grey group boxes"
 assert "font-weight:600" in w.btn_train.styleSheet() and w.btn_train.text() == "Start training"
 assert w.panel_scroll.viewport().width() >= w.panel.minimumSizeHint().width(), "the left panel shows its contents whole"
-assert w.type_box.findData("fake") >= 0 and w.type_box.findData("yolo") >= 0 and w.type_box.findData("yolo_scratch") >= 0
-assert [w.type_box.itemText(i) for i in range(4)] == ["Classes + boxes  (pretrained)", "Classes + boxes  (not pretrained)",
-                                                       "Classes + boxes + distance  (pretrained)", "Classes + boxes + distance  (not pretrained)"]
+assert w.type_box.findData("fake") >= 0 and w.type_box.findData("yolo") >= 0 and w.type_box.findData("yolo_scratch") < 0
+# only random-weight types are offered: nothing in the type box or its explanation offers a pretrained start
+assert [w.type_box.itemText(i) for i in range(2)] == ["Classes + boxes", "Classes + boxes + distance"]
+assert not any("pretrained" in w.type_box.itemText(i).lower() for i in range(w.type_box.count()))
+assert "random weights" in tt.HINTS["type"] and "nothing pretrained" in tt.HINTS["type"]
 # every type's name is shown whole in the type box, and the table's last column is not cut off
 fm = w.type_box.fontMetrics()
 assert max(fm.horizontalAdvance(w.type_box.itemText(i)) for i in range(4)) + 40 <= w.type_box.width(), w.type_box.width()
@@ -178,24 +180,55 @@ assert not w.running() and MSG and "has a distance" in MSG[-1][1] and "Classes +
 assert w.run_label.text() == "Training did not start." and w.btn_train.isEnabled() and w.panel.isEnabled() and w.btn_stop.text() == "Stop"
 w.type_box.setCurrentIndex(w.type_box.findData("yolo"))
 assert "Boxes with a distance" not in w.data_info.text() and "cannot be trained" not in w.data_info.text()
-# a model is continued as the kind it is: picking a distance model switches the type to a distance type, a plain one switches it back
+# continuing a model.  One that has a distance model keeps it: picking it switches the type to Classes + boxes + distance and locks it.
+# A classes + boxes model can go on as it is OR get a distance model on top, so the type stays free.
 import pickle, zipfile
-def fake_pt(path, distance):
+def fake_pt(path, kind):
+    inside = {"two": {"opara_two_model": {"format": "opara-two-model-v1"}, "model": "yolo"}, "old": {"format": "gimble-det-dist-v1"},
+              "plain": {"model": "yolo"}}[kind]
     with zipfile.ZipFile(path, "w") as z:
-        z.writestr("archive/data.pkl", pickle.dumps({"format": "gimble-det-dist-v1"} if distance else {"model": "yolo"}))
+        z.writestr("archive/data.pkl", pickle.dumps(inside))
     return path
-os.makedirs(ml.folder_path(w.tp.models_dir, "scratch"), exist_ok=True)
-vdist = ml.save_version(w.tp.models_dir, "scratch", fake_pt(os.path.join(TMP, "d.pt"), True), "n", "Tester", classes=["cup", "bottle", "can"])
-w._fill_continue()
+for d in ("scratch", "assist"):
+    os.makedirs(ml.folder_path(w.tp.models_dir, d), exist_ok=True)
+names = ["cup", "bottle", "can"]
+vtwo = ml.save_version(w.tp.models_dir, "scratch", fake_pt(os.path.join(TMP, "two.pt"), "two"), "n", "Two", classes=names)
+vold = ml.save_version(w.tp.models_dir, "scratch", fake_pt(os.path.join(TMP, "old.pt"), "old"), "n", "Old", classes=names)
+vplain = ml.save_version(w.tp.models_dir, "assist", fake_pt(os.path.join(TMP, "plain.pt"), "plain"), "s", "Plain", classes=names)
+assert [tc.checkpoint_kind(v) for v in (vtwo, vold, vplain)] == ["two", "old", "plain"]
+w._fill_continue(); w.refresh_models()
 labels = {w.cont_box.itemData(i): w.cont_box.itemText(i) for i in range(w.cont_box.count())}
-assert labels[vdist].endswith("(this project, with distance)") and not labels[vs[0]["path"]].endswith("with distance)"), labels
-w.cont_box.setCurrentIndex(w.cont_box.findData(vdist)); w.cont_on.setChecked(True)
+assert labels[vtwo].endswith("(this project, with distance)") and labels[vold].endswith("(this project, with distance, earlier kind)"), labels
+assert labels[vplain].endswith("(this project)"), labels
+listed = [w.models_list.item(i).text() for i in range(w.models_list.count())]
+assert any("classes + boxes + distance (earlier kind)" in t for t in listed) and any("Small   classes + boxes   20" in t for t in listed), listed
+w.type_box.setCurrentIndex(w.type_box.findData("yolo"))
+assert w.dist_only.isHidden() and w.dist_only_hint.isHidden()                     # nothing to keep or not: no model is continued
+w.cont_box.setCurrentIndex(w.cont_box.findData(vtwo)); w.cont_on.setChecked(True)
 assert w.type_box.currentData() == "yolo_distance" and w.tp.settings["model"]["type"] == "yolo_distance" and not w.type_box.isEnabled()
 assert "Boxes with a distance" in w.data_info.text()
-w.cont_box.setCurrentIndex(w.cont_box.findData(vs[0]["path"]))
-assert w.type_box.currentData() == "yolo" and w.tp.settings["model"]["type"] == "yolo" and "Boxes with a distance" not in w.data_info.text()
+# the detector can be kept as it is (only the distance model is trained): offered with a distance type, on by default, and saved
+assert not w.dist_only.isHidden() and w.dist_only.isChecked() and w.tp.settings["model"]["distance_only"] is True
+w.dist_only.setChecked(False); assert w.tp.settings["model"]["distance_only"] is False
+w.dist_only.setChecked(True)
+# a classes + boxes model: the type is free.  As Classes + boxes + distance it gets a distance model on top; as Classes + boxes it goes on as it is
+w.cont_box.setCurrentIndex(w.cont_box.findData(vplain))
+assert w.type_box.currentData() == "yolo_distance" and w.type_box.isEnabled() and not w.dist_only.isHidden()
+w.type_box.setCurrentIndex(w.type_box.findData("yolo"))
+assert w.tp.settings["model"]["type"] == "yolo" and w.type_box.isEnabled() and w.dist_only.isHidden() and "Boxes with a distance" not in w.data_info.text()
+assert os.path.normpath(w.tp.settings["model"]["continue_from"]) == os.path.normpath(vplain)
+# the earlier one-network kind cannot be trained further: it says so when started, and nothing is left of the run
+w.cont_box.setCurrentIndex(w.cont_box.findData(vold))
+assert w.type_box.currentData() == "yolo_distance" and not w.type_box.isEnabled() and w.dist_only.isHidden()
+runs_before = sorted(os.listdir(w.tp.runs_dir))
+MSG.clear(); w.start(); wait(lambda: not w.preparing())
+assert not w.running() and MSG and "earlier kind" in MSG[-1][1] and "cannot be trained further" in MSG[-1][1], MSG
+assert sorted(os.listdir(w.tp.runs_dir)) == runs_before
 w.cont_on.setChecked(False)
-os.remove(vdist); os.remove(ml.info_path(vdist)); w._fill_continue(); w.refresh_models()
+assert w.type_box.isEnabled() and w.dist_only.isHidden()
+for v in (vtwo, vold, vplain):
+    os.remove(v); os.remove(ml.info_path(v))
+w._fill_continue(); w.refresh_models()
 w.type_box.setCurrentIndex(w.type_box.findData("fake")); assert w.tp.settings["model"]["type"] == "fake" and w.size_box.currentData() == "n"
 # ---- a long preparation: the window keeps working, shows how far it is and how long is left, and Cancel ends it
 real_start = w.tp.start_run

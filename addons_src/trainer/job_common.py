@@ -51,7 +51,8 @@ def best_info(save_dir):
         return None
 
 
-SCORE_KEYS = ("map50", "map50_95", "dist_median_err", "dist_within_20", "dist_mae_m")       # what is kept with a saved model
+SCORE_KEYS = ("map50", "map50_95", "dist_median_err", "dist_within_20", "dist_mae_m",        # what is kept with a saved model
+              "dist_found", "dist_median_err_detected")
 
 
 def publish(job, best_pt, scores=None):
@@ -71,19 +72,25 @@ def publish(job, best_pt, scores=None):
     return saved
 
 
-def finish(job, best_pt, info=None):
-    """The end of a clean run."""
+def finish(job, best_pt, info=None, warning=None):
+    """The end of a clean run.  `warning` is kept in the result for a run that saved something else than was asked for."""
     if not best_pt or not os.path.exists(best_pt):
         print("Training ended without a usable best.pt.", flush=True)
         write_result(job, ok=False, message="Training ended without a usable model.")
         return 1
     import model_library as ml
-    scores = {k: info[k] for k in SCORE_KEYS if info and k in info} or None
+    scores = {k: info[k] for k in SCORE_KEYS if info and info.get(k) is not None} or None
     saved = publish(job, best_pt, scores)
-    write_result(job, ok=True, best=best_pt, info=info, saved=saved, finished=time.time())
+    extra = {"warning": warning} if warning else {}
+    write_result(job, ok=True, best=best_pt, info=info, saved=saved, finished=time.time(), **extra)
     if info:
-        print(f"\nDone. Best epoch {info['epoch']} of {info['total_epochs']}: mAP50 {info['map50']}, mAP50-95 {info['map50_95']}"
-              + ml.distance_text(info, ", "), flush=True)
+        parts = []
+        if info.get("epoch") is not None and info.get("total_epochs") is not None:
+            parts.append(f"best epoch {info['epoch']} of {info['total_epochs']}")
+        if info.get("map50") is not None:
+            parts.append(f"mAP50 {info['map50']}, mAP50-95 {info.get('map50_95')}")
+        text = ": ".join(parts[:1] + [", ".join(parts[1:])] if len(parts) > 1 else parts) + ml.distance_text(info, ", " if parts else "")
+        print("\nDone." + (" " + text[0].upper() + text[1:] if text else ""), flush=True)
     for p in saved:
         print(f"Saved as a new model version: {p}", flush=True)
     return 0

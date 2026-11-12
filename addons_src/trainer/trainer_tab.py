@@ -32,18 +32,22 @@ HINTS = {
     "noise": "Adds random grain, like a camera in low light. Higher numbers are grainier.",
     "jpeg": "Re-saves the picture at lower JPEG quality so it picks up compression blocks. Lower numbers look worse (100 = no loss).",
     "count": "How many distorted versions are made of each training picture. 3 copies means about 4 times as many training pictures, and every epoch takes about 4 times as long.",
-    "type": "All of these are YOLO models. Classes + boxes: the model finds objects and says what they are. "
-            "Classes + boxes + distance: it also estimates how far away each object is, in metres. It learns that from the LiDAR distances picked on "
-            "boxes in the Annotator (boxes without one still teach class and position), and it is the kind the Gimble uses to show distance. "
-            "Pretrained starts from weights that already know general shapes: it trains quickly and works with fewer pictures. "
-            "Not pretrained starts from random numbers: it needs many more pictures and epochs.",
+    "type": "Classes + boxes: a YOLO model that finds objects and says what they are. "
+            "Classes + boxes + distance: two models trained one after the other. First that same YOLO model; then a separate, small distance "
+            "model that is told a box and its class and answers how far away it is, in metres. It learns that from the LiDAR distances picked on "
+            "boxes in the Annotator. Each is scored by itself, then both together, and they are saved as one model (the kind the Gimble uses to "
+            "show distance). Every model starts from random weights: nothing pretrained is used, so it needs many pictures and epochs.",
     "size": "Bigger models can be more accurate but are slower to train and run, and need more GPU memory. n = nano (smallest), s = small, m = medium, l = large.",
     "epochs": "One epoch is one pass over all the training pictures. More epochs train longer; it usually helps until the validation score stops improving.",
     "patience": "Training ends early when the validation score has not improved for this many epochs.",
     "batch": "How many pictures the GPU handles at once. Higher is faster but needs more GPU memory. If training runs out of memory, lower it.",
     "imgsz": "Every picture is resized to this many pixels wide before training. Bigger sizes find small objects better but need more GPU memory and time. 640 is the usual choice.",
-    "continue": "Train further from a model you already made (here or in the annotator's models, or a .pt file). It keeps its size and its kind "
-                "(with or without distance) and must know the same classes you have ticked.",
+    "continue": "Train further from a model you already made (here or in the annotator's models, or a .pt file). It keeps its size and must "
+                "know the same classes you have ticked. A Classes + boxes model can also get a distance model on top: choose the "
+                "Classes + boxes + distance type.",
+    "dist_only": "Ticked: the detector of the model you continue from is used exactly as it is, and only the distance model is trained "
+                 "(a new one, or the model's own trained further). This is quick, and the detector's scores do not change. "
+                 "Unticked: the detector is trained further first, then the distance model.",
     "name": "Optional name for the finished model. It is shown in the annotator's AI model box with the size and date. Left empty, it is named after you.",
     "python": "The Python that runs the training. It needs torch (the CUDA build, for your GPU) and ultralytics.",
 }
@@ -332,7 +336,7 @@ class TrainerTab(QWidget):
         dv.addWidget(btn)
 
         mv = section(3, "Model", None, lambda: f"{self.type_box.currentText()}, {self.epochs.value()} epochs")
-        mf = QFormLayout()
+        mf = self.model_form = QFormLayout()
         mv.addLayout(mf)
         self.type_box = QComboBox()
         self.type_box.currentIndexChanged.connect(lambda _i: self._type_changed())
@@ -361,6 +365,14 @@ class TrainerTab(QWidget):
         crow.setContentsMargins(0, 0, 0, 0)
         mf.addRow(self.cont_row)
         mf.addRow(hint("continue"))
+        self.dist_only = QCheckBox("Keep the detector as it is: train only the distance model")
+        self.dist_only.toggled.connect(lambda _c: self._model_changed())
+        tip(self.dist_only, "dist_only")
+        self.dist_only_hint = hint("dist_only")
+        mf.addRow(self.dist_only)
+        mf.addRow(self.dist_only_hint)
+        for wdg in (self.dist_only, self.dist_only_hint):
+            self._row_visible(wdg, False)
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("(optional)")
         self.name_edit.textChanged.connect(lambda _t: self._model_changed())
@@ -486,6 +498,7 @@ class TrainerTab(QWidget):
                 s.setValue(m[k])
             self._fill_continue(m.get("continue_from"))
             self.cont_on.setChecked(bool(m.get("continue_from")))
+            self.dist_only.setChecked(bool(m.get("distance_only", True)))
             self.name_edit.setText(m.get("name") or "")
             self._continue_enable()
         finally:
@@ -585,7 +598,7 @@ class TrainerTab(QWidget):
         self.models_list.clear()
         for v in self.tp.list_models():
             sc = v.get("scores") or {}
-            kind = "classes + boxes + distance" if tc.is_distance_checkpoint(v["path"]) else "classes + boxes"
+            kind = {"two": "classes + boxes + distance", "old": "classes + boxes + distance (earlier kind)"}.get(tc.checkpoint_kind(v["path"]), "classes + boxes")
             self.models_list.addItem(f"{self.ml.mr.SIZE_NAMES.get(v['size'], '?')}   {kind}   {time.strftime('%Y-%m-%d %H:%M', time.localtime(v['ts']))}"
                                      + (f"   mAP50 {sc['map50']}" if "map50" in sc else "") + self.ml.distance_text(sc))
 
@@ -630,7 +643,8 @@ class TrainerTab(QWidget):
     def _type_changed(self):
         if self._loading:
             return
-        self._fill_sizes()
+        self._fill_sizes(self.size_box.currentData())
+        self._continue_enable()
         self._model_changed()
         self._summary()
 
@@ -638,7 +652,8 @@ class TrainerTab(QWidget):
         if self._loading:
             return
         m = {"type": self.type_box.currentData(), "size": self.size_box.currentData(), "epochs": self.epochs.value(),
-             "name": self.name_edit.text().strip(), "continue_from": self.cont_box.currentData() if self.cont_on.isChecked() else None}
+             "name": self.name_edit.text().strip(), "continue_from": self.cont_box.currentData() if self.cont_on.isChecked() else None,
+             "distance_only": self.dist_only.isChecked()}
         m.update({k: s.value() for k, s in self.more.items()})
         self.tp.set_settings({"model": m})
         self._update_env_view()
@@ -653,7 +668,7 @@ class TrainerTab(QWidget):
                 for v in self.ml.list_versions(d, key):
                     if v["path"] not in seen:
                         seen.add(v["path"])
-                        kind = ", with distance" if tc.is_distance_checkpoint(v["path"]) else ""
+                        kind = {"two": ", with distance", "old": ", with distance, earlier kind"}.get(tc.checkpoint_kind(v["path"]), "")
                         self.cont_box.addItem(f"{v['file'][:-3]}   ({label}{kind})", v["path"])
         if want and want not in seen:
             self.cont_box.addItem(os.path.basename(want), want)
@@ -661,19 +676,34 @@ class TrainerTab(QWidget):
         self.cont_box.setCurrentIndex(i if i >= 0 else (0 if self.cont_box.count() else -1))
         self._loading = was
 
+    def _row_visible(self, wdg, on):
+        if hasattr(self.model_form, "setRowVisible"):                # Qt 6.4 and later
+            self.model_form.setRowVisible(wdg, on)
+        else:
+            wdg.setVisible(on)
+
     def _continue_enable(self):
         on = self.cont_on.isChecked()
+        path = self.cont_box.currentData() if on else None
+        kind = tc.checkpoint_kind(path) if path and os.path.isfile(path) else "plain"
+        builtin = (self.type_box.currentData() or "") in ("yolo", "yolo_distance")
         self.cont_row.setEnabled(on)
         self.size_box.setEnabled(not on)
-        self.type_box.setEnabled(not on)
+        # a classes + boxes model can go on as it is or get a distance model on top; one with a distance model keeps it
+        self.type_box.setEnabled(not on or (kind == "plain" and builtin))
+        show = on and self.type_box.currentData() == "yolo_distance" and kind != "old"
+        if show != (not self.dist_only.isHidden()):
+            for wdg in (self.dist_only, self.dist_only_hint):         # whole rows: the form gives their height back and lays itself out again
+                self._row_visible(wdg, show)
 
     def _continue_changed(self):
-        self._continue_enable()
         self._type_follows_model()
+        self._continue_enable()
         self._model_changed()
 
     def _type_follows_model(self):
-        """A model is continued as the kind it is: choosing a distance model switches the type to a distance type, and the other way round."""
+        """A model that has a distance model is continued with it: choosing one switches the type to Classes + boxes + distance.
+        A classes + boxes model leaves the type as it is (it can go on as it is, or get a distance model on top)."""
         path = self.cont_box.currentData() if self.cont_on.isChecked() else None
         cur = self.type_box.currentData()
         spec = tc.model_types().get(cur or "", {})
@@ -684,7 +714,7 @@ class TrainerTab(QWidget):
             self._loading = True
             try:
                 self.type_box.setCurrentIndex(max(0, self.type_box.findData(want)))
-                self._fill_sizes()
+                self._fill_sizes(self.size_box.currentData())
             finally:
                 self._loading = False
             self._summary()
@@ -696,6 +726,7 @@ class TrainerTab(QWidget):
             self._fill_continue(path)
             self.cont_on.setChecked(True)
             self._type_follows_model()
+            self._continue_enable()
             self._model_changed()
 
     def clear_distortions(self):
@@ -1035,6 +1066,10 @@ class TrainerTab(QWidget):
         res = job.result()
         if job.stopped:
             self.run_label.setText("Stopped. Nothing was saved from this run.")
+        elif res and res.get("ok") and res.get("warning"):
+            self.run_label.setText("Finished, but not with what was asked for - see the end of the log. " + res["warning"])
+            self.refresh_models()
+            self._tell_annotators()
         elif res and res.get("ok"):
             self.run_label.setText("Finished. The new model is saved and the annotator lists it.")
             self.refresh_models()

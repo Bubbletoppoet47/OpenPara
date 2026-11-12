@@ -5,12 +5,27 @@ Same interface as model_assist.ModelAssist (predict_boxes + class_names), so the
 the same way. The from-scratch model lives in ~/yolo_runs/gimble_model/weights/best.pt and is rewritten
 after every training round; reload_if_changed() notices that and picks up the new version automatically.
 This module only ever READS that file. (The original helper model is ModelAssist's job and is never touched.)
+
+Two kinds of model file give a distance per box and are both read here (load_distance_model):
+    a detector with a distance model added   distance_model.py - what the Trainer makes now (two models, one after the other)
+    the earlier one-network model            gimble_model.GimbleNet
 """
 import os
 
 import numpy as np
 
-import gimble_model as gm
+
+def load_distance_model(path):
+    """(model with .infer(img, conf) and .names, its details) of either kind of model file that gives a distance per box."""
+    import torch
+    ck = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(ck, dict) and str(ck.get("format", "")).startswith("gimble-det-dist"):
+        del ck
+        import gimble_model as gm
+        return gm.load_checkpoint(path)
+    del ck
+    import distance_model as dm
+    return dm.load(path)
 
 
 class GimbleAssist:
@@ -28,7 +43,7 @@ class GimbleAssist:
     # ---- loading -------------------------------------------------------------------------
     def _load(self):
         st = os.stat(self.path)
-        model, ck = gm.load_checkpoint(self.path)
+        model, ck = load_distance_model(self.path)
         model.to(self.device).eval()
         self.model = model
         self.imgsz = int(ck.get("imgsz", 640))

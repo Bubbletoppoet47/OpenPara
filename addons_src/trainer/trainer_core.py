@@ -8,10 +8,10 @@ A training project (a ".training" folder, marker training.json):
     models/         Assist/ Scratch/  every model this project trained (as dated versions, the annotator's Models folder layout)
     runs/<id>/      one folder per training run: dataset/ (the frozen copy it trains on), job.json, log.txt, result.json, the training output
 
-Two kinds of model can be trained (model_types()):
-    classes + boxes              a stock Ultralytics YOLO model                                  -> models/Assist
-    classes + boxes + distance   the same detector with a distance head (gimble_model.GimbleNet)  -> models/Scratch
-The distance kind learns from the LiDAR distances picked per box in the annotator; the frozen copy carries them in distances.csv.
+Two kinds of model can be trained (model_types()), both from random weights (nothing pretrained):
+    classes + boxes              a stock Ultralytics YOLO model                                            -> models/Assist
+    classes + boxes + distance   that detector, then a separate distance model trained after it; one file  -> models/Scratch
+The distance model learns from the LiDAR distances picked per box in the annotator; the frozen copy carries them in distances.csv.
 
 Distortions are made only for TRAINING pictures; pictures of sets marked Validation are never distorted (the annotator's rule).
 A run trains on a frozen copy of the data, so importing or editing while it runs changes nothing about that run.
@@ -31,7 +31,10 @@ MARKER = "training.json"
 FORMAT = "openpara-training"
 HELPER_SCRIPT = os.path.join(HERE, "train_helper_job.py")
 DISTANCE_SCRIPT = os.path.join(HERE, "train_distance_job.py")
-DISTANCE_FORMAT = b"gimble-det-dist"        # what a classes + boxes + distance checkpoint carries inside (gimble_model.MODEL_FORMAT)
+TWO_FORMAT = b"opara-two-model"             # a detector with a distance model added carries this at its start (distance_model.FORMAT)
+OLD_DISTANCE_FORMAT = b"gimble-det-dist"    # the earlier kind: one network for boxes and distance (gimble_model.MODEL_FORMAT)
+OLD_KIND_TEXT = ("This model is the earlier kind, where one network gave boxes and distance together. It still works in the Annotator and on "
+                 "the Gimble, but it cannot be trained further. Train a new Classes + boxes + distance model.")
 
 DISTORTION_TYPES = [   # key, label, range key, low limit, high limit, decimals, neutral value (the type "off")
     ("brightness", "Brightness", "brightness", 0.1, 3.0, 2, (1.0, 1.0)),
@@ -45,7 +48,7 @@ DISTORTION_TYPES = [   # key, label, range key, low limit, high limit, decimals,
 DEFAULTS = {
     "distortions": {"enabled": False, "count": 5, "types": {t[0]: True for t in DISTORTION_TYPES}, "ranges": {}, "blur_chance": 0.5},
     "model": {"type": "yolo", "size": "m", "epochs": 100, "patience": 30, "batch": 16, "imgsz": 640, "classes": None,
-              "continue_from": None, "name": ""},
+              "continue_from": None, "distance_only": True, "name": ""},
     "python": "",
 }
 
@@ -86,16 +89,13 @@ def untitled_dir():
 
 def model_types():
     """{key: spec}: the built-in types plus what add-ons registered with ext.add_model_trainer.
-    Built in: classes + boxes (stock YOLO) and classes + boxes + distance (YOLO with a distance head), each pretrained or from random weights.
-    A spec with distance=True trains a model that also outputs a distance per box and is saved with the Scratch models."""
+    Built in: classes + boxes (stock YOLO) and classes + boxes + distance (that detector, then a separate distance model).  Both start
+    from random weights: 'cfg' is the description a new model is built from, 'fallback' the one for an Ultralytics without it.
+    A spec with distance=True trains a model that also gives a distance per box and is saved with the Scratch models."""
     common = {"script": HELPER_SCRIPT, "sizes": ("n", "s", "m", "l"), "default_size": "m", "models_key": "assist", "needs": [],
-              "pretrained": "yolo26{size}.pt", "fallback": "yolo11{size}.pt", "distance": False}
-    dist = dict(common, script=DISTANCE_SCRIPT, models_key="scratch", distance=True, default_size="n", fallback=None)
-    out = {"yolo": dict(common, label="Classes + boxes  (pretrained)", from_scratch=False),                 # labels short enough for the type box
-           "yolo_scratch": dict(common, label="Classes + boxes  (not pretrained)", from_scratch=True,
-                                pretrained="yolo26{size}.yaml", fallback="yolo11{size}.yaml"),
-           "yolo_distance": dict(dist, label="Classes + boxes + distance  (pretrained)", from_scratch=False),
-           "yolo_distance_scratch": dict(dist, label="Classes + boxes + distance  (not pretrained)", from_scratch=True, pretrained=None)}
+              "cfg": "yolo26{size}.yaml", "fallback": "yolo11{size}.yaml", "distance": False}
+    out = {"yolo": dict(common, label="Classes + boxes"),
+           "yolo_distance": dict(common, label="Classes + boxes + distance", script=DISTANCE_SCRIPT, models_key="scratch", distance=True)}
     try:
         import ext
         for k, spec in ext.MODEL_TRAINERS.items():
@@ -116,28 +116,36 @@ class Cancelled(Exception):
     """Raised by the preparation of a run when the user stopped it before the training program started."""
 
 
-def is_distance_checkpoint(path):
-    """True when this .pt is a classes + boxes + distance model.  Read without torch: a .pt is a zip whose pickle names the format."""
+OLD_TYPES = {"helper": "yolo", "yolo_scratch": "yolo", "yolo_distance_scratch": "yolo_distance"}     # type names of earlier versions
+
+
+def checkpoint_kind(path):
+    """What a .pt model is: "two" (a detector with a distance model added), "old" (the earlier one-network distance model) or "plain"
+    (a classes + boxes model, or anything else).  Read without torch: a .pt is a zip whose pickle names the format near its start."""
     import zipfile
     try:
         with zipfile.ZipFile(path) as z:
             for n in z.namelist():
                 if n.endswith("data.pkl"):
                     with z.open(n) as f:
-                        return DISTANCE_FORMAT in f.read(4 << 20)
+                        head = f.read(4 << 20)
+                    return "two" if TWO_FORMAT in head else "old" if OLD_DISTANCE_FORMAT in head else "plain"
     except (OSError, zipfile.BadZipFile, KeyError):
         pass
-    return False
+    return "plain"
+
+
+def is_distance_checkpoint(path):
+    """True when this .pt gives a distance per box (either kind of distance model)."""
+    return checkpoint_kind(path) != "plain"
 
 
 def type_for_checkpoint(path, current="yolo"):
-    """The model type that can continue this .pt: a distance model needs a distance type and a plain YOLO model a plain one.
-    `current` is kept when it already fits."""
-    types = model_types()
-    want = is_distance_checkpoint(path)
-    if current in types and bool(types[current].get("distance")) == want:
-        return current
-    return "yolo_distance" if want else "yolo"
+    """The model type that continues this .pt.  A model with a distance model goes on as Classes + boxes + distance.  A classes + boxes
+    model can go on as either: as it is, or with a distance model trained on top of it - `current` is kept when it is one of the two."""
+    if checkpoint_kind(path) != "plain":
+        return "yolo_distance"
+    return current if current in ("yolo", "yolo_distance") else "yolo"
 
 
 def default_me():
@@ -261,7 +269,7 @@ def checkpoint_info(python, path, stop=None):
     distance = is_distance_checkpoint(path)
     if inf.get("size") and inf.get("classes"):
         return {"size": inf["size"], "classes": list(inf["classes"]), "distance": distance}
-    if distance:
+    if checkpoint_kind(path) == "old":
         code = ("import json,re,sys,torch\nck=torch.load(sys.argv[1],map_location='cpu',weights_only=False)\n"
                 "m=re.search(r'yolo\\d+([nslmx])',str(ck.get('cfg','')))\n"
                 "print('CKPT'+json.dumps({'size':m.group(1) if m else None,'classes':list(ck['names'])}))\n")
@@ -368,8 +376,7 @@ class TrainingProject:
     @property
     def settings(self):
         st = _merge(DEFAULTS, self.meta["settings"])
-        if st["model"].get("type") == "helper":                     # the old name of the pretrained YOLO type
-            st["model"]["type"] = "yolo"
+        st["model"]["type"] = OLD_TYPES.get(st["model"].get("type"), st["model"].get("type"))      # pretrained types are gone: all random weights
         st["model"].pop("start", None)
         return st
 
@@ -580,6 +587,7 @@ class TrainingProject:
         s = self.settings
         m = dict(s["model"])
         m.update({k: v for k, v in overrides.items() if v is not None})
+        m["type"] = OLD_TYPES.get(m["type"], m["type"])
         types = model_types()
         if m["type"] not in types:
             raise ValueError(f"Unknown model type: {m['type']}")
@@ -589,7 +597,9 @@ class TrainingProject:
             if not os.path.isfile(m["continue_from"]):
                 raise ValueError(f"The model to continue from is not there: {m['continue_from']}")
             if types[m["type"]]["script"] in (HELPER_SCRIPT, DISTANCE_SCRIPT):
-                m["type"] = type_for_checkpoint(m["continue_from"], m["type"])     # a model is continued as the kind it is
+                if checkpoint_kind(m["continue_from"]) == "old":
+                    raise ValueError(OLD_KIND_TEXT)
+                m["type"] = type_for_checkpoint(m["continue_from"], m["type"])     # a model with a distance model keeps it
             tell("model")
             prev = checkpoint_info(python, m["continue_from"], stop)
             m["size"] = prev["size"] or m["size"]
@@ -632,11 +642,11 @@ class TrainingProject:
         job = {"data_yaml": yaml_path, "run_dir": run_dir, "type": m["type"], "size": m["size"], "epochs": int(m["epochs"]),
                "patience": int(m["patience"]), "batch": int(m["batch"]), "imgsz": int(m["imgsz"]), "workers": 2, "device": None,
                "classes": counts["classes"], "counts": {"train": counts["train"], "val": counts["val"]},
-               "distance": bool(spec.get("distance")), "dist_counts": counts["dist"], "dist_gain": 2.0, "lr": None,
+               "distance": bool(spec.get("distance")), "dist_counts": counts["dist"], "lr": None,
                "start_weights": m["continue_from"] if prev else None, "based_on": os.path.basename(m["continue_from"]) if prev else None,
-               "from_scratch": bool(spec.get("from_scratch")),
-               "pretrained": spec.get("pretrained", "yolo26{size}.pt"), "fallback": spec.get("fallback", "yolo11{size}.pt"),
-               "cfg": spec.get("cfg", "yolo26{size}.yaml"),
+               # distance_only: the detector of the model to continue from is kept as it is, only the distance model is trained
+               "distance_only": bool(prev and spec.get("distance") and m.get("distance_only", True)),
+               "cfg": spec.get("cfg", "yolo26{size}.yaml"), "fallback": spec.get("fallback", "yolo11{size}.yaml"),
                "models_key": spec["models_key"], "models_dirs": [self.models_dir, annotator_models_dir()],
                "trainer": (m.get("name") or "").strip() or me_name or "trainer", "lib_dir": ANNOTATOR_APP}
         with open(os.path.join(run_dir, "job.json"), "w", encoding="utf-8") as f:

@@ -4,8 +4,10 @@
                                 [--paths <folders with the packages>]
 
 Writes  gimble_model.onnx  (image in; candidate boxes with class and confidence, and a distance per box, out) and  gimble_model.json
-(class names, image size, what it was made from).  Two kinds of model are understood, told apart by the file itself:
-    Scratch   the Gimble model (boxes + distance): exported exactly like the rig's own export_pi.py
+(class names, image size, what it was made from).  Three kinds of model are understood, told apart by the file itself:
+    Scratch   boxes + distance.  Either a YOLO detector with a distance model added (what the Trainer makes: the two are joined here
+              into the one file, the detector's boxes going straight to the distance model), or the earlier one-network Gimble model
+              (exported exactly like the rig's own export_pi.py)
     Assist    a YOLO detector (boxes only): the same outputs, with every distance 0.0 because the model does not predict one
 Runs in a Python that has torch, ultralytics, onnx and onnxruntime.  It only READS the .pt.  Lines starting with "GIMBLE " are for the
 program that started it; the rest is for the log.
@@ -48,6 +50,27 @@ def load(weights, app):
         extra = dict(round=ck.get("round"), epoch=ck.get("epoch"), map50=ck.get("map50"), map=ck.get("map"), dist_median_rel_err=ck.get("dist_med_rel"),
                      imgsz=ck.get("imgsz"))
         return "scratch", Scratch(model).eval(), names, extra
+
+    if isinstance(ck, dict) and "opara_two_model" in ck:        # a detector with a distance model added (distance_model.py)
+        del ck
+        sys.path.insert(0, app)
+        import distance_model as dm
+        two, entry = dm.load(weights)
+
+        class Two(nn.Module):
+            def __init__(self, two):
+                super().__init__()
+                self.det, self.dist = two.det, two.dist
+
+            def forward(self, img):
+                det = self.det(img)                                  # the final boxes: x1 y1 x2 y2 conf class
+                # one more, empty box at the end and its answer dropped again: the distance model then never gets a list of no boxes
+                rois = torch.cat([torch.cat([det[:, :1] * 0.0, det[:, :4]], 1), det.new_zeros(1, 5)], 0)
+                cls = torch.cat([det[:, 5], det.new_zeros(1)], 0)
+                return det[:, :6], self.dist.metres(img, rois, cls)[:-1]
+        extra = dict(round=entry.get("round"), epoch=entry.get("epoch"), map50=entry.get("map50"), map=entry.get("map"),
+                     dist_median_rel_err=entry.get("dist_med_rel"), imgsz=entry.get("imgsz"))
+        return "scratch", Two(two).eval(), two.names, extra
 
     from ultralytics import YOLO
     yolo = YOLO(weights)

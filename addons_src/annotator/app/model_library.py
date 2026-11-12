@@ -1,8 +1,8 @@
 """
 model_library.py - the shared Models folder: every trained model, as dated versions.
 
-    <Models>/Assist/    helper models   (pretrained start, boxes + classes)
-    <Models>/Scratch/   from-scratch models (+ distance)
+    <Models>/Assist/    classes + boxes models (a YOLO detector)
+    <Models>/Scratch/   classes + boxes + distance models (a detector with a distance model added, or the earlier one-network kind)
 
 YOU make these three folders and paste the first models in (any file name). This program never creates
 them: when one is missing it says which one and does nothing.

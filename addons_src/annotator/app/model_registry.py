@@ -60,10 +60,13 @@ def write_info(run_dir, **fields):
 def detect_size(kind, checkpoint):
     """'n'/'s'/'m'/'l'/'x' of a checkpoint (loads it; needs torch / ultralytics), or None."""
     try:
+        ck = None
         if kind == "scratch":
             import torch
-            cfg = torch.load(checkpoint, map_location="cpu", weights_only=False).get("cfg", "")
-        else:
+            ck = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        if isinstance(ck, dict) and "model" not in ck:           # the earlier one-network distance model names its description
+            cfg = ck.get("cfg", "")
+        else:                                                    # a YOLO model file (also one with a distance model added)
             from ultralytics import YOLO
             y = YOLO(checkpoint).model.yaml
             if y.get("scale") in tuple("nslmx"):

@@ -125,12 +125,16 @@ Pi shows no distance of its own for it (the LiDAR distance still shows); a model
 `test_videos/` (files already on the PC are skipped). It needs the Annotator's packages (torch, ultralytics) and downloads onnx and
 onnxruntime.
 
-**Trainer: two kinds of model** (`addons_src/trainer/`). "Classes + boxes" trains a stock YOLO model (`train_helper_job.py`, saved in
-`Models/Assist`). "Classes + boxes + distance" trains the same detector with a distance head (`train_distance_job.py`, the model of
-`annotator/app/gimble_model.py`, saved in `Models/Scratch`): it learns the distance in metres from the LiDAR distances picked on boxes in
-the Annotator, which travel in the dataset zip and into the run's frozen copy (`distances.csv`); boxes without a distance still teach
-class and position. Both kinds can start from the pretrained YOLO26 weights or from random weights, and "Continue from existing model"
-goes on from a model as the kind it is. A distance model's saved scores include its median distance error on the validation boxes.
+**Trainer: two kinds of model, both from random weights** (`addons_src/trainer/`). "Classes + boxes" trains a stock YOLO model
+(`train_helper_job.py`, saved in `Models/Assist`). "Classes + boxes + distance" (`train_distance_job.py`, saved in `Models/Scratch`)
+trains two models one after the other: that same detector, then a separate small distance model (`annotator/app/distance_model.py`)
+that is told a box and its class and answers metres. The distance model learns from the LiDAR distances picked on boxes in the
+Annotator, which travel in the dataset zip and into the run's frozen copy (`distances.csv`). The log scores each model by itself
+(the detector's mAP; the distance error on the labelled boxes) and then both together (the distance error from the detector's own
+boxes). The result is one file: the detector's `.pt` with the distance model added. Nothing pretrained is offered. "Continue from
+existing model" goes on from a model you trained; a Classes + boxes model can get a distance model on top, and "Keep the detector as
+it is" trains only the distance model. The earlier one-network distance models (`gimble_model.py`) still work in the Annotator and on
+the Gimble but cannot be trained further.
 Pressing Start training prepares the run in the background (the distorted copies of the training pictures, then the run's own copy of
 the data): the window shows a bar, how far it is, the time left, and Cancel; the copies are made once and kept, also after a cancel.
 
