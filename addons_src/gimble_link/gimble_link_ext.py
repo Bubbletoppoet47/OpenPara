@@ -115,11 +115,17 @@ def make_dialog(win):
             self.model_tree.setColumnWidth(2, 110)
             self.model_tree.setColumnWidth(3, 130)
             self.model_tree.itemSelectionChanged.connect(self.update_ui)
+            self.model_tree.setAcceptDrops(True)                     # a .pt dropped on the list is added to it, like Choose a file
+            self.model_tree.viewport().setAcceptDrops(True)
+            self.model_tree.dragEnterEvent = self.model_tree.dragMoveEvent = self._drag_models
+            self.model_tree.dropEvent = self._drop_models
             ml.addWidget(self.model_tree, 1)
             ml.addWidget(ui_kit.note("The trained models on this PC, newest first: from OpenPara's and the Playground's Models folders, and "
-                                     "any .pt you add with Choose a file. A model that finds boxes only (the Trainer's models) shows the "
-                                     "LiDAR distance on the Gimble but no distance of its own. The model that was on the Gimble is kept "
-                                     "one step back. Start Test model again on the Gimble to use the new one."))
+                                     "any .pt you add with Choose a file or drop on this list. Sending converts the model to the form the "
+                                     "Gimble runs; a .pt copied to the Gimble by hand cannot run there. A Classes + boxes + distance model "
+                                     "(a detector and a distance model) becomes one file on the Gimble and shows its own distance; a "
+                                     "Classes + boxes model shows the LiDAR distance only. The model that was on the Gimble is kept one "
+                                     "step back. Start Test model again on the Gimble to use the new one."))
             row = QHBoxLayout()
             self.send_btn = ui_kit.primary(QPushButton("Send to the Gimble"))
             self.send_btn.clicked.connect(self.send_model)
@@ -443,10 +449,9 @@ def make_dialog(win):
             self.models = GC.list_models() + [m for m in self.extra_models if os.path.isfile(m["path"])]
             self.models.sort(key=lambda m: m["ts"], reverse=True)
             self.model_tree.clear()
-            kinds = {"assist": "Assist (boxes only)", "scratch": "Scratch (boxes + distance)", None: "read when it is sent"}
             for m in self.models:
                 cls = m["classes"] or []
-                it = QTreeWidgetItem([m["label"], kinds.get(m["kind"], kinds[None]),
+                it = QTreeWidgetItem([m["label"], GC.KIND_TEXT.get(m["kind"], GC.KIND_TEXT[None]),
                                       ", ".join(str(c) for c in cls[:4]) + (" ..." if len(cls) > 4 else ""), m.get("where") or "", m["file"]])
                 it.setData(0, Qt.ItemDataRole.UserRole, m)
                 for col in range(5):
@@ -467,19 +472,49 @@ def make_dialog(win):
                                                   "Trained models (*.pt)")
             if not path:
                 return
-            path = os.path.abspath(path)
-            GC.save_settings(model_folder=os.path.dirname(path))
-            m = GC.model_entry(path, None, "chosen file")
-            if m is None:
-                self.say(f"{os.path.basename(path)} cannot be read.", "bad")
+            GC.save_settings(model_folder=os.path.dirname(os.path.abspath(path)))
+            self.add_models([path])
+
+        def add_models(self, paths, where="chosen file"):
+            """Adds .pt files to the list (Choose a file, or dropped on it) and selects the last one."""
+            added = None
+            for path in paths:
+                path = os.path.abspath(path)
+                m = GC.model_entry(path, None, where) if path.lower().endswith(".pt") and os.path.isfile(path) else None
+                if m is None:
+                    self.say(f"{os.path.basename(path)} is not a trained model file (.pt) that can be read.", "bad")
+                    continue
+                self.extra_models = [e for e in self.extra_models if os.path.normcase(e["path"]) != os.path.normcase(path)] + [m]
+                added = path
+            if added is None:
                 return
-            self.extra_models = [e for e in self.extra_models if os.path.normcase(e["path"]) != os.path.normcase(path)] + [m]
             self.fill_models()
             for i in range(self.model_tree.topLevelItemCount()):
                 d = self.model_tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole)
-                if d and os.path.normcase(d["path"]) == os.path.normcase(path):
+                if d and os.path.normcase(d["path"]) == os.path.normcase(added):
                     self.model_tree.setCurrentItem(self.model_tree.topLevelItem(i))
-            self.say(f"Added {os.path.basename(path)} to the list.")
+            self.say(f"Added {os.path.basename(added)} to the list. Send to the Gimble converts it and puts it there.")
+
+        def _drag_models(self, ev):
+            if ev.mimeData().hasUrls() and any(u.isLocalFile() for u in ev.mimeData().urls()):
+                ev.acceptProposedAction()
+            else:
+                ev.ignore()
+
+        def _drop_models(self, ev):
+            paths = [u.toLocalFile() for u in ev.mimeData().urls() if u.isLocalFile()]
+            if paths:
+                ev.acceptProposedAction()
+                self.add_models(paths, "dropped file")
+
+        def check_picture(self):
+            """The picture open in the Annotator, when there is one: the converted model is checked on it as well as on a test pattern."""
+            try:
+                img_id = getattr(win, "current_image_id", None)
+                path = win.project.image_path(img_id) if img_id is not None else None
+                return path if path and os.path.isfile(path) else None
+            except Exception:  # noqa: BLE001  (a window without a project open)
+                return None
 
         def start_test(self):
             link, folder = self.link, self.folder
@@ -493,10 +528,11 @@ def make_dialog(win):
                 return
             link, folder = self.link, self.folder
             out = tempfile.mkdtemp(prefix="opara_gimble_")
+            picture = self.check_picture()
 
             def work(progress, stop, step):
                 try:
-                    res = GC.export_model(m["path"], out, m["label"], on_step=step, stop=stop)
+                    res = GC.export_model(m["path"], out, m["label"], on_step=step, stop=stop, check_image=picture)
                     step("Sending it to the Gimble")
                     GC.send_model(link, folder, res["onnx"], res["json"], lambda d, t: progress(d, t, "gimble_model.onnx"), stop)
                     return res, GC.status(link, folder)
@@ -508,7 +544,13 @@ def make_dialog(win):
                 res, st = r
                 self.show_status(st)
                 running = "gimble_detect.py" in st.get("running", [])
-                self.say(f"Sent {m['label']} ({res['mb']} MB) to the Gimble. " +
+                what = f", {res['parts']} in one file" if res.get("parts") else ""
+                found = res.get("found")
+                check = "" if found is None else (" On the picture open in the Annotator this model finds nothing (no box of confidence "
+                                                  "0.1 or more)." if not found else
+                                                  f" Checked on the picture open in the Annotator: it finds {found} "
+                                                  f"{'box' if found == 1 else 'boxes'} there, the same as before the conversion.")
+                self.say(f"Sent {m['label']} ({res['mb']} MB{what}) to the Gimble.{check} " +
                          ("Test model is running there: close it and start it again to use the new model." if running else
                           "Start Test model on the Gimble to use it (the button here, or TEST MODEL on its screen)."), "good")
             self.run(f"{m['label']}:", work, done)

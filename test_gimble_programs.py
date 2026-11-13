@@ -158,10 +158,13 @@ now = recorded(); assert all(now.get(k) == v for k, v in BEFORE.items()), "an ol
 import gimble_detect as gd
 import onnx
 from onnx import helper, numpy_helper, TensorProto
-def write_model(path):
-    """A real (tiny) model file in the Gimble's format: whatever the picture, one person at 0.91 and a second box below any threshold."""
+def write_model(path, second=None):
+    """A real (tiny) model file in the Gimble's format: whatever the picture, one person at 0.91 and a second box below any threshold.
+    second: (confidence, distance) of one more box, above the thresholds."""
     dets = np.zeros((300, 6), np.float32); dets[0] = (200, 230, 330, 500, 0.91, 0); dets[1] = (10, 10, 60, 60, 0.10, 0)      # in the letterboxed 640 x 640
     dist = np.zeros(300, np.float32); dist[0] = 4.2
+    if second:
+        dets[1] = (400, 200, 520, 420, second[0], 0); dist[1] = second[1]
     g = helper.make_graph([helper.make_node("Constant", [], ["dets"], value=numpy_helper.from_array(dets)),
                            helper.make_node("Constant", [], ["dist"], value=numpy_helper.from_array(dist))], "gimble",
                           [helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 3, 640, 640])],
@@ -205,6 +208,26 @@ rows = list(csv.DictReader(open(os.path.join(V, os.path.splitext(vids2[1])[0] + 
 assert rows and rows[0]["model_distance_m"] == "" and rows[0]["lidar_distance_m"] != ""
 assert "boxes only - no distance of its own" in open(gpaths.LOG_FILE).read()
 
+# a model trained as two models (a detector, then a distance model) arrives as the same one file and is run the same way.  Its distance
+# model looks only at the surer boxes: a box it did not look at has the distance 0.0 and is shown, and written, without a distance
+write_model(gpaths.MODEL_FILE, second=(0.6, 0.0))
+app = make({"names": ["person"], "imgsz": 640, "round": 1, "label": "Nano 2026-11-12 13:19", "kind": "scratch", "has_distance": True,
+            "parts": "detector + distance model", "distance_from_conf": 0.1, "distance_max_boxes": 50})
+assert app.has_dist and app.model_label() == "Nano 2026-11-12 13:19"
+res = app.detect(np.zeros((480, 640, 3), np.uint8))
+assert [round(d["conf"], 2) for d in res] == [0.91, 0.6] and [gd.has_distance(d) for d in res] == [True, False], res
+direct(app, [(0.8, lambda: app.press("rec")), (2.2, lambda: app.press("rec")), (2.5, lambda: setattr(app, "running", False))])
+app.run()
+vids3 = sorted(f for f in os.listdir(V) if f.endswith((".mp4", ".avi")))
+rows = list(csv.DictReader(open(os.path.join(V, os.path.splitext(vids3[-1])[0] + ".csv"))))
+by_conf = {r["confidence"]: r["model_distance_m"] for r in rows}
+assert len(vids3) == 3 and by_conf == {"0.910": "4.20", "0.600": ""}, by_conf
+assert "detector + distance model)" in open(gpaths.LOG_FILE).read()
+os.remove(os.path.join(V, vids3[-1])); [os.remove(os.path.join(V, os.path.splitext(vids3[-1])[0] + e)) for e in (".csv", ".json")]
+write_model(gpaths.MODEL_FILE)
+json.dump({"names": ["person"], "imgsz": 640, "round": "Small 2026-11-11 02:59", "label": "Small 2026-11-11 02:59", "kind": "assist", "has_distance": False},
+          open(os.path.join(ROOT, "model", "gimble_model.json"), "w"))
+
 # ---- the start screen: says what is on the drive; each button starts the right program; a failed start is said
 import gimble_menu as gm
 m = gm.Menu(gm.build_parser().parse_args(["--windowed"]))
@@ -226,6 +249,18 @@ m.start = lambda key: 3
 m.do("record"); assert "ended with a problem (code 3)" in m.msg and "logs/gimble_log.txt" in m.msg
 os.remove(gpaths.MODEL_FILE); m.refresh(); started.clear(); m.start = lambda key: (started.append(key), 0)[1]
 m.do("test"); assert started == [] and "No model on the drive yet" in m.msg and m.model[0] == "No model yet", "without a model the test is not started; it says how to get one"
+assert gd.no_model_text(os.path.join(ROOT, "model")).startswith("No model yet: send one from OpenPara")
+# the PC's own model file (.pt) copied into model/ by hand cannot run on the Pi: the start screen and Test model say so, and what to do
+open(os.path.join(ROOT, "model", "Nano_2026-11-12.pt"), "wb").write(b"pt")
+m.refresh(); assert m.model == ("A .pt file cannot run here", "Send it from OpenPara instead", False), m.model
+text = gd.no_model_text(os.path.join(ROOT, "model"))
+assert text.startswith("Nano_2026-11-12.pt cannot run here (a .pt needs the PC). Send it from OpenPara"), text
+a2 = gd.DetApp(gd.build_parser().parse_args(["--windowed"])); assert a2.sess is None and a2.model_msg == text
+os.remove(os.path.join(ROOT, "model", "Nano_2026-11-12.pt"))
+# a model made of two models says so on the start screen
+write_model(gpaths.MODEL_FILE)
+json.dump({"names": ["person"], "label": "Nano 2026-11-12 13:19", "has_distance": True, "parts": "detector + distance model"}, open(os.path.join(ROOT, "model", "gimble_model.json"), "w"))
+m.refresh(); assert m.model[0] == "Nano 2026-11-12 13:19" and m.model[1].startswith("boxes + distance, two models, put here ") and m.model[2], m.model
 m.do("quit"); assert not m.running
 
 shutil.rmtree(T, ignore_errors=True)

@@ -86,11 +86,13 @@ def finish(job, best_pt, info=None, warning=None):
     if info:
         parts = []
         if info.get("epoch") is not None and info.get("total_epochs") is not None:
-            parts.append(f"best epoch {info['epoch']} of {info['total_epochs']}")
+            parts.append(f"Best epoch {info['epoch']} of {info['total_epochs']}:")
         if info.get("map50") is not None:
             parts.append(f"mAP50 {info['map50']}, mAP50-95 {info.get('map50_95')}")
-        text = ": ".join(parts[:1] + [", ".join(parts[1:])] if len(parts) > 1 else parts) + ml.distance_text(info, ", " if parts else "")
-        print("\nDone." + (" " + text[0].upper() + text[1:] if text else ""), flush=True)
+        dist = ml.distance_text(info, ", " if info.get("map50") is not None else "")
+        if not parts and dist:
+            dist = dist[0].upper() + dist[1:]
+        print("\nDone. " + " ".join(parts) + dist, flush=True)
     for p in saved:
         print(f"Saved as a new model version: {p}", flush=True)
     return 0

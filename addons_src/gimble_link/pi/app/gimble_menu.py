@@ -75,6 +75,12 @@ def recordings_info():
 def model_info():
     """(first line, second line, has a model) about the model Test model will run."""
     if not os.path.isfile(gpaths.MODEL_FILE):
+        try:
+            pts = [f for f in os.listdir(gpaths.MODEL) if f.lower().endswith(".pt")]
+        except OSError:
+            pts = []
+        if pts:                                              # the PC's own model file, copied here by hand: it cannot run on the Pi
+            return "A .pt file cannot run here", "Send it from OpenPara instead", False
         return "No model yet", "Send one from OpenPara", False
     meta = {}
     try:
@@ -84,6 +90,8 @@ def model_info():
         pass
     label = str(meta.get("label") or (f"round {meta.get('round')}" if meta.get("round") is not None else "model"))
     kind = "boxes only" if meta.get("has_distance") is False else "boxes + distance"
+    if meta.get("parts"):                                    # trained as two models (a detector, then a distance model), joined into this one file
+        kind += ", two models"
     when = datetime.datetime.fromtimestamp(os.path.getmtime(gpaths.MODEL_FILE)).strftime("%Y-%m-%d")
     return label[:30], f"{kind}, put here {when}", True
 

@@ -133,7 +133,7 @@ JOB = os.path.join(T, "fake_job.py")
 open(JOB, "w").write('''
 import argparse, json, os, sys, time
 ap = argparse.ArgumentParser()
-for a in ("--weights", "--out", "--app", "--label", "--paths"): ap.add_argument(a)
+for a in ("--weights", "--out", "--app", "--label", "--paths", "--check-image"): ap.add_argument(a)
 a = ap.parse_args()
 def say(tag, **kw): print("GIMBLE " + json.dumps(dict(kw, tag=tag)), flush=True)
 say("step", text="Reading the model")
@@ -152,17 +152,32 @@ say("step", text="Converting it to the Pi's format")
 onnx = os.path.join(a.out, "gimble_model.onnx")
 open(onnx, "wb").write(b"NEW-" + os.path.basename(a.weights).encode() * 3000)
 meta = dict(names=["person", "bottle"], imgsz=640, round=a.label, source=os.path.basename(a.weights), kind=kind, label=a.label, has_distance=kind == "scratch")
+parts = None
+if kind == "scratch":                       # as the real job describes a detector with a distance model added
+    parts = "detector + distance model"
+    meta.update(parts=parts, dist_median_rel_err=0.081, dist_median_rel_err_detected=0.124, distance_from_conf=0.1, distance_max_boxes=50)
 json.dump(meta, open(os.path.join(a.out, "gimble_model.json"), "w"))
-say("done", onnx=onnx, json=os.path.join(a.out, "gimble_model.json"), kind=kind, mb=round(os.path.getsize(onnx) / 1e6, 1), names=meta["names"], checked=7)
+pic = getattr(a, "check_image", None)
+assert not pic or os.path.isfile(pic), "the check picture is a file that is there"
+say("done", onnx=onnx, json=os.path.join(a.out, "gimble_model.json"), kind=kind, mb=round(os.path.getsize(onnx) / 1e6, 1), names=meta["names"], checked=7,
+    checked_on="the picture open in the Annotator" if pic else "a test pattern", found=(0 if "empty" in pic else 3) if pic else None, parts=parts)
 ''')
 assert os.path.isfile(GC.JOB) and "gimble_detect.py" in open(GC.JOB, encoding="utf-8").read(), "the real job ships with the add-on"
 real = open(GC.JOB, encoding="utf-8").read()
-for words in ('input_names=["images"]', 'output_names=["dets", "dist"]', "gimble_model.onnx", "gimble_model.json", "opset_version=17"):
+for words in ('input_names=["images"]', 'output_names=["dets", "dist"]', "gimble_model.onnx", "gimble_model.json", "opset_version=17",
+              "--check-image", "DIST_FROM_CONF = 0.1", "opara_two_model"):
     assert words in real, words                                   # what the Pi's gimble_detect.py expects from the file
+compile(real, GC.JOB, "exec")                                    # it is run on the PC only (it needs torch): at least it is Python
 steps = []
 out = os.path.join(T, "out"); os.makedirs(out)
 res = GC.export_model(ms[0]["path"], out, ms[0]["label"], on_step=steps.append, job=JOB, python=sys.executable)
 assert res["kind"] == "assist" and res["checked"] == 7 and os.path.isfile(res["onnx"]) and steps == ["Reading the model", "Converting it to the Pi's format"]
+assert res["found"] is None and res["checked_on"] == "a test pattern" and res["parts"] is None                # no picture was given to check on
+PIC = os.path.join(T, "open picture.jpg"); open(PIC, "wb").write(b"jpg")
+r2 = GC.export_model(ms[0]["path"], tempfile.mkdtemp(dir=T), "x", job=JOB, python=sys.executable, check_image=PIC)
+assert r2["found"] == 3 and r2["checked_on"] == "the picture open in the Annotator", r2
+r2 = GC.export_model(ms[0]["path"], tempfile.mkdtemp(dir=T), "x", job=JOB, python=sys.executable, check_image=os.path.join(T, "gone.jpg"))
+assert r2["found"] is None, "a picture that is not there is not passed on"
 for i, words in ((3, "pasted.pt could not be read as a model"), (2, "RuntimeError: boom")):
     try:
         GC.export_model(ms[i]["path"], out, "x", job=JOB, python=sys.executable); raise SystemExit("a failed export gave a model")
@@ -185,7 +200,7 @@ assert open(os.path.join(md, "gimble_model.onnx"), "rb").read() == open(res["onn
 assert open(os.path.join(md, "previous", "gimble_model.onnx"), "rb").read() == b"OLD-MODEL" * 1000
 assert json.load(open(os.path.join(md, "gimble_model.json")))["label"] == ms[0]["label"]
 st = GC.status(link, PI); text = GC.status_text(st)
-assert ms[0]["label"] in text and "Assist (boxes only)" in text and "bottle" in text, text
+assert ms[0]["label"] in text and "Classes + boxes, dated" in text and "bottle" in text and "distance error" not in text, text
 GC.restore_previous(link, PI)
 assert open(os.path.join(md, "gimble_model.onnx"), "rb").read() == b"OLD-MODEL" * 1000 and json.load(open(os.path.join(md, "gimble_model.json")))["round"] == 5
 try:
@@ -218,7 +233,7 @@ dlg = GX.open_dialog(win, "model")
 assert dlg.windowTitle() == "Gimble" and dlg.pages.currentIndex() == 1 and GX.open_dialog(win, "status") is dlg and dlg.pages.currentIndex() == 0
 assert dlg.combo.count() == 1 and "Gimble Pi" in dlg.combo.currentText() and dlg.link is None and dlg.conn_btn.isEnabled()
 assert not dlg.send_btn.isEnabled() and not dlg.get_btn.isEnabled() and not dlg.refresh_btn.isEnabled(), "nothing to do before it is connected"
-assert dlg.model_tree.topLevelItemCount() == 4 and dlg.model_tree.topLevelItem(0).text(1) == "Assist (boxes only)" and dlg.model_tree.topLevelItem(1).text(1) == "Scratch (boxes + distance)"
+assert dlg.model_tree.topLevelItemCount() == 4 and dlg.model_tree.topLevelItem(0).text(1) == "Classes + boxes" and dlg.model_tree.topLevelItem(1).text(1) == "Classes + boxes + distance"
 assert dlg.model_tree.topLevelItem(0).text(3) == os.path.basename(_ud) and dlg.model_tree.topLevelItem(0).toolTip(0) == ms[0]["path"], "where each model is from"
 assert dlg.file_btn.isEnabled() and not dlg.start_btn.isEnabled() and not dlg.programs_btn.isEnabled() and not dlg.videos_btn.isEnabled()
 # a model file from anywhere on this PC
@@ -228,6 +243,25 @@ dlg.choose_model()
 assert dlg.model_tree.topLevelItemCount() == 5 and dlg.model_tree.currentItem().text(4) == "my best.pt" and dlg.model_tree.currentItem().text(3) == "chosen file"
 assert dlg.model_tree.currentItem().text(1) == "read when it is sent" and "Added my best.pt" in dlg.state.text() and GC.load_settings()["model_folder"] == ELSE
 dlg.fill_models(); assert dlg.model_tree.topLevelItemCount() == 5, "it stays in the list"
+# a .pt dropped on the list is added like a chosen one (sending converts it); anything else is said not to be a model
+from PyQt6.QtCore import QMimeData, QUrl
+class Drop:
+    def __init__(self, paths, text=False):
+        self.md = QMimeData(); self.ok = None
+        self.md.setText("words") if text else self.md.setUrls([QUrl.fromLocalFile(p) for p in paths])
+    def mimeData(self): return self.md
+    def acceptProposedAction(self): self.ok = True
+    def ignore(self): self.ok = False
+open(os.path.join(ELSE, "dropped.pt"), "wb").write(b"PTy"); open(os.path.join(ELSE, "gimble_model.onnx"), "wb").write(b"x")
+assert dlg.model_tree.acceptDrops() and dlg.model_tree.viewport().acceptDrops()
+ev = Drop([os.path.join(ELSE, "dropped.pt")]); dlg.model_tree.dragEnterEvent(ev); assert ev.ok is True
+ev = Drop([], text=True); dlg.model_tree.dragEnterEvent(ev); assert ev.ok is False
+dlg.model_tree.dropEvent(Drop([os.path.join(ELSE, "dropped.pt")]))
+assert dlg.model_tree.topLevelItemCount() == 6 and dlg.model_tree.currentItem().text(4) == "dropped.pt" and dlg.model_tree.currentItem().text(3) == "dropped file"
+assert "Added dropped.pt" in dlg.state.text() and "converts it" in dlg.state.text()
+dlg.model_tree.dropEvent(Drop([os.path.join(ELSE, "gimble_model.onnx")]))
+assert dlg.model_tree.topLevelItemCount() == 6 and "gimble_model.onnx is not a trained model file (.pt)" in dlg.state.text(), dlg.state.text()
+dlg.extra_models = [m for m in dlg.extra_models if m["file"] != "dropped.pt"]; dlg.fill_models(); assert dlg.model_tree.topLevelItemCount() == 5
 def code(self):
     self.edit.setText("ABCD-EFGH-JKMN"); self.keep.setChecked(True); return QDialog.DialogCode.Accepted
 RT.CodeDialog.exec = code
@@ -241,7 +275,11 @@ pick("Nano_2026-11-09_1200_Ian.pt"); assert dlg.send_btn.isEnabled() and dlg.sta
 dlg.send_model(); assert dlg.busy is not None and not dlg.send_btn.isEnabled() and not dlg.job_row.isHidden()
 wait(lambda: dlg.busy is None, what="send from the dialog")
 assert "Sent Nano 2026-11-" in dlg.state.text() and "Start Test model on the Gimble" in dlg.state.text(), dlg.state.text()
-assert "Scratch (boxes + distance)" in dlg.status_lbl.text() and json.load(open(os.path.join(md, "gimble_model.json")))["kind"] == "scratch"
+# a detector with a distance model added goes as ONE file; the status names both parts and how good the distance was in training
+assert "detector + distance model in one file" in dlg.state.text() and "Checked on the picture" not in dlg.state.text(), dlg.state.text()
+assert "Classes + boxes + distance (detector + distance model)" in dlg.status_lbl.text() and json.load(open(os.path.join(md, "gimble_model.json")))["kind"] == "scratch"
+assert "Its distance error in training (median):  8% on the labelled boxes,  12% from the detector's own boxes" in dlg.status_lbl.text(), dlg.status_lbl.text()
+assert sorted(os.listdir(md)) == ["gimble_model.json", "gimble_model.onnx", "previous"], "still the same two files on the Gimble"
 assert open(os.path.join(md, "previous", "gimble_model.onnx"), "rb").read() == b"OLD-MODEL" * 1000 and dlg.job_row.isHidden()
 assert not [d for d in os.listdir(tempfile.gettempdir()) if d.startswith("opara_gimble_")], "the converted files are not left on this PC"
 # a model that cannot be converted: said, nothing sent
@@ -249,6 +287,22 @@ pick("pasted.pt"); dlg.send_model(); wait(lambda: dlg.busy is None)
 assert "could not be read as a model" in dlg.state.text() and json.load(open(os.path.join(md, "gimble_model.json")))["kind"] == "scratch"
 n = len(ASK); dlg.restore_previous(); wait(lambda: dlg.busy is None)
 assert len(ASK) == n + 1 and "previous model is back" in dlg.state.text() and "round 5" in dlg.status_lbl.text()
+# with a picture open in the Annotator the converted model is checked on it too, and the result says what the model finds there
+keep_md = os.path.join(T, "model_kept"); shutil.copytree(md, keep_md)
+pick("Nano_2026-11-09_1200_Ian.pt")
+class Proj:
+    def image_path(self, i): return os.path.join(T, i + ".jpg")
+open(os.path.join(T, "open picture.jpg"), "wb").write(b"jpg"); open(os.path.join(T, "empty.jpg"), "wb").write(b"jpg")
+win.project, win.current_image_id = Proj(), "open picture"
+assert dlg.check_picture() == os.path.join(T, "open picture.jpg")
+dlg.send_model(); wait(lambda: dlg.busy is None, what="send with a check picture")
+assert "Checked on the picture open in the Annotator: it finds 3 boxes there, the same as before the conversion." in dlg.state.text(), dlg.state.text()
+win.current_image_id = "empty"
+dlg.send_model(); wait(lambda: dlg.busy is None, what="send with a picture the model finds nothing in")
+assert "On the picture open in the Annotator this model finds nothing" in dlg.state.text(), dlg.state.text()
+win.current_image_id = "not there"; assert dlg.check_picture() is None
+win.current_image_id = None; assert dlg.check_picture() is None
+shutil.rmtree(md); shutil.copytree(keep_md, md)                  # the stand-in Gimble as it was before these sends
 # recordings
 D2 = os.path.join(T, "rec2"); dlg.dest_edit.setText(D2); dlg.fill_sessions()
 dlg.download(); wait(lambda: dlg.busy is None, what="download from the dialog")

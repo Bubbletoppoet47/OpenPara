@@ -11,6 +11,11 @@ also shows what the LiDAR measures inside that box, so you can see how far off t
 Model files (sent from OpenPara: Annotator > File > Gimble: Send a Model; or made on the PC by export_pi.py), in the drive's model/ folder:
     model/gimble_model.onnx     model/gimble_model.json
 A model that only finds boxes (an "Assist" model, has_distance false in the .json) is shown without a distance of its own.
+A model trained as two models (a detector, then a distance model; "parts" in the .json) arrives as the same one file: the conversion
+on the PC joins them, so nothing here runs differently.  Its distance model looks only at the surer boxes; a box it did not look at
+has the distance 0.0 and is shown without one.
+A .pt file (the model as the PC trains it) cannot run here - there is no PyTorch on the Pi.  It has to be SENT from OpenPara, which
+converts it; a .pt copied into model/ by hand is named on the screen so it is clear why nothing runs.
 
 REC VIDEO records what you see - the picture with the boxes, classes and distances drawn in - to test_videos/<date_time>.mp4, and writes
 every prediction of every recorded frame to test_videos/<date_time>.csv (class, confidence, box, the model's distance, the LiDAR's).
@@ -79,6 +84,22 @@ def postprocess(dets, dist, shape, r, left, top, conf):
     return out
 
 
+def no_model_text(model_dir):
+    """What to say when model/ has no gimble_model.onnx: how to get one - and, when a .pt lies there, that a .pt cannot run here."""
+    try:
+        pts = sorted(f for f in os.listdir(model_dir) if f.lower().endswith(".pt"))
+    except OSError:
+        pts = []
+    if pts:
+        return f"{pts[0]} cannot run here (a .pt needs the PC). Send it from OpenPara: Annotator > File > Gimble: Send a Model"
+    return "No model yet: send one from OpenPara (Annotator > File > Gimble: Send a Model)"
+
+
+def has_distance(d):
+    """True when the model worked out a distance for this box (0 = it did not: the box was not sure enough for the distance model)."""
+    return d["dist"] > 0
+
+
 def lidar_in_box(u, v, z, box, shrink=0.2):
     """Median LiDAR depth of the points inside the middle of the box (None if fewer than 3)."""
     x1, y1, x2, y2 = box
@@ -108,7 +129,7 @@ class DetApp(gp.App):
             self.model_msg = "onnxruntime missing - run setup_pi.sh (or: pip install onnxruntime)"
             return
         if not os.path.exists(path):
-            self.model_msg = "No model yet: send one from OpenPara (Annotator > File > Gimble: Send a Model)"
+            self.model_msg = no_model_text(os.path.dirname(path))
             return
         try:
             so = ort.SessionOptions()
@@ -119,7 +140,8 @@ class DetApp(gp.App):
             self.S = int(self.meta.get("imgsz", 640))
             self.names = list(self.meta.get("names", []))
             self.has_dist = self.meta.get("has_distance", True) is not False
-            gp.log(f"Model loaded: {path} ({self.model_label()}" + ("" if self.has_dist else ", boxes only - no distance of its own") + ")")
+            gp.log(f"Model loaded: {path} ({self.model_label()}" + ("" if self.has_dist else ", boxes only - no distance of its own")
+                   + (f", {self.meta['parts']}" if self.meta.get("parts") else "") + ")")
         except Exception as e:  # noqa: BLE001
             self.sess = None
             self.model_msg = f"Could not load model: {e}"
@@ -254,7 +276,7 @@ class DetApp(gp.App):
             for d in shown:
                 name = self.names[d["cls"]] if d["cls"] < len(self.names) else str(d["cls"])
                 v["csv"].writerow([v["n"], t, name, f"{d['conf']:.3f}"] + [f"{c:.0f}" for c in d["box"]]
-                                  + [f"{d['dist']:.2f}" if self.has_dist else "", f"{d['lidar']:.2f}" if d["lidar"] is not None else ""])
+                                  + [f"{d['dist']:.2f}" if self.has_dist and has_distance(d) else "", f"{d['lidar']:.2f}" if d["lidar"] is not None else ""])
             v["n"] += 1
             if v["n"] % 50 == 0:
                 v["csv_f"].flush()
@@ -295,9 +317,10 @@ class DetApp(gp.App):
                 col = PALETTE[d["cls"] % len(PALETTE)]
                 name = self.names[d["cls"]] if d["cls"] < len(self.names) else str(d["cls"])
                 cv2.rectangle(img, (x1, y1), (x2, y2), col, 2)
-                txt = f"{name} {d['conf']:.2f}" + (f"  {d['dist']:.1f} m" if self.has_dist else "")
+                own = self.has_dist and has_distance(d)
+                txt = f"{name} {d['conf']:.2f}" + (f"  {d['dist']:.1f} m" if own else "")
                 if d["lidar"] is not None:
-                    txt += f"  (LiDAR {d['lidar']:.1f})" if self.has_dist else f"  LiDAR {d['lidar']:.1f} m"
+                    txt += f"  (LiDAR {d['lidar']:.1f})" if own else f"  LiDAR {d['lidar']:.1f} m"
                 (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
                 ty = y1 - 4 if y1 - th - 6 > 0 else y1 + th + 6
                 cv2.rectangle(img, (x1, ty - th - 4), (x1 + tw + 6, ty + 3), col, -1)

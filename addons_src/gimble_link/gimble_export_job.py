@@ -8,6 +8,9 @@ Writes  gimble_model.onnx  (image in; candidate boxes with class and confidence,
     Scratch   boxes + distance.  Either a YOLO detector with a distance model added (what the Trainer makes: the two are joined here
               into the one file, the detector's boxes going straight to the distance model), or the earlier one-network Gimble model
               (exported exactly like the rig's own export_pi.py)
+              In the joined file the distance model looks only at the boxes with a confidence of DIST_FROM_CONF or more, DIST_MOST at
+              the most (the surest ones): the detector always hands out 300 candidates, nearly all of them nothing, and working out
+              a distance for every one made a picture take about three times as long.  The others get the distance 0.0 = not worked out.
     Assist    a YOLO detector (boxes only): the same outputs, with every distance 0.0 because the model does not predict one
 Runs in a Python that has torch, ultralytics, onnx and onnxruntime.  It only READS the .pt.  Lines starting with "GIMBLE " are for the
 program that started it; the rest is for the log.
@@ -16,6 +19,10 @@ import argparse
 import json
 import os
 import sys
+
+
+DIST_FROM_CONF = 0.1          # below every threshold the Gimble's CONF button offers (0.25 and up)
+DIST_MOST = 50
 
 
 def say(tag, **kw):
@@ -58,18 +65,25 @@ def load(weights, app):
         two, entry = dm.load(weights)
 
         class Two(nn.Module):
-            def __init__(self, two):
+            def __init__(self, two, floor=DIST_FROM_CONF, most=DIST_MOST):
                 super().__init__()
-                self.det, self.dist = two.det, two.dist
+                self.det, self.dist, self.floor, self.most = two.det, two.dist, floor, most
 
             def forward(self, img):
-                det = self.det(img)                                  # the final boxes: x1 y1 x2 y2 conf class
+                det = self.det(img)[:, :6]                           # the final boxes, surest first: x1 y1 x2 y2 conf class
+                keep = torch.nonzero(det[:, 4] >= self.floor).squeeze(1)[:self.most]
+                sel = det.index_select(0, keep)
                 # one more, empty box at the end and its answer dropped again: the distance model then never gets a list of no boxes
-                rois = torch.cat([torch.cat([det[:, :1] * 0.0, det[:, :4]], 1), det.new_zeros(1, 5)], 0)
-                cls = torch.cat([det[:, 5], det.new_zeros(1)], 0)
-                return det[:, :6], self.dist.metres(img, rois, cls)[:-1]
+                rois = torch.cat([torch.cat([sel[:, :1] * 0.0, sel[:, :4]], 1), det.new_zeros(1, 5)], 0)
+                cls = torch.cat([sel[:, 5], det.new_zeros(1)], 0)
+                d = self.dist.metres(img, rois, cls)[:-1]
+                return det, torch.zeros_like(det[:, 4]).scatter(0, keep, d)
         extra = dict(round=entry.get("round"), epoch=entry.get("epoch"), map50=entry.get("map50"), map=entry.get("map"),
-                     dist_median_rel_err=entry.get("dist_med_rel"), imgsz=entry.get("imgsz"))
+                     dist_median_rel_err=entry.get("dist_med_rel"), imgsz=entry.get("imgsz"),
+                     more=dict(parts="detector + distance model", distance_inputs=entry.get("inputs"),
+                               dist_median_rel_err_detected=entry.get("dist_med_rel_detected"),
+                               distance_from_conf=DIST_FROM_CONF, distance_max_boxes=DIST_MOST),
+                     every=Two(two, floor=-1.0, most=100000).eval())          # the same with a distance for every candidate: for the check
         return "scratch", Two(two).eval(), two.names, extra
 
     from ultralytics import YOLO
@@ -127,7 +141,63 @@ def picture_size(asked, trained):
     return max(160, min(1280, int(round(s / 32)) * 32))
 
 
+def letterbox(path, S):
+    """A picture file as the Gimble gives it to the model: (1, 3, S, S) float32 RGB 0-1, padded with 114.  The same steps as
+    preprocess() in the Gimble's gimble_detect.py."""
+    import cv2
+    import numpy as np
+    img = cv2.imread(path)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    r = S / max(h, w)
+    nh, nw = max(1, round(h * r)), max(1, round(w * r))
+    img = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA if r < 1 else cv2.INTER_LINEAR)
+    top, left = (S - nh) // 2, (S - nw) // 2
+    canvas = np.full((S, S, 3), 114, np.uint8)
+    canvas[top:top + nh, left:left + nw] = img
+    return np.ascontiguousarray(canvas[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
+
+
+def convert(wrapper, x, path):
+    """Writes wrapper as an ONNX file, traced on the picture x.  Returns what the original answers for x."""
+    import torch
+    with torch.no_grad():
+        ref = wrapper(x)
+        kw = dict(input_names=["images"], output_names=["dets", "dist"], opset_version=17)
+        try:
+            torch.onnx.export(wrapper, x, path, dynamo=False, **kw)
+        except TypeError:                                    # a torch without the 'dynamo' switch
+            torch.onnx.export(wrapper, x, path, **kw)
+    return ref
+
+
+def compare(ref, got):
+    """(same, different, largest distance difference in metres, boxes of DIST_FROM_CONF or more) between what the original answers
+    (ref) and what the converted file answers (got), candidate by candidate.  Candidates whose confidence ties with another (an
+    untrained model scores everything alike) may swap places and are left out."""
+    import numpy as np
+    r_det, r_ds = ref
+    d, ds = got
+    ok = bad = 0
+    dmax = 0.0
+    if len(d) != len(r_det):
+        return 0, max(len(d), len(r_det)), 0.0, 0
+    for row, dd in zip(r_det, r_ds):
+        if (np.abs(r_det[:, 4] - row[4]) < 1e-4).sum() > 1 or not len(d):
+            continue
+        diff = np.abs(d - row[None]).max(1)
+        j = int(diff.argmin())
+        if diff[j] < 0.05:
+            ok += 1
+            dmax = max(dmax, abs(float(ds[j]) - float(dd)))
+        else:
+            bad += 1
+    return ok, bad, dmax, int((r_det[:, 4] >= DIST_FROM_CONF).sum())
+
+
 def main():
+    global DIST_FROM_CONF, DIST_MOST
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights", required=True)
     ap.add_argument("--out", required=True)
@@ -135,14 +205,17 @@ def main():
     ap.add_argument("--imgsz", type=int, default=0, help="picture size on the Pi; 0 = the size the model was trained at (640 when it does not say)")
     ap.add_argument("--label", default="")
     ap.add_argument("--paths", default="", help="folders to look for packages in (the program's own list), joined with the path separator")
+    ap.add_argument("--check-image", default="", help="a picture the model should find something in: the converted file is checked on it as well")
+    ap.add_argument("--dist-from-conf", type=float, default=DIST_FROM_CONF, help="the distance model looks at boxes of this confidence or more")
+    ap.add_argument("--dist-most", type=int, default=DIST_MOST, help="... and at this many boxes at the most (the surest)")
     a = ap.parse_args()
+    DIST_FROM_CONF, DIST_MOST = a.dist_from_conf, max(1, a.dist_most)
     for p in reversed([p for p in a.paths.split(os.pathsep) if p]):          # OpenPara's Python ignores PYTHONPATH: the add-on folders come this way
         if p not in sys.path:
             sys.path.insert(0, p)
     try:
         import torch
         import onnxruntime as ort
-        import numpy as np
     except ImportError as e:
         say("error", text=f"This Python cannot export the model: {e}. It needs torch, ultralytics, onnx and onnxruntime.")
         return 2
@@ -160,45 +233,63 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     onnx_path = os.path.join(a.out, "gimble_model.onnx")
     dummy = torch.rand(1, 3, S, S)
-    say("step", text="Converting it to the Pi's format")
-    with torch.no_grad():
-        ref = wrapper(dummy)
-        kw = dict(input_names=["images"], output_names=["dets", "dist"], opset_version=17)
+    pictures = [("a test pattern", dummy)]
+    if a.check_image:
         try:
-            torch.onnx.export(wrapper, dummy, onnx_path, dynamo=False, **kw)
-        except TypeError:                                    # a torch without the 'dynamo' switch
-            torch.onnx.export(wrapper, dummy, onnx_path, **kw)
-    say("step", text="Checking the converted model against the original")
-    sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
-    d, ds = sess.run(None, {"images": dummy.numpy()})
-    r_det, r_ds = ref[0].numpy(), ref[1].numpy()
-    # candidate by candidate; candidates whose confidence ties with another (an untrained model scores everything alike) may swap places
-    ok = bad = 0
-    dmax = 0.0
-    for row, dd in zip(r_det, r_ds):
-        if (np.abs(r_det[:, 4] - row[4]) < 1e-4).sum() > 1 or not len(d):
-            continue
-        diff = np.abs(d - row[None]).max(1)
-        j = int(diff.argmin())
-        if diff[j] < 0.05:
-            ok += 1
-            dmax = max(dmax, abs(float(ds[j]) - float(dd)))
-        else:
-            bad += 1
-    print(f"ONNX vs PyTorch: {ok} distinct candidates identical, {bad} different, max distance difference {dmax:.4f} m")
-    if bad or dmax > 0.5:
-        say("error", text=f"The converted model does not give the same answers as the original ({bad} boxes differ, distance off by up to "
-                          f"{dmax:.2f} m), so it was not sent.")
+            x = letterbox(a.check_image, S)
+        except Exception:  # noqa: BLE001  (no OpenCV here, or a file that is no picture: the check goes on without it)
+            x = None
+        if x is not None:
+            pictures.append(("the picture open in the Annotator", torch.from_numpy(x)))
+    tmp = os.path.join(a.out, "check_every_box.onnx")
+
+    def run(path, x):
+        return ort.InferenceSession(path, providers=["CPUExecutionProvider"]).run(None, {"images": x.numpy()})
+
+    def wrong(what, bad, dmax):
+        say("error", text=f"The converted model does not give the same answers as the original on {what} ({bad} boxes differ, distance off "
+                          f"by up to {dmax:.2f} m), so it was not sent.")
         return 1
+    every = extra.pop("every", None)
+    if every is not None:
+        # the distance model, on every candidate box of the test pattern (in the file that is sent it only looks at the sure ones,
+        # and a test pattern has none of those)
+        say("step", text="Checking the distance model's conversion")
+        try:
+            ref = convert(every, dummy, tmp)
+            ok, bad, dmax, _n = compare([r.numpy() for r in ref], run(tmp, dummy))
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        print(f"Distance model, every candidate: {ok} identical, {bad} different, max distance difference {dmax:.4f} m")
+        if bad or dmax > 0.5:
+            return wrong("the distance model's check", bad, dmax)
+    say("step", text="Converting it to the Pi's format")
+    convert(wrapper, pictures[-1][1], onnx_path)                     # traced on the real picture when there is one
+    say("step", text="Checking the converted model against the original")
+    ok, found, on = 0, None, pictures[0][0]
+    for what, x in pictures:
+        with torch.no_grad():
+            ref = [r.numpy() for r in wrapper(x)]
+        k, bad, dmax, n = compare(ref, run(onnx_path, x))
+        print(f"ONNX vs PyTorch on {what}: {k} distinct candidates identical, {bad} different, max distance difference {dmax:.4f} m, "
+              f"{n} boxes of confidence {DIST_FROM_CONF} or more")
+        if bad or dmax > 0.5:
+            return wrong(what, bad, dmax)
+        ok += k
+        if x is not dummy:
+            found, on = n, what
     meta = dict(names=names, imgsz=S, round=extra.get("round") if kind == "scratch" and extra.get("round") is not None else (a.label or None),
                 epoch=extra.get("epoch"), map50=extra.get("map50"), map=extra.get("map"), dist_median_rel_err=extra.get("dist_median_rel_err"),
                 source=os.path.basename(a.weights), kind=kind, label=a.label, has_distance=kind == "scratch",
                 note="input: RGB float 0-1, letterboxed to imgsz (pad 114); outputs dets (N,6) xyxy,conf,cls and dist (N,) metres"
-                     + ("" if kind == "scratch" else "; this model does not predict distance: dist is 0.0"))
+                     + ("" if kind == "scratch" else "; this model does not predict distance: dist is 0.0")
+                     + ("; dist 0.0 = not worked out for that box (its confidence is under distance_from_conf)" if extra.get("more") else ""))
+    meta.update({k: v for k, v in (extra.get("more") or {}).items() if v is not None})
     with open(os.path.join(a.out, "gimble_model.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
     say("done", onnx=onnx_path, json=os.path.join(a.out, "gimble_model.json"), kind=kind, mb=round(os.path.getsize(onnx_path) / 1e6, 1),
-        names=names, checked=ok)
+        names=names, checked=ok, checked_on=on, found=found, parts=(extra.get("more") or {}).get("parts"))
     return 0
 
 

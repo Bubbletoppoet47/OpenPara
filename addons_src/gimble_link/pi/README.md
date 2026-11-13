@@ -28,8 +28,16 @@ photo), **SETUP** (first time on a new Pi: installs what is needed), **QUIT**.
 ## A new model
 
 From OpenPara: Annotator > File > **Gimble: Send a Model...** sends a trained model over the network into `model/` (the thumb drive stays
-in the Pi). A model that only finds boxes ("Assist") shows the LiDAR distance but no distance of its own.
-Start TEST MODEL again to use a new model.
+in the Pi). Sending converts it: the PC's model file (`.pt`) becomes the two files the Pi runs, `gimble_model.onnx` and
+`gimble_model.json`. A `.pt` copied into `model/` by hand cannot run here (there is no PyTorch on the Pi); the start screen says so.
+
+- A **Classes + boxes** model shows the LiDAR distance but no distance of its own.
+- A **Classes + boxes + distance** model is two models on the PC (a detector, then a distance model). The conversion joins them into
+  the one file, so the Gimble runs it like any other: the start screen says "boxes + distance, two models". Its distance model
+  looks at the boxes with a confidence of 0.1 or more (the 50 surest at most), which keeps a picture as quick as with the detector alone.
+- A model from before (one network for boxes and distance) keeps working.
+
+Start TEST MODEL again to use a new model. **Put the previous model back** in OpenPara undoes the last send.
 
 ## Details
 

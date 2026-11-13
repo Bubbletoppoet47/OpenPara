@@ -31,6 +31,7 @@ JOB = os.path.join(HERE, "gimble_export_job.py")
 PI_DIR = os.path.join(HERE, "pi")                    # the Gimble's own programs, as this OpenPara carries them (see update_programs)
 ROOTS = ("/media", "/mnt", "/run/media", "~")
 KINDS = {"assist": "Assist", "scratch": "Scratch"}
+KIND_TEXT = {"assist": "Classes + boxes", "scratch": "Classes + boxes + distance", None: "read when it is sent"}       # as the Trainer names them
 SIZE_NAMES = {"n": "Nano", "s": "Small", "m": "Medium", "l": "Large", "x": "Extra large"}
 
 
@@ -270,8 +271,15 @@ def status_text(st):
     if m:
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(st["model_time"])) if st["model_time"] else "?"
         what = m.get("label") or (f"round {m.get('round')}" if m.get("round") is not None else m.get("source", "a model"))
-        kind = {"assist": "Assist (boxes only)", "scratch": "Scratch (boxes + distance)"}.get(m.get("kind"), "boxes + distance")
+        kind = KIND_TEXT.get(m.get("kind") if m.get("kind") in KINDS else "scratch")
+        if m.get("parts"):
+            kind += f" ({m['parts']})"
         lines.append(f"Model on it:  {what}  -  {kind}, dated {when}, {st['model_mb']} MB")
+        err = [f"{round(float(m[k]) * 100)}% {t}" for k, t in (("dist_median_rel_err", "on the labelled boxes"),
+                                                              ("dist_median_rel_err_detected", "from the detector's own boxes"))
+               if isinstance(m.get(k), (int, float))]
+        if err:
+            lines.append("Its distance error in training (median):  " + ",  ".join(err))
         names = m.get("names") or []
         lines.append("Classes:  " + (", ".join(str(n) for n in names[:12]) + (f" ... ({len(names)} in all)" if len(names) > 12 else "")))
     elif st["model_time"]:
@@ -305,13 +313,17 @@ def export_python():
         return sys.executable
 
 
-def export_model(pt, out_dir, label="", on_step=None, stop=None, job=None, python=None):
-    """Runs the export job and returns its last message {'onnx', 'json', 'kind', 'mb', 'names', 'checked'}.  on_step(text) says what it is
-    doing; stop() -> True ends it.  GimbleError carries what went wrong (the job's own words, or the end of its log)."""
+def export_model(pt, out_dir, label="", on_step=None, stop=None, job=None, python=None, check_image=None):
+    """Runs the export job and returns its last message {'onnx', 'json', 'kind', 'mb', 'names', 'checked', 'checked_on', 'found', 'parts'}.
+    on_step(text) says what it is doing; stop() -> True ends it.  GimbleError carries what went wrong (the job's own words, or the end
+    of its log).  check_image: a picture the model should find something in - the converted file is checked on it too ('found' = how
+    many boxes of some confidence the model has on it; None without a picture)."""
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p), PYTHONIOENCODING="utf-8", YOLO_VERBOSE="False")
     here = [p for p in sys.path if p and os.path.isdir(p)]             # where this program finds its packages (the add-ons' folders too)
     cmd = [python or export_python(), job or JOB, "--weights", pt, "--out", out_dir, "--app", ANNOTATOR_APP, "--label", label,
            "--paths", os.pathsep.join(here)]
+    if check_image and os.path.isfile(check_image):
+        cmd += ["--check-image", check_image]
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
     log = tempfile.TemporaryFile()
     try:

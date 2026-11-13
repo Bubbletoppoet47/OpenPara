@@ -359,29 +359,66 @@ else:
     assert len(ml.list_versions(tp.models_dir, "assist")) == n_assist + 1 and len(ml.list_versions(tp.models_dir, "scratch")) == n_scratch
     assert os.path.dirname(rf["saved"][0]) == ml.folder_path(tp.models_dir, "assist")
 
-    # 6. converted for the Gimble: the two models become the one file the Pi runs, giving boxes and a distance per box
+    # 6. converted for the Gimble: the two models become the ONE file the Pi runs, and the Gimble's own program gets from it what the
+    #    Annotator gets from the .pt - the same boxes, the same distances
     try:
         import onnxruntime as ort
     except ImportError:
         ort = None
         print("no onnxruntime: the conversion for the Gimble is skipped")
     if ort:
-        import subprocess
+        import shutil, subprocess
+        JOB = os.path.join(ADD, "gimble_link", "gimble_export_job.py")
         outd = os.path.join(TMP, "pi_out")
-        r = subprocess.run([PY, os.path.join(ADD, "gimble_link", "gimble_export_job.py"), "--weights", v2["path"], "--out", outd, "--app", ANN],
-                           capture_output=True, text=True, timeout=300)
+        r = subprocess.run([PY, JOB, "--weights", v2["path"], "--out", outd, "--app", ANN, "--check-image", pic], capture_output=True, text=True, timeout=300)
         assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
+        assert "Distance model, every candidate:" in r.stdout and "0 different" in r.stdout and "on the picture open in the Annotator" in r.stdout, r.stdout[-2000:]
+        done = json.loads([ln for ln in r.stdout.splitlines() if ln.startswith("GIMBLE ") and '"done"' in ln][-1][7:])
+        assert done["parts"] == "detector + distance model" and done["checked_on"] == "the picture open in the Annotator" and done["found"] is not None, done
+        assert sorted(os.listdir(outd)) == ["gimble_model.json", "gimble_model.onnx"], "the two files the Gimble has always taken, nothing else"
         meta = json.load(open(os.path.join(outd, "gimble_model.json")))
         assert meta["has_distance"] is True and meta["kind"] == "scratch" and meta["names"] == ["crate", "ball"] and meta["imgsz"] == 160, meta
-        assert meta["round"] == 2
+        assert meta["round"] == 2 and meta["parts"] == "detector + distance model" and meta["distance_from_conf"] == 0.1 and meta["distance_max_boxes"] == 50
+        assert meta["distance_inputs"] in ("picture", "boxes") and abs(meta["dist_median_rel_err"] - res2["info"]["dist_median_err"]) < 1e-9
         sess = ort.InferenceSession(os.path.join(outd, "gimble_model.onnx"), providers=["CPUExecutionProvider"])
-        x = torch.rand(1, 3, 160, 160)
-        dets, dist = sess.run(None, {"images": x.numpy()})
+        assert [i.name for i in sess.get_inputs()] == ["images"] and [o.name for o in sess.get_outputs()] == ["dets", "dist"]
+        # the distance model looks only at the boxes of 0.1 or more (the 50 surest at the most): the others have 0.0 = not worked out
+        dets, dist = sess.run(None, {"images": torch.rand(1, 3, 160, 160).numpy()})
         assert dets.shape[1] == 6 and dist.shape == (dets.shape[0],) and len(dets) > 0
-        ref = dm.load(v2["path"])[0].infer(x, conf=0.0)[0].numpy()
+        assert ((dist > 0) == (dets[:, 4] >= 0.1)).all() and (dist > 0).sum() <= 50, (dets[:8, 4], dist[:8])
+        # the Gimble's own program (its picture preparation and its reading of the answer), on real pictures, against the Annotator.
+        # These tiny models are sure of nothing, so the file is made once more with the distance worked out from far lower down
+        pi = os.path.join(TMP, "pi_app"); shutil.copytree(os.path.join(ADD, "gimble_link", "pi", "app"), pi)
+        sys.path.insert(0, pi)
+        import cv2, gimble_detect as gdet
         import numpy as np
-        assert len(ref) == len(dets) and np.abs(np.sort(ref[:, 6]) - np.sort(dist)).max() < 0.05, (ref[:5], dist[:5])
-        print("converted for the Gimble: boxes and distances equal to the two models run one after the other")
+        low = os.path.join(TMP, "pi_low")
+        r = subprocess.run([PY, JOB, "--weights", v2["path"], "--out", low, "--app", ANN, "--dist-from-conf", "0.0005", "--dist-most", "40"],
+                           capture_output=True, text=True, timeout=300)
+        assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
+        sess = ort.InferenceSession(os.path.join(low, "gimble_model.onnx"), providers=["CPUExecutionProvider"])
+        ga2 = gimble_assist.GimbleAssist(v2["path"], device="cpu")
+        vdir = os.path.join(job.run_dir, "dataset", "images", "val")
+        boxes = with_dist = 0
+        for fn in sorted(os.listdir(vdir)):
+            frame = cv2.imread(os.path.join(vdir, fn)); H, W = frame.shape[:2]
+            x, rr, left, top = gdet.preprocess(frame, 160)
+            dets, dist = sess.run(None, {"images": x})
+            on_pi = gdet.postprocess(dets, dist, frame.shape, rr, left, top, 0.0005)
+            on_pc = ga2.predict_detections(os.path.join(vdir, fn), 0.0005)
+            assert len(on_pi) == len(on_pc) > 0, (fn, len(on_pi), len(on_pc))
+            assert sum(gdet.has_distance(d) for d in on_pi) <= 40
+            for d in on_pi:
+                x1, y1, x2, y2 = d["box"]
+                q = min(on_pc, key=lambda q: abs(q[1] * W - (x1 + x2) / 2) + abs(q[2] * H - (y1 + y2) / 2) + abs(q[3] * W - (x2 - x1)) + abs(q[5] - d["conf"]) * 100)
+                # (a box that touches the picture's edge ends one pixel earlier on the Gimble: it cuts at the last pixel, the Annotator at the edge)
+                assert abs(q[1] * W - (x1 + x2) / 2) <= 1.0 and abs(q[2] * H - (y1 + y2) / 2) <= 1.0 and abs(q[5] - d["conf"]) < 1e-3 and q[0] == d["cls"], (fn, d, q)
+                boxes += 1
+                if gdet.has_distance(d):
+                    assert abs(q[6] - d["dist"]) < 0.02, (fn, d, q)
+                    with_dist += 1
+        assert with_dist > 20, with_dist
+        print(f"converted for the Gimble: on {len(os.listdir(vdir))} pictures the Gimble's program reads {boxes} boxes like the Annotator, {with_dist} of them with the same distance")
     print("real training ok: two stages from random weights, distance only, both continued, distance added on top of a detector")
 
 print("trainer distance ok", flush=True)

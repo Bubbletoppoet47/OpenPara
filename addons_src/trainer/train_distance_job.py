@@ -262,13 +262,15 @@ def main():
     if start:
         try:
             ck, prev = dm.read(start)
-            if not (isinstance(ck, dict) and "model" in ck):
-                raise ValueError("it is not a YOLO model file")
-            det_names = dm.names_of(ck)
-            del ck
         except Exception as e:  # noqa: BLE001
-            return fail(job, f"Could not continue from {os.path.basename(start)}: {e}\nA model of the earlier kind (one network for boxes and "
-                             "distance) can be used but not trained further: train a new Classes + boxes + distance model.")
+            return fail(job, f"Could not continue from {os.path.basename(start)}: {e}")
+        if isinstance(ck, dict) and str(ck.get("format", "")).startswith("gimble-det-dist"):
+            return fail(job, f"{os.path.basename(start)} is a model of the earlier kind (one network for boxes and distance). It can be used "
+                             "but not trained further: train a new Classes + boxes + distance model.")
+        if not (isinstance(ck, dict) and "model" in ck):
+            return fail(job, f"Could not continue from {os.path.basename(start)}: it is not a YOLO model file.")
+        det_names = dm.names_of(ck)
+        del ck
         if prev is not None:
             round_no = int(prev.get("round") or 0) + 1
 

@@ -119,9 +119,13 @@ keyboard and mouse, copies files to and from it and runs commands there: a Raspb
 through that helper on the Gimble rig's Raspberry Pi, so the thumb drive stays in the Pi. It finds the Gimble folder (the one with
 `gimble_pi.py` and `gimble_detect.py`), converts a model of the Annotator's Models folder (Assist or Scratch) to `gimble_model.onnx` +
 `gimble_model.json` in a job of its own (`gimble_export_job.py`; the converted model is compared with the original before it is sent)
-and puts it in `model/`; the model that was there moves to `model/previous/` and can be put back. An Assist model has no distance, so the
-Pi shows no distance of its own for it (the LiDAR distance still shows); a model that gives distance is trained with one of the Trainer's
-"Classes + boxes + distance" types (below) and is listed under Scratch. Recordings are copied from `dataset/` and test videos from
+and puts it in `model/`; the model that was there moves to `model/previous/` and can be put back. A Classes + boxes model has no
+distance, so the Pi shows no distance of its own for it (the LiDAR distance still shows). A Classes + boxes + distance model (the
+Trainer's type below: a detector and a separate distance model) is joined into that one file by the conversion, so the Gimble runs it
+like any other model and its programs do not have to be updated for it; the distance model there looks only at the boxes with a
+confidence of 0.1 or more, which keeps a picture about as quick as with the detector alone. With a picture open in the Annotator the
+converted model is also checked on that picture. A `.pt` dropped on the Send page is added to its list; a `.pt` copied to the Gimble
+by hand cannot run there, and the Gimble says so. Recordings are copied from `dataset/` and test videos from
 `test_videos/` (files already on the PC are skipped). It needs the Annotator's packages (torch, ultralytics) and downloads onnx and
 onnxruntime.
 
