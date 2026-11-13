@@ -13,7 +13,7 @@ The core is **Sketch/Part and Assembly** (with STEP / STL exchange, units, setti
 
 - **Part Generator**: spur, helical, herringbone and internal ring gears with true involute teeth; a Gear systems tab sizes a train of up to three gears from centre distances or ratios, or a planetary sun / planet / ring set, and opens each gear as its own part.
 - **Truss Generator**: builds the members of a truss from the lines of a sketch (profile, longest length, angled end cuts) and writes a cut list.
-- **Simulation**: 1D FEA of frames and trusses, 2D FEA of flat parts (plane stress / strain, linear and nonlinear) and 2D CFD of the flow around a profile, on a sketch or a slice of a part or assembly; results can be saved as animations.
+- **Simulation**: 1D FEA of frames and trusses (member profiles from basic shapes or from your own sketches of the cross-section), 2D FEA of flat parts (plane stress / strain, linear and nonlinear) and 2D CFD of the flow around a profile, on a sketch or a slice of a part or assembly; results can be saved as animations.
 - **Parametric Studies**: varies the inputs of a simulation project over a table of design points and records the outputs (CSV export).
 
 Parts that use the Part Generator keep their data without the add-on and say that they need it. Uninstalling an add-on never touches your files or your material library. Installing needs an internet connection; once installed an add-on works offline. The renderer (Visualize) is not part of this version yet; it is being reworked and will follow as an add-on.

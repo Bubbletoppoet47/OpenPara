@@ -549,6 +549,8 @@ def convert_beam_state(st, old, new, convert):
         _sc(m, ("depth",), lf)
         mems.append(m)
     st["members"] = mems
+    if st.get("profs"):                                   # the profile sketches: their outlines are lengths too
+        st["profs"] = [dict(p, outline=profiles1d.scale_outline(p["outline"], lf)) for p in st["profs"]]
     loads = []
     for ld in st.get("loads", []):
         ld = dict(ld)

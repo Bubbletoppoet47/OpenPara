@@ -84,6 +84,8 @@ class ProfileDialog(QDialog):
             self.shape.addItem(label, key)
         if self.stored and self.stored.get("shape") == "imported":
             self.shape.addItem("Imported / drawn section: " + self.stored.get("label", ""), "imported")
+        for p_ in tab.profs:                                   # the profile sketches of this simulation (cross-sections drawn as a sketch)
+            self.shape.addItem("Profile sketch: " + p_["name"], f"sketch:{p_['id']}")
         lay.addWidget(self.shape)
         top = QHBoxLayout()
         self.form_box = QWidget()
@@ -108,6 +110,12 @@ class ProfileDialog(QDialog):
         row_.addWidget(b)
         b = QPushButton("Export .profprops...")
         b.clicked.connect(self.export_file)
+        row_.addWidget(b)
+        b = QPushButton("Add a profile sketch...")
+        b.setToolTip("Use a cross-section drawn as a sketch: a sketch of the frame's part, of a part that is open, or of a .gpd file. It is "
+                     "added to the Profile sketches of this simulation and stays linked to its sketch (Update, parametric studies).")
+        b.clicked.connect(self.add_sketch)
+        b.setEnabled(getattr(tab.win, "sim", None) is not None)
         row_.addWidget(b)
         row_.addStretch(1)
         lay.addLayout(row_)
@@ -193,11 +201,13 @@ class ProfileDialog(QDialog):
         self.b_clear.clicked.connect(self.clear_it)
         lay.addWidget(self.bb)
         start = (self.stored or {}).get("shape") or "rect"
+        if start == "sketch":
+            start = f"sketch:{self.stored.get('ref')}"
         i = self.shape.findData(start)
         self.shape.setCurrentIndex(max(0, i))
         self.cb_flip.setChecked(bool((self.stored or {}).get("flip")))
         self.cb_weak.setChecked(bool((self.stored or {}).get("weak")))
-        self.build_form(self.stored if (self.stored and self.stored.get("shape") == start) else None)
+        self.build_form(self.stored if (self.stored and (self.stored.get("shape") == start or start.startswith("sketch:"))) else None)
         self.shape.currentIndexChanged.connect(self.shape_changed)
         self.cb_flip.toggled.connect(self.recompute)
         self.cb_weak.toggled.connect(self.recompute)
@@ -219,11 +229,27 @@ class ProfileDialog(QDialog):
         imported = key == "imported"
         self.cb_flip.setEnabled(not imported)
         self.cb_weak.setEnabled(not imported and key not in ("custom", "round", "pipe"))
+        self.cb_weak.setText("Turn 90 degrees" if self.sketch_of(key) else "Bend about the weak axis")
         self.grp_copies.setEnabled(not imported)
         self.grp_copies.setToolTip(self.grp_copies.toolTip() if not imported else
                                    "An imported section is only numbers. Use 'Enter A, I and c directly' to make copies of it.")
         if imported:
             self.preview.set_profile(None)
+            return
+        p_ = self.sketch_of(key)
+        if p_ is not None:                                     # a profile sketch has no dimensions here: they are in its sketch
+            src = QLabel(f"Sketch '{p_['sketch']}' of {p_['part_name']}")
+            src.setWordWrap(True)
+            self.form.addRow("Drawn in", src)
+            e = QLineEdit("")
+            if existing and existing.get("shape") == "sketch" and existing.get("ref") == p_["id"] and existing.get("As_one"):
+                e.setText(f"{existing['As_one']:.6g}")
+            e.setPlaceholderText("none")
+            e.setToolTip("Only used when 'Include shear deformation' is on. A drawn section has no general rule for its shear area: for a "
+                         "section with a web it is about the web thickness times the full depth. Give the value of ONE section (copies add).")
+            e.textChanged.connect(self.recompute)
+            self.form.addRow(f"Shear area, optional ({self.U['L']}^2)", e)
+            self.edits["As"] = e
             return
         defaults = pr1.default_dims(key, self.U["L_m"])
         have = existing["dims"] if existing and existing.get("shape") == key else {}
@@ -233,12 +259,43 @@ class ProfileDialog(QDialog):
             self.form.addRow(f"{lab} ({self.length_label(k)})", e)
             self.edits[k] = e
 
+    def sketch_of(self, key):
+        """The tab's profile sketch behind an entry of the shape box (None for the basic shapes)."""
+        if isinstance(key, str) and key.startswith("sketch:"):
+            return self.tab.prof_by_id(int(key[7:]))
+        return None
+
+    def add_sketch(self):
+        prof = self.tab.add_profile_sketch()
+        if prof is None:
+            return
+        data = f"sketch:{prof['id']}"
+        if self.shape.findData(data) < 0:
+            self.shape.addItem("Profile sketch: " + prof["name"], data)
+        self.shape.setCurrentIndex(self.shape.findData(data))
+        self.shape_changed()
+
     def recompute(self, *_):
         key = self.shape.currentData()
         ok = True
+        p_ = self.sketch_of(key)
         if key == "imported":
             self.profile = copy.deepcopy(self.stored)
             self.preview.set_profile(None)
+        elif p_ is not None:
+            try:
+                txt_as = self.edits["As"].text().strip() if "As" in self.edits else ""
+                try:
+                    As = float(txt_as) if txt_as else None
+                except ValueError:
+                    raise ValueError("The shear area must be a number (or empty).")
+                self.profile = pr1.sketch(p_["name"], p_["outline"], self.cb_flip.isChecked(), self.cb_weak.isChecked(), self.copies_spec(),
+                                          p_["id"], As)
+            except ValueError as ex:
+                self.profile = None
+                ok = False
+                self.info.setText(f"<span style='color:#b00020'>{ex}</span>")
+                self.preview.set_profile(None)
         else:
             try:
                 dims = {k: float(e.text()) for k, e in self.edits.items()}
@@ -252,12 +309,20 @@ class ProfileDialog(QDialog):
         if ok and self.profile:
             pf = self.profile
             L = self.U["L"]
-            txt = (f"<b>{pf['label']}</b><br>A = {pf['A']:.6g} {L}&sup2;&nbsp;&nbsp; I = {pf['I']:.6g} {L}&sup4;<br>"
+            txt = (f"<b>{pf['label']}</b><br>A = {pf['A']:.6g} {L}&sup2;&nbsp;&nbsp; I = {pf['I']:.6g} {L}<sup>4</sup><br>"
                    f"c(+y side) = {pf['c_top']:.5g} {L}&nbsp;&nbsp; c(-y side) = {pf['c_bottom']:.5g} {L}<br>"
                    f"S = I/c: {pf['I'] / pf['c_top']:.5g} (+y side), {pf['I'] / pf['c_bottom']:.5g} (-y side) {L}&sup3;")
             if pf.get("shape") == "angle":
                 txt += ("<br><i>Angle: bending about the horizontal centroidal axis; the product of inertia is ignored (valid when the load acts "
                         "through the shear centre and the member cannot twist).</i>")
+            if pf.get("shape") == "sketch":
+                if p_ is not None and p_.get("error"):
+                    txt += f"<br><span style='color:#b00020'>The sketch could not be read again ({p_['error']}); this is its earlier outline.</span>"
+                if abs(pf.get("skew") or 0.0) > pr1.SKEW_NOTE:
+                    txt += ("<br><i>This section is not symmetric about the plane of the frame: left free, the member would also move sideways "
+                            "and twist. The analysis holds it in the plane and bends it about the horizontal centroidal axis.</i>")
+                if not pf.get("As"):
+                    txt += "<br><i>No shear area given: members with this profile have no shear deformation.</i>"
             self.info.setText(txt)
             if key != "imported":
                 self.preview.set_profile(pf)

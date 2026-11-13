@@ -124,3 +124,5 @@ assert dlg.copies_spec()["side_v"] == "left" and dlg.profile and dlg.profile["co
 dlg.cp_sv.setCurrentIndex(0)
 assert dlg.profile["copies"]["side_v"] == "right"
 print("ALL OK")
+sys.stdout.flush()
+os._exit(0)            # skip PyQt's clean-up at exit: it can crash deleting the widgets this script still holds (as in the other UI tests)

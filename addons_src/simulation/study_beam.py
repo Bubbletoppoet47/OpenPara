@@ -2,12 +2,18 @@
 study_beam.py - the parametric-study adapter of the 1D FEA tab (see study_iface.py).
 
 Inputs a study can vary: the default material, every load value (force, moment, line load, wind, snow), the in-plane depth of members that
-carry wind or snow, and every dimension of a member's profile.  Outputs: displacement, fibre stress, safety factors, forces, reactions, and the
+carry wind or snow, and every dimension of a member's profile.  A profile drawn as a sketch is varied through the dimensions of its sketch:
+  * a profile sketch of the FRAME'S part: its dimensions are among the part's dimensions the study tab lists itself; geometry_state() works the
+    profile sketches out again from the changed part, together with the frame;
+  * a profile sketch of ANOTHER part (a copy in the project's profiles/): the variables of that part and the dimensions of its profile sketches
+    are inputs of this adapter ("bprof"); prepare() changes a fresh copy of the part and reads the sketches again.
+Outputs: displacement, fibre stress, safety factors, forces, reactions, and the
 same per member and per support.  Ported from the Parameterization tab of the earlier program.
 """
 import traceback
 
 import beam1d
+import profile_sketch
 import profiles1d as pr1
 import units
 from study_iface import StudyAdapter, StudyCancelled, fmt_num, set_widget, widget_params
@@ -47,13 +53,83 @@ class BeamStudy(StudyAdapter):
                             "label": f"{mem['name']}: in-plane depth (wind / snow)", "bdim": (mem["lid"], "depth"),
                             "now": "" if mem.get("depth") is None else fmt_num(mem["depth"])})
             prof = mem.get("profile")
-            if not prof or prof.get("shape") in ("custom", "imported"):
+            if not prof or prof.get("shape") in ("custom", "imported", "sketch"):
                 continue
             for k, lab in pr1.dim_defs(prof["shape"]):
                 out.append({"id": f"beam.mem{mem['lid']}.{k}", "group": "1D FEA profile dimensions", "kind": "text", "choices": None,
                             "label": f"{mem['name']} ({pr1.shape_label(prof['shape'])}): {lab}", "bdim": (mem["lid"], k),
                             "now": fmt_num(prof["dims"][k])})
+        out += self.profile_part_params()
         return out
+
+    def profile_part_params(self):
+        """The variables and profile-sketch dimensions of the parts copied into the project for their profile sketches."""
+        t = self.tab
+        src_of = getattr(t.win, "profile_source", None)
+        if src_of is None or getattr(t.win, "sim", None) is None:
+            return []
+        out = []
+        for part in sorted({p["part"] for p in t.profs if p["part"] != "main"}):
+            sids = {str(p["sid"]) for p in t.profs if p["part"] == part}
+            try:
+                cands = src_of(part).doc.cfg_candidates()
+            except Exception:
+                continue
+            pname = next(p["part_name"] for p in t.profs if p["part"] == part)
+            for key, label, now in cands:
+                if not (key.startswith("g:") or (key.startswith("d:") and key.split(":")[1] in sids)):
+                    continue
+                out.append({"id": f"beam.prof.{part}.{key}", "group": "Profile sketch dimensions (changes the profile)", "kind": "text",
+                            "choices": None, "label": f"{pname}: {label}", "now": str(now), "bprof": (part, key)})
+        return out
+
+    def profs_changed(self, profs, by_part, ctx, unit):
+        """The profile sketches after changing their parts: by_part = {part key: {cfg key: text}}.  Raises ValueError with the reason."""
+        t = self.tab
+        cache = ctx.setdefault("profile_outlines", {})
+        out = []
+        for p in profs:
+            vals = by_part.get(p["part"])
+            if not vals:
+                out.append(p)
+                continue
+            ck = (p["part"], tuple(sorted(vals.items())), unit)
+            if ck not in cache:
+                src = t.win.profile_source(p["part"], True)
+                profile_sketch.check_values(src.doc, vals, [q["sid"] for q in profs if q["part"] == p["part"]])
+                src.set_values(vals)
+                cache[ck] = src
+            try:
+                outline, notes, sname = profile_sketch.read(cache[ck].doc, p["sid"], unit)
+                pr1.sketch(p["name"], outline)
+            except ValueError as ex:
+                raise ValueError(f"Profile sketch '{p['name']}': {ex}")
+            out.append(dict(p, outline=outline, notes=list(notes), sketch=sname, error=None))
+        return out
+
+    def geometry_state(self, src, vals):
+        """The state of the tab after changing the dimensions of the frame's part: the frame sketch and the profile sketches of that part."""
+        t = self.tab
+        profile_sketch.check_values(src.doc, vals, [p["sid"] for p in t.profs if p["part"] == "main"])
+        src.set_values(vals)
+        sid = getattr(t, "sketch_id", None) or (getattr(getattr(t.win, "sim", None), "meta", None) or {}).get("sid")
+        m = src.doc.models.get(sid)
+        if m is None:
+            raise ValueError("The sketch of the simulation is not in the part any more.")
+        st = self.base_state()
+        st["model_json"] = m.to_json()
+        profs = []
+        for p in st.get("profs") or []:
+            if p["part"] == "main":
+                try:
+                    outline, notes, sname = profile_sketch.read(src.doc, p["sid"], t.unit_name())
+                    pr1.sketch(p["name"], outline)
+                except ValueError as ex:
+                    raise ValueError(f"Profile sketch '{p['name']}': {ex}")
+                p = dict(p, outline=outline, notes=list(notes), sketch=sname, error=None)
+            profs.append(p)
+        st["profs"] = profs
+        return st
 
     def outputs(self):
         t = self.tab
@@ -86,13 +162,27 @@ class BeamStudy(StudyAdapter):
 
     def prepare(self, values, ctx, state=None):
         spec = {"error": None, "run": None}
+        profs = None
         try:
+            by_part = {}
+            for pid, text in values.items():
+                d = self.desc(pid)
+                if d is not None and d.get("bprof") is not None:
+                    by_part.setdefault(d["bprof"][0], {})[d["bprof"][1]] = text
+            bad = self.tab.prof_problems()
+            if bad:
+                raise ValueError(" ".join(bad) + " Update the profile sketches first.")
+            if by_part:                                        # profile sketches of other parts: read again from the changed parts
+                state = dict(state if state is not None else self.base_state())
+                profs = state["profs"] = self.profs_changed(state.get("profs") or [], by_part, ctx, self.tab.unit_name())
             s = self.scratch(state)
             ov = {"loads": {}, "dims": {}}
             for pid, text in values.items():
                 d = self.desc(pid)
                 if d is None:
                     raise ValueError(f"The input '{pid}' does not exist in this simulation any more.")
+                if d.get("bprof") is not None:
+                    continue
                 if d.get("bload") is not None:
                     i, k = d["bload"]
                     ov["loads"].setdefault(i, {})[k] = float(text)
@@ -116,8 +206,11 @@ class BeamStudy(StudyAdapter):
             progress("solving")
             try:
                 res = beam1d.solve(*b["args"])
-                return {"status": "ok", "result": res, "sup_targets": sup_targets, "notes": list(b.get("notes", [])),
+                case = {"status": "ok", "result": res, "sup_targets": sup_targets, "notes": list(b.get("notes", [])),
                         "excluded": list(b.get("excluded", []))}
+                if profs is not None:
+                    case["profs"] = profs                      # show() puts the changed profile sketches on the screen with the result
+                return case
             except beam1d.BeamError as ex:
                 return {"status": "failed", "error": str(ex)}
             except Exception:
@@ -169,6 +262,8 @@ class BeamStudy(StudyAdapter):
     def show(self, case):
         t = self.tab
         st = case.get("state")
+        if case.get("profs") is not None:
+            st = dict(st if st is not None else t.export_state(), profs=case["profs"])
         if st is not None:
             t.win._restoring = True
             try:

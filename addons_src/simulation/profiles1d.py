@@ -11,6 +11,9 @@ All lengths are in the tab's length unit (the numbers are only ever combined con
 
 "y" is the direction the member bends in (in the plane of the frame); "h" always means the depth in that direction.
 Shapes built from polygons use section_props.properties (exact polygon integrals); round shapes use their closed forms.
+
+A profile drawn as a sketch (shape "sketch", made by sketch()) has no dimensions: it carries its outline, "outline": [[polygon, is_hole], ...]
+(profile_sketch.py), and "ref": the id of the profile sketch of the tab it came from, so the tab can work it out again when that sketch changes.
 """
 import math
 
@@ -38,7 +41,7 @@ _BY_KEY = {s[0]: s for s in SHAPES}
 
 
 def shape_label(key):
-    return _BY_KEY[key][1] if key in _BY_KEY else "Imported"
+    return _BY_KEY[key][1] if key in _BY_KEY else "Profile sketch" if key == "sketch" else "Imported"
 
 
 def dim_defs(key):
@@ -67,8 +70,22 @@ def _circle(r, n=72):
     return [(r * math.cos(2 * math.pi * i / n), r * math.sin(2 * math.pi * i / n)) for i in range(n)]
 
 
-def _faces(key, d):
+def _sketch_faces(outline):
+    """The face dicts of a sketched outline: every outer polygon is a face; the holes only have to be counted negative, so they all hang on the
+    first one."""
+    outer = [[tuple(q) for q in poly] for poly, hole in outline if not hole]
+    holes = [[tuple(q) for q in poly] for poly, hole in outline if hole]
+    if not outer:
+        raise ValueError("The profile sketch has no closed outline.")
+    faces = [{"poly": poly, "holes": []} for poly in outer]
+    faces[0]["holes"] = [{"poly": poly} for poly in holes]
+    return faces
+
+
+def _faces(key, d, outline=None):
     """The outline of the section as the face dicts section_props expects (outer polygon counter-clockwise, holes as 'holes')."""
+    if key == "sketch":
+        return _sketch_faces(outline)
     if key == "rect":
         return [{"poly": _rect(d["b"], d["h"]), "holes": []}]
     if key == "round":
@@ -130,7 +147,7 @@ def make_label(key, d):
 def shear_area_of(key, d, weak=False):
     """Effective shear area As (for the shear deformation of the Timoshenko option): the web for I / channel / tee / tube sections, the usual
     factors for solid ones, half the area as a rough guess for an angle.  None for a section known only by numbers."""
-    if key in ("custom", "imported"):
+    if key in ("custom", "imported", "sketch"):
         return None
     if key == "rect":
         return 5.0 / 6.0 * d["b"] * d["h"]
@@ -151,9 +168,9 @@ def _rot90(poly):
     return [(-y, x) for x, y in poly]
 
 
-def _outline(key, d, flip, weak):
+def _outline(key, d, flip, weak, outline=None):
     """[(polygon, is_hole)] of the base section as it is drawn (turned for the weak axis, flipped), y up."""
-    faces = _faces(key, d)
+    faces = _faces(key, d, outline)
     if weak and key not in ("round", "pipe"):
         faces = [{"poly": _rot90(f["poly"]), "holes": [{"poly": _rot90(h["poly"])} for h in f["holes"]]} for f in faces]
     out = []
@@ -166,9 +183,10 @@ def _outline(key, d, flip, weak):
     return out
 
 
-def _base(key, d, flip, weak):
+def _base(key, d, flip, weak, outline=None):
     """The section before any copies: A, I, As, fibre distances, the drawn outline, its box and the height of its centroid in the drawing."""
     yc0 = 0.0
+    skew = None
     if key == "custom":
         A, I, ct, cb = d["A"], d["I"], d["c_top"], d["c_bottom"]
     elif key == "round":
@@ -177,14 +195,16 @@ def _base(key, d, flip, weak):
         di = d["d"] - 2 * d["t"]
         A, I, ct, cb = math.pi * (d["d"] ** 2 - di ** 2) / 4, math.pi * (d["d"] ** 4 - di ** 4) / 64, d["d"] / 2, d["d"] / 2
     else:
-        faces = _faces(key, d)
+        faces = _faces(key, d, outline)
         if weak:                                           # turn the section 90 degrees: it then bends about its other axis
             faces = [{"poly": _rot90(f["poly"]), "holes": [{"poly": _rot90(h["poly"])} for h in f["holes"]]} for f in faces]
         pr = secp.properties(faces)
         A, I, ct, cb, yc0 = pr["area"], pr["Ixx"], pr["c_top"], pr["c_bottom"], pr["yc"]
+        if key == "sketch" and pr["Ixx"] > 0 and pr["Iyy"] > 0:
+            skew = pr["Ixy"] / math.sqrt(pr["Ixx"] * pr["Iyy"])        # 0 when an axis of symmetry is horizontal or vertical
     if flip:
         ct, cb, yc0 = cb, ct, -yc0
-    polys = [] if key == "custom" else _outline(key, d, flip, weak)
+    polys = [] if key == "custom" else _outline(key, d, flip, weak, outline)
     if polys:
         xs = [x for poly, _h in polys for x, _y in poly]
         ys = [y for poly, _h in polys for _x, y in poly]
@@ -194,7 +214,7 @@ def _base(key, d, flip, weak):
     As = shear_area_of(key, d, weak)
     if As is None and key == "angle":
         As = 0.5 * A
-    return {"A": A, "I": I, "As": As, "ct": ct, "cb": cb, "polys": polys, "box": box, "yc0": yc0}
+    return {"A": A, "I": I, "As": As, "ct": ct, "cb": cb, "polys": polys, "box": box, "yc0": yc0, "skew": skew}
 
 
 COPY_DEFAULTS = {"nx": 1, "gx": 0.0, "ny": 1, "gy": 0.0, "mirror_v": False, "gap_v": 0.0, "mirror_h": False, "gap_h": 0.0,
@@ -305,13 +325,57 @@ def compute(key, dims, flip=False, weak=False, copies=None):
     return out
 
 
+SKEW_NOTE = 0.05           # a sketched section whose |Ixy| / sqrt(Ixx Iyy) is above this gets the "not symmetric" note
+
+
+def sketch(name, outline, flip=False, weak=False, copies=None, ref=None, As=None):
+    """-> the profile dict of a section drawn as a sketch.  outline: [[polygon, is_hole], ...] in the tab's length unit (profile_sketch.py).
+    weak: turned 90 degrees.  As: the shear area of ONE section, when the user gave one (a drawn shape has no rule for it; without it the
+    member has no shear deformation).  ref: the id of the tab's profile sketch.  Raises ValueError with a message for the user."""
+    if not outline:
+        raise ValueError("The profile sketch has no closed outline.")
+    cp = normalize_copies(copies)
+    base = _base("sketch", {}, flip, weak, outline)
+    if As is not None:
+        As = float(As)
+        if not (math.isfinite(As) and As > 0):
+            raise ValueError("The shear area must be a positive number (or empty).")
+        base["As"] = As
+    A, I, ct, cb, As_all = base["A"], base["I"], base["ct"], base["cb"], base["As"]
+    n = 1
+    if cp:
+        comb = _combine(base, cp)
+        A, I, ct, cb, As_all, n = comb["A"], comb["I"], comb["ct"], comb["cb"], comb["As"], comb["n"]
+    if not (A > 0 and I > 0 and ct > 0 and cb > 0):
+        raise ValueError("The section has no area, no stiffness, or a fibre distance of zero.")
+    label = (name or "Profile sketch") + (" (turned 90 deg)" if weak else "") + (" (flipped)" if flip else "")
+    if cp:
+        label += f" ({n} copies)"
+    out = {"shape": "sketch", "dims": {}, "name": name or "Profile sketch", "ref": ref, "outline": [[[list(q) for q in poly], bool(hole)] for poly, hole in outline],
+           "flip": bool(flip), "weak": bool(weak), "A": A, "I": I, "c_top": ct, "c_bottom": cb, "label": label}
+    if base["skew"] is not None and not cp:
+        out["skew"] = base["skew"]
+    if As is not None:
+        out["As_one"] = As
+        out["As"] = As_all
+    if cp:
+        out["copies"] = cp
+    return out
+
+
+def relink(profile, outline, name=None):
+    """A sketch profile worked out again from a new outline of its sketch (the turn, flip, copies and shear area stay).  Raises ValueError."""
+    return sketch(name or profile.get("name"), outline, profile.get("flip", False), profile.get("weak", False), profile.get("copies"),
+                  profile.get("ref"), profile.get("As_one"))
+
+
 def shear_area(profile):
     """As of a stored profile (older files do not have it: it is worked out again from the shape)."""
     if profile is None:
         return None
     if profile.get("As"):
         return float(profile["As"])
-    if profile.get("shape") in (None, "custom", "imported"):
+    if profile.get("shape") in (None, "custom", "imported", "sketch"):
         return None
     try:
         return compute(profile["shape"], profile["dims"], profile.get("flip", False), profile.get("weak", False), profile.get("copies")).get("As")
@@ -326,11 +390,12 @@ def drawing(profile, n_circle=48):
     if key in (None, "custom", "imported"):
         return []
     d = profile["dims"]
-    polys = _outline(key, d, bool(profile.get("flip")), bool(profile.get("weak")))
+    ol = profile.get("outline") if key == "sketch" else None
+    polys = _outline(key, d, bool(profile.get("flip")), bool(profile.get("weak")), ol)
     cp = normalize_copies(profile.get("copies"))
     if not cp:
         return polys
-    base = _base(key, d, bool(profile.get("flip")), bool(profile.get("weak")))
+    base = _base(key, d, bool(profile.get("flip")), bool(profile.get("weak")), ol)
     cps, _ext = _layout(base["box"], cp)
     out = []
     for sx, sy, tx, ty in cps:
@@ -347,6 +412,10 @@ def imported(name, A, I, c_top, c_bottom):
             "label": name or f"A={_fmt(A)} I={_fmt(I)}"}
 
 
+def scale_outline(outline, lf):
+    return [[[[x * lf, y * lf] for x, y in poly], bool(hole)] for poly, hole in outline]
+
+
 def scale(profile, lf):
     """The same profile with every length multiplied by lf (a change of length unit)."""
     p = dict(profile)
@@ -359,6 +428,10 @@ def scale(profile, lf):
     p["A"] = profile["A"] * lf ** 2
     if profile.get("As"):
         p["As"] = profile["As"] * lf ** 2
+    if profile.get("As_one"):
+        p["As_one"] = profile["As_one"] * lf ** 2
+    if profile.get("outline"):
+        p["outline"] = scale_outline(profile["outline"], lf)
     if profile.get("copies"):
         p["copies"] = dict(profile["copies"])
         for k in ("gx", "gy", "gap_v", "gap_h"):
@@ -394,6 +467,12 @@ def fibres(profile, nf=60):
     X1, Y1, X2, Y2 = E[:, 0], E[:, 1], E[:, 2], E[:, 3]
     brk = np.unique(np.round(np.concatenate([Y1, Y2]), 12))
     H = brk[-1] - brk[0]
+    if len(brk) > 4 * nf:                                  # a drawn outline with arcs has a corner at every little step: keep the strips few
+        keep, gap = [brk[0]], H / (4.0 * nf)
+        for y in brk[1:-1]:
+            if y - keep[-1] >= gap and brk[-1] - y >= gap:
+                keep.append(y)
+        brk = np.array(keep + [brk[-1]])
     ym, dy = [], []
     for lo, hi in zip(brk[:-1], brk[1:]):
         k = max(1, int(round(nf * (hi - lo) / H)))

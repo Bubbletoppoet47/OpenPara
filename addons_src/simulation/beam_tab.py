@@ -7,6 +7,10 @@ Each line of the sketch is a member; points shared by lines are the joints. A me
 in the Profile button of its table row, and optionally its own material. Everything is solved at once (it is instant), so the
 default is to solve after every change.
 
+A profile can be one of the basic shapes, numbers, or a PROFILE SKETCH: a cross-section drawn as a sketch (self.profs, profile_sketch.py).
+Any number of profile sketches can be added; each can be used by any number of members.  A member that uses one keeps the id of the profile
+sketch ("ref"), so when the sketch changes (Update, Update from original, a parametric study) its section is worked out again.
+
 Needs numpy only.
 """
 import copy
@@ -22,7 +26,7 @@ import sim_ui
 import sim_report
 import anim_export
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
-                             QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplitter,
+                             QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplitter,
                              QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
 
 import beam1d
@@ -111,6 +115,10 @@ class BeamTab(QWidget):
         self.import_msg = ""
         self.stale = False
         self.clip_profile = None
+        self.profs = []          # profile sketches: {"id", "name", "part": "main" (the frame's part) | key of a part in the project's profiles/,
+        #                          "part_name", "sid": sketch id in that part, "sketch": its name, "outline": [[polygon, is_hole], ...] in this
+        #                          tab's length unit, "notes": [text], "error": None | why it could not be read again (the outline is then the last good one)}
+        self.prof_seq = 0
         self.building = False
         self.syncing = False
         self.cur_unit = units.DEFAULT
@@ -142,6 +150,26 @@ class BeamTab(QWidget):
                                    "(construction lines are ignored). Importing the same sketch again after changing it keeps the profiles, "
                                    "supports and loads of the lines that still exist.")
         lay.addWidget(self.picker)
+        lb = QLabel("Profile sketches (cross-sections drawn as a sketch)")
+        lb.setToolTip("A member's profile can be a sketch of its cross-section instead of one of the basic shapes. Add the sketch here (from "
+                      "the frame's part or from another part, which is then copied into the project), then choose it in a member's Profile.")
+        lay.addWidget(lb)
+        self.prof_list = QListWidget()
+        self.prof_list.setMaximumHeight(84)
+        self.prof_list.setToolTip(lb.toolTip())
+        lay.addWidget(self.prof_list)
+        row = QHBoxLayout()
+        for text, fn, tip in (("Add...", self.add_profile_sketch, "Choose a sketch of a cross-section: of the frame's part, of a part that is open, "
+                               "or of a .gpd file."),
+                              ("Update", self.update_profile_sketches, "Copies the parts of the profile sketches again from their originals and "
+                               "works out every member that uses them again."),
+                              ("Remove", self.remove_profile_sketch, "Takes the selected profile sketch out of this simulation. Members that use "
+                               "it lose their profile.")):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        lay.addLayout(row)
         b = QPushButton("Clear (start over)")
         b.setToolTip("Removes the imported copy of the sketch and everything set up on this tab (supports, loads, results...) so you can "
                      "import the sketch again from scratch. The sketch itself is not touched.")
@@ -802,6 +830,7 @@ class BeamTab(QWidget):
         self.refresh_ties()
         self.status(msg)
         self.fill_members()
+        self.fill_profs()
         self.refresh_lists()
         self.notify_param()
         self.canvas.fit()
@@ -1001,6 +1030,158 @@ class BeamTab(QWidget):
         if npt or nln:
             self.status(f"Selected: {npt} joint(s), {nln} member(s).")
 
+    # --- profile sketches: cross-sections drawn as a sketch
+    def prof_by_id(self, pid):
+        return next((p for p in self.profs if p["id"] == pid), None)
+
+    def prof_users(self, pid):
+        return [m for m in self.members if m["profile"] and m["profile"].get("shape") == "sketch" and m["profile"].get("ref") == pid]
+
+    def prof_text(self, p):
+        return f"{p['name']}  -  sketch '{p['sketch']}' of {p['part_name']}"
+
+    def fill_profs(self):
+        self.prof_list.clear()
+        for p in self.profs:
+            n = len(self.prof_users(p["id"]))
+            it = QListWidgetItem(self.prof_text(p) + (f"  ({n} member{'' if n == 1 else 's'})" if n else "  (not used yet)"))
+            tip = "; ".join(p.get("notes") or [])
+            if p.get("error"):
+                it.setForeground(QBrush(QColor("#b00020")))
+                tip = "NOT UPDATED, the earlier outline is still used: " + p["error"]
+            it.setToolTip(tip)
+            self.prof_list.addItem(it)
+
+    def unique_prof_name(self, base, skip=None):
+        taken = {p["name"] for p in self.profs if p is not skip}
+        if base not in taken:
+            return base
+        k = 2
+        while f"{base} ({k})" in taken:
+            k += 1
+        return f"{base} ({k})"
+
+    def add_prof(self, entry):
+        """Adds a profile sketch (the dict of SimWindow.add_profile_from), or updates the one already taken from the same sketch.  -> it."""
+        have = next((p for p in self.profs if p["part"] == entry["part"] and p["sid"] == entry["sid"]), None)
+        if have is not None:
+            have.update(outline=entry["outline"], notes=list(entry.get("notes") or []), sketch=entry["sketch"], part_name=entry["part_name"],
+                        error=None)
+            self.relink_profiles()
+            prof = have
+            if self.model is not None:
+                self.fill_members()
+                self.changed()
+        else:
+            self.prof_seq += 1
+            prof = {"id": self.prof_seq, "name": self.unique_prof_name(entry["sketch"]), "part": entry["part"], "part_name": entry["part_name"],
+                    "sid": entry["sid"], "sketch": entry["sketch"], "outline": entry["outline"], "notes": list(entry.get("notes") or []),
+                    "error": None}
+            self.profs.append(prof)
+        self.fill_profs()
+        self.notify_param()
+        return prof
+
+    def add_profile_sketch(self):
+        """The Add button: the window of the simulation chooses the part and the sketch.  -> the profile sketch, or None."""
+        pick = getattr(self.win, "pick_profile_sketch", None)
+        if pick is None or getattr(self.win, "sim", None) is None:
+            return None
+        entry = pick()
+        if entry is None:
+            return None
+        prof = self.add_prof(entry)
+        self.status(f"Profile sketch '{prof['name']}' added. Choose it in a member's Profile.")
+        self.update_info()
+        return prof
+
+    def remove_profile_sketch(self):
+        r = self.prof_list.currentRow()
+        if not (0 <= r < len(self.profs)):
+            self.status("Select a profile sketch in the list first.")
+            return
+        p = self.profs[r]
+        users = self.prof_users(p["id"])
+        if users and QMessageBox.question(self, "Remove profile sketch", f"{len(users)} member(s) use '{p['name']}'. They lose their profile. "
+                                          "Remove it?") != QMessageBox.StandardButton.Yes:
+            return
+        self.drop_prof(p["id"])
+
+    def drop_prof(self, pid):
+        p = self.prof_by_id(pid)
+        if p is None:
+            return
+        for m in self.prof_users(pid):
+            m["profile"] = None
+        self.profs.remove(p)
+        if p["part"] != "main" and not any(q["part"] == p["part"] for q in self.profs):
+            drop = getattr(self.win, "drop_profile_part", None)
+            if drop is not None and getattr(self.win, "sim", None) is not None:
+                drop(p["part"])
+        if self.clip_profile and self.clip_profile.get("shape") == "sketch" and self.clip_profile.get("ref") == pid:
+            self.clip_profile = None
+        self.fill_profs()
+        if self.model is not None:
+            self.fill_members()
+        self.notify_param()
+        self.update_info()
+        self.changed()
+        self.status(f"Profile sketch '{p['name']}' removed.")
+
+    def update_profile_sketches(self):
+        """The Update button: the profile parts are copied again from their originals, then every profile sketch is read again."""
+        if not self.profs:
+            self.status("There is no profile sketch to update.")
+            return
+        upd = getattr(self.win, "update_profile_parts", None)
+        notes = upd() if upd is not None and getattr(self.win, "sim", None) is not None else []
+        notes += self.refresh_profs()
+        self.status("Profile sketches read again." + ("  " + "  ".join(notes) if notes else ""))
+
+    def refresh_profs(self):
+        """Reads every profile sketch again from its copy in the project and works out the members that use it.  A sketch that cannot be read
+        any more keeps its last outline and says why.  -> remarks for the user."""
+        read = getattr(self.win, "profile_outline", None)
+        if read is None or getattr(self.win, "sim", None) is None or not self.profs:
+            return []
+        notes = []
+        for p in self.profs:
+            try:
+                outline, pn, sname = read(p["part"], p["sid"], self.unit_name())
+                pr1.sketch(p["name"], outline)                         # it must give a section
+                p.update(outline=outline, notes=list(pn), sketch=sname, error=None)
+            except ValueError as ex:
+                p["error"] = str(ex)
+                notes.append(f"Profile sketch '{p['name']}' was not updated ({ex}); its earlier outline is still used.")
+        self.relink_profiles()
+        self.fill_profs()
+        if self.model is not None:
+            self.fill_members()
+            self.update_info()
+            self.changed()
+        self.notify_param()
+        return notes
+
+    def relink_profiles(self):
+        """Every member that uses a profile sketch gets its section worked out again from the sketch's outline as it is now (its turn, flip,
+        copies and shear area stay).  A member whose profile sketch is gone loses its profile."""
+        for m in self.members:
+            pf = m["profile"]
+            if not pf or pf.get("shape") != "sketch":
+                continue
+            p = self.prof_by_id(pf.get("ref"))
+            if p is None:
+                m["profile"] = None
+                continue
+            try:
+                m["profile"] = pr1.relink(pf, p["outline"], p["name"])
+            except ValueError:
+                pass                                                   # an outline that gives no section: the member keeps what it had
+
+    def prof_problems(self):
+        """Why the profile sketches in use are not what their sketches are now (a study case must not run on them)."""
+        return [f"Profile sketch '{p['name']}': {p['error']}" for p in self.profs if p.get("error") and self.prof_users(p["id"])]
+
     # --- profiles
     def edit_profile_lid(self, lid):
         for r, m in enumerate(self.members):
@@ -1022,6 +1203,7 @@ class BeamTab(QWidget):
             if 0 <= r < len(self.members):
                 self.members[r]["profile"] = copy.deepcopy(prof)
         self.fill_members()
+        self.fill_profs()
         self.notify_param()
         self.changed()
         self.status(("Profile removed from " if prof is None else "Profile set on ") + f"{len(rows)} member(s).")
@@ -1290,6 +1472,9 @@ class BeamTab(QWidget):
         warn = self.connectivity_warnings()
         if warn:
             txt += "<br><span style='color:#b36b00'>WARNING: " + "<br>".join(warn) + "</span>"
+        bad = self.prof_problems()
+        if bad:
+            txt += "<br><span style='color:#b00020'>" + "<br>".join(bad) + " The earlier outline is still used.</span>"
         if self.stale:
             txt = ("<b style='color:#b36b00'>OUT OF DATE: the sketch has changed since this was saved. This tab still shows the "
                    "older copy. Import the sketch again to update it (profiles, supports and loads of the lines that still exist are "
@@ -1855,7 +2040,8 @@ class BeamTab(QWidget):
         return {"model_json": self.model.to_json(), "source": self.source, "inputs": pstore.get_inputs(self, self.INPUTS),
                 "cur_unit": self.cur_unit, "material": self.mat_combo.currentData(), "members": copy.deepcopy(self.members),
                 "supports": copy.deepcopy(self.supports), "loads": copy.deepcopy(self.loads),
-                "ties": copy.deepcopy(self.ties), "auto_tie": self.cb_tie.isChecked(), "sketch_id": getattr(self, "sketch_id", None)}
+                "ties": copy.deepcopy(self.ties), "auto_tie": self.cb_tie.isChecked(), "sketch_id": getattr(self, "sketch_id", None),
+                "profs": copy.deepcopy(self.profs), "prof_seq": self.prof_seq}
 
     def import_state(self, st, out_of_date=False):
         m = sc.Model()
@@ -1878,6 +2064,10 @@ class BeamTab(QWidget):
             if o:
                 for k in ("name", "mat", "profile", "rel_a", "rel_b", "depth"):
                     mem[k] = copy.deepcopy(o.get(k))
+        self.profs = copy.deepcopy(st.get("profs") or [])
+        self.prof_seq = max([int(st.get("prof_seq") or 0)] + [p["id"] for p in self.profs])
+        self.relink_profiles()                                 # the sections follow the profile sketches of this state (a study changes them)
+        self.fill_profs()
         nodes = self.node_ids()
         lids = {mm["lid"] for mm in self.members}
         self.supports = [dict(copy.deepcopy(s), targets=[t for t in s["targets"] if t in nodes]) for s in st.get("supports", [])]

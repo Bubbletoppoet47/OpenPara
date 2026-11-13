@@ -6,6 +6,8 @@ the simulation only ever works on that copy (sim_source.py), so the original can
   * a part:      one of its sketches, or a slice - a plane that cuts the part (a base plane, a reference plane, with an offset)
   * an assembly: only a slice (a plane cuts all its parts; touching parts are bonded)
 "Update from original" copies the original again into the project and takes the snapshot again; that clears the mesh and result.
+1D FEA only: the cross-section of a member can be a PROFILE SKETCH - another sketch of the same part, or a sketch of another part, which is
+copied into the project too (profiles/, see sim_project.py), so a profile never depends on its original either.
 The material of the part (Material in its tree) fills the material boxes by itself; in an assembly slice every region uses the material
 of the part it was cut from.  The solvers and tabs are the ones of the earlier program (physics_tab, cfd_tab, beam_tab).
 """
@@ -15,8 +17,8 @@ import types
 
 import numpy as np
 
-from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout,
-                             QWidget)
+from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox, QPushButton, QStackedWidget,
+                             QVBoxLayout, QWidget)
 
 import beam_tab
 import cfd_tab
@@ -25,6 +27,8 @@ import mat_lib
 import physics_materials as pmat
 import physics_store as pstore
 import physics_tab
+import profile_sketch
+import profiles1d
 import sim_project
 import sim_slice
 import sim_source
@@ -37,6 +41,7 @@ import units
 
 KINDS = {"beam": ("1D FEA", beam_tab.BeamTab), "fea": ("2D FEA", physics_tab.PhysicsTab), "cfd": ("2D CFD", cfd_tab.CFDTab)}
 SLICE_NEW, SLICE_LAST = "__slice_new__", "__slice_last__"
+MAIN_PART = "main"                              # the part of a profile sketch that is the frame's own part (the project's source)
 
 
 class _HostModel:
@@ -64,6 +69,25 @@ class SimHost:
 
     def sketch_json(self, sid):
         return self.sim.source_json(sid)
+
+    # --- profile sketches of the 1D FEA tab (see SimWindow)
+    def pick_profile_sketch(self):
+        return self.sim.pick_profile_sketch()
+
+    def profile_outline(self, part, sid, unit):
+        return self.sim.profile_outline(part, sid, unit)
+
+    def profile_source(self, part, fresh=False):
+        return self.sim.profile_source(part, fresh)
+
+    def profile_part_name(self, part):
+        return self.sim.profile_part_name(part)
+
+    def drop_profile_part(self, key):
+        return self.sim.drop_profile_part(key)
+
+    def update_profile_parts(self):
+        return self.sim.update_profile_parts()
 
 
 def fill_material(tab, kind, mat):
@@ -101,6 +125,7 @@ class SimWindow(QWidget):
         self.meta = {"sid": None, "slice": None}
         self.pending = None
         self.units_note = ""
+        self.prof_src = {}                        # profile part key -> (file time, its Source): loaded once, again when the copy changes
         self.host = SimHost(self)
         self.saved_sig = None
         lay = QVBoxLayout(self)
@@ -228,7 +253,8 @@ class SimWindow(QWidget):
             ins = {}
         return (repr(getattr(t, "supports", None)), repr(getattr(t, "loads", None)), id(getattr(t, "mesh", None)),
                 id(getattr(t, "result", None)), repr(sorted(ins.items())), repr(getattr(t, "members", None)),
-                repr([bool(f["included"]) for f in t.geom["faces"]]) if getattr(t, "geom", None) else "")
+                repr([bool(f["included"]) for f in t.geom["faces"]]) if getattr(t, "geom", None) else "",
+                repr([(p["id"], p["part"], p["sid"], p["name"]) for p in getattr(t, "profs", [])]))
 
     def is_dirty(self):
         return self.signature() != self.saved_sig
@@ -368,7 +394,7 @@ class SimWindow(QWidget):
         if not self.project_ok():
             return False
         t = self.tab
-        if getattr(t, "model", None) is not None and (t.result is not None or t.mesh is not None or getattr(t, "supports", None) or getattr(t, "loads", None)):
+        if getattr(t, "model", None) is not None and (t.result is not None or getattr(t, "mesh", None) is not None or getattr(t, "supports", None) or getattr(t, "loads", None)):
             if QMessageBox.question(self, "Import source", "Importing a source replaces the copy in the project and clears the supports, loads, mesh and "
                                     "result of this simulation. Continue?") != QMessageBox.StandardButton.Yes:
                 return False
@@ -387,6 +413,8 @@ class SimWindow(QWidget):
         self.meta = {"sid": None, "slice": None}
         self.pending = None
         self.tab.picker.refresh()
+        if hasattr(self.tab, "refresh_profs"):               # profile sketches of the frame's part: read again from the new copy
+            self.tab.refresh_profs()
         self.show_source()
         msg = f"Copied {m['source']['name']} into the project ({m['source']['file']})."
         if missing:
@@ -662,7 +690,7 @@ class SimWindow(QWidget):
             if ok:
                 self.import_source()
             return
-        if self.tab.result is not None or self.tab.mesh is not None:
+        if self.tab.result is not None or getattr(self.tab, "mesh", None) is not None:
             if QMessageBox.question(self, "Update from original", "Copying the original again clears the supports, loads, mesh and result of this "
                                     "tab. Continue?") != QMessageBox.StandardButton.Yes:
                 return
@@ -674,12 +702,242 @@ class SimWindow(QWidget):
             return
         self.meta = {"sid": sid, "slice": self.meta.get("slice")}
         self.tab.picker.refresh()
+        notes = self.update_profile_parts() if self.kind == "beam" else []
         if sid is None:
-            self.say("Copied the original again. Choose a sketch or a slice and press Import.")
+            if hasattr(self.tab, "refresh_profs"):
+                self.tab.refresh_profs()
+            self.say("Copied the original again. Choose a sketch or a slice and press Import." + ("  " + "  ".join(notes) if notes else ""))
             return
         self.tab.picker.select(sid)
         self.tab.picker.go()
+        if hasattr(self.tab, "refresh_profs"):
+            notes += self.tab.refresh_profs()
+        if notes:
+            self.say("  ".join(notes))
         self.save()
+
+    # ------------------------------------------------------------------ profile sketches (1D FEA): cross-sections drawn as a sketch
+    def profile_part_name(self, part):
+        if part == MAIN_PART:
+            return self.src.get("name") or "the frame's part"
+        if self.project_ok():
+            for e in sim_project.profile_parts(self.path):
+                if e["key"] == part:
+                    return e["name"]
+        return os.path.splitext(str(part))[0]
+
+    def profile_source(self, part, fresh=False):
+        """The Source of the part a profile sketch is in: MAIN_PART = the frame's part, else the key of a part in profiles/.
+        fresh=True: a new copy loaded from the project, which a parametric study may change.  Raises ValueError."""
+        if not self.project_ok():
+            raise ValueError("This simulation has no project folder yet.")
+        try:
+            if part == MAIN_PART:
+                if self.source is None or self.source.type != "part":
+                    raise ValueError("The project has no part yet (Import source...).")
+                return sim_source.open_source(sim_project.source_file(self.path)) if fresh else self.source
+            path = sim_project.profile_file(self.path, part)
+            if not path or not os.path.isfile(path):
+                raise ValueError(f"The copy of the profile part '{self.profile_part_name(part)}' is missing from the project. Add the profile "
+                                 "sketch again.")
+            if fresh:
+                return sim_source.PartSource(path)
+            t = os.path.getmtime(path)
+            have = self.prof_src.get(part)
+            if have is None or have[0] != t:
+                have = (t, sim_source.PartSource(path))
+                self.prof_src[part] = have
+            return have[1]
+        except sim_source.SourceError as ex:
+            raise ValueError(str(ex))
+
+    def profile_outline(self, part, sid, unit, src=None):
+        """(outline, notes, sketch name) of a profile sketch, lengths in the unit system `unit`.  Raises ValueError with the reason."""
+        src = src or self.profile_source(part)
+        return profile_sketch.read(src.doc, sid, unit)
+
+    def profile_choices(self):
+        """[(label, spec)] of the parts a profile sketch can be taken from: the frame's part, the profile parts already in the project, the
+        open part tabs.  spec: (MAIN_PART,) | ("have", key) | ("tab", tab widget) | ("file", path)."""
+        out = []
+        if self.source is not None and self.source.type == "part":
+            out.append((f"{self.src.get('name') or 'part'}  (the frame's part, already in the project)", (MAIN_PART,)))
+        have = sim_project.profile_parts(self.path) if self.project_ok() else []
+        for e in have:
+            out.append((f"{e['name']}  (profile part, already in the project)", ("have", e["key"])))
+        if self.shell is not None:
+            for i in range(self.shell.tabs.count()):
+                w = self.shell.tabs.widget(i)
+                if not hasattr(w, "asm") and getattr(w, "doc", None) is not None and hasattr(w.doc, "features"):
+                    out.append((f"{w.title()}  (open part tab: copied into the project)", ("tab", w)))
+        return out
+
+    def profile_spec_doc(self, spec):
+        """The part document behind a choice of profile_choices (to list and preview its sketches).  Raises ValueError."""
+        if spec[0] == MAIN_PART:
+            return self.profile_source(MAIN_PART).doc
+        if spec[0] == "have":
+            return self.profile_source(spec[1]).doc
+        if spec[0] == "tab":
+            return spec[1].doc
+        try:
+            return sim_source.PartSource(spec[1]).doc
+        except sim_source.SourceError as ex:
+            raise ValueError(str(ex))
+
+    def add_profile_from(self, spec, sid):
+        """Makes the profile sketch `sid` of a choice available to the tab: a part that is not in the project yet is copied into profiles/.
+        -> {"part", "part_name", "sid", "sketch", "outline", "notes"}.  Raises ValueError."""
+        if not self.project_ok():
+            raise ValueError("This simulation has no project folder yet.")
+        unit = self.tab.unit_name()
+        if spec[0] in (MAIN_PART, "have"):
+            part = MAIN_PART if spec[0] == MAIN_PART else spec[1]
+        else:
+            try:
+                if spec[0] == "tab":
+                    w = spec[1]
+                    p = getattr(w, "path", None)
+                    _m, e = sim_project.import_profile_part(self.path, orig_path=p, text=w.doc.to_json(),
+                                                            name=os.path.splitext(os.path.basename(p))[0] if p else w.title())
+                else:
+                    _m, e = sim_project.import_profile_part(self.path, orig_path=spec[1])
+            except sim_project.ProjectError as ex:
+                raise ValueError(str(ex))
+            part = e["key"]
+        outline, notes, sname = self.profile_outline(part, sid, unit)
+        return {"part": part, "part_name": self.profile_part_name(part), "sid": sid, "sketch": sname, "outline": outline, "notes": notes}
+
+    def update_profile_parts(self):
+        """Copies every profile part again from its original (an open tab of it counts with its unsaved edits).  A part whose original is
+        gone keeps its copy.  -> remarks for the user."""
+        notes = []
+        if not self.project_ok():
+            return notes
+        for e in sim_project.profile_parts(self.path):
+            p, text = e.get("orig"), None
+            if p and self.shell is not None:
+                i = self.shell.find_tab(p)
+                w = self.shell.tabs.widget(i) if i is not None else None
+                if w is not None and not hasattr(w, "asm") and getattr(w, "doc", None) is not None:
+                    text = w.doc.to_json()
+            if text is None and (not p or not os.path.isfile(p)):
+                notes.append(f"The original of the profile part '{e['name']}' was not found: its copy in the project is kept.")
+                continue
+            try:
+                sim_project.import_profile_part(self.path, orig_path=p, text=text, name=e["name"], key=e["key"])
+            except sim_project.ProjectError as ex:
+                notes.append(f"Profile part '{e['name']}' was not updated: {ex}")
+        return notes
+
+    def drop_profile_part(self, key):
+        """A profile part no profile sketch uses any more leaves the project."""
+        if key == MAIN_PART or not self.project_ok():
+            return
+        self.prof_src.pop(key, None)
+        sim_project.remove_profile_part(self.path, key)
+
+    def pick_profile_sketch(self):
+        """The window that adds a profile sketch: the part, then one of its sketches (with what it gives).  -> the entry of add_profile_from, or None."""
+        if not self.project_ok() or self.source is None:
+            QMessageBox.information(self, "Profile sketch", "Make the project and import the frame's part first.")
+            return None
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add a profile sketch")
+        dlg.setMinimumWidth(460)
+        lay = QVBoxLayout(dlg)
+        note = QLabel("A profile sketch is the cross-section of a member, drawn at its true size as closed outlines (a loop inside another is a "
+                      "hole). Up in the sketch is the direction the member bends in; you can flip or turn it for each member. The part it is "
+                      "in is copied into the project, so the profile never depends on the original.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color:#555555; font-size:11px;")
+        lay.addWidget(note)
+        lay.addWidget(QLabel("Part"))
+        row = QHBoxLayout()
+        combo = QComboBox()
+        choices = self.profile_choices()
+        for text, _spec in choices:
+            combo.addItem(text)
+        row.addWidget(combo, 1)
+        b_file = QPushButton("Browse for a .gpd file...")
+        row.addWidget(b_file)
+        lay.addLayout(row)
+        lay.addWidget(QLabel("Sketch of that part"))
+        lst = QListWidget()
+        lst.setMaximumHeight(150)
+        lay.addWidget(lst)
+        info = QLabel("")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        lay.addWidget(bb)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        ok = bb.button(QDialogButtonBox.StandardButton.Ok)
+        state = {"doc": None, "sids": []}
+        unit = self.tab.unit_name()
+        L = units.get(unit)["L"]
+
+        def show_sketch(*_):
+            r = lst.currentRow()
+            good = False
+            if state["doc"] is not None and 0 <= r < len(state["sids"]):
+                try:
+                    outline, notes, sname = profile_sketch.read(state["doc"], state["sids"][r], unit)
+                    pf = profiles1d.sketch(sname, outline)
+                    info.setText(f"A = {pf['A']:.6g} {L}<sup>2</sup>&nbsp;&nbsp; I = {pf['I']:.6g} {L}<sup>4</sup>&nbsp;&nbsp; depth = "
+                                 f"{pf['c_top'] + pf['c_bottom']:.5g} {L}" + ("<br>" + "; ".join(notes) + "." if notes else ""))
+                    good = True
+                except ValueError as ex:
+                    info.setText(f"<span style='color:#b00020'>{ex}</span>")
+            ok.setEnabled(good)
+
+        def show_part(*_):
+            lst.clear()
+            state["doc"], state["sids"] = None, []
+            i = combo.currentIndex()
+            if not (0 <= i < len(choices)):
+                info.setText("Choose a part: one that is open, or browse for a file.")
+                ok.setEnabled(False)
+                return
+            spec = choices[i][1]
+            try:
+                doc = self.profile_spec_doc(spec)
+            except ValueError as ex:
+                info.setText(f"<span style='color:#b00020'>{ex}</span>")
+                ok.setEnabled(False)
+                return
+            frame = self.meta.get("sid") if spec[0] == MAIN_PART else None
+            items = [(sid, name) for sid, name in profile_sketch.sketches_of(doc) if sid != frame]
+            state["doc"], state["sids"] = doc, [sid for sid, _n in items]
+            for _sid, name in items:
+                lst.addItem(name)
+            if items:
+                lst.setCurrentRow(0)
+            else:
+                info.setText("This part has no " + ("other " if frame else "") + "sketch. Draw the cross-section as a sketch in the part first.")
+                ok.setEnabled(False)
+
+        def browse():
+            f, _ = QFileDialog.getOpenFileName(dlg, "Part with the profile sketch", os.path.dirname(self.src.get("path") or ""), "Part (*.gpd)")
+            if f:
+                choices.append((f"{os.path.basename(f)}  (file: copied into the project)", ("file", f)))
+                combo.addItem(choices[-1][0])
+                combo.setCurrentIndex(combo.count() - 1)
+        b_file.clicked.connect(browse)
+        combo.currentIndexChanged.connect(show_part)
+        lst.currentRowChanged.connect(show_sketch)
+        show_part()
+        if not dlg.exec():
+            return None
+        i, r = combo.currentIndex(), lst.currentRow()
+        if not (0 <= i < len(choices)) or not (0 <= r < len(state["sids"])):
+            return None
+        try:
+            return self.add_profile_from(choices[i][1], state["sids"][r])
+        except ValueError as ex:
+            QMessageBox.warning(self, "Profile sketch", str(ex))
+            return None
 
 
 # ---------------------------------------------------------------------------------------------------------------- the document tabs of the manifest

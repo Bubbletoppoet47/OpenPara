@@ -7,6 +7,9 @@ A simulation is a PROJECT FOLDER named with the type of the simulation:
         state.sim         the setup, mesh and result (written by physics_store)
         source/           THE LOCAL COPY of what the simulation works on: a part (<name>.gpd), or an assembly (<name>.gpa) with the part files it
                           uses.  The simulation only ever reads this copy, never the original, which can be moved, renamed or deleted.
+        profiles/         1D FEA: the local copies of OTHER parts whose sketches are member profiles (cross-sections).  One .gpd per part,
+                          listed in the marker as "profiles": [{"key": file name, "name", "file", "orig", "imported"}].  Importing another
+                          source does not touch them.
         study/            parametric studies (the Parametric Studies add-on)
 
 Importing a source copies it into source/ (replacing the earlier copy).  Everything here is plain files and JSON, so it is easy to test.
@@ -20,6 +23,7 @@ MARKER = "simulation.json"
 STATE = "state.sim"
 SOURCE_DIR = "source"
 STUDY_DIR = "study"
+PROFILE_DIR = "profiles"
 EXT = {"beam": ".gpb", "fea": ".gpf", "cfd": ".gpc", "solid": ".gpv"}
 LABEL = {"beam": "1D FEA", "fea": "2D FEA", "cfd": "2D CFD", "solid": "3D FEA"}
 VERSION = 1
@@ -201,3 +205,77 @@ def import_source(folder, orig_path=None, text=None, name=None):
     m["meta"] = {"sid": None, "slice": None}
     write(folder, m)
     return m, missing
+
+
+# ---------------------------------------------------------------------------------------------------------------- profile parts (1D FEA)
+def profile_parts(folder, m=None):
+    """[{"key", "name", "file", "orig", "imported"}]: the parts copied into the project for their profile sketches."""
+    m = m or read(folder)
+    return [dict(e) for e in (m.get("profiles") or []) if isinstance(e, dict) and e.get("key") and e.get("file")]
+
+
+def profile_file(folder, key, m=None):
+    """Absolute path of the copy of a profile part, or None when the project has no such part."""
+    for e in profile_parts(folder, m):
+        if e["key"] == key:
+            return os.path.normpath(os.path.join(folder, e["file"]))
+    return None
+
+
+def _same_file(a, b):
+    return bool(a) and bool(b) and os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def import_profile_part(folder, orig_path=None, text=None, name=None, key=None):
+    """Copies a part (.gpd) into profiles/ for its profile sketches.  A part that is already there (the same original file, or `key`) is
+    replaced by the new copy and keeps its key, so the profile sketches taken from it stay linked.  `text` = the live state of the part when
+    it is open with unsaved edits.  -> (manifest, the entry of the part)."""
+    m = read(folder)
+    if text is None:
+        if not orig_path or not os.path.isfile(orig_path):
+            raise ProjectError("The part to import was not found.")
+        with open(orig_path, encoding="utf-8") as f:
+            text = f.read()
+    if orig_path and os.path.splitext(orig_path)[1].lower() not in ("", ".gpd"):
+        raise ProjectError("Only a part (.gpd) can hold profile sketches.")
+    try:
+        d = json.loads(text)
+    except ValueError as ex:
+        raise ProjectError(f"The part could not be read ({ex}).")
+    if not isinstance(d, dict) or "components" in d or "features" not in d:
+        raise ProjectError("Only a part (.gpd) can hold profile sketches.")
+    d["sims"], d["renders"] = [], []
+    name = name or (os.path.splitext(os.path.basename(orig_path))[0] if orig_path else "profile")
+    parts = [e for e in (m.get("profiles") or []) if isinstance(e, dict) and e.get("key")]
+    old = next((e for e in parts if e["key"] == key), None) if key else None
+    if old is None and orig_path:
+        old = next((e for e in parts if _same_file(e.get("orig"), orig_path)), None)
+    dest = os.path.join(folder, PROFILE_DIR)
+    os.makedirs(dest, exist_ok=True)
+    safe = "".join(c if c not in '<>:"/\\|?*' else "_" for c in name).strip() or "profile"
+    fname = old["key"] if old else _unique(dest, safe + ".gpd")
+    tmp = os.path.join(dest, fname + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(d, indent=1))
+    os.replace(tmp, os.path.join(dest, fname))
+    entry = {"key": fname, "name": name, "file": f"{PROFILE_DIR}/{fname}",
+             "orig": os.path.abspath(orig_path) if orig_path else (old or {}).get("orig"), "imported": time.strftime("%Y-%m-%d %H:%M:%S")}
+    m["profiles"] = [e for e in parts if e["key"] != fname] + [entry]
+    write(folder, m)
+    return m, entry
+
+
+def remove_profile_part(folder, key):
+    """Takes a profile part out of the project: its entry in the marker and its copy in profiles/."""
+    m = read(folder)
+    parts = [e for e in (m.get("profiles") or []) if isinstance(e, dict) and e.get("key")]
+    gone = [e for e in parts if e["key"] == key]
+    if not gone:
+        return m
+    m["profiles"] = [e for e in parts if e["key"] != key]
+    write(folder, m)
+    try:
+        os.remove(os.path.join(folder, gone[0]["file"]))
+    except OSError:
+        pass
+    return m
