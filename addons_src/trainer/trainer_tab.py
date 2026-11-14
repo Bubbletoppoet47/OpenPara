@@ -49,7 +49,8 @@ HINTS = {
                  "(a new one, or the model's own trained further). This is quick, and the detector's scores do not change. "
                  "Unticked: the detector is trained further first, then the distance model.",
     "name": "Optional name for the finished model. It is shown in the annotator's AI model box with the size and date. Left empty, it is named after you.",
-    "python": "The Python that runs the training. It needs torch (the CUDA build, for your GPU) and ultralytics.",
+    "python": "The Python that runs the training. It needs torch (the CUDA build, for your GPU) and ultralytics. "
+              "When OpenPara's own Python is the one chosen and it has neither, OpenPara can download them for you.",
 }
 
 
@@ -130,6 +131,8 @@ class TrainerTab(QWidget):
         self.job = None
         self.env = None
         self._bg = False
+        self._pkg = None                                       # while torch / ultralytics are being downloaded: {'stop', 't0', 'text'}
+        self._offered = False                                  # the download was offered once on its own (the button stays)
         self._prep = None                                      # while a run is being prepared: {'stop', 'stage', 'done', 'total', 't0', ...}
         self._closed = False
         self._distort_pictures = 0
@@ -175,6 +178,12 @@ class TrainerTab(QWidget):
         if self.preparing():
             QMessageBox.information(self, "Please wait", "The training data is still being prepared. Press Cancel to stop that, then close the tab.")
             return False
+        if self._pkg:
+            r = QMessageBox.question(self, "Download running", "torch and ultralytics are still being downloaded. Closing this tab cancels the download.\n\nCancel it and close?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+            if r != QMessageBox.StandardButton.Yes:
+                return False
+            self._pkg["stop"] = True
         if self._bg:
             QMessageBox.information(self, "Please wait", "An import or export is still running. Close the tab when it has finished.")
             return False
@@ -185,6 +194,8 @@ class TrainerTab(QWidget):
         self._closed = True
         if self._prep:
             self._prep["stop"] = True                          # the preparation thread ends at its next picture
+        if self._pkg:
+            self._pkg["stop"] = True                           # so does the download
         if self.running():
             self.job.stop()
         if self.temp_root:
@@ -424,6 +435,32 @@ class TrainerTab(QWidget):
         self.env_label.setWordWrap(True)
         self.env_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         rv.addWidget(self.env_label)
+        # downloading torch / ultralytics for OpenPara's own Python: the button, what it is doing, and the way to remove it again
+        prow2 = QHBoxLayout()
+        self.btn_pkg_install = QPushButton("Download torch and ultralytics...")
+        self.btn_pkg_install.clicked.connect(lambda _c=False: self.offer_download())
+        self.btn_pkg_remove = QPushButton("Remove the downloaded packages")
+        self.btn_pkg_remove.clicked.connect(lambda _c=False: self.remove_downloaded())
+        for b in (self.btn_pkg_install, self.btn_pkg_remove):
+            b.setVisible(False)
+            prow2.addWidget(b)
+        prow2.addStretch(1)
+        rv.addLayout(prow2)
+        self.pkg_box = QWidget()
+        pk = QHBoxLayout(self.pkg_box)
+        pk.setContentsMargins(0, 0, 0, 0)
+        self.pkg_bar = QProgressBar()
+        self.pkg_bar.setRange(0, 0)                            # it does not know how far it is: it moves to show it is alive
+        self.pkg_bar.setMaximumWidth(160)
+        self.pkg_text = QLabel("")
+        self.pkg_text.setWordWrap(True)
+        self.pkg_cancel = QPushButton("Cancel")
+        self.pkg_cancel.clicked.connect(lambda _c=False: self.cancel_download())
+        pk.addWidget(self.pkg_bar)
+        pk.addWidget(self.pkg_text, 1)
+        pk.addWidget(self.pkg_cancel)
+        self.pkg_box.setVisible(False)
+        rv.addWidget(self.pkg_box)
         row = QHBoxLayout()
         rv.addSpacing(6)
         rv.addWidget(pane_head("Run"))
@@ -859,6 +896,9 @@ class TrainerTab(QWidget):
             self.py_box.setCurrentIndex(self.py_box.findData(want))
         self._loading = was
         self._python_chosen(save=bool(saved) and want == saved)
+        if not self._offered and not self._closed and self.env and tc.can_download(self.env):
+            self._offered = True                               # asked once on its own; the button below the text asks again
+            QTimer.singleShot(300, self.offer_download)
 
     def _python_chosen(self, save=True):
         if self._loading:
@@ -887,10 +927,131 @@ class TrainerTab(QWidget):
         self.tp.set_settings({"python": info["python"]})
         self._pythons_found(list(infos.values()), info["python"])
 
+    # ------------------------------------------------------------------ downloading torch and ultralytics
+    def _pkg_buttons(self, offer):
+        """The download button (when OpenPara's own Python lacks something) and the remove button (when something was downloaded)."""
+        names = ""
+        if self.env:
+            need_t, need_u = tc.missing_packages(self.env)
+            names = " and ".join(n for n, need in (("torch", need_t), ("ultralytics", need_u)) if need)
+        self.btn_pkg_install.setText(f"Download {names}..." if names else "Download torch and ultralytics...")
+        self.btn_pkg_install.setVisible(bool(offer))
+        self.btn_pkg_remove.setVisible(tc.has_packages() and not self._pkg)
+        self.btn_pkg_remove.setEnabled(not self.running())
+
+    def _ask_download(self, text, choices):
+        """Asks which download to make: choices = [(button text, kind)]; returns the kind, or None for Not now."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Download what training needs")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(text)
+        buttons = {box.addButton(label, QMessageBox.ButtonRole.AcceptRole): kind for label, kind in choices}
+        box.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        return buttons.get(box.clickedButton())
+
+    def offer_download(self):
+        """Asks (once, with the size) whether to download what OpenPara's own Python lacks, then does it in the background."""
+        if self._pkg or self._closed or not self.env or not tc.can_download(self.env):
+            return
+        need_t, need_u = tc.missing_packages(self.env)
+        names = " and ".join(n for n, need in (("torch", need_t), ("ultralytics", need_u)) if need)
+        text = f"Training needs {names}, and the Python OpenPara runs on does not have {'it' if not (need_t and need_u) else 'them'} yet.\n\n"
+        if need_t:
+            gpu = tc.nvidia_gpu()
+            if gpu:
+                text += (f"This computer has an NVIDIA GPU ({gpu}). The GPU version trains much faster:\n    {tc.DOWNLOAD_TEXT['cuda']}.\n"
+                         f"The CPU version works on any computer but is slow:\n    {tc.DOWNLOAD_TEXT['cpu']}.\n\n")
+                choices = [("Download the GPU version", "cuda"), ("Download the CPU version", "cpu")]
+            else:
+                text += f"No NVIDIA GPU was found, so this is the CPU version: slow, but it works.\n    {tc.DOWNLOAD_TEXT['cpu']}.\n\n"
+                choices = [("Download", "cpu")]
+        else:
+            text += "It is a small download (about 0.2 GB).\n\n"
+            choices = [("Download", "cpu")]
+        text += "It is done once, needs an internet connection, and you can keep working while it downloads."
+        kind = self._ask_download(text, choices)
+        if kind:
+            self.start_download(kind)
+
+    def start_download(self, kind):
+        if self._pkg or not self.env:
+            return
+        python = self.env["python"]
+        need_t, need_u = tc.missing_packages(self.env)
+        state = self._pkg = {"stop": False, "t0": time.time(), "text": "Starting ...", "kind": kind}
+        self.pkg_box.setVisible(True)
+        self.pkg_cancel.setEnabled(True)
+        self._update_env_view()
+        self._pkg_show()
+
+        def say(t):
+            self.post(lambda: state.update(text=t))
+
+        def run():
+            err, cancelled = None, False
+            try:
+                tc.install_packages(kind, need_t, need_u, progress=say, stop=lambda: state["stop"])
+            except tc.Cancelled:
+                cancelled = True
+            except tc.InstallError as e:
+                err = str(e)
+            except Exception as e:  # noqa: BLE001
+                err = f"The download failed unexpectedly: {e}"
+            info = None if (err or cancelled) else tc.check_env(python)
+            self.post(lambda: self._download_done(python, info, err, cancelled))
+        threading.Thread(target=run, daemon=True).start()
+
+    def cancel_download(self):
+        if self._pkg:
+            self._pkg["stop"] = True
+            self._pkg["text"] = "Cancelling ..."
+            self.pkg_cancel.setEnabled(False)
+
+    def _pkg_show(self):
+        if self._pkg:
+            n = int(time.time() - self._pkg["t0"])
+            self.pkg_text.setText(f"{self._pkg['text']}   ({n // 60}:{n % 60:02d})")
+
+    def _download_done(self, python, info, err, cancelled):
+        if self._closed:
+            return
+        self._pkg = None
+        self.pkg_box.setVisible(False)
+        if err:
+            QMessageBox.warning(self, "Download", err)
+        elif cancelled:
+            self.status.setText("The download was cancelled; nothing was installed.")
+        elif info is not None:
+            self._added_python(info)
+            if info["ok"]:
+                gpu = f"GPU: {info['gpu']}" if info.get("cuda") else "This is the CPU version, so training is slow (fine for a try)."
+                QMessageBox.information(self, "Download", f"Done. torch {info['torch']} and ultralytics {info['ultralytics']} are installed.\n\n{gpu}")
+            else:
+                QMessageBox.warning(self, "Download", "The download finished, but the Trainer still cannot use it:\n\n" + tc.env_text(info))
+        self._update_env_view()
+
+    def remove_downloaded(self):
+        """Deletes the packages the Trainer downloaded (the way back to how it was; they can be downloaded again)."""
+        if self._pkg or self.running() or not tc.has_packages():
+            return
+        r = QMessageBox.question(self, "Remove the downloaded packages", "Delete the torch and ultralytics that OpenPara downloaded for its own Python? "
+                                 "They can be downloaded again, but training needs them.",
+                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if r != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            tc.remove_packages()
+        except tc.InstallError as e:
+            QMessageBox.warning(self, "Remove", str(e))
+        self._offered = True                                   # taken away on purpose: not asked again unasked (the button stays)
+        self.check_env()
+
     def _update_env_view(self):
         if self.env is None:
             if not self.py_box.count():
                 self.env_label.setText("No Python was found. Use Browse... to pick the python.exe that has torch and ultralytics.")
+            self._pkg_buttons(False)
             return
         text = tc.env_text(self.env)
         if self.env["problems"]:
@@ -900,7 +1061,11 @@ class TrainerTab(QWidget):
             self.env_label.setStyleSheet("color: #b36b00;")
         else:
             self.env_label.setStyleSheet("")
+        offer = tc.can_download(self.env) and not self._pkg
+        if offer:
+            text += "\nOpenPara can download what is missing: press the button below."
         self.env_label.setText(text)
+        self._pkg_buttons(offer)
         self.btn_train.setEnabled(not self.running() and not self.preparing())
 
     def start(self):
@@ -1049,6 +1214,8 @@ class TrainerTab(QWidget):
     def _tick(self):
         if self._prep is not None:
             self._prep_show()
+        if self._pkg is not None:
+            self._pkg_show()
         if self.job is None:
             return
         text = self.job.read_log()

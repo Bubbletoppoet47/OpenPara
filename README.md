@@ -142,6 +142,7 @@ boxes). The result is one file: the detector's `.pt` with the distance model add
 existing model" goes on from a model you trained; a Classes + boxes model can get a distance model on top, and "Keep the detector as
 it is" trains only the distance model. The earlier one-network distance models (`gimble_model.py`) still work in the Annotator and on
 the Gimble but cannot be trained further.
+The Training Python box lists the Pythons the Trainer finds. When OpenPara's own Python is the one chosen and has no torch or ultralytics (a fresh Playground install), the Trainer asks once whether to download them (it says the size: a few hundred MB for the CPU version, about 3 GB with NVIDIA GPU support, which it offers only when an NVIDIA GPU is found) and does it in the background with a progress row and Cancel, into `<user folder>/Trainer/packages`; "Remove the downloaded packages" undoes it. A Python you picked yourself is never touched.
 Pressing Start training prepares the run in the background (the distorted copies of the training pictures, then the run's own copy of
 the data): the window shows a bar, how far it is, the time left, and Cancel; the copies are made once and kept, also after a cancel.
 

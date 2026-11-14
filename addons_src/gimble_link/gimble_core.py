@@ -320,6 +320,13 @@ def export_model(pt, out_dir, label="", on_step=None, stop=None, job=None, pytho
     many boxes of some confidence the model has on it; None without a picture)."""
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p), PYTHONIOENCODING="utf-8", YOLO_VERBOSE="False")
     here = [p for p in sys.path if p and os.path.isdir(p)]             # where this program finds its packages (the add-ons' folders too)
+    try:
+        import paths
+        pk = paths.train_packages_dir()                                   # torch / ultralytics the Trainer downloaded for OpenPara's own Python
+        if not python and not os.environ.get("OPARA_GIMBLE_PYTHON") and os.path.isdir(pk) and os.listdir(pk):
+            here.insert(0, pk)                                           # first, as in the Trainer: one consistent set
+    except (ImportError, OSError):
+        pass
     cmd = [python or export_python(), job or JOB, "--weights", pt, "--out", out_dir, "--app", ANNOTATOR_APP, "--label", label,
            "--paths", os.pathsep.join(here)]
     if check_image and os.path.isfile(check_image):

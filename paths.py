@@ -36,6 +36,11 @@ def user_dir():
     return d
 
 
+def train_packages_dir():
+    """Where the Trainer puts the torch / ultralytics it downloads for OpenPara's own Python (the Gimble's model export reads it too)."""
+    return os.path.join(user_dir(), "Trainer", "packages")
+
+
 def user_file(name, seed=True):
     """Path of a data file in the user folder; when it does not exist yet and a file of that name sits next to the program, that one is copied
     (the shipped library, or the data an older copy of the program kept next to its code)."""

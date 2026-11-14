@@ -11,6 +11,17 @@ import sys
 import time
 
 
+def _add_packages():
+    """The torch / ultralytics the Trainer downloaded for OpenPara's own Python: that Python ignores PYTHONPATH, so the Trainer hands the
+    folder over in OPARA_TRAIN_SITE (set only for OpenPara's own Python; a Python you picked yourself keeps to its own packages)."""
+    p = os.environ.get("OPARA_TRAIN_SITE")
+    if p and os.path.isdir(p) and p not in sys.path:
+        sys.path.insert(1, p)
+
+
+_add_packages()
+
+
 def load_job(argv=None):
     argv = argv if argv is not None else sys.argv
     with open(argv[1], encoding="utf-8") as f:

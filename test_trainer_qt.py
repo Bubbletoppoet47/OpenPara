@@ -22,6 +22,8 @@ sz.save_config({"name": "Tester", "id": ME["id"]})
 import trainer_core as tc, trainer_tab as tt
 
 MSG = []
+ASKED_DL = []
+tt.TrainerTab._ask_download = lambda self, text, choices: ASKED_DL.append((text, choices)) or None   # the download question: not now
 QMessageBox.information = staticmethod(lambda p, t, x, *a, **k: MSG.append((t, x)))
 QMessageBox.warning = staticmethod(lambda p, t, x, *a, **k: MSG.append((t, x)))
 QMessageBox.critical = staticmethod(lambda p, t, x, *a, **k: MSG.append(("ERR " + t, x)))

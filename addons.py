@@ -565,6 +565,9 @@ def _pip_install(pins, target, progress):
         shutil.rmtree(wheels, ignore_errors=True)
 
 
+unpack_wheel = _unpack_wheel                                      # also used by the Trainer's download of torch and ultralytics
+
+
 def _fetch_folder(aid, work, progress):
     """Put the add-on's files (addon.json + modules) into `work`; from the program folder when it has them, else from the release."""
     src = os.path.join(SRC_DIR, aid)

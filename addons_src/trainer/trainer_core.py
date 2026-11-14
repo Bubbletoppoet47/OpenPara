@@ -18,11 +18,14 @@ A run trains on a frozen copy of the data, so importing or editing while it runs
 """
 import json
 import os
+import re
+import shlex
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -184,9 +187,12 @@ def train_python():
     return sys.executable
 
 
-_PROBE = ("import json,importlib.util as u\nd={}\n"
+SITE_HOOK = ("import os as _os, sys as _sys\n_p = _os.environ.get('OPARA_TRAIN_SITE')\n"
+             "if _p and _os.path.isdir(_p) and _p not in _sys.path:\n    _sys.path.insert(1, _p)\n")      # what job_common does for the jobs
+
+_PROBE = (SITE_HOOK + "import json,importlib.util as u\nd={}\n"
           "for m in ('torch','ultralytics'):\n"
-          "    try:\n        d[m]=__import__(m).__version__\n    except Exception as e:\n        d[m]=None\n"
+          "    try:\n        d[m]=__import__(m).__version__\n    except Exception as e:\n        d[m]=None;d[m+'_error']=type(e).__name__+': '+str(e)[:400]\n"
           "d['cuda']=False;d['gpu']=None;d['cuda_build']=None\n"
           "if d['torch']:\n    import torch\n    d['cuda']=bool(torch.cuda.is_available())\n    d['cuda_build']=torch.version.cuda\n"
           "    d['gpu']=torch.cuda.get_device_name(0) if d['cuda'] else None\n"
@@ -198,7 +204,7 @@ def check_env(python=None):
     python = python or train_python()
     info = {"python": python, "torch": None, "ultralytics": None, "cuda": False, "gpu": None}
     try:
-        r = subprocess.run([python, "-c", _PROBE], capture_output=True, text=True, timeout=120)
+        r = subprocess.run([python, "-c", _PROBE], capture_output=True, text=True, timeout=120, env=child_env(python))
         for line in r.stdout.splitlines():
             if line.startswith("PROBE"):
                 info.update(json.loads(line[5:]))
@@ -210,10 +216,16 @@ def check_env(python=None):
         problems.append(f"Python for training could not be started ({python}). Set OPARA_TRAIN_PYTHON to a Python that has torch and ultralytics.")
     else:
         if not info["torch"]:
-            problems.append("torch is not installed in the training Python.  Install it:  pip install torch torchvision  "
-                            "(for an NVIDIA GPU use the CUDA build from pytorch.org).")
+            if _broken(info, "torch"):
+                problems.append(f"torch is installed in the training Python but cannot be loaded: {info['torch_error']}" + _load_hint(info["torch_error"]))
+            else:
+                problems.append("torch is not installed in the training Python.  Install it:  pip install torch torchvision  "
+                                "(for an NVIDIA GPU use the CUDA build from pytorch.org).")
         if not info["ultralytics"]:
-            problems.append("ultralytics is not installed in the training Python.  Install it:  pip install ultralytics")
+            if _broken(info, "ultralytics") and info["torch"]:
+                problems.append(f"ultralytics is installed in the training Python but cannot be loaded: {info['ultralytics_error']}")
+            elif not _broken(info, "ultralytics"):
+                problems.append("ultralytics is not installed in the training Python.  Install it:  pip install ultralytics")
         if info["torch"] and not info["cuda"]:
             if not info.get("cuda_build"):
                 warnings.append(f"torch {info['torch']} in this Python is the CPU-only build, so it cannot use your GPU. Pick another Python above that has "
@@ -277,7 +289,8 @@ def checkpoint_info(python, path, stop=None):
         code = _YOLO_CKPT
     try:
         kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
-        proc = subprocess.Popen([python, "-c", code, path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True, **kw)
+        proc = subprocess.Popen([python, "-c", SITE_HOOK + code, path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                text=True, env=child_env(python), **kw)
         t0 = time.time()
         while proc.poll() is None:                      # loading torch takes seconds: stay stoppable meanwhile
             if (stop and stop()) or time.time() - t0 > 180:
@@ -307,6 +320,332 @@ def env_text(info):
     if info.get("ultralytics"):
         lines.append(f"ultralytics {info['ultralytics']}")
     return "\n".join(lines + info["problems"] + info["warnings"])
+
+
+# ---------------------------------------------------------------- torch and ultralytics, downloaded for OpenPara's own Python
+#
+# OpenPara's own Python has neither.  When it is the training Python, the Trainer can download them into  <user folder>/Trainer/packages
+# (never into the program folder: an update replaces that, and the download is hundreds of MB, or about 3 GB with NVIDIA GPU support).
+# Every program that runs the training Python gets that folder on its path through OPARA_TRAIN_SITE (child_env): OpenPara's Python ignores
+# PYTHONPATH.  A Python you picked yourself is never given the folder and is never installed into.
+#
+# How: "pip download" (as the add-ons do), the wheels unpacked into a staging folder, then moved into place - so a cancelled or failed
+# download leaves nothing half-installed.  Three steps, because pip would otherwise fetch torch a second time for ultralytics:
+#   1. torch and torchvision     from the PyTorch index for the CPU or the CUDA build (Windows: the CPU build is the one on PyPI)
+#   2. ultralytics               alone (--no-deps) ...
+#   3. ... and what ultralytics asks for besides torch, read from the wheel's own metadata
+# OPARA_TRAIN_PIP_ARGS adds arguments to every pip call (the tests use it to point pip at a folder of fake wheels).
+
+PACKAGES_VAR = "OPARA_TRAIN_SITE"
+CUDA_TAG = "cu124"                                   # the CUDA build of torch to offer (the one the check's hint names too)
+DOWNLOAD_TEXT = {"cpu": "about 0.5 GB to download, about 1.5 GB on disk", "cuda": "about 3 GB to download, about 6 GB on disk"}
+NEED_FREE_GB = {"cpu": 3.0, "cuda": 12.0}            # free disk space for the download and the unpacked files together
+NO_DEPS = ("ultralytics-thop",)                       # asks for torch, which is already downloaded: pip would fetch it again, so it is taken without its needs
+PIP_COMMON = ["--only-binary=:all:", "--disable-pip-version-check", "--no-input", "--progress-bar", "off", "--no-cache-dir"]
+
+
+class InstallError(Exception):
+    """What went wrong while downloading the packages, in words for the person."""
+
+
+def packages_dir():
+    try:
+        import paths
+        return paths.train_packages_dir()
+    except Exception:  # noqa: BLE001
+        return os.path.join(user_dir(), "Trainer", "packages")
+
+
+def has_packages():
+    d = packages_dir()
+    try:
+        return os.path.isdir(d) and bool(os.listdir(d))
+    except OSError:
+        return False
+
+
+def _norm_path(p):
+    return os.path.normcase(os.path.realpath(os.path.abspath(p)))
+
+
+def own_python():
+    """The python.exe that runs pip for the packages: the console python next to OpenPara's own (the same one the add-ons use)."""
+    try:
+        import paths
+        return paths.python_exe()
+    except Exception:  # noqa: BLE001
+        return sys.executable
+
+
+def is_own_python(python):
+    """True for the Python OpenPara itself runs on: the only one the Trainer downloads packages for."""
+    if not python:
+        return False
+    own = {_norm_path(sys.executable), _norm_path(own_python())}
+    try:
+        return _norm_path(python) in own
+    except OSError:
+        return False
+
+
+def child_env(python, extra=None):
+    """The environment for a program run with the training Python: the downloaded packages are on its path (own Python only)."""
+    env = dict(os.environ)
+    if extra:
+        env.update(extra)
+    if is_own_python(python) and has_packages():
+        env[PACKAGES_VAR] = packages_dir()
+    else:
+        env.pop(PACKAGES_VAR, None)
+    return env
+
+
+def _broken(info, mod):
+    """True when `mod` is installed but could not be loaded (not simply absent)."""
+    err = info.get(mod + "_error") or ""
+    return bool(err) and not err.startswith(("ModuleNotFoundError", "ImportError: No module named"))
+
+
+def _load_hint(err):
+    if "DLL" in err or "WinError" in err or "dll" in err:
+        return ("  On Windows this usually means the Microsoft Visual C++ Redistributable is missing: install it from "
+                "https://aka.ms/vs/17/release/vc_redist.x64.exe and scan again.")
+    return ""
+
+
+def missing_packages(info):
+    """(torch is missing, ultralytics is missing) for a check_env result - absent, not merely broken."""
+    return (not info.get("torch") and not _broken(info, "torch"), not info.get("ultralytics") and not _broken(info, "ultralytics"))
+
+
+def can_download(info):
+    """True when the Trainer can fetch what this Python lacks: it is OpenPara's own Python and torch and/or ultralytics are absent."""
+    return bool(info) and is_own_python(info.get("python")) and any(missing_packages(info))
+
+
+def nvidia_gpu():
+    """The name of an NVIDIA GPU in this computer (nvidia-smi), or None."""
+    cands = [shutil.which("nvidia-smi")]
+    if os.name == "nt":
+        cands += [os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
+                  os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "nvidia-smi.exe")]
+    for exe in cands:
+        if exe and os.path.isfile(exe):
+            try:
+                kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+                r = subprocess.run([exe, "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True, timeout=10, **kw)
+            except (OSError, subprocess.SubprocessError):
+                continue
+            names = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+            if r.returncode == 0 and names:
+                return names[0]
+    return None
+
+
+def torch_index(kind):
+    """The package index torch comes from, or None for PyPI.  PyPI's Windows and macOS torch is the CPU build; its Linux one is a CUDA build."""
+    if kind == "cuda":
+        return f"https://download.pytorch.org/whl/{CUDA_TAG}"
+    return "https://download.pytorch.org/whl/cpu" if sys.platform.startswith("linux") else None
+
+
+def _kill_tree(proc):
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=20)
+        else:
+            proc.kill()
+    except (OSError, subprocess.SubprocessError):
+        proc.kill()
+
+
+def _pip_hint(text):
+    low = text.lower()
+    if "certificate_verify_failed" in low or "ssl" in low and "certificate" in low:
+        return ("\n\nThe download server's certificate was not trusted: this computer or its network (antivirus that scans HTTPS, a firewall, a "
+                "VPN) is in the way, or Windows is missing a root certificate. Opening https://pypi.org in your browser once, Windows Update, "
+                "or switching off HTTPS scanning for a moment can fix it.")
+    if "no matching distribution" in low or "could not find a version" in low:
+        return "\n\nNo download exists for this Python or this computer's kind of processor, or the download server does not have it."
+    if any(w in low for w in ("connection", "timed out", "max retries", "name or service", "getaddrinfo", "proxy")):
+        return "\n\nIs this computer online? The download server could not be reached."
+    if "no space left" in low or "errno 28" in low:
+        return "\n\nThe disk is full."
+    return ""
+
+
+def _run_pip(args, say, stop, what):
+    """Runs  pip <args>  with OpenPara's own Python, saying what it is doing, ending it when stop() says so.  Raises InstallError / Cancelled."""
+    extra = shlex.split(os.environ.get("OPARA_TRAIN_PIP_ARGS", ""))
+    cmd = [own_python(), "-m", "pip"] + list(args) + PIP_COMMON + extra
+    kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PIP_DISABLE_PIP_VERSION_CHECK="1")
+    env.pop(PACKAGES_VAR, None)
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+                                errors="replace", env=env, **kw)
+    except OSError as e:
+        raise InstallError(f"pip could not be started ({e}).")
+    tail = []
+
+    def read():
+        for raw in proc.stdout:
+            line = raw.rstrip()
+            if not line:
+                continue
+            tail.append(line)
+            del tail[:-40]
+            m = re.match(r"\s*Downloading (\S+) \(([^)]+)\)", line)
+            if m:
+                say(f"Downloading {m.group(1)} ({m.group(2)}) ...")
+            elif line.lstrip().startswith("Collecting "):
+                say("Looking up " + line.split()[1] + " ...")
+    t = threading.Thread(target=read, daemon=True)
+    t.start()
+    say(what)
+    while t.is_alive():
+        if stop():
+            _kill_tree(proc)
+            t.join(5)
+            raise Cancelled()
+        t.join(0.25)
+    code = proc.wait()
+    if code != 0:
+        text = "\n".join(tail[-12:])
+        raise InstallError(f"The download did not work (pip ended with code {code}):\n{text}{_pip_hint(chr(10).join(tail))}")
+
+
+def _norm_name(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _req_name(req):
+    m = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", req)
+    return _norm_name(m.group(0)) if m else ""
+
+
+def _wheel_requirements(wheel):
+    """What a wheel asks for besides torch and torchvision, as requirement lines (markers kept: pip decides), from its own metadata."""
+    import email.parser
+    import zipfile
+    with zipfile.ZipFile(wheel) as z:
+        name = next((n for n in z.namelist() if n.endswith(".dist-info/METADATA")), None)
+        if name is None:
+            raise InstallError(f"{os.path.basename(wheel)} has no description of what it needs.")
+        meta = email.parser.Parser().parsestr(z.read(name).decode("utf-8", "replace"))
+    out = []
+    for line in meta.get_all("Requires-Dist") or []:
+        req = line.strip()
+        if re.search(r"\bextra\s*==", req):
+            continue
+        if _req_name(req) and _req_name(req) not in ("torch", "torchvision"):
+            out.append(req)
+    return out
+
+
+def _unpack_all(wheels, staging, say, stop, skip=()):
+    """Unpacks every wheel in `wheels` into `staging`, except the packages in `skip` (what an earlier step already put there: a later
+    step must never replace it, e.g. the CUDA torch by a CPU one that a dependency dragged in)."""
+    import addons
+    for w in sorted(os.listdir(wheels)):
+        if not w.endswith(".whl") or _norm_name(w.split("-")[0]) in skip:
+            continue
+        if stop():
+            raise Cancelled()
+        say(f"Unpacking {w.split('-')[0]} ...")
+        try:
+            addons.unpack_wheel(os.path.join(wheels, w), staging)
+        except Exception as e:  # noqa: BLE001
+            raise InstallError(f"Could not unpack {w}: {e}")
+
+
+def _move_into(src, dst):
+    """Moves everything in src into dst, replacing what has the same name (both are on the same drive, so it is quick)."""
+    os.makedirs(dst, exist_ok=True)
+    for name in os.listdir(src):
+        s_, d_ = os.path.join(src, name), os.path.join(dst, name)
+        if os.path.isdir(d_) and not os.path.islink(d_):
+            shutil.rmtree(d_)
+        elif os.path.lexists(d_):
+            os.remove(d_)
+        os.replace(s_, d_)
+
+
+def install_packages(kind, need_torch=True, need_ultralytics=True, progress=None, stop=None):
+    """Downloads torch (kind 'cpu' or 'cuda') and/or ultralytics for OpenPara's own Python into packages_dir().  progress(text) is called (from
+    a worker thread) with what it is doing; stop() -> True ends it (Cancelled).  Raises InstallError.  Nothing is left half done."""
+    say = progress or (lambda _t: None)
+    stop = stop or (lambda: False)
+    if kind not in ("cpu", "cuda"):
+        raise InstallError(f"Unknown kind of download: {kind}")
+    dest = packages_dir()
+    parent = os.path.dirname(dest)
+    try:
+        os.makedirs(parent, exist_ok=True)
+        free = shutil.disk_usage(parent).free / 1e9
+    except OSError as e:
+        raise InstallError(f"Cannot use the folder {parent}: {e}")
+    need = NEED_FREE_GB[kind] if need_torch else 1.5
+    if free < need:
+        raise InstallError(f"There is not enough free disk space for this: about {need:.0f} GB is needed on the drive of {parent}, "
+                           f"and {free:.1f} GB is free.")
+    staging = dest + ".new"
+    work = os.path.join(parent, "packages.download")
+    for d in (staging, work):
+        shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(staging)
+    os.makedirs(work)
+    done_already = set()
+    try:
+        if need_torch:
+            wheels = os.path.join(work, "torch")
+            os.makedirs(wheels)
+            idx = torch_index(kind)
+            _run_pip(["download", "--dest", wheels, "torch", "torchvision"] + (["--index-url", idx] if idx else []), say, stop,
+                     "Downloading torch " + ("with NVIDIA GPU support" if kind == "cuda" else "(the CPU version)") + " - this is the big one ...")
+            _unpack_all(wheels, staging, say, stop)
+            done_already = {_norm_name(w.split("-")[0]) for w in os.listdir(wheels) if w.endswith(".whl")}
+            shutil.rmtree(wheels, ignore_errors=True)
+        if need_ultralytics:
+            wheels = os.path.join(work, "ultralytics")
+            os.makedirs(wheels)
+            _run_pip(["download", "--dest", wheels, "--no-deps", "ultralytics"], say, stop, "Downloading ultralytics ...")
+            ultra = [os.path.join(wheels, w) for w in os.listdir(wheels) if w.endswith(".whl")]
+            if not ultra:
+                raise InstallError("ultralytics was not downloaded.")
+            reqs = _wheel_requirements(ultra[0])
+            need_dirs = []
+            for k, (lines, flags) in enumerate([([r for r in reqs if _req_name(r) not in NO_DEPS], []),
+                                                ([r for r in reqs if _req_name(r) in NO_DEPS], ["--no-deps"])]):
+                if not lines:
+                    continue
+                req_file = os.path.join(work, f"ultralytics-needs-{k}.txt")
+                with open(req_file, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines) + "\n")
+                wd = os.path.join(work, f"ultralytics-needs-{k}")
+                os.makedirs(wd)
+                _run_pip(["download", "--dest", wd, "-r", req_file] + flags, say, stop, "Downloading what ultralytics needs ...")
+                need_dirs.append(wd)
+            skip = done_already | {"torch", "torchvision"}                # torch comes from step 1 only (or from the Python itself), never from here
+            _unpack_all(wheels, staging, say, stop, skip=skip)
+            for wd in need_dirs:
+                _unpack_all(wd, staging, say, stop, skip=skip)
+        if stop():
+            raise Cancelled()
+        say("Putting the files in place ...")
+        _move_into(staging, dest)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def remove_packages():
+    """Deletes what install_packages downloaded.  Raises InstallError when something could not be deleted (a training run still using it)."""
+    d = packages_dir()
+    for p in (d, d + ".new", d + ".download"):
+        shutil.rmtree(p, ignore_errors=True)
+    if os.path.exists(d):
+        raise InstallError(f"Some files in {d} could not be deleted. Is a training run or the Gimble export still using them?")
 
 
 # ---------------------------------------------------------------- distortions
@@ -675,7 +1014,7 @@ class Job:
             kw["creationflags"] = 0x08000000                       # CREATE_NO_WINDOW
         else:
             kw["start_new_session"] = True                          # so Stop can end the whole group (the data loader workers too)
-        env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
+        env = child_env(python, {"PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"})
         proc = subprocess.Popen([python, "-u", script, os.path.join(run_dir, "job.json")], stdout=log, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, cwd=cwd or run_dir, env=env, **kw)
         log.close()
