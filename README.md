@@ -73,7 +73,7 @@ follows the newest `dev-<version>` pre-release instead of the newest release.
 - A Playground build has two modes (Help > Playground mode; it asks to restart):
   - **Testing** (the default): exactly what the next release would be. Only the add-ons that ship are available, so the menus match
     OpenPara. Those are the add-ons in `addons_src/` except the ids in `addons.NOT_RELEASED` (now Visualize, `render`; Motor Control,
-    `motor`; Remote Computer, `remote`; and the Gimble connection, `gimble_link`): they are built for the Playground and offered there in
+    `motor`; Remote Computer, `remote`; the Gimble connection, `gimble_link`; and Autotune, `autotune`): they are built for the Playground and offered there in
     Full dev mode only, and a release carries neither their files nor their menus. Taking an id out of that list releases the add-on.
   - **Full dev**: no restrictions. It also loads `dev_addons/` (unreleased add-ons: 3D FEA of parametric parts (`solid_fea`), voxel/mesh FEA, mesh, circuits ...; Simulation and Parametric Studies were released in 0.8.6 and live in `addons_src/`) and `shared/` (code they
     share).
@@ -117,6 +117,22 @@ keyboard and mouse, copies files to and from it and runs commands there: a Raspb
   sent, and the connection, files and wrong-code handling pass, but nobody has yet watched a Windows desktop being used through it. The
   Wayland back end (`grim` + `/dev/uinput`, for Raspberry Pi OS) is written but has not run on a real machine. A Mac can only be reached
   for files and commands.
+
+**Autotune** (`addons_src/autotune/`, File > New Autotune; Playground only, `addons.NOT_RELEASED`) is live pitch correction for fun: sing or
+speak into a microphone and hear yourself on the notes of a key and scale (or notes you click), with a tuner display (the note, how flat or
+sharp you are, the level in and out), Retune speed (Instant = the hard robotic effect, 100 to 300 ms keeps the singer's vibrato), Amount, a
+Bypass switch, and a Voice range that trades delay for how low a voice it follows. `autotune_core.py` is the engine and needs only numpy:
+YIN pitch detection (FFT based, a 3-measurement vote, a quiet-sound gate), the nearest note of the scale with a little stickiness, the
+correction smoothed by the retune speed, and time-domain PSOLA to move the voice (grains of two periods laid down one period of the wanted
+note apart, so the vowel keeps its character; where nothing is voiced the sound passes through untouched). The output does not depend on how
+the sound is cut into blocks (the tests compare them). `autotune_audio.py` is the sound-card side (the `sounddevice` package, with PortAudio
+inside its Windows wheel; the add-on lists `sounddevice`, `cffi` and `pycparser` because add-on packages are fetched without their
+dependencies) and `autotune_tab.py` the window. The delay is the engine's (20 to 35 ms by Voice range; shown) plus the sound card's, so
+about 40 to 60 ms through headphones; WASAPI is offered first on Windows because it has the least delay. `test_autotune_core.py` runs the
+engine on made-up voices (vibrato, slides, breaths, vowel resonances) and `test_autotune_tab.py` the window and the stream with a pretend sound
+card. **Not yet seen on a real microphone and headphones**: the build machine has no sound hardware, so the sound-card layer (device lists,
+sample-rate choice, WASAPI settings, dropout counting) is checked against a stand-in. A compiled (C) version of the engine is the next step
+if the Python one crackles or is too slow on a weak computer.
 
 **Gimble connection** (`addons_src/gimble_link/`, the Annotator's File menu: Gimble: Send a Model / Download Recordings / Status) works
 through that helper on the Gimble rig's Raspberry Pi, so the thumb drive stays in the Pi. It finds the Gimble folder (the one with

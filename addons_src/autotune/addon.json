@@ -1,0 +1,32 @@
+{
+ "id": "autotune",
+ "name": "Autotune",
+ "version": "0.8.6",
+ "description": "Live autotune: sing or speak into a microphone and hear yourself pulled onto the notes of a key and scale, with a tuner display. Wear headphones. Mainly for fun. Playground only.",
+ "requires": [
+  {
+   "pip": "sounddevice==0.5.6",
+   "import": "sounddevice"
+  },
+  {
+   "pip": "cffi==2.1.1",
+   "import": "cffi"
+  },
+  {
+   "pip": "pycparser==3.12",
+   "import": "pycparser"
+  }
+ ],
+ "tabs": [
+  {
+   "kind": "autotune",
+   "label": "Autotune",
+   "short": "Autotune",
+   "module": "autotune_tab",
+   "factory": "make_tab",
+   "args": [
+    "host"
+   ]
+  }
+ ]
+}

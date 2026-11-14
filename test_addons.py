@@ -16,15 +16,15 @@ def importable(m):
 
 # ---- what ships
 S = addons.shipped()
-assert set(S) == {"partgen", "truss", "annotator", "annotator_gimble", "trainer", "simulation", "parametric", "render", "motor", "remote", "gimble_link"}, set(S)
+assert set(S) == {"partgen", "truss", "annotator", "annotator_gimble", "trainer", "simulation", "parametric", "render", "motor", "remote", "gimble_link", "autotune"}, set(S)
 # what is released: Visualize (render), Motor Control, Remote Computer and the Gimble connection are built for the Playground only, so a
 # normal OpenPara does not know them
-assert addons.NOT_RELEASED == ("render", "motor", "remote", "gimble_link") and not addons.offered("render") and addons.offered("simulation") and addons.offered("parametric")
+assert addons.NOT_RELEASED == ("render", "motor", "remote", "gimble_link", "autotune") and not addons.offered("render") and addons.offered("simulation") and addons.offered("parametric")
 assert set(addons.known()) == set(S) - set(addons.NOT_RELEASED), addons.known()
 os.environ["OPARA_CHANNEL"] = "playground"
 assert "render" not in addons.known(), "the Playground in Testing mode is exactly the next release"
 os.environ["OPARA_PLAYGROUND_MODE"] = "full"
-assert {"render", "motor", "remote", "gimble_link"} <= set(addons.known()) and addons.offered("motor") and addons.offered("remote"), "Full dev mode offers them"
+assert {"render", "motor", "remote", "gimble_link", "autotune"} <= set(addons.known()) and addons.offered("motor") and addons.offered("remote"), "Full dev mode offers them"
 del os.environ["OPARA_CHANNEL"], os.environ["OPARA_PLAYGROUND_MODE"]
 RELEASED = addons.known()
 addons.NOT_RELEASED = ()          # the rest of this test installs and removes every add-on in addons_src/

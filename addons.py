@@ -38,7 +38,7 @@ REPO = "Bubbletoppoet47/OpenPara"
 # Add-ons that are in addons_src/ (so the Playground builds and offers them) but are NOT part of a normal OpenPara yet.  A normal OpenPara -
 # and the Playground in Testing mode, which shows exactly what the next release is - does not know them: no menu, no ribbon tab, no download.
 # The Playground in Full dev mode offers them like any other add-on.  To release one, take its id out of this list.
-NOT_RELEASED = ("render", "motor", "remote", "gimble_link")
+NOT_RELEASED = ("render", "motor", "remote", "gimble_link", "autotune")
 
 # what the dialog and the "install it?" questions show before anything is downloaded (tests keep it equal to addons_src/*/addon.json)
 CATALOG = {
@@ -80,6 +80,9 @@ CATALOG = {
                     "description": "Adds File > Gimble to the Annotator: send a trained model to the Gimble rig's Raspberry Pi in the form its "
                                    "Detect program reads, download its recordings and see its status, over the network. Needs the Annotator and "
                                    "Remote Computer add-ons, and the Remote helper running on the Pi. Playground only."},
+    "autotune": {"name": "Autotune",
+                 "description": "Live autotune: sing or speak into a microphone and hear yourself pulled onto the notes of a key and scale, with a "
+                                "tuner display. Wear headphones. Mainly for fun. Playground only."},
     "trainer": {"project_marker": {"marker": "training.json", "format": "openpara-training"},
                 "name": "Trainer",
                 "description": "Merge annotator datasets (zips) into one training project, choose training and validation sets and distortions, and "
