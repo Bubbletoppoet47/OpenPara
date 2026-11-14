@@ -13,6 +13,8 @@ os.environ["OPARA_USER_DIR"] = os.path.join(TMP, "user")
 TR = os.path.join(HERE, "addons_src", "trainer")
 sys.path[:0] = [HERE, TR, os.path.join(HERE, "addons_src", "annotator", "app")]
 import trainer_core as tc, paths
+REAL_NEED = dict(tc.NEED_FREE_GB)
+tc.NEED_FREE_GB = {k: 0.01 for k in REAL_NEED}       # these tests do not depend on how much room this computer has (the refusal itself is tested below)
 
 
 def wheel(index, name, version, requires=(), files=None):
@@ -183,6 +185,7 @@ assert tc._pip_hint("something else") == ""
 # ---- not enough free disk: refused before anything is downloaded
 real = shutil.disk_usage
 shutil.disk_usage = lambda p: type("U", (), {"free": 1_000_000_000, "total": 10**12, "used": 0})()
+tc.NEED_FREE_GB = REAL_NEED
 try:
     tc.install_packages("cuda")
     raise SystemExit("it should have refused")
@@ -190,6 +193,7 @@ except tc.InstallError as e:
     assert "not enough free disk space" in str(e) and "12 GB" in str(e) and "1.0 GB" in str(e), str(e)
 finally:
     shutil.disk_usage = real
+    tc.NEED_FREE_GB = {k: 0.01 for k in REAL_NEED}
 assert not tc.has_packages() and not leftovers()
 
 # ---- a torch that is there but cannot be loaded (Windows: the Visual C++ files are missing) is said so, and is not downloaded again

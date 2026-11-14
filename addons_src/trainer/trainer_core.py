@@ -339,7 +339,7 @@ def env_text(info):
 PACKAGES_VAR = "OPARA_TRAIN_SITE"
 CUDA_TAG = "cu124"                                   # the CUDA build of torch to offer (the one the check's hint names too)
 DOWNLOAD_TEXT = {"cpu": "about 0.5 GB to download, about 1.5 GB on disk", "cuda": "about 3 GB to download, about 6 GB on disk"}
-NEED_FREE_GB = {"cpu": 3.0, "cuda": 12.0}            # free disk space for the download and the unpacked files together
+NEED_FREE_GB = {"cpu": 3.0, "cuda": 12.0, "ultralytics": 1.5}   # free disk space for the download and the unpacked files together
 NO_DEPS = ("ultralytics-thop",)                       # asks for torch, which is already downloaded: pip would fetch it again, so it is taken without its needs
 PIP_COMMON = ["--only-binary=:all:", "--disable-pip-version-check", "--no-input", "--progress-bar", "off", "--no-cache-dir"]
 
@@ -585,7 +585,7 @@ def install_packages(kind, need_torch=True, need_ultralytics=True, progress=None
         free = shutil.disk_usage(parent).free / 1e9
     except OSError as e:
         raise InstallError(f"Cannot use the folder {parent}: {e}")
-    need = NEED_FREE_GB[kind] if need_torch else 1.5
+    need = NEED_FREE_GB[kind] if need_torch else NEED_FREE_GB["ultralytics"]
     if free < need:
         raise InstallError(f"There is not enough free disk space for this: about {need:.0f} GB is needed on the drive of {parent}, "
                            f"and {free:.1f} GB is free.")

@@ -12,6 +12,7 @@ for p in (HERE, os.path.join(HERE, "addons_src", "annotator", "app"), os.path.jo
 from PyQt6.QtWidgets import QApplication, QMessageBox
 app = QApplication([])
 import trainer_core as tc, trainer_tab as tt
+tc.NEED_FREE_GB = {k: 0.01 for k in tc.NEED_FREE_GB}       # not dependent on how much room this computer has
 
 MSG, ASKED, ANSWER = [], [], {"kind": "cpu"}
 QMessageBox.information = staticmethod(lambda p, t, x, *a, **k: MSG.append((t, x)))
