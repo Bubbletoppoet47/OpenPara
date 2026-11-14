@@ -121,7 +121,7 @@ keyboard and mouse, copies files to and from it and runs commands there: a Raspb
 **Autotune** (`addons_src/autotune/`, File > New Autotune; Playground only, `addons.NOT_RELEASED`) is live pitch correction for fun: sing or
 speak into a microphone and hear yourself on the notes of a key and scale (or notes you click), with a tuner display (the note, how flat or
 sharp you are, the level in and out), Retune speed (Instant = the hard robotic effect, 100 to 300 ms keeps the singer's vibrato), Amount, a
-Bypass switch, and a Voice range that trades delay for how low a voice it follows. `autotune_core.py` is the engine and needs only numpy:
+Bypass switch, a slider for how quiet a sound is ignored, and a Voice range that trades delay for how low a voice it follows. `autotune_core.py` is the engine and needs only numpy:
 YIN pitch detection (FFT based, a 3-measurement vote, a quiet-sound gate), the nearest note of the scale with a little stickiness, the
 correction smoothed by the retune speed, and time-domain PSOLA to move the voice (grains of two periods laid down one period of the wanted
 note apart, so the vowel keeps its character; where nothing is voiced the sound passes through untouched). The output does not depend on how
