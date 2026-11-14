@@ -221,11 +221,14 @@ QTest.keyClick(w.cmd_edit, Qt.Key.Key_Up); assert w.cmd_edit.text() == w.history
 
 # ---- the helper for the other computer
 out = RT.save_helper_to(D)
-assert sorted(os.listdir(out)) == ["READ ME.txt", "Set up (Raspberry Pi, Linux).desktop", "Set up (Windows).bat", "openpara_remote_helper.py"]
+assert sorted(os.listdir(out)) == ["READ ME.txt", "Set up (Linux).sh", "Set up (Raspberry Pi, Linux).desktop", "Set up (Windows).bat",
+                                   "openpara_remote_helper.py"]
 assert os.path.basename(out) == "OpenPara Remote helper"
 desk = open(os.path.join(out, "Set up (Raspberry Pi, Linux).desktop")).read(); bat = open(os.path.join(out, "Set up (Windows).bat"), newline="").read()
-assert "openpara_remote_helper.py" in desk and "--install" in desk and "Terminal=true" in desk and "\r" not in desk
-assert "--install" in bat and "pause" in bat and bat.count("\r\n") >= 5
+sh = open(os.path.join(out, "Set up (Linux).sh"), newline="").read()
+assert "Set up (Linux).sh" in desk and "Terminal=true" in desk and "\r" not in desk and "\r" not in sh
+assert "--install" in sh and "--install" in bat and "pause" in bat and bat.count("\r\n") >= 50 and bat.count("\n") == bat.count("\r\n")
+assert "python.org" in bat and "apt-get" in sh
 assert open(os.path.join(out, "openpara_remote_helper.py"), encoding="utf-8").read() == open(H.__file__, encoding="utf-8").read()
 rd = open(os.path.join(out, "READ ME.txt"), encoding="utf-8").read()
 for words in ("--install", "ACCESS CODE", "same network", "--new-code", "--uninstall", "New Remote Computer", "Set up (Windows).bat", "--check"):

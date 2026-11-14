@@ -37,15 +37,19 @@ HELPER_README = """OpenPara Remote helper
 ======================
 
 Put  openpara_remote_helper.py  on the computer you want to reach from OpenPara (a Raspberry Pi, a laptop whose screen is broken ...).
-It needs Python 3.8 or newer and nothing else.
+It needs Python 3.8 or newer and nothing else. If that computer has no Python, the set-up in this folder installs it first: it asks
+before it does, and the computer must be online for that one time (Windows: Python is fetched from python.org and installed for your
+user only; Linux: it uses the computer's package manager and asks for the administrator password).
 
 First time (you need to see that computer's screen once, or a second screen plugged in):
 
-  1. Double-click  "Set up (Raspberry Pi, Linux).desktop"  or  "Set up (Windows).bat"  in this folder (choose Execute / Run if asked),
-     or open a terminal in this folder and run:
-         python3 openpara_remote_helper.py --install
+  1. Double-click  "Set up (Windows).bat"  or  "Set up (Raspberry Pi, Linux).desktop"  in this folder (choose Execute / Run if asked),
+     or on Linux open a terminal in this folder and run:
+         bash "Set up (Linux).sh"
      It shows an ACCESS CODE - write it down. It also makes the helper start with every login.
-     (Windows: use  python  instead of  python3.  If Windows asks whether Python may be reached on private networks, answer Allow.)
+     (If Windows asks whether Python may be reached on private networks, answer Allow.)
+     If you would rather install Python yourself, do that first (python.org), then run  python openpara_remote_helper.py --install
+     (Linux: python3 ...) in this folder.
   2. Restart that computer (or log out and in). From then on the helper runs by itself.
   3. In OpenPara: File > New Remote Computer, Search this network, pick the computer and type the access code.
      If the search finds nothing, use Add by address: the helper says its address when it starts (and with --check); use the first one.
@@ -63,6 +67,7 @@ Good to know
   * Raspberry Pi OS with the Wayland desktop: the screen needs 'grim' (it is there on Raspberry Pi OS), keyboard and mouse need the
     permission that --install sets up (restart once). If the picture stays black, switch the desktop to X11:
     sudo raspi-config > Advanced Options > Wayland > X11.
+  * On Windows use  python  (or  py -3 ) instead of  python3  in the lines above.
 """
 
 
@@ -1147,7 +1152,8 @@ class RemoteTab(QWidget):
     def save_helper(self):
         r = QMessageBox.information(
             self, "Get the helper",
-            "The other computer needs one small file, openpara_remote_helper.py, and Python 3.8 or newer.\n\n"
+            "The other computer needs one small file, openpara_remote_helper.py, and Python 3.8 or newer. If it has no Python, the "
+            "set-up that is saved with the helper installs it (it asks first, and that computer must be online that one time).\n\n"
             "Choose a folder or a USB drive next. OpenPara saves the helper and a read-me with the steps there; carry it to the other "
             "computer and follow the read-me (it takes a minute, and you need to see that computer's screen that one time).\n\n"
             "Whoever knows its access code can see and use that computer fully, so only do this with computers of your own.",
@@ -1164,32 +1170,36 @@ class RemoteTab(QWidget):
             self.say("The helper could not be saved there (is the drive writable?).", "bad")
 
 
-SETUP_DESKTOP = """[Desktop Entry]
-Type=Application
-Name=Set up the OpenPara Remote helper
-Comment=Installs the helper on this computer and shows its access code
-Exec=bash -c 'S=$(find /media /mnt /run/media "$HOME" -maxdepth 6 -name openpara_remote_helper.py 2>/dev/null | head -n1); if [ -n "$S" ]; then python3 "$S" --install; else echo "openpara_remote_helper.py was not found on any drive."; fi; echo; read -p "Write the access code down, then press Enter to close. " x'
-Icon=preferences-desktop-remote-desktop
-Terminal=true
-Categories=Utility;
-"""
-SETUP_BAT = ("@echo off\r\ncd /d \"%~dp0\"\r\nwhere python >nul 2>nul && (python openpara_remote_helper.py --install) || (py -3 openpara_remote_helper.py --install)\r\n"
-             "echo.\r\necho Write the access code down. If nothing was shown above, install Python from python.org first.\r\npause\r\n")
+SETUP_DIR = "helper_setup"
+# What is saved next to the helper, and where it comes from (helper_setup/ beside openpara_remote_helper.py): the file name on the drive,
+# its source, and the line ending that file needs (a .bat is read by Windows, a .sh by bash, which does not accept a Windows line end).
+SETUP_FILES = (("Set up (Raspberry Pi, Linux).desktop", "setup_linux.desktop", "\n"),
+               ("Set up (Linux).sh", "setup_linux.sh", "\n"),
+               ("Set up (Windows).bat", "setup_windows.bat", "\r\n"))
+
+
+def setup_text(source, eol):
+    """The text of a set-up file with the line ending it needs (the repository may have checked it out with either)."""
+    path = os.path.join(os.path.dirname(RL.helper_path()), SETUP_DIR, source)
+    with open(path, encoding="utf-8", newline="") as f:
+        text = f.read()
+    return text.replace("\r\n", "\n").replace("\n", eol)
 
 
 def save_helper_to(dest):
-    """Writes the helper, its read-me and a double-click set-up for Linux and for Windows into <dest>/OpenPara Remote helper/; returns that
-    folder, or None."""
+    """Writes the helper, its read-me and the double-click set-ups for Linux and for Windows (they install Python when the computer has
+    none) into <dest>/OpenPara Remote helper/; returns that folder, or None."""
     out = os.path.join(dest, "OpenPara Remote helper")
     try:
+        files = [(name, setup_text(src, eol)) for name, src, eol in SETUP_FILES]
         os.makedirs(out, exist_ok=True)
         shutil.copyfile(RL.helper_path(), os.path.join(out, "openpara_remote_helper.py"))
-        for name, text in (("READ ME.txt", HELPER_README), ("Set up (Raspberry Pi, Linux).desktop", SETUP_DESKTOP)):
-            with open(os.path.join(out, name), "w", encoding="utf-8", newline="\n") as f:
+        with open(os.path.join(out, "READ ME.txt"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(HELPER_README)
+        for name, text in files:
+            with open(os.path.join(out, name), "w", encoding="ascii" if name.endswith(".bat") else "utf-8", newline="") as f:
                 f.write(text)
-        with open(os.path.join(out, "Set up (Windows).bat"), "w", encoding="ascii", newline="") as f:
-            f.write(SETUP_BAT)
-    except OSError:
+    except (OSError, UnicodeError):
         return None
     return out
 

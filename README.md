@@ -94,7 +94,10 @@ follows the newest `dev-<version>` pre-release instead of the newest release.
 keyboard and mouse, copies files to and from it and runs commands there: a Raspberry Pi, or a laptop whose screen is broken.
 
 - The other computer runs one file, `openpara_remote_helper.py` (Python 3.8+, standard library only). "Get the helper..." in the tab saves
-  it with a read-me to a folder or USB drive. On that computer: `python3 openpara_remote_helper.py --install` shows an **access code** once
+  it with a read-me and a double-click set-up for Windows (`Set up (Windows).bat`) and for Linux / Raspberry Pi to a folder or USB drive.
+  The set-up installs Python first when that computer has none (it asks first; the computer must be online that once: python.org on
+  Windows, installed for the user only and checked for the Python Software Foundation signature; the package manager on Linux). Then
+  `python3 openpara_remote_helper.py --install` shows an **access code** once
   and makes the helper start with every login; `--check` says what works there (screen, keyboard and mouse); `--new-code`, `--uninstall`,
   `--ask`, `--no-input`, `--no-files`, `--no-commands`, `--no-screen` do what they say.
 - Both computers must be on the same network (home Wi-Fi, or a hotspot both joined). "Search this network" finds helpers; "Add by address"

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Set up the OpenPara Remote helper
+Comment=Installs Python if it is missing, installs the helper on this computer and shows its access code
+Exec=bash -c 'S=$(find /media /mnt /run/media "$HOME" -maxdepth 6 -name "Set up (Linux).sh" 2>/dev/null | head -n1); if [ -n "$S" ]; then bash "$S"; else echo "The set-up files were not found on any drive."; read -p "Press Enter to close. " x; fi'
+Icon=preferences-desktop-remote-desktop
+Terminal=true
+Categories=Utility;
