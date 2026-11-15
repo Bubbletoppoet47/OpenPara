@@ -1,9 +1,22 @@
 {
  "name": "System dynamics",
  "order": 5,
- "status": "planned",
- "needs": [
-  "sketch"
- ],
- "description": "Mechanical system dynamics: lumped masses, springs, dampers, inertias, gears and sources; time response, modes and frequency response. Shares its network solver with Circuits. Not started."
+ "status": "workshopping",
+ "description": "Drag-and-drop mechanical systems, straight-line and turning: masses, inertias, springs, dampers, gears, levers, rack and pinion, force / torque sources, a link and a DC motor with gearbox. Shows the equations, the poles (natural frequency and damping ratio) and the time response. Bode, Nyquist, root locus and the optimiser come next.",
+ "tabs": [
+  {
+   "kind": "dynamics",
+   "label": "Dynamics",
+   "short": "Dynamics",
+   "module": "dynamics_tab",
+   "factory": "make_tab",
+   "args": [
+    "path"
+   ],
+   "set_host": true,
+   "file_types": [
+    ".opdyn"
+   ]
+  }
+ ]
 }
