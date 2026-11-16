@@ -2,7 +2,7 @@
  "name": "Systems and Controls",
  "order": 5,
  "status": "workshopping",
- "description": "Control-systems tools built problem by problem from an introductory controls textbook. First tool: type a transfer function G(s) and get its zeros, poles, gain, DC gain, stability and a pole-zero plot.",
+ "description": "Control-systems tools built problem by problem from an introductory controls textbook. Transfer function: type G(s) and get zeros, poles, gain, stability, step and impulse responses and plots. Mechanical / Electrical systems: draw a circuit or a mass-spring-damper system and get G(s), its analog and the same plots.",
  "tabs": [
   {
    "kind": "controls",

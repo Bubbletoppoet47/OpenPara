@@ -12,9 +12,11 @@ import numpy as np
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QPainter, QPen
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSplitter, QStackedWidget,
-                             QStackedWidget, QToolButton, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPlainTextEdit,
+                             QPushButton, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
+import ctl_canvas as cv
+import ctl_circuit as ckt
 import ctl_core as core
 
 FILTER = "OpenPara controls (*.opctl);;All files (*)"
@@ -492,7 +494,264 @@ class TransferFunctionSection(Section):
         self.den.setText(d.get("den", ""))
 
 
-SECTIONS = [TransferFunctionSection]
+class NetworkSection(Section):
+    """Draw an electrical circuit or a mechanical system; get G(s) (with your names, and with numbers), its analog, and the usual plots."""
+    key = "network"
+    title = "Mechanical / Electrical systems"
+    VIEWS = ("Analog system", "Pole-zero plot", "Block diagram", "Step response", "Impulse response")
+    TOOLS = {"electrical": ("V", "R", "L", "C", "GND", "VO"), "mechanical": ("M", "K", "B", "WALL", "F", "X")}
+    HINT = ("Pick a part, then click on the grid: two clicks for a part with two ends, one click for ground, wall, force and the output.\n"
+            "Wire joins parts. R rotates, Delete removes the selected part, right click goes back to Select.")
+
+    def __init__(self, changed):
+        super().__init__(changed)
+        self.domain = "electrical"
+        self.data = {"electrical": [], "mechanical": []}
+        self.sol = None
+        self.analysis = None
+        self.numbers = None
+        self.tab = None
+        self._building = False
+        lay = QVBoxLayout(self.inputs)
+        lay.setContentsMargins(8, 4, 8, 8)
+        self.dom = QComboBox()
+        self.dom.addItems(["Electrical circuit", "Mechanical system"])
+        lay.addWidget(self.dom)
+        grid = QGridLayout()
+        self.group = QButtonGroup(self.inputs)
+        self.group.setExclusive(True)
+        self.btns = {}
+        order = [("select", "Select"), ("wire", "Wire")] + [(k, cv.LABELS[k]) for k in ckt.ELECTRICAL if k in self.TOOLS["electrical"]] + \
+                [(k, cv.LABELS[k]) for k in ckt.MECHANICAL]
+        for tool, text in order:
+            b = QPushButton(text)
+            b.setCheckable(True)
+            self.group.addButton(b)
+            self.btns[tool] = b
+            b.clicked.connect(lambda _c=False, t=tool: self.canvas.set_tool(t))
+        self.btns["select"].setChecked(True)
+        self.tool_grid = grid
+        lay.addLayout(grid)
+        row = QHBoxLayout()
+        self.rot_btn = QPushButton("Rotate (R)")
+        self.del_btn = QPushButton("Delete")
+        row.addWidget(self.rot_btn)
+        row.addWidget(self.del_btn)
+        lay.addLayout(row)
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(["Name", "Value"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setMinimumHeight(130)
+        self.table.setToolTip("Leave Value empty to keep the part as a symbol (R, L, C ...); type a number to use it.")
+        lay.addWidget(QLabel("Parts (leave Value empty to keep the name as a symbol)"))
+        lay.addWidget(self.table)
+        self.ex = QComboBox()
+        self.ex.addItem("Examples…")
+        for name, _d in ckt.EXAMPLES:
+            self.ex.addItem(name)
+        lay.addWidget(self.ex)
+        self.send = QPushButton("Open G(s) in Transfer function")
+        self.send.setToolTip("Needs numbers for every part.")
+        lay.addWidget(self.send)
+        hint = QLabel(self.HINT)
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#5b6675;")
+        lay.addWidget(hint)
+        lay.addStretch(1)
+
+        rl = QVBoxLayout(self.results)
+        rl.setContentsMargins(0, 0, 0, 0)
+        split = QSplitter(Qt.Orientation.Vertical)
+        self.canvas = cv.Canvas()
+        self.canvas.empty_text = "Pick a part on the left and click here to draw, or choose an example."
+        self.canvas.set_parts(self.data["electrical"])
+        self.text = QPlainTextEdit()
+        self.text.setReadOnly(True)
+        self.text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.analog = cv.Canvas(readonly=True)
+        self.plot = PoleZeroPlot()
+        self.diagram = BlockDiagram()
+        self.time_plot = TimePlot()
+        self.view = QComboBox()
+        self.view.addItems(self.VIEWS)
+        self.stack = QStackedWidget()
+        for w in (self.analog, self.plot, self.diagram, self.time_plot):
+            self.stack.addWidget(w)
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(0, 2, 0, 0)
+        rv.addWidget(self.view)
+        rv.addWidget(self.stack, 1)
+        bottom = QSplitter(Qt.Orientation.Horizontal)
+        bottom.addWidget(self.text)
+        bottom.addWidget(right)
+        bottom.setSizes([380, 520])
+        split.addWidget(self.canvas)
+        split.addWidget(bottom)
+        split.setSizes([420, 330])
+        rl.addWidget(split)
+
+        self.dom.activated.connect(lambda i: self.set_domain("electrical" if i == 0 else "mechanical", user=True))
+        self.canvas.edited.connect(self.parts_changed)
+        self.canvas.tool_reset.connect(lambda: (self.btns["select"].setChecked(True), self.canvas.set_tool("select")))
+        self.rot_btn.clicked.connect(self.canvas.rotate_selected)
+        self.del_btn.clicked.connect(self.canvas.delete_selected)
+        self.table.itemChanged.connect(self.cell_edited)
+        self.ex.activated.connect(self.load_example)
+        self.send.clicked.connect(self.open_in_tf)
+        self.view.activated.connect(lambda _i: (self.show_view(), self.changed()))
+        self.layout_tools()
+        self.set_domain("electrical")
+
+    # ------------------------------------------------------------------ the left column
+    def layout_tools(self):
+        for i in reversed(range(self.tool_grid.count())):
+            self.tool_grid.takeAt(i)
+        tools = ["select", "wire"] + list(self.TOOLS[self.domain])
+        for b in self.btns.values():
+            b.setVisible(False)
+        for i, t in enumerate(tools):
+            self.tool_grid.addWidget(self.btns[t], i // 2, i % 2)
+            self.btns[t].setVisible(True)
+
+    def set_domain(self, domain, user=False):
+        self.domain = domain
+        self.dom.setCurrentIndex(0 if domain == "electrical" else 1)
+        self.view.setItemText(0, "Mechanical analog" if domain == "electrical" else "Electrical analog")
+        self.canvas.set_parts(self.data[domain])
+        self.btns["select"].setChecked(True)
+        self.canvas.set_tool("select")
+        self.layout_tools()
+        self.rebuild_table()
+        self.update_result()
+        if user:
+            self.changed()
+
+    def rebuild_table(self):
+        self._building = True
+        self.table.setRowCount(0)
+        self.rows = [i for i, p in enumerate(self.canvas.parts) if p["kind"] in ckt.VALUED]
+        self.table.setRowCount(len(self.rows))
+        for r, i in enumerate(self.rows):
+            p = self.canvas.parts[i]
+            kind = QTableWidgetItem("%s  " % p["kind"])
+            self.table.setItem(r, 0, QTableWidgetItem(p.get("name", "")))
+            self.table.setItem(r, 1, QTableWidgetItem(p.get("value", "")))
+        self._building = False
+
+    def cell_edited(self, item):
+        if self._building:
+            return
+        r, c = item.row(), item.column()
+        if r >= len(self.rows):
+            return
+        part = self.canvas.parts[self.rows[r]]
+        part["name" if c == 0 else "value"] = item.text().strip()
+        self.canvas.update()
+        self.update_result()
+        self.changed()
+
+    def parts_changed(self):
+        self.rebuild_table()
+        self.update_result()
+        self.changed()
+
+    def load_example(self, i):
+        if i <= 0:
+            return
+        self.ex.setCurrentIndex(0)
+        domain, parts = ckt.example(i - 1)
+        self.data[domain] = [dict(p) for p in parts]
+        self.set_domain(domain)
+        self.changed()
+
+    def open_in_tf(self):
+        if not self.numbers or self.tab is None:
+            return
+        tf = self.tab.section("transfer_function")
+        n, d = self.numbers
+        tf.num.setText("[" + " ".join(core.fmt(x, 12) for x in n) + "]")
+        tf.den.setText("[" + " ".join(core.fmt(x, 12) for x in d) + "]")
+        self.tab.show_section("transfer_function")
+
+    # ------------------------------------------------------------------ the answer
+    def update_result(self):
+        parts = self.canvas.parts
+        self.sol = self.analysis = self.numbers = None
+        analog_parts, analog_lines = [], []
+        if not any(p["kind"] != "W" for p in parts):
+            self.text.setPlainText(self.HINT)
+            self.finish([], "")
+            return
+        try:
+            sol = ckt.solve(parts, self.domain)
+        except ckt.CircuitError as e:
+            self.text.setPlainText(str(e))
+            self.finish([], "")
+            return
+        self.sol = sol
+        lines = ["G(s) = %s/%s = %s" % (sol.out_name, sol.in_name, ckt.tf_text(sol)), "Equation: " + ckt.equation_text(sol)]
+        nums = ckt.numeric(sol, {})
+        if nums is None:
+            left = sorted(sol.num.names() | sol.den.names())
+            lines.append("")
+            lines.append("Give a number to %s to get the poles and the step response." % ", ".join(left))
+        else:
+            try:
+                self.analysis = core.analyze(nums[0], nums[1])
+                self.numbers = nums
+                lines.append("")
+                lines.append(core.simple_report(self.analysis))
+            except core.TFError as e:
+                lines.append("")
+                lines.append(str(e))
+        try:
+            if self.domain == "electrical":
+                if ckt.is_series_loop(parts):
+                    analog_parts, analog_lines = ckt.analog_of_loop(parts)
+                else:
+                    analog_lines = ckt.analog_lines_general(parts, "electrical")
+            else:
+                if ckt.is_single_body(parts):
+                    analog_parts, analog_lines = ckt.analog_of_body(parts)
+                else:
+                    analog_lines = ckt.analog_lines_general(parts, "mechanical")
+        except ckt.CircuitError:
+            pass
+        lines += [""] + analog_lines
+        self.text.setPlainText("\n".join(lines))
+        self.finish(analog_parts, "A drawn analog is made for a single series loop (electrical) or one rigid body (mechanical).")
+
+    def finish(self, analog_parts, empty):
+        self.analog.empty_text = empty
+        self.analog.set_parts(analog_parts)
+        a = self.analysis
+        self.send.setEnabled(self.numbers is not None)
+        self.plot.set_roots(a.zeros if a else [], a.poles if a else [])
+        self.diagram.set_blocks(core.blocks_single(a) if a else [])
+        self.show_view()
+
+    def show_view(self):
+        i = max(0, self.view.currentIndex())
+        if i >= 3:
+            kind = "impulse" if i == 4 else "step"
+            self.time_plot.set_response(core.response_of(self.analysis, kind) if self.analysis else None, kind)
+        self.stack.setCurrentIndex(min(i, 3))
+
+    # ------------------------------------------------------------------ files
+    def to_json(self):
+        return {"domain": self.domain, "electrical": cv.parts_to_json(self.data["electrical"]), "mechanical": cv.parts_to_json(self.data["mechanical"]),
+                "view": self.view.currentIndex()}
+
+    def from_json(self, d):
+        self.data = {"electrical": cv.parts_from_json(d.get("electrical")), "mechanical": cv.parts_from_json(d.get("mechanical"))}
+        self.view.setCurrentIndex(min(max(int(d.get("view", 0)), 0), len(self.VIEWS) - 1) if isinstance(d.get("view", 0), int) else 0)
+        self.set_domain("mechanical" if d.get("domain") == "mechanical" else "electrical")
+
+
+SECTIONS = [TransferFunctionSection, NetworkSection]
 
 
 # ------------------------------------------------------------------------------------------------------------- the dropdown column
@@ -539,6 +798,8 @@ class ControlsTab(QWidget):
         self.host = None
         self.dirty = False
         self.sections = [cls(self.edited) for cls in SECTIONS]
+        for s in self.sections:
+            s.tab = self
         self.pages = QStackedWidget()
         self.drops = []
         left = QWidget()
@@ -591,6 +852,11 @@ class ControlsTab(QWidget):
 
     def edited(self):
         self.dirty = True
+
+    def show_section(self, key):
+        for d in self.drops:
+            if d.section.key == key:
+                d.set_open(True)
 
     def section(self, key):
         for s in self.sections:
