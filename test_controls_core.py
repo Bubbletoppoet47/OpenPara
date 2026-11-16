@@ -1,0 +1,118 @@
+"""Systems and Controls maths (dev_addons/controls/ctl_core.py): polynomial text, poles / zeros / gain / DC gain, worked answers.  No Qt."""
+import math
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "dev_addons", "controls"))
+import numpy as np
+
+import ctl_core as C
+
+
+def tf(n, d):
+    return C.analyze(C.parse_poly(n), C.parse_poly(d))
+
+
+def near(a, b, tol=1e-9):
+    return abs(a - b) < tol
+
+
+# ---- polynomial text -----------------------------------------------------------------------------------------------------------------------
+P = C.parse_poly
+for text, want in (("2s+3", [2, 3]), ("s^2+3s+2", [1, 3, 2]), ("S**2 + 3*S + 2", [1, 3, 2]), ("s²+3s+2", [1, 3, 2]), ("(s+1)(s+2)", [1, 3, 2]),
+                   ("10(s+2)", [10, 20]), ("s(s+1)^2", [1, 2, 1, 0]), ("-s+4", [-1, 4]), ("2 s + 3", [2, 3]), ("5", [5]), ("1e-3 s", [1e-3, 0]),
+                   ("s^2-s-2", [1, -1, -2]), ("(s+1)^3", [1, 3, 3, 1]), ("3(s+1)(s-2)", [3, -3, -6]), ("s^2 - s^2 + 4", [4]),
+                   ("[1 3 2]", [1, 3, 2]), ("1, 3, 2", [1, 3, 2]), ("[0 0 2 3]", [2, 3]), ("2 3", [2, 3]), ("[2.5, -1]", [2.5, -1]),
+                   ("1.5s", [1.5, 0]), ("−s+1", [-1, 1])):
+    got = P(text)
+    assert np.allclose(got, want), (text, got, want)
+for bad in ("", "   ", "s+", "2s +* 3", "(s+1", "s^x", "s^-1", "s^1.5", "2s@3", "[1 a 2]", "s)", "^2"):
+    try:
+        P(bad)
+        raise AssertionError("should have been refused: " + repr(bad))
+    except C.TFError as e:
+        assert str(e)
+
+# ---- the book example 1.4.5.1:  G(s) = (2s+3) / (s^2+3s+2) ------------------------------------------------------------------------------------
+a = tf("2s+3", "s^2+3s+2")
+assert [near(z.real, -1.5) and z.imag == 0 for z in a.zeros] == [True]
+assert [round(p.real, 9) for p in a.poles] == [-1.0, -2.0] and all(p.imag == 0 for p in a.poles)
+assert near(a.gain, 2.0) and near(a.dc, 1.5)
+assert a.order == 2 and a.rel_degree == 1 and a.kind == "strictly proper" and a.sys_type == 0 and a.stability == "stable" and not a.cancels
+txt = C.report(a)
+assert "2 (s + 1.5)" in txt and "(s + 1)(s + 2)" in txt and "Gain K = 2" in txt and "Zeros (roots of the numerator):   -1.5" in txt
+assert "Poles (roots of the denominator): -1, -2" in txt and "G(0) = 3 / 2 = 1.5" in txt and "stable" in txt
+assert "time constant 1 s" in txt and "time constant 0.5 s" in txt
+# the same function written other ways gives the same answer
+b = tf("[2 3]", "(s+1)(s+2)")
+assert np.allclose(b.num, a.num) and np.allclose(b.den, a.den) and np.allclose(b.gain, a.gain)
+
+# ---- scaling: multiplying top and bottom changes the polynomials but not the zeros, poles, K or DC gain --------------------------------------
+c = tf("4s+6", "2s^2+6s+4")
+assert near(c.gain, 2.0) and near(c.dc, 1.5) and np.allclose(sorted(p.real for p in c.poles), [-2, -1])
+
+# ---- repeated poles, integrator (pole at the origin) -------------------------------------------------------------------------------------
+a = tf("1", "s(s+1)^2")
+assert math.isinf(a.dc) and a.sys_type == 1 and a.stability == "marginally stable"
+assert "s(s + 1)²" in C.report(a) and "repeated 2 times" in C.report(a) and "integrator" in C.report(a)
+a = tf("1", "s^2(s+3)")
+assert a.sys_type == 2 and math.isinf(a.dc)
+a = tf("s", "s^2+3s+2")                                   # a zero at the origin
+assert a.dc == 0.0 and "zero at s = 0" in C.report(a)
+a = tf("s+2", "s(s+5)")                                   # numerator and denominator both... only the denominator has s
+assert math.isinf(a.dc)
+a = tf("s(s+1)", "s(s+3)")                                # a common factor of s cancels in the DC gain
+assert near(a.dc, 1.0 / 3.0) and a.sys_type == 0 and len(a.cancels) == 1
+
+# ---- complex poles: natural frequency and damping ratio ------------------------------------------------------------------------------------
+a = tf("25", "s^2+6s+25")                                 # wn = 5, zeta = 0.6
+(m,) = a.modes
+assert m["kind"] == "pair" and near(m["wn"], 5.0) and near(m["zeta"], 0.6) and near(m["wd"], 4.0) and near(a.dc, 1.0)
+assert "(s² + 6s + 25)" in C.report(a) and "-3 + 4j" in C.report(a) and "damping ratio zeta = 0.6" in C.report(a)
+a = tf("10(s+2)", "(s^2+2s+5)(s+3)")
+assert near(a.gain, 10) and near(a.dc, 20.0 / 15.0) and a.stability == "stable" and "(s + 3)(s² + 2s + 5)" in C.report(a)
+a = tf("1", "s^2+4")                                      # undamped: poles on the imaginary axis
+assert a.stability == "marginally stable" and near(a.modes[0]["zeta"], 0.0)
+a = tf("1", "s^2-s-2")                                    # roots 2 and -1
+assert a.stability == "unstable" and sorted(round(p.real, 9) for p in a.poles) == [-1.0, 2.0] and "right half-plane" in C.report(a)
+assert "(s - 2)" in C.report(a)
+a = tf("1", "s^2+2s+1")                                   # a double root found numerically as -1 +- 1e-8 must still print as (s + 1)²
+assert "(s + 1)²" in C.report(a) and "repeated 2 times" in C.report(a)
+a = tf("1", "(s+1)^3")
+assert "(s + 1)³" in C.report(a)
+
+a = tf("1", "(s+2)^4")                                    # a quadruple root is merged back into one
+assert "(s + 2)⁴" in C.report(a) or "(s + 2)^4" in C.report(a)
+a = tf("1", "(s+1)(s+1.0005)")                            # two distinct close poles stay distinct
+assert "repeated" not in C.report(a) and "(s + 1.0005)" in C.report(a)
+
+# ---- cancelling pole and zero, improper, no poles / no zeros -----------------------------------------------------------------------------
+a = tf("s+2", "(s+2)(s+5)")
+assert len(a.cancels) == 1 and abs(a.cancels[0] + 2) < 1e-9 and "cancel" in C.report(a)
+a = tf("s^2+1", "s+1")
+assert a.kind == "improper" and a.rel_degree == -1 and "improper" in C.report(a)
+a = tf("3", "2")                                          # a pure gain
+assert near(a.gain, 1.5) and near(a.dc, 1.5) and a.poles == [] and a.zeros == [] and a.order == 0
+assert "Zeros (roots of the numerator):   none" in C.report(a)
+a = tf("s+1", "1")
+assert a.kind == "improper" and a.poles == []
+
+# ---- errors -----------------------------------------------------------------------------------------------------------------------------------
+for n, d, word in (("1", "0", "denominator is zero"), ("0", "s+1", "numerator is zero")):
+    try:
+        tf(n, d)
+        raise AssertionError("should fail")
+    except C.TFError as e:
+        assert word in str(e)
+
+# ---- text helpers -----------------------------------------------------------------------------------------------------------------------------
+assert C.poly_text([1, 3, 2]) == "s² + 3s + 2" and C.poly_text([2, 3]) == "2s + 3" and C.poly_text([-1, 0, 4]) == "-s² + 4" and C.poly_text([1, 0, 0, -1]) == "s³ - 1"
+assert C.poly_text([0.5, 1.5]) == "0.5s + 1.5" and C.poly_text([1, -1]) == "s - 1" and C.poly_text([3]) == "3"
+assert C.fmt(-1.0000000000000002) == "-1" and C.fmt(1.5) == "1.5" and C.fmt(0) == "0" and C.fmt(1 / 3) == "0.333333" and C.fmt(1e-15) == "0"
+assert C.cfmt(complex(-1, 2)) == "-1 + 2j" and C.cfmt(complex(-1, -2)) == "-1 - 2j" and C.cfmt(complex(-1.5, 0)) == "-1.5"
+ft = C.fraction_text("G(s) = ", "2s + 3", "s² + 3s + 2").splitlines()
+assert len(ft) == 3 and set(ft[1].strip().replace("G(s) = ", "")) <= {"─"} or "─" in ft[1]
+assert ft[0].strip() == "2s + 3" and ft[2].strip() == "s² + 3s + 2" and ft[1].startswith("G(s) = ")
+assert C.factor_text([]) == "1" and C.factor_text([complex(0, 0)]) == "s"
+print("PASS controls core")

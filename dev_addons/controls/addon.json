@@ -1,0 +1,22 @@
+{
+ "name": "Systems and Controls",
+ "order": 5,
+ "status": "workshopping",
+ "description": "Control-systems tools built problem by problem from an introductory controls textbook. First tool: type a transfer function G(s) and get its zeros, poles, gain, DC gain, stability and a pole-zero plot.",
+ "tabs": [
+  {
+   "kind": "controls",
+   "label": "Controls",
+   "short": "Controls",
+   "module": "controls_tab",
+   "factory": "make_tab",
+   "args": [
+    "path"
+   ],
+   "set_host": true,
+   "file_types": [
+    ".opctl"
+   ]
+  }
+ ]
+}
