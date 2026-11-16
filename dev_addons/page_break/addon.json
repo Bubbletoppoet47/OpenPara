@@ -1,0 +1,22 @@
+{
+ "name": "Page Break",
+ "order": 6,
+ "status": "workshopping",
+ "description": "Cut long PDF pages into normal-sized pages and combine pages from several PDFs into one file. Click a page to drop a break, click a break to remove it, leave segments out, reorder pages, auto-break every N inches, then export one combined PDF.",
+ "tabs": [
+  {
+   "kind": "pagebreak",
+   "label": "Page Break",
+   "short": "Page Break",
+   "module": "page_break_tab",
+   "factory": "make_tab",
+   "args": [
+    "path"
+   ],
+   "set_host": true,
+   "file_types": [
+    ".oppb"
+   ]
+  }
+ ]
+}
