@@ -11,10 +11,13 @@ section on the right. Adding a tool = one `Section` class in `controls_tab.py` p
   when they matter (complex pair: wn and zeta; integrator: infinite DC gain; cancelling pole and zero; improper G(s)). "Show the full working"
   adds the polynomial form, how K and G(0) are found, order, relative degree, type and the time constants.
   A block diagram R(s) -> [G(s)] -> Y(s), as one block (typeset fraction) or as blocks in series (K, one block per zero and pole).
+  Step and impulse responses of G(s) as closed-form answers (partial fractions; repeated poles give t*e^(-at), complex poles give
+  e^(sigma t)(A cos wt + B sin wt), a pole at the origin gives a ramp, an improper G(s) gives delta(t) terms; a cancelling pole and zero are reduced first).
+  The full working adds Y(s) in partial fractions. A time plot (Step | Impulse picker, final value dashed) sits beside the pole-zero plot.
   A pole-zero plot. First test: book example 1.4.5.1, G(s) = (2s+3)/(s^2+3s+2): zero -1.5, poles -1 and -2, K = 2, DC gain 1.5.
 
 ## Files
-* `ctl_core.py` - maths, no Qt (`parse_poly`, `analyze`, `report`).  `controls_tab.py` - the tab.
+* `ctl_core.py` - maths, no Qt (`parse_poly`, `analyze`, `report`, `response_of`).  `controls_tab.py` - the tab.
 * Tests: `test_controls_core.py`, `test_controls_tab.py`.
 
 The earlier drawn mechanical-system editor (parts, solver, time response) was removed from this tab; it is in git history (commit daeab49) and

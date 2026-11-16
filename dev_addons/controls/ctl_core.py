@@ -406,6 +406,13 @@ def report(a):
             L.append(f"  Pole {cfmt(p)}{rep_}:  time constant {fmt(m['tau'])} s")
         else:
             L.append(f"  Pole {cfmt(p)}{rep_}:  {'at the origin (integrator)' if p == 0 else 'growing exponential'}")
+    for kind, title, ys in (("step", "Step response", "G(s) / s"), ("impulse", "Impulse response", "G(s)")):
+        r = response_of(a, kind)
+        L.append("")
+        L.append(f"{title}:  Y(s) = {ys}")
+        L.append(f"  Y(s) = {r.pf_text}")
+        L.append(f"  y(t) = {r.text}")
+        L.append(f"  y(0+) = {fmt(r.y0)};  final value: {r.final_note}")
     return "\n".join(L)
 
 
@@ -447,11 +454,13 @@ def simple_report(a):
     L.append("DC gain G(0): " + ("infinite (pole at s = 0)" if math.isinf(a.dc) else fmt(a.dc)))
     L.append({"stable": "Stable", "unstable": "Unstable (a pole is in the right half-plane)",
               "marginally stable": "Marginally stable (a pole is on the imaginary axis)"}[a.stability])
+    L.append("Step response:    y(t) = " + response_of(a, "step").text)
+    L.append("Impulse response: y(t) = " + response_of(a, "impulse").text)
     for m in a.modes:
         if m["kind"] == "pair":
             L.append(f"Poles {pair_text(m['pole'])}: wn = {fmt(m['wn'])} rad/s, zeta = {fmt(m['zeta'])}")
     if a.cancels:
-        L.append("Pole and zero cancel at " + ", ".join(cfmt(c) for c in a.cancels))
+        L.append("Pole and zero cancel at " + ", ".join(cfmt(c) for c in a.cancels) + " (the responses use the reduced G(s))")
     if a.kind == "improper":
         L.append("Improper: the numerator is a higher power of s than the denominator")
     return "\n".join(L)
@@ -479,3 +488,255 @@ def blocks_series(a):
     for f in factor_list(a.poles):
         out.append(("1", _strip(f)))
     return out or [("1", None)]
+
+
+# --------------------------------------------------------------------------------------------------- step and impulse response
+class Response:
+    """The analytical response of G(s) to a unit step or a unit impulse.  Attributes: kind, terms (list of dicts: kind 'real' | 'osc', n = power
+    of t, sigma, omega, c for a real term, a and b for an oscillating one (a cos wt + b sin wt)), deltas ({k: coefficient of the k-th derivative of
+    delta(t)}), text (y(t) = ...), pf_text (Y(s) in partial fractions), y0 (y at 0+), final (a number, or None), final_note, horizon (s)."""
+
+    def eval(self, t):
+        t = np.asarray(t, float)
+        y = np.zeros_like(t)
+        for m in self.terms:
+            base = np.exp(m["sigma"] * t) * (t ** m["n"] / math.factorial(m["n"]) if m["n"] else 1.0)
+            if m["kind"] == "real":
+                y = y + m["c"] * base
+            else:
+                y = y + base * (m["a"] * np.cos(m["omega"] * t) + m["b"] * np.sin(m["omega"] * t))
+        return y
+
+
+def _taylor(c, p, n):
+    """First n coefficients of the polynomial c (highest power first) written in powers of (s - p)."""
+    c = np.asarray(c, complex)
+    out = []
+    for _ in range(n):
+        if len(c) == 0:
+            out.append(0j)
+            continue
+        q, r = np.polydiv(c, np.array([1.0, -p]))
+        out.append(complex(r[0]) if len(r) else 0j)
+        c = q
+    return out
+
+
+def _partial_fractions(num, groups):
+    """num / prod (s - p)^m over the distinct poles `groups` [(p, m)], num of lower degree -> {(p, k): c} for c / (s - p)^k."""
+    res = {}
+    for p, m in groups:
+        others = np.ones(1, complex)
+        for q, mq in groups:
+            if q is not p:
+                for _ in range(mq):
+                    others = np.polymul(others, np.array([1.0, -q]))
+        nt, dt = _taylor(num, p, m), _taylor(others, p, m)
+        h = []
+        for k in range(m):
+            h.append((nt[k] - sum(h[i] * dt[k - i] for i in range(k))) / dt[0])
+        for j in range(m):
+            res[(p, m - j)] = h[j]
+    return res
+
+
+def _exp_text(sigma):
+    if abs(sigma) < 1e-12:
+        return ""
+    a = fmt(sigma)
+    return "e^(" + ("-t" if a == "-1" else "t" if a == "1" else f"{a}t") + ")"
+
+
+def _tpow(n):
+    return "" if n == 0 else ("t" if n == 1 else f"t{SUP.get(n, '^' + str(n))}")
+
+
+def _term_parts(m):
+    """(sign, text) of one term of y(t)."""
+    ex, tp = _exp_text(m["sigma"]), _tpow(m["n"])
+    scale = 1.0 / math.factorial(m["n"]) if m["n"] else 1.0
+    if m["kind"] == "real":
+        c = m["c"]
+        mag = fmt(abs(c))
+        sign = "-" if c < 0 else "+"
+        lead = [x for x in (tp, ex) if x]
+        if not lead:
+            return sign, mag
+        body = "·".join(lead)
+        return sign, (body if mag == "1" else mag + body)
+    a, b = m["a"], m["b"]
+    wt = fmt(m["omega"])
+    wt = "" if wt == "1" else wt
+    cos_, sin_ = f"cos({wt}t)", f"sin({wt}t)"
+    lead = "·".join(x for x in (tp, ex) if x)
+
+    def one(coef, trig):
+        mag = fmt(abs(coef))
+        return (trig if mag == "1" else mag + trig)
+
+    if abs(a) > 1e-12 and abs(b) > 1e-12:                    # a cos + b sin: the sign of a goes in front, the rest inside the bracket
+        inner = one(a, cos_) + (" - " if (b < 0) != (a < 0) else " + ") + one(b, sin_)
+        return ("-" if a < 0 else "+"), (lead + "(" + inner + ")")
+    coef, trig = (a, cos_) if abs(a) > 1e-12 else (b, sin_)
+    mag = fmt(abs(coef))
+    return ("-" if coef < 0 else "+"), ("" if mag == "1" else mag) + lead + trig
+
+
+def _delta_text(k):
+    return "δ(t)" if k == 0 else ("δ'(t)" if k == 1 else f"δ({k})(t)")
+
+
+def _y_text(terms, deltas):
+    pieces = []
+    for k in sorted(deltas):
+        c = deltas[k]
+        pieces.append(("-" if c < 0 else "+", ("" if abs(abs(c) - 1) < 1e-12 else fmt(abs(c))) + _delta_text(k)))
+    for m in terms:
+        pieces.append(_term_parts(m))
+    if not pieces:
+        return "0"
+    out = ""
+    for i, (sg, body) in enumerate(pieces):
+        out += (("-" if sg == "-" else "") if i == 0 else f" {sg} ") + body
+    return out
+
+
+def _pf_text(res, groups):
+    """Y(s) in partial fractions as text."""
+    pieces = []
+    done = set()
+    for p, m in sorted(groups, key=lambda g: (-round(g[0].real, 9), -g[0].imag)):
+        if (p.imag > 1e-9):
+            if p in done:
+                continue
+            done.add(p)
+            for k in range(1, m + 1):
+                c = res[(p, k)]
+                if k == 1:
+                    A, B, sg, om = c.real, c.imag, p.real, p.imag
+                    num = poly_text([2 * A, -2 * (A * sg + B * om)])
+                    den = poly_text([1, -2 * sg, sg * sg + om * om])
+                    pieces.append(("+", (f"({num})" if "s" in num else num) + f" / ({den})"))
+                else:
+                    pieces.append(("+", f"[{cfmt(c)} / (s - ({cfmt(p)})){SUP.get(k, '^' + str(k))} + conjugate]"))
+        elif p.imag < -1e-9:
+            continue
+        else:
+            for k in range(1, m + 1):
+                c = res[(p, k)].real
+                if abs(c) < 1e-12:
+                    continue
+                base = "s" if abs(p.real) < 1e-12 else f"(s {'+' if -p.real > 0 else '-'} {fmt(abs(p.real))})"
+                den = base + ("" if k == 1 else SUP.get(k, f"^{k}"))
+                pieces.append(("-" if c < 0 else "+", f"{fmt(abs(c))} / {den}"))
+    if not pieces:
+        return "0"
+    out = ""
+    for i, (sg, body) in enumerate(pieces):
+        out += (("-" if sg == "-" else "") if i == 0 else f" {sg} ") + body
+    return out
+
+
+def _reduced(a):
+    """K, zeros, poles with every cancelling pole / zero pair removed."""
+    zs = list(a.zeros)
+    ps = []
+    for p in a.poles:
+        for k, z in enumerate(zs):
+            if abs(p - z) <= REL * 10 * max(1.0, abs(p)):
+                del zs[k]
+                break
+        else:
+            ps.append(p)
+    return a.gain, zs, ps
+
+
+def response_of(a, kind):
+    """time_response, remembered on the Analysis."""
+    cache = a.__dict__.setdefault("_responses", {})
+    if kind not in cache:
+        cache[kind] = time_response(a, kind)
+    return cache[kind]
+
+
+def time_response(a, kind):
+    """Analytical unit step ('step') or unit impulse ('impulse') response of the Analysis `a`."""
+    K, zs, ps = _reduced(a)
+    num = K * np.real(np.poly(zs)) if zs else np.array([K])
+    pole_list = list(ps) + ([complex(0, 0)] if kind == "step" else [])
+    groups = []
+    for r in sorted(pole_list, key=lambda z: (-round(z.real, 9), -z.imag)):
+        for k, (q, m) in enumerate(groups):
+            if abs(r - q) <= 1e-4 * max(1.0, abs(q)):
+                groups[k] = ((q * m + r) / (m + 1), m + 1)
+                break
+        else:
+            groups.append((r, 1))
+    groups = [(complex(q.real, 0.0) if abs(q.imag) < 1e-9 * max(1.0, abs(q)) else q, m) for q, m in groups]
+    den = np.ones(1, complex)
+    for q, m in groups:
+        for _ in range(m):
+            den = np.polymul(den, np.array([1.0, -q]))
+    den = np.real(den) if np.allclose(den.imag, 0, atol=1e-9 * max(1.0, float(np.max(np.abs(den))))) else den
+    deltas = {}
+    rem = np.asarray(num, complex)
+    if len(num) >= len(den):
+        quo, rem = np.polydiv(np.asarray(num, complex), np.asarray(den, complex))
+        for i, qc in enumerate(quo[::-1]):                    # coefficient of s^i is the i-th derivative of delta
+            if abs(qc) > 1e-12 * max(1.0, abs(K)):
+                deltas[i] = float(qc.real)
+    res = _partial_fractions(rem, groups) if groups and np.any(np.abs(rem) > 0) else {}
+    terms = []
+    for (p, k), c in res.items():
+        if abs(c) < 1e-12 * max(1.0, abs(K)):
+            continue
+        if p.imag > 1e-9:
+            terms.append({"kind": "osc", "n": k - 1, "sigma": p.real, "omega": p.imag, "a": 2 * c.real, "b": -2 * c.imag})
+        elif p.imag < -1e-9:
+            continue
+        else:
+            terms.append({"kind": "real", "n": k - 1, "sigma": p.real if abs(p.real) > 1e-12 else 0.0, "omega": 0.0, "c": c.real})
+    for m in terms:
+        if m["kind"] == "osc" and abs(m["sigma"]) < 1e-12:
+            m["sigma"] = 0.0
+    terms.sort(key=lambda m: (0 if m["sigma"] == 0 and m["n"] == 0 else 1 if m["sigma"] == 0 else 2, -m["sigma"], m["n"], m["kind"] != "real"))
+    r = Response()
+    r.kind, r.terms, r.deltas = kind, terms, deltas
+    r.text = _y_text(terms, deltas)
+    pf = _pf_text(res, groups) if res else ""
+    if deltas:                                            # an improper Y(s): a polynomial in s comes out first (each s^k is a derivative of delta)
+        poly = poly_text([deltas.get(k, 0.0) for k in range(max(deltas), -1, -1)])
+        pf = poly + ((" - " + pf[1:] if pf.startswith("-") else " + " + pf) if pf else "")
+    r.pf_text = pf or "0"
+    r.y0 = float(sum((m["c"] if m["kind"] == "real" else m["a"]) for m in terms if m["n"] == 0))
+    # final value
+    growing = [m for m in terms if m["sigma"] > 1e-9]
+    marginal = [m for m in terms if abs(m["sigma"]) <= 1e-9]
+    r.final, r.final_note = 0.0, "0"
+    if growing:
+        r.final, r.final_note = None, "grows without limit"
+    elif any(m["n"] > 0 or m["kind"] == "osc" for m in marginal):
+        r.final, r.final_note = None, ("grows without limit" if any(m["n"] > 0 for m in marginal) else "oscillates forever (no final value)")
+    elif marginal:
+        r.final = float(sum(m["c"] for m in marginal))
+        r.final_note = fmt(r.final)
+    # a time range that shows the whole story
+    dec = [-m["sigma"] for m in terms if m["sigma"] < -1e-9]
+    osc = [m["omega"] for m in terms if m["kind"] == "osc"]
+    if growing:
+        g = max(m["sigma"] for m in growing)
+        t = 7.0 / g
+    elif dec:
+        t = 5.0 / min(dec)
+        if any(abs(m["sigma"]) <= 1e-9 for m in terms if m["kind"] == "osc"):
+            t = max(t, 6 * 2 * math.pi / min(w for w in osc))
+    elif osc:
+        t = 6 * 2 * math.pi / min(osc)
+    else:
+        t = 5.0
+    if any(m["n"] > 0 and m["sigma"] == 0 for m in terms) or (kind == "step" and r.final is None and not growing and not osc):
+        t = max(t, 5.0) if not dec else t
+    if r.final is None and not growing and dec and not osc:      # a ramp: show the transient and then the straight line it settles to
+        t *= 8
+    r.horizon = float(min(max(t, 1e-3), 1e4))
+    return r

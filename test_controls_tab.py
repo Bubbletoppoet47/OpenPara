@@ -38,7 +38,8 @@ tf.den.setText("s^2+3s+2")
 a = tf.analysis
 assert a is not None and abs(a.gain - 2.0) < 1e-12 and abs(a.dc - 1.5) < 1e-12
 out = tf.text.toPlainText()
-assert out.splitlines() == ["G(s) = 2(s + 1.5) / ((s + 1)(s + 2))", "Zeros: -1.5", "Poles: -1, -2", "Gain K: 2", "DC gain G(0): 1.5", "Stable"], out
+assert out.splitlines() == ["G(s) = 2(s + 1.5) / ((s + 1)(s + 2))", "Zeros: -1.5", "Poles: -1, -2", "Gain K: 2", "DC gain G(0): 1.5", "Stable",
+                           "Step response:    y(t) = 1.5 - e^(-t) - 0.5e^(-2t)", "Impulse response: y(t) = e^(-t) + e^(-2t)"], out
 assert tf.diagram.blocks == [("2 (s + 1.5)", "(s + 1)(s + 2)")]
 assert tf.msg.text() == "" and [round(z.real, 9) for z in tf.plot.zeros] == [-1.5] and sorted(round(p.real, 9) for p in tf.plot.poles) == [-2.0, -1.0]
 tf.plot.grab()                                                                  # painting must not raise
@@ -75,6 +76,15 @@ assert t.is_dirty()
 
 # ---- the full working is one tick away, and the block diagram can be one block or blocks in series ------------------------------------------
 tf.load_example(1)
+# the time plot follows the Step | Impulse picker and survives odd sizes and odd answers
+from PyQt6.QtGui import QImage, QPainter
+tf.resp_kind.setCurrentIndex(1); tf.show_time()
+assert tf.time_plot.kind == "impulse" and tf.time_plot.resp.kind == "impulse"
+for (w, h) in [(300, 200), (60, 40), (1, 1), (900, 500)]:
+    for num, den in [("2s+3", "s^2+3s+2"), ("1", "s^2+1"), ("1", "s"), ("s", "1"), ("s+1", "s+1"), ("1", "s^2")]:
+        tf.num.setText(num); tf.den.setText(den); tf.show_time()
+        img = QImage(w, h, QImage.Format.Format_RGB32); tf.time_plot.resize(w, h); pp = QPainter(img); tf.time_plot.draw(pp) if w > 1 else None; pp.end()
+tf.num.setText("2s+3"); tf.den.setText("s^2+3s+2"); tf.resp_kind.setCurrentIndex(0); tf.show_time()
 tf.working.setChecked(True)
 full = tf.text.toPlainText()
 assert "Pole-zero model" in full and "G(0) = 3 / 2 = 1.5" in full and "time constant 0.5 s" in full and "Zeros (roots of the numerator)" in full
@@ -105,7 +115,7 @@ t.save()
 assert os.path.isfile(path) and not t.is_dirty()
 d = json.load(open(path))
 assert d["format"] == "openpara-controls"
-assert d["sections"]["transfer_function"] == {"num": "2s+3", "den": "s^2+3s+2", "diagram": "Single block", "working": False}
+assert d["sections"]["transfer_function"] == {"num": "2s+3", "den": "s^2+3s+2", "diagram": "Single block", "working": False, "response": "Step response"}
 t2 = T.make_tab(path)
 assert t2.title() == "book.opctl" and not t2.is_dirty() and abs(t2.section("transfer_function").analysis.dc - 1.5) < 1e-12
 tf.diag_mode.setCurrentIndex(1)

@@ -8,6 +8,8 @@ import json
 import math
 import os
 
+import numpy as np
+
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QPainter, QPen
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSplitter,
@@ -133,6 +135,108 @@ class PoleZeroPlot(QWidget):
         p.drawText(QRectF(area.right() - 120, area.top() + 2, 118, 14), Qt.AlignmentFlag.AlignRight, "○ zero")
         p.setPen(QColor("#d62828"))
         p.drawText(QRectF(area.right() - 120, area.top() + 16, 118, 14), Qt.AlignmentFlag.AlignRight, "× pole")
+
+
+# ------------------------------------------------------------------------------------------------------------- time response plot
+def ticks(lo, hi):
+    step = nice_step(hi - lo)
+    v = math.ceil(lo / step - 1e-9) * step
+    out = []
+    while v <= hi + step * 1e-9:
+        out.append(0.0 if abs(v) < step * 1e-9 else v)
+        v += step
+    return out
+
+
+class TimePlot(QWidget):
+    """y(t) of the step or impulse response, drawn from the analytical expression, with the final value as a dashed line."""
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(300, 200)
+        self.resp = None
+        self.kind = "step"
+
+    def set_response(self, resp, kind):
+        self.resp, self.kind = resp, kind
+        self.update()
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        try:
+            self.draw(p)
+        except Exception:                      # noqa: BLE001 - an error escaping a paint event would close the whole program
+            pass
+        finally:
+            p.end()
+
+    def draw(self, p):
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        p.fillRect(0, 0, w, h, QColor("#ffffff"))
+        r = QRectF(58, 12, w - 74, h - 46)
+        f = QFont("Segoe UI")
+        f.setPixelSize(11)
+        p.setFont(f)
+        if r.width() < 40 or r.height() < 40:
+            return
+        rs = self.resp
+        if rs is None:
+            p.setPen(QColor("#7a8696"))
+            p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "Type G(s) to see its step and impulse response.")
+            return
+        if not rs.terms:
+            p.setPen(QColor("#7a8696"))
+            p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter,
+                       "The response is only a δ(t) spike (nothing to draw)." if rs.deltas else "The response is zero.")
+            return
+        T = rs.horizon
+        t = np.unique(np.concatenate([np.linspace(0, T, 600), T * np.linspace(0, 1, 500) ** 3]))
+        y = rs.eval(t)
+        y = np.nan_to_num(y, nan=0.0, posinf=1e300, neginf=-1e300)
+        lo, hi = float(np.min(y)), float(np.max(y))
+        if rs.final is not None:
+            lo, hi = min(lo, rs.final), max(hi, rs.final)
+        lo, hi = min(lo, 0.0), max(hi, 0.0)
+        if hi - lo < 1e-12:
+            lo, hi = lo - 1.0, hi + 1.0
+        pad = 0.06 * (hi - lo)
+        lo, hi = lo - pad, hi + pad
+
+        def X(v):
+            return r.left() + v / T * r.width()
+
+        def Y(v):
+            return r.bottom() - (v - lo) / (hi - lo) * r.height()
+
+        for v in ticks(lo, hi):
+            p.setPen(QPen(QColor("#e1e6ee"), 1))
+            p.drawLine(QPointF(r.left(), Y(v)), QPointF(r.right(), Y(v)))
+            p.setPen(QColor("#4a5668"))
+            p.drawText(QRectF(0, Y(v) - 7, r.left() - 5, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, core.fmt(v, 4))
+        for v in ticks(0, T):
+            p.setPen(QPen(QColor("#e1e6ee"), 1))
+            p.drawLine(QPointF(X(v), r.top()), QPointF(X(v), r.bottom()))
+            p.setPen(QColor("#4a5668"))
+            p.drawText(QRectF(X(v) - 30, r.bottom() + 3, 60, 14), Qt.AlignmentFlag.AlignCenter, core.fmt(v, 4))
+        p.setPen(QPen(QColor("#9aa6b8"), 1))
+        p.drawRect(r)
+        p.setPen(QPen(QColor("#6b7a90"), 1.2))
+        p.drawLine(QPointF(r.left(), Y(0)), QPointF(r.right(), Y(0)))
+        p.setPen(QColor("#4a5668"))
+        p.drawText(QRectF(r.left(), h - 17, r.width(), 14), Qt.AlignmentFlag.AlignCenter, "time t (s)")
+        p.setClipRect(r)
+        if rs.final is not None:
+            p.setPen(QPen(QColor("#e76f51"), 1, Qt.PenStyle.DashLine))
+            p.drawLine(QPointF(r.left(), Y(rs.final)), QPointF(r.right(), Y(rs.final)))
+        p.setPen(QPen(QColor("#1f77b4"), 2))
+        pts = [QPointF(X(a), Y(b)) for a, b in zip(t, y)]
+        for a, b in zip(pts, pts[1:]):
+            p.drawLine(a, b)
+        p.setClipping(False)
+        p.setPen(QColor("#4a5668"))
+        note = ("final value " + core.fmt(rs.final)) if rs.final is not None else rs.final_note
+        p.drawText(QRectF(r.left() + 6, r.top() + 2, r.width() - 12, 14), Qt.AlignmentFlag.AlignRight, note)
 
 
 # ------------------------------------------------------------------------------------------------------------- block diagram
@@ -293,15 +397,27 @@ class TransferFunctionSection(Section):
         self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.diagram = BlockDiagram()
         self.plot = PoleZeroPlot()
+        self.time_plot = TimePlot()
+        self.resp_kind = QComboBox()
+        self.resp_kind.addItems(["Step response", "Impulse response"])
+        tw = QWidget()
+        tl = QVBoxLayout(tw)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.addWidget(self.resp_kind)
+        tl.addWidget(self.time_plot, 1)
+        bottom = QSplitter(Qt.Orientation.Horizontal)
+        bottom.addWidget(tw)
+        bottom.addWidget(self.plot)
         split.addWidget(self.text)
         split.addWidget(self.diagram)
-        split.addWidget(self.plot)
-        split.setSizes([150, 190, 340])
+        split.addWidget(bottom)
+        split.setSizes([175, 170, 340])
         rl.addWidget(split)
         self.num.textChanged.connect(self.update_result)
         self.den.textChanged.connect(self.update_result)
         self.diag_mode.activated.connect(lambda _i: (self.update_result(), self.changed()))
         self.working.toggled.connect(lambda _on: self.update_result())
+        self.resp_kind.activated.connect(lambda _i: (self.show_time(), self.changed()))
         self.working.clicked.connect(lambda _c: self.changed())
         self.num.textEdited.connect(lambda _t: self.changed())
         self.den.textEdited.connect(lambda _t: self.changed())
@@ -325,6 +441,7 @@ class TransferFunctionSection(Section):
                                    "  numerator   2s+3\n  denominator s^2+3s+2\nor pick it from Examples.")
             self.plot.set_roots([], [])
             self.diagram.set_blocks([])
+            self.time_plot.set_response(None, "step")
             return
         try:
             num = core.parse_poly(nt)
@@ -343,19 +460,27 @@ class TransferFunctionSection(Section):
         self.text.setPlainText(core.report(a) if self.working.isChecked() else core.simple_report(a))
         self.diagram.set_blocks(core.blocks_series(a) if self.diag_mode.currentIndex() == 1 else core.blocks_single(a))
         self.plot.set_roots(a.zeros, a.poles)
+        self.show_time()
+
+    def show_time(self):
+        kind = "impulse" if self.resp_kind.currentIndex() == 1 else "step"
+        self.time_plot.set_response(core.response_of(self.analysis, kind) if self.analysis else None, kind)
 
     def fail(self, why):
         self.msg.setText(why)
         self.text.setPlainText("")
         self.plot.set_roots([], [])
         self.diagram.set_blocks([])
+        self.time_plot.set_response(None, "step")
 
     def to_json(self):
-        return {"num": self.num.text(), "den": self.den.text(), "diagram": self.diag_mode.currentText(), "working": self.working.isChecked()}
+        return {"num": self.num.text(), "den": self.den.text(), "diagram": self.diag_mode.currentText(), "working": self.working.isChecked(),
+                "response": self.resp_kind.currentText()}
 
     def from_json(self, d):
         self.diag_mode.setCurrentIndex(max(0, self.diag_mode.findText(d.get("diagram", "Single block"))))
         self.working.setChecked(bool(d.get("working", False)))
+        self.resp_kind.setCurrentIndex(max(0, self.resp_kind.findText(d.get("response", "Step response"))))
         self.num.setText(d.get("num", ""))
         self.den.setText(d.get("den", ""))
 

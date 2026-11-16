@@ -118,12 +118,14 @@ assert C.factor_text([]) == "1" and C.factor_text([complex(0, 0)]) == "s"
 
 # ---- the short answer and the block diagram -------------------------------------------------------------------------------------------------
 a = tf("2s+3", "s^2+3s+2")
-assert C.simple_report(a).splitlines() == ["G(s) = 2(s + 1.5) / ((s + 1)(s + 2))", "Zeros: -1.5", "Poles: -1, -2", "Gain K: 2", "DC gain G(0): 1.5", "Stable"]
+assert C.simple_report(a).splitlines() == ["G(s) = 2(s + 1.5) / ((s + 1)(s + 2))", "Zeros: -1.5", "Poles: -1, -2", "Gain K: 2", "DC gain G(0): 1.5", "Stable",
+                                           "Step response:    y(t) = 1.5 - e^(-t) - 0.5e^(-2t)", "Impulse response: y(t) = e^(-t) + e^(-2t)"]
 assert C.blocks_single(a) == [("2 (s + 1.5)", "(s + 1)(s + 2)")]
 assert C.blocks_series(a) == [("2", None), ("s + 1.5", None), ("1", "s + 1"), ("1", "s + 2")]
 a = tf("1", "s(s+1)^2")
 r = C.simple_report(a).splitlines()
 assert r[0] == "G(s) = 1 / (s(s + 1)²)" and "DC gain G(0): infinite (pole at s = 0)" in r and r[5].startswith("Marginally stable")
+assert r[6] == "Step response:    y(t) = -2 + t + 2e^(-t) + t·e^(-t)" and r[7] == "Impulse response: y(t) = 1 - e^(-t) - t·e^(-t)", r
 assert C.blocks_single(a) == [("1", "s(s + 1)²")] and C.blocks_series(a) == [("1", "s"), ("1", "(s + 1)²")]
 a = tf("10(s+2)", "(s^2+2s+5)(s+3)")
 r = C.simple_report(a)
@@ -136,4 +138,98 @@ assert C.simple_report(tf("3", "2")).splitlines()[0] == "G(s) = 1.5" and C.block
 assert C.simple_report(tf("-(s+1)", "(s+2)(s+3)")).splitlines()[0] == "G(s) = -(s + 1) / ((s + 2)(s + 3))"
 assert C.blocks_single(tf("s", "s^2+1")) == [("s", "s² + 1")]
 assert C.pair_text(complex(-1, 2)) == "-1 ± 2j" and C.pair_text(complex(0, 3)) == "±3j"
+
+# ---- step and impulse responses: the book problems, worked by hand -------------------------------------------------------------------------------
+def resp(n, d, kind):
+    return C.response_of(tf(n, d), kind)
+
+
+t_ = np.linspace(0, 4, 41)
+# 1.4.5.5  impulse response of (s^2+3s+3) / (s^3+6s^2+11s+6) = 0.5 e^-t - e^-2t + 1.5 e^-3t
+r = resp("s^2+3s+3", "s^3+6s^2+11s+6", "impulse")
+assert r.text == "0.5e^(-t) - e^(-2t) + 1.5e^(-3t)" and near(r.y0, 1.0) and r.final == 0.0
+assert np.allclose(r.eval(t_), 0.5 * np.exp(-t_) - np.exp(-2 * t_) + 1.5 * np.exp(-3 * t_))
+assert r.pf_text == "0.5 / (s + 1) - 1 / (s + 2) + 1.5 / (s + 3)"
+# step response of (2s+8) / (s^3+5s^2+8s+4) = 2 - 6e^-t + 4e^-2t + 2t e^-2t   (a repeated pole)
+r = resp("2s+8", "s^3+5s^2+8s+4", "step")
+assert r.text == "2 - 6e^(-t) + 4e^(-2t) + 2t·e^(-2t)" and near(r.y0, 0.0) and near(r.final, 2.0)
+assert np.allclose(r.eval(t_), 2 - 6 * np.exp(-t_) + 4 * np.exp(-2 * t_) + 2 * t_ * np.exp(-2 * t_))
+assert r.pf_text == "2 / s - 6 / (s + 1) + 4 / (s + 2) + 2 / (s + 2)²"
+# closed loop 45(s+6) / ((s^2+65s+354) s): (s+6) cancels, leaving 45 / (s (s+59)); the step response has a double pole at the origin
+a = tf("45(s+6)", "(s^2+65s+354)s")
+assert len(a.cancels) == 1 and abs(a.cancels[0] + 6) < 1e-6
+r = C.response_of(a, "step")
+t3 = np.linspace(0, 0.3, 31)
+assert np.allclose(r.eval(t3), 45 / 59 * t3 - 45 / 59 ** 2 * (1 - np.exp(-59 * t3)), atol=1e-12)
+assert r.text == "-0.0129273 + 0.762712t + 0.0129273e^(-59t)" and r.final is None and "without limit" in r.final_note
+assert "cancel at -6" in C.simple_report(a)
+r = C.response_of(a, "impulse")
+assert np.allclose(r.eval(t3), 45 / 59 * (1 - np.exp(-59 * t3))) and near(r.final, 45 / 59)
+
+# ---- special cases ---------------------------------------------------------------------------------------------------------------------------
+assert resp("1", "s^2+2s+5", "impulse").text == "0.5e^(-t)sin(2t)"
+assert resp("1", "s^2+2s+5", "step").text == "0.2 - e^(-t)(0.2cos(2t) + 0.1sin(2t))"
+assert resp("1", "s^2+4", "step").text == "0.25 - 0.25cos(2t)" and "oscillates" in resp("1", "s^2+4", "step").final_note
+assert resp("1", "s(s+1)", "step").text == "-1 + t + e^(-t)" and resp("1", "s(s+1)", "impulse").final == 1.0
+assert resp("3", "2", "impulse").text == "1.5δ(t)" and resp("3", "2", "step").text == "1.5" and resp("3", "2", "impulse").terms == []
+assert resp("s^2+1", "s+1", "step").text == "δ(t) + 1 - 2e^(-t)" and resp("s^2+1", "s+1", "impulse").text == "-δ(t) + δ'(t) + 2e^(-t)"
+assert resp("1", "s^2-s-2", "step").final is None and "grows" in resp("1", "s^2-s-2", "step").final_note
+assert resp("s", "s+1", "impulse").text == "δ(t) - e^(-t)"
+assert "Step response:  Y(s) = G(s) / s" in C.report(tf("2s+8", "s^3+5s^2+8s+4")) and "y(0+) = 0;  final value: 2" in C.report(tf("2s+8", "s^3+5s^2+8s+4"))
+
+
+# ---- the analytical answers agree with an independent numerical simulation (state space + matrix exponential) --------------------------------------
+def expm(A):
+    n = np.linalg.norm(A, 1)
+    k = max(0, int(math.ceil(math.log2(n / 0.5))) + 1) if n > 0.5 else 0
+    X, R, term = A / 2 ** k, np.eye(len(A)), np.eye(len(A))
+    for i in range(1, 25):
+        term = term @ X / i
+        R = R + term
+    for _ in range(k):
+        R = R @ R
+    return R
+
+
+def simulate(num, den, t, kind):
+    """Controllable canonical form of a proper G(s); returns y(t) without the delta term."""
+    d0 = float(den[0])
+    den = np.asarray(den, float) / d0
+    num = np.asarray(num, float) / d0
+    n = len(den) - 1
+    num = np.concatenate([np.zeros(n + 1 - len(num)), num])
+    D = num[0]
+    c = num[1:] - D * den[1:]
+    A = np.zeros((n, n))
+    A[:-1, 1:] = np.eye(n - 1)
+    A[-1, :] = -den[1:][::-1]
+    B = np.zeros(n)
+    B[-1] = 1.0
+    C_ = c[::-1]
+    y = []
+    for tk in t:
+        E = expm(A * tk)
+        if kind == "impulse":
+            y.append(C_ @ E @ B)
+        else:
+            big = np.zeros((n + 1, n + 1))                       # integral of e^(A tau) B from 0 to t: the corner of expm([[A, B], [0, 0]] t)
+            big[:n, :n], big[:n, n] = A * tk, B * tk
+            x = expm(big)[:n, n]
+            y.append(C_ @ x + D)
+    return np.array(y)
+
+
+CASES = [("2s+3", "s^2+3s+2"), ("s^2+3s+3", "(s+1)(s+2)(s+3)"), ("2s+8", "s^3+5s^2+8s+4"), ("1", "s^2+2s+5"), ("10(s+2)", "(s^2+2s+5)(s+3)"),
+         ("1", "s^2+4"), ("1", "s(s+1)"), ("1", "s^2"), ("1", "s(s+1)^2"), ("1", "s^2-s-2"), ("s+2", "(s+2)(s+5)"), ("s+3", "s+1"), ("1", "(s+1)^3"),
+         ("5", "s^2+0.4s+4"), ("3", "(s+1)(s^2+2s+10)^2"), ("45(s+6)", "(s^2+65s+354)s"), ("s", "s^2+s+1"), ("1", "s^2(s+2)")]
+for n_, d_ in CASES:
+    a = tf(n_, d_)
+    for kind in ("step", "impulse"):
+        r = C.response_of(a, kind)
+        tt = np.linspace(0, r.horizon, 25)
+        ref = simulate(a.num, a.den, tt, kind)
+        got = r.eval(tt)
+        err = np.max(np.abs(got - ref)) / max(1.0, np.max(np.abs(ref)))
+        assert err < 1e-7, (n_, d_, kind, err, r.text)
+        assert r.horizon > 0 and np.all(np.isfinite(got))
 print("PASS controls core")
