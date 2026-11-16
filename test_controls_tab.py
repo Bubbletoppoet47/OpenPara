@@ -94,6 +94,14 @@ x0, x1, y0, y1 = pl.view_box()
 assert x0 < -3 and x1 > 0 and y0 < -2 and y1 > 2
 assert T.nice_step(10) >= 1
 
+# painting at silly sizes, with and without roots, must never raise (an error in a paint event closes the program)
+for size in ((1, 1), (10, 5), (50, 50), (300, 260), (2000, 100), (80, 900)):
+    for roots in (([], []), ([complex(-1.5, 0)], [complex(-1, 0), complex(-2, 0)]), ([], [complex(0, 0)]), ([complex(1e6, 0)], [complex(-1e-6, 1e-6)])):
+        pl.set_roots(*roots)
+        pl.setMinimumSize(0, 0)
+        pl.resize(*size)
+        pl.grab()
+
 # ---- the add-on is described for the app -------------------------------------------------------------------------------------------------------
 spec = json.load(open(os.path.join(HERE, "dev_addons", "controls", "addon.json")))
 assert spec["name"] == "Systems and Controls" and spec["status"] == "workshopping"

@@ -54,11 +54,21 @@ class PoleZeroPlot(QWidget):
 
     def paintEvent(self, ev):
         p = QPainter(self)
+        try:
+            self.draw(p)
+        except Exception:                      # noqa: BLE001 - an error escaping a paint event would close the whole program
+            pass
+        finally:
+            p.end()
+
+    def draw(self, p):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
         p.fillRect(0, 0, w, h, QColor("#ffffff"))
         m = 34
         area = QRectF(m + 14, 10, w - m - 24, h - m - 12)
+        if area.width() < 40 or area.height() < 40:                      # too small to draw anything useful
+            return
         x0, x1, y0, y1 = self.view_box()
         sc = min(area.width() / (x1 - x0), area.height() / (y1 - y0))               # the same scale on both axes
         cx = area.center().x() - sc * (x0 + x1) / 2
