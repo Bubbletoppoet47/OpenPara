@@ -6,14 +6,16 @@ it keeps the list of PDFs, their breaks and what is excluded - the PDFs themselv
 """
 import json
 import os
+import threading
 from collections import OrderedDict
 
-from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPen
 from PyQt6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplitter,
                              QStackedWidget, QVBoxLayout, QWidget)
 
 import pb_core as core
+import pb_deps
 import ui_kit
 
 PDF_FILTER = "PDF files (*.pdf);;All files (*)"
@@ -220,9 +222,16 @@ class PageBlock(QWidget):
         lay.addLayout(wrap)
 
 
+class SetupSignals(QObject):
+    progress = pyqtSignal(str)
+    done = pyqtSignal(bool, str)
+
+
 # ------------------------------------------------------------------------------------------------------------- the tab
 class PageBreakTab(QWidget):
     MAX_CACHED_IMAGES = 14
+    AUTO_SETUP = True                          # download PyMuPDF by itself when it is missing (a test turns this off)
+    installer = None                           # a test can put its own downloader here (see pb_deps.install)
 
     def __init__(self, path=None):
         super().__init__()
@@ -258,8 +267,15 @@ class PageBreakTab(QWidget):
         self.col.setSpacing(0)
         self.col.addStretch(1)
         self.scroll.setWidget(self.inner)
+        self.setup = self.build_setup_page()
+        self.setup_sig = SetupSignals()
+        self.setup_sig.progress.connect(self.setup_text.setText)
+        self.setup_sig.done.connect(self.setup_finished)
+        self.setup_busy = False
+        self.pending_path = None
         self.views.addWidget(self.empty)
         self.views.addWidget(self.scroll)
+        self.views.addWidget(self.setup)
         split.addWidget(self.views)
         split.setStretchFactor(1, 1)
         split.setSizes([360, 1000])
@@ -268,9 +284,73 @@ class PageBreakTab(QWidget):
         self.status = ui_kit.StatusLine("")
         lay.addWidget(self.status)
         self.refresh()
+        if not core.available():
+            self.pending_path = path
+            self.dirty = False
+            self.show_setup("Getting ready ...")
+            if self.AUTO_SETUP:
+                QTimer.singleShot(0, self.start_setup)
+            else:
+                self.show_setup("PyMuPDF is needed.", failed=True)
+            return
         if path and os.path.isfile(path):
             self.open_path(path)
         self.dirty = False
+
+    # ------------------------------------------------------------------ getting PyMuPDF (once, the first time)
+    def build_setup_page(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.setSpacing(8)
+        t = QLabel("Setting up Page Break")
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        t.setStyleSheet(f"font-size:15px; font-weight:600; color:{ui_kit.INK};")
+        lay.addWidget(t)
+        self.setup_text = QLabel("")
+        self.setup_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setup_text.setWordWrap(True)
+        self.setup_text.setFixedWidth(480)
+        self.setup_text.setStyleSheet(f"color:{ui_kit.MUTED};")
+        lay.addWidget(self.setup_text, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.setup_retry = ui_kit.primary(QPushButton("Try again"))
+        self.setup_retry.clicked.connect(lambda _c=False: self.start_setup())
+        lay.addWidget(self.setup_retry, 0, Qt.AlignmentFlag.AlignHCenter)
+        return w
+
+    def show_setup(self, text, failed=False):
+        self.views.setCurrentWidget(self.setup)
+        self.setup_text.setText(text)
+        self.setup_retry.setVisible(failed)
+        self.status.say("")
+
+    def start_setup(self):
+        """Downloads PyMuPDF in a thread (the window stays alive); setup_finished() runs when it is done."""
+        if self.setup_busy or core.available():
+            return
+        self.setup_busy = True
+        self.show_setup("Downloading PyMuPDF, the library that reads and writes PDFs (about 20 MB, once). This needs an internet connection.")
+
+        def work():
+            try:
+                pb_deps.install(lambda text, frac=None: self.setup_sig.progress.emit(text), self.installer)
+                self.setup_sig.done.emit(True, "")
+            except BaseException as e:                         # noqa: BLE001 - whatever went wrong is shown to the person, never raised in a thread
+                self.setup_sig.done.emit(False, str(e))
+        self.setup_thread = threading.Thread(target=work, daemon=True)
+        self.setup_thread.start()
+
+    def setup_finished(self, ok, message):
+        self.setup_busy = False
+        if ok and core.reload():
+            self.views.setCurrentWidget(self.empty)
+            self.refresh_numbers()
+            self.status.say("PyMuPDF is ready.", "good")
+            path, self.pending_path = self.pending_path, None
+            if path and os.path.isfile(path):
+                self.open_path(path)
+            return
+        self.show_setup("PyMuPDF could not be downloaded.\n\n" + (message.strip()[-600:] or "Check the internet connection and try again."), failed=True)
 
     # ------------------------------------------------------------------ building the window
     def build_bar(self):
@@ -422,7 +502,8 @@ class PageBreakTab(QWidget):
 
     def refresh_numbers(self):
         n_pages, n_out = len(self.project.items), self.project.output_count()
-        self.views.setCurrentWidget(self.scroll if n_pages else self.empty)
+        if core.available():
+            self.views.setCurrentWidget(self.scroll if n_pages else self.empty)
         files = len({s.path for s in (it.source for it in self.project.items)})
         self.pages_lbl.setText(f"{n_pages} page(s) from {files} file(s)" if n_pages else "No pages yet.")
         self.stats_lbl.setText(f"{n_pages} source page(s)  →  {n_out} output page(s)" if n_pages else "Nothing to export yet.")
@@ -442,6 +523,9 @@ class PageBreakTab(QWidget):
 
     # ------------------------------------------------------------------ actions (each returns something a test can check)
     def import_path(self, path):
+        if not core.available():
+            self.status.say("Page Break is still getting PyMuPDF. Wait for the set-up to finish.", "warn")
+            return []
         try:
             items = self.project.import_pdf(path)
         except core.PageBreakError as e:
@@ -454,6 +538,9 @@ class PageBreakTab(QWidget):
         return items
 
     def import_dialog(self):
+        if not core.available():
+            self.status.say("Page Break is still getting PyMuPDF. Wait for the set-up to finish.", "warn")
+            return
         paths, _ = QFileDialog.getOpenFileNames(self, "Choose a PDF", "", PDF_FILTER)
         for p in paths:
             self.import_path(p)
@@ -570,6 +657,10 @@ class PageBreakTab(QWidget):
         return self.project.to_json(self.zoom, self.auto_inches.text())
 
     def open_path(self, path):
+        if not core.available():
+            self.pending_path = path                            # opened as soon as PyMuPDF is there
+            self.status.say("Page Break is still getting PyMuPDF; the file opens when it is ready.", "warn")
+            return False
         if path.lower().endswith(".pdf"):                       # a PDF dropped on the tab: just import it
             return bool(self.import_path(path))
         try:

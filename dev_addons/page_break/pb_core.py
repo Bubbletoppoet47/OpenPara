@@ -9,13 +9,9 @@ import json
 import math
 import os
 
-try:
-    import pymupdf as fitz            # the newer package name
-except ImportError:                   # pragma: no cover
-    try:
-        import fitz                   # the older name of the same package
-    except ImportError:
-        fitz = None
+import pb_deps
+
+fitz = pb_deps.load()                 # PyMuPDF, or None: the tab then downloads it (pb_deps.install) and calls reload()
 
 FORMAT = "openpara-pagebreak"
 BASE_WIDTH_PX = 760        # the width of a page at 100 %
@@ -36,9 +32,16 @@ def available():
     return fitz is not None
 
 
+def reload():
+    """Looks for PyMuPDF again (after pb_deps.install); True when it is there."""
+    global fitz
+    fitz = pb_deps.load()
+    return fitz is not None
+
+
 def need_fitz():
     if fitz is None:
-        raise PageBreakError("Page Break needs PyMuPDF. Install it with:  pip install pymupdf")
+        raise PageBreakError("Page Break is still getting PyMuPDF (it downloads it once; this needs an internet connection). Wait for the set-up to finish, or press Try again.")
 
 
 def display_scale(width_pt, height_pt, zoom=1.0):

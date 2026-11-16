@@ -3,6 +3,8 @@
 Cut long PDF pages (a saved web page, a long printout) into normal-sized pages, and combine pages from several PDFs into one file.
 Tab: **Page Break**; project files: `.oppb` (JSON: the list of PDFs, their breaks, what is excluded and the page order; the PDFs stay where they are).
 Needs PyMuPDF (`pymupdf` in `requirements-playground.txt`; it is AGPL-licensed, so check the licence before a public release).
+An install that was updated in place does not have it (updates replace program files, not the bundled packages): the tab then downloads PyMuPDF
+once into `<user folder>/packages/pagebreak` (`pb_deps.py`, needs internet), shows the progress, and retries on request if the download fails.
 
 * **Import PDF...** adds every page of a PDF to the end of the list (import more files any time).
 * **Click a page** to drop a break line; click the line again to remove it. The shaded bands are the output pages, each labelled `Page N · height`.

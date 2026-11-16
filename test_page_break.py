@@ -230,4 +230,64 @@ assert not tab2.open_path(os.path.join(T, "bad.oppb"))
 man = json.load(open(os.path.join(HERE, "dev_addons", "page_break", "addon.json")))
 t0 = man["tabs"][0]
 assert t0["kind"] == "pagebreak" and t0["module"] == "page_break_tab" and t0["factory"] == "make_tab" and ".oppb" in t0["file_types"]
+# ---------------------------------------------------------------- 4. PyMuPDF missing: downloaded once into the user folder, then everything works
+import shutil
+import pb_deps, pymupdf
+from PyQt6.QtTest import QTest as _QT
+site = pb_deps.site_dir()
+assert site.startswith(UD) and not os.path.isdir(site)
+CALLS = []
+
+
+def fake_installer(pins, target, progress):
+    CALLS.append((list(pins), target))
+    if progress:
+        progress("Downloading pymupdf ...", None)
+    os.makedirs(target, exist_ok=True)
+    shutil.copytree(os.path.dirname(pymupdf.__file__), os.path.join(target, "pymupdf"))
+
+
+def offline_installer(pins, target, progress):
+    CALLS.append(("offline",))
+    os.makedirs(target, exist_ok=True)
+    open(os.path.join(target, "half-written.txt"), "w").write("x")
+    raise RuntimeError("Downloading the packages failed (needs an internet connection)")
+
+
+def wait(tab_, seconds=30):
+    for _ in range(seconds * 20):
+        app.processEvents()
+        if not tab_.setup_busy:
+            break
+        _QT.qWait(50)
+    app.processEvents()
+
+
+real_fitz = core.fitz
+core.fitz = None                                         # as on a computer that has no PyMuPDF
+assert not core.available()
+try:
+    core.Project().import_pdf(tall); raise SystemExit("without PyMuPDF an import must say so")
+except core.PageBreakError as e:
+    assert "PyMuPDF" in str(e)
+
+pt.PageBreakTab.installer = staticmethod(offline_installer)
+tabx = pt.make_tab(os.path.join(T, "proj.oppb"))
+tabx.resize(1000, 700); tabx.show()
+wait(tabx)
+assert tabx.views.currentWidget() is tabx.setup and tabx.setup_retry.isVisibleTo(tabx.setup) and "internet" in tabx.setup_text.text()
+assert not os.path.isdir(site) and not os.path.isdir(site + ".new"), "a failed download leaves nothing half-installed"
+assert tabx.import_path(tall) == [] and "PyMuPDF" in tabx.status.text(), "no import while PyMuPDF is missing"
+pt.PageBreakTab.installer = staticmethod(fake_installer)
+tabx.setup_retry.click()
+wait(tabx)
+assert core.available() and tabx.views.currentWidget() in (tabx.empty, tabx.scroll), tabx.setup_text.text()
+assert CALLS[-1][0] == [pb_deps.PIN] and os.path.isdir(os.path.join(site, "pymupdf")) and site in sys.path
+assert tabx.project.items, "the project file that was asked for opens as soon as PyMuPDF is there"
+assert len(tabx.import_path(tall)) == 2
+n_calls = len(CALLS)
+tab_again = pt.make_tab()                                # a later start: nothing to download
+assert len(CALLS) == n_calls and tab_again.views.currentWidget() is tab_again.empty
+core.fitz = real_fitz
+pt.PageBreakTab.installer = None
 print("OK test_page_break")
