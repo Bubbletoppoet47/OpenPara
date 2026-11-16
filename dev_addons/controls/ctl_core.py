@@ -740,3 +740,149 @@ def time_response(a, kind):
         t *= 8
     r.horizon = float(min(max(t, 1e-3), 1e4))
     return r
+
+
+# ------------------------------------------------------------------------------------------------------------- Routh-Hurwitz
+from fractions import Fraction  # noqa: E402
+
+
+class Routh:
+    """rows: [{'power': n, 'cells': [text], 'values': [float], 'kind': 'normal'|'eps'|'aux_source'|'aux_derivative'}]; first_col: [float];
+    changes; rhp; imag (roots on the imaginary axis found); verdict; necessary (ok, text); notes; aux (list of (text, roots)); check (text)."""
+
+
+def _sgn(x):
+    return (x > 0) - (x < 0)
+
+
+def _build_routh(a, eps):
+    """The array for polynomial coefficients a (Fractions, highest first, a[0] > 0, no trailing zero) using a number for epsilon."""
+    n = len(a) - 1
+    width = n // 2 + 1
+    r0 = [a[j] for j in range(0, n + 1, 2)]
+    r1 = [a[j] for j in range(1, n + 1, 2)]
+    r0 += [Fraction(0)] * (width - len(r0))
+    r1 += [Fraction(0)] * (width - len(r1))
+    rows = [r0, r1]
+    kinds = ["normal", "normal"]
+    aux = []
+    for i in range(2, n + 1):
+        prev2, prev = rows[i - 2], rows[i - 1]
+        if all(x == 0 for x in prev):                                   # a whole row of zeros: build the auxiliary equation from the row above
+            p2 = n - (i - 2)
+            coeffs = [Fraction(0)] * (p2 + 1)
+            for j, x in enumerate(prev2):
+                q = p2 - 2 * j
+                if q >= 0:
+                    coeffs[p2 - q] = x
+            aux.append((p2, coeffs))
+            prev = [Fraction(p2 - 2 * j) * x if p2 - 2 * j > 0 else Fraction(0) for j, x in enumerate(prev2)]
+            rows[i - 1] = prev
+            kinds[i - 2] = "aux_source"
+            kinds[i - 1] = "aux_derivative"
+        piv = prev[0]
+        if piv == 0:                                                     # a zero alone in the first column: a small epsilon takes its place
+            prev = [eps] + prev[1:]
+            rows[i - 1] = prev
+            kinds[i - 1] = "eps"
+            piv = eps
+        new = [(piv * prev2[j + 1] - prev2[0] * prev[j + 1]) / piv for j in range(width - 1)] + [Fraction(0)]
+        rows.append(new)
+        kinds.append("normal")
+    return rows, kinds, aux
+
+
+def routh(den):
+    """Routh array and verdict for the characteristic polynomial `den` (coefficients, highest power first).  Raises TFError if there is no s."""
+    a = [Fraction(float(c)).limit_denominator(10 ** 9) for c in trim(den)]
+    while a and a[0] == 0:
+        a.pop(0)
+    if len(a) < 2:
+        raise TFError("The characteristic polynomial has no s in it, so there is nothing to test.")
+    notes = []
+    if a[0] < 0:
+        a = [-c for c in a]
+        notes.append("The leading coefficient was negative; every coefficient was multiplied by -1 (the roots do not change).")
+    origin = 0
+    while a[-1] == 0:                                                    # roots at s = 0
+        a.pop()
+        origin += 1
+    full = [float(c) for c in a] + [0.0] * origin
+    if origin:
+        notes.append("%s s = 0 is a root%s; it is taken out and the rest is tested." % ("The factor s^%d: " % origin if origin > 1 else "A factor s:", " (repeated)" if origin > 1 else ""))
+    n = len(a) - 1
+    # necessary condition
+    allc = [Fraction(float(c)).limit_denominator(10 ** 9) for c in trim(den)]
+    if allc and allc[0] < 0:
+        allc = [-c for c in allc]
+    missing = [len(allc) - 1 - i for i, c in enumerate(allc) if c == 0]
+    negative = [len(allc) - 1 - i for i, c in enumerate(allc) if c < 0]
+    r = Routh()
+    if missing:
+        r.necessary = (False, "Necessary condition fails: the s^%s term%s missing (every power of s must be present)." % (", s^".join(str(m) for m in missing), " is" if len(missing) == 1 else "s are"))
+    elif negative:
+        r.necessary = (False, "Necessary condition fails: some coefficients are negative (all must have the same sign).")
+    else:
+        r.necessary = (True, "Necessary condition holds: all powers of s are present and all coefficients are positive.")
+    if n == 0:
+        r.rows, r.first_col, r.changes, r.rhp, r.imag, r.aux, r.notes = [], [], 0, 0, 0, [], notes
+        r.verdict = "Marginally stable (only roots at s = 0)"
+        r.check = ""
+        return r
+    e1, e2 = Fraction(1, 10 ** 6), Fraction(1, 10 ** 7)
+    rows1, kinds, aux = _build_routh(a, e1)
+    rows2, _k, _a = _build_routh(a, e2)
+    out = []
+    for i, (row, row2) in enumerate(zip(rows1, rows2)):
+        cells = []
+        for x, y in zip(row, row2):
+            x, y = float(x), float(y)
+            if kinds[i] == "eps" and cells == [] and x == float(e1):
+                cells.append("ε")
+            elif abs(x - y) > 1e-9 * max(1.0, abs(x)) and x != 0 and y != 0:        # depends on epsilon: show the leading term c·ε^p
+                p = round(math.log10(abs(x / y)))
+                c = x / float(e1) ** p
+                cells.append(("%sε" % fmt(c) if p == 1 else "%s/ε" % fmt(c) if p == -1 else "%sε^%d" % (fmt(c), p)).replace("1ε", "ε").replace("-1ε", "-ε"))
+            else:
+                cells.append(fmt(x))
+        out.append({"power": n - i, "cells": cells, "values": [float(x) for x in row], "kind": kinds[i]})
+    # a row's last (padding) zeros are not part of the table
+    for i, row in enumerate(out):
+        used = (n - i) // 2 + 1 if i >= 2 else (len(a[(i)::2]))
+        row["cells"] = row["cells"][:max(1, used if i >= 2 else len(a[i::2]))]
+        row["values"] = row["values"][:len(row["cells"])]
+    first = [float(rw[0]) for rw in rows1]
+    r.rows = out
+    r.first_col = first
+    signs = [_sgn(x) for x in first if x != 0]
+    r.changes = sum(1 for x, y in zip(signs, signs[1:]) if x != y)
+    r.aux = []
+    imag_aux = 0
+    for p2, coeffs in aux:
+        cf = [float(c) for c in coeffs]
+        roots = np.roots(cf) if p2 >= 1 else np.array([])
+        text = poly_text(cf)
+        r.aux.append((text, list(roots)))
+        imag_aux += int(sum(1 for z in roots if abs(z.real) <= 1e-7 * max(1.0, abs(z))))
+        notes.append("A row of zeros appeared. The auxiliary equation (from the row above it) is %s = 0, with roots %s." % (text, ", ".join(cfmt(z) for z in roots)))
+        notes.append("Its derivative's coefficients replace the row of zeros, and the array is finished.")
+    if any(k == "eps" for k in kinds):
+        notes.append("A zero alone in the first column was replaced by a small ε > 0, and the signs are read as ε → 0.")
+    r.imag = imag_aux + origin
+    r.rhp = r.changes
+    if r.rhp:
+        r.verdict = "Unstable: %d sign change%s in the first column, so %d pole%s in the right half-plane" % (r.changes, "" if r.changes == 1 else "s", r.rhp, "" if r.rhp == 1 else "s")
+    elif r.imag:
+        r.verdict = "Marginally stable: no sign changes, but %d root%s on the imaginary axis (simple roots; repeated ones would make it unstable)" % (r.imag, "" if r.imag == 1 else "s")
+    else:
+        r.verdict = "Stable: no sign changes in the first column, so no poles in the right half-plane"
+    r.notes = notes
+    # cross-check with the real roots
+    roots = np.roots(full)
+    tol = 1e-6
+    rhp_n = int(sum(1 for z in roots if z.real > tol * max(1.0, abs(z))))
+    axis_n = int(sum(1 for z in roots if abs(z.real) <= tol * max(1.0, abs(z))))
+    r.rhp_roots, r.axis_roots = rhp_n, axis_n
+    r.check = ("Check with the roots: %d in the right half-plane, %d on the imaginary axis%s" %
+               (rhp_n, axis_n, " (agrees)." if rhp_n == r.rhp else " - DISAGREES with the array; the array is exact, so trust it only if the polynomial has repeated roots on the axis."))
+    return r

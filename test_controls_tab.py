@@ -62,7 +62,7 @@ tf.plot.grab()
 assert tf.ex.count() == 1 + len(tf.EXAMPLES)
 for i in range(1, tf.ex.count()):
     tf.load_example(i)
-    assert tf.analysis is not None and tf.msg.text() == "", tf.ex.itemText(i)
+    assert tf.analysis is not None and tf.msg.text() in ("", "Numerator left empty: taken as 1."), tf.ex.itemText(i)
     t.grab()
 tf.load_example(1)
 assert tf.num.text() == "2s+3" and tf.den.text() == "s^2+3s+2" and abs(tf.analysis.dc - 1.5) < 1e-12
@@ -78,7 +78,7 @@ assert t.is_dirty()
 tf.load_example(1)
 # the time plot follows the Step | Impulse picker and survives odd sizes and odd answers
 from PyQt6.QtGui import QImage, QPainter
-assert [tf.view.itemText(i) for i in range(tf.view.count())] == ["Pole-zero plot", "Block diagram", "Step response", "Impulse response"]
+assert [tf.view.itemText(i) for i in range(tf.view.count())] == ["Pole-zero plot", "Block diagram", "Step response", "Impulse response", "Routh-Hurwitz"]
 assert tf.view.currentIndex() == 0 and tf.stack.currentWidget() is tf.plot
 tf.view.setCurrentIndex(1); tf.show_view(); assert tf.stack.currentWidget() is tf.diagram
 tf.view.setCurrentIndex(3); tf.show_view()
@@ -87,6 +87,28 @@ for (w, h) in [(300, 200), (60, 40), (1, 1), (900, 500)]:
     for num, den in [("2s+3", "s^2+3s+2"), ("1", "s^2+1"), ("1", "s"), ("s", "1"), ("s+1", "s+1"), ("1", "s^2")]:
         tf.num.setText(num); tf.den.setText(den); tf.show_view()
         img = QImage(w, h, QImage.Format.Format_RGB32); tf.time_plot.resize(w, h); pp = QPainter(img); tf.time_plot.draw(pp) if w > 1 else None; pp.end()
+# Routh-Hurwitz: only Q(s) typed (empty numerator = 1), the book's tables show, special rows are coloured
+tf.num.setText(""); tf.den.setText("s^5+s^4+4s^3+24s^2+3s+63")
+assert tf.analysis is not None and "taken as 1" in tf.msg.text() and tf.analysis.num.tolist() == [1.0]
+tf.view.setCurrentIndex(4); tf.show_view()
+rv = tf.routh_view
+assert tf.stack.currentWidget() is rv and rv.table.rowCount() == 6 and rv.verdict.text().startswith("Unstable: 2 sign changes")
+assert [rv.table.item(i, 0).text() for i in range(6)] == ["1", "1", "-20", "21", "42", "63"] and rv.table.verticalHeaderItem(0).text() == "s⁵"
+assert "21s² + 63 = 0" in rv.notes.toPlainText() and "agrees" in rv.notes.toPlainText()
+for q in ("s^5+15s^4+85s^3+225s^2+274s+120", "s^3+s^2+2s+8", "s^3+0s^2+2s+3", "s+1", "s^2", "s^4+s^3+3s^2+5s+10"):
+    tf.den.setText(q); tf.show_view()
+    rv.grab()
+tf.den.setText("s^5+15s^4+85s^3+225s^2+274s+120"); tf.show_view()
+assert rv.verdict.text().startswith("Stable") and rv.table.item(5, 0).text() == "120"
+tf.den.setText("1"); tf.show_view()                                      # nothing to test: a plain-words line, no crash
+assert "nothing to test" in rv.verdict.text() or "Type the characteristic" in rv.verdict.text()
+tf.den.setText("s^2+3s+"); tf.show_view()                                # a typo: the view is emptied, not stale
+assert rv.table.rowCount() == 0
+tf.num.setText("2s@3"); tf.den.setText("s+1")
+assert tf.msg.text().startswith("Numerator:")                           # a typed but wrong numerator is still an error
+tf.load_example(5)
+assert tf.num.text() == "" and tf.den.text() == "s^5+15s^4+85s^3+225s^2+274s+120"
+tf.load_example(1)
 tf.num.setText("2s+3"); tf.den.setText("s^2+3s+2"); tf.view.setCurrentIndex(2); tf.show_view(); assert tf.time_plot.kind == "step"; tf.view.setCurrentIndex(0); tf.show_view()
 tf.working.setChecked(True)
 full = tf.text.toPlainText()

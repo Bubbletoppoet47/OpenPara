@@ -232,4 +232,55 @@ for n_, d_ in CASES:
         err = np.max(np.abs(got - ref)) / max(1.0, np.max(np.abs(ref)))
         assert err < 1e-7, (n_, d_, kind, err, r.text)
         assert r.horizon > 0 and np.all(np.isfinite(got))
+
+# ---- Routh-Hurwitz: the book's arrays, special cases, and a random cross-check against the roots ----------------------------------------------------
+def cols(r):
+    return [row["cells"] for row in r.rows]
+
+
+r = C.routh([1, 15, 85, 225, 274, 120])                                                   # book 2.3 worked example
+assert cols(r) == [["1", "85", "274"], ["15", "225", "120"], ["70", "266"], ["168", "120"], ["216"], ["120"]], cols(r)
+assert r.verdict.startswith("Stable") and r.changes == 0 and r.necessary[0] and r.check.endswith("(agrees).")
+r = C.routh([1, 1, 4, 24, 3, 63])                                                         # book 2.3.3: row of zeros, auxiliary equation 21 s^2 + 63
+assert cols(r) == [["1", "4", "3"], ["1", "24", "63"], ["-20", "-60"], ["21", "63"], ["42"], ["63"]], cols(r)
+assert [row["kind"] for row in r.rows][3:5] == ["aux_source", "aux_derivative"]
+assert r.changes == 2 and r.verdict.startswith("Unstable") and abs(abs(r.aux[0][1][0].imag) - math.sqrt(3)) < 1e-9 and r.aux[0][0] == "21s² + 63", r.aux
+assert any("21s² + 63 = 0" in n for n in r.notes) and r.rhp_roots == 2 and r.axis_roots == 2
+r = C.routh([1, 1, 2, 8])                                                                 # 2.3.4.1
+assert cols(r) == [["1", "2"], ["1", "8"], ["-6"], ["8"]] and r.changes == 2 and r.verdict.startswith("Unstable: 2 sign changes")
+r = C.routh([1, 1, 3, 5, 10])                                                             # 2.3.4.2
+assert cols(r) == [["1", "3", "10"], ["1", "5"], ["-2", "10"], ["10"], ["10"]] and r.changes == 2
+r = C.routh([1, 0, 2, 3])                                                                 # a zero alone in the first column: epsilon
+assert cols(r)[1][0] == "ε" and cols(r)[2][0] == "-3/ε" and r.rows[1]["kind"] == "eps" and r.changes == 2 and not r.necessary[0] and "s^2" in r.necessary[1]
+r = C.routh([1, 0, 1])                                                                    # roots on the imaginary axis only
+assert r.verdict.startswith("Marginally stable") and r.changes == 0 and r.imag == 2
+r = C.routh([2, 4, 2, 0])                                                                 # root at s = 0: taken out
+assert r.verdict.startswith("Marginally stable") and any("A factor s" in n for n in r.notes), r.notes
+r = C.routh([-1, -3, -2])                                                                 # negative leading coefficient is flipped
+assert r.verdict.startswith("Stable") and any("multiplied by -1" in n for n in r.notes)
+for bad in ([5], [0, 0, 3]):
+    try:
+        C.routh(bad)
+        raise AssertionError("expected TFError")
+    except C.TFError:
+        pass
+rng = np.random.default_rng(7)
+checked = 0
+for _ in range(600):
+    deg = int(rng.integers(2, 9))
+    q = [int(x) for x in rng.integers(-4, 10, size=deg + 1)]
+    if q[0] == 0 or q[-1] == 0:
+        continue
+    roots = np.roots(q)
+    re = np.abs(roots.real)
+    if np.any((re > 1e-9) & (re < 1e-4)):                                                    # too close to the axis for the root test to be trusted
+        continue
+    r = C.routh(q)
+    want_rhp = int(np.sum(roots.real > 1e-7))
+    want_axis = int(np.sum(re <= 1e-7))
+    assert r.rhp == want_rhp, (q, r.rhp, want_rhp, [row["cells"] for row in r.rows])
+    if want_rhp == 0:
+        assert r.verdict.startswith("Stable" if want_axis == 0 else "Marginally"), (q, r.verdict)
+    checked += 1
+assert checked > 300, checked
 print("PASS controls core")

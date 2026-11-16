@@ -241,6 +241,68 @@ class TimePlot(QWidget):
         p.drawText(QRectF(r.left() + 6, r.top() + 2, r.width() - 12, 14), Qt.AlignmentFlag.AlignRight, note)
 
 
+# ------------------------------------------------------------------------------------------------------------- Routh-Hurwitz view
+SUP = {"0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹"}
+
+
+class RouthView(QWidget):
+    """The Routh array as a table (first column shaded like the book) with the verdict above it and the special-case notes below."""
+    COLORS = {"aux_source": "#f6d5d1", "aux_derivative": "#dcd2ec", "eps": "#fbeec2"}
+
+    def __init__(self):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 4, 4, 4)
+        self.verdict = QLabel("")
+        self.verdict.setWordWrap(True)
+        self.verdict.setStyleSheet("font-weight:bold;")
+        self.table = QTableWidget(0, 0)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.table.horizontalHeader().setVisible(False)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.notes = QPlainTextEdit()
+        self.notes.setReadOnly(True)
+        self.notes.setMaximumHeight(170)
+        lay.addWidget(self.verdict)
+        lay.addWidget(self.table, 1)
+        lay.addWidget(self.notes)
+        self.set_result(None)
+
+    def set_result(self, r, message=""):
+        self.table.clear()
+        if r is None:
+            self.table.setRowCount(0)
+            self.table.setColumnCount(0)
+            self.verdict.setText(message or "Type the characteristic polynomial Q(s) in the Denominator box (the Numerator can stay empty).")
+            self.verdict.setStyleSheet("font-weight:normal;color:#7a8696;")
+            self.notes.setPlainText("")
+            return
+        cols = max((len(row["cells"]) for row in r.rows), default=0)
+        self.table.setRowCount(len(r.rows))
+        self.table.setColumnCount(max(cols, 1))
+        for i, row in enumerate(r.rows):
+            head = "s" + "".join(SUP[c] for c in str(row["power"])) if row["power"] > 1 else ("s" if row["power"] == 1 else "s⁰")
+            self.table.setVerticalHeaderItem(i, QTableWidgetItem(head))
+            for j, text in enumerate(row["cells"]):
+                it = QTableWidgetItem(text)
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                color = self.COLORS.get(row["kind"])
+                if j == 0:
+                    color = "#cfe6c4" if row["kind"] == "normal" else color
+                    f = it.font()
+                    f.setBold(True)
+                    it.setFont(f)
+                if color:
+                    it.setBackground(QColor(color))
+                self.table.setItem(i, j, it)
+        tint = "#1b6e3c" if r.verdict.startswith("Stable") else ("#9a6700" if r.verdict.startswith("Marginal") else "#b3261e")
+        self.verdict.setText(r.verdict)
+        self.verdict.setStyleSheet("font-weight:bold;color:%s;" % tint)
+        lines = [r.necessary[1]] + list(r.notes) + ([r.check] if r.check else [])
+        self.notes.setPlainText("\n".join(lines))
+
+
 # ------------------------------------------------------------------------------------------------------------- block diagram
 class BlockDiagram(QWidget):
     """R(s) -> [ G(s) ] -> Y(s): one box, or a row of boxes in series.  A block is (top, bottom); bottom None means a lone expression, otherwise a
@@ -343,11 +405,15 @@ class Section:
 class TransferFunctionSection(Section):
     key = "transfer_function"
     title = "Transfer function: poles, zeros, gain"
-    VIEWS = ["Pole-zero plot", "Block diagram", "Step response", "Impulse response"]
+    VIEWS = ["Pole-zero plot", "Block diagram", "Step response", "Impulse response", "Routh-Hurwitz"]
     EXAMPLES = (("Book 1.4.5.1:  (2s+3) / (s²+3s+2)", "2s+3", "s^2+3s+2"),
                 ("Integrator:  1 / (s(s+1)²)", "1", "s(s+1)^2"),
                 ("Complex poles:  10(s+2) / ((s²+2s+5)(s+3))", "10(s+2)", "(s^2+2s+5)(s+3)"),
-                ("Unstable:  1 / (s²-s-2)", "1", "s^2-s-2"))
+                ("Unstable:  1 / (s²-s-2)", "1", "s^2-s-2"),
+                ("Book 2.3 worked:  Q(s) = s⁵+15s⁴+85s³+225s²+274s+120", "", "s^5+15s^4+85s^3+225s^2+274s+120"),
+                ("Book 2.3.3 auxiliary equation:  Q(s) = s⁵+s⁴+4s³+24s²+3s+63", "", "s^5+s^4+4s^3+24s^2+3s+63"),
+                ("Book 2.3.4.1:  Q(s) = s³+s²+2s+8", "", "s^3+s^2+2s+8"),
+                ("Book 2.3.4.2:  Q(s) = s⁴+s³+3s²+5s+10", "", "s^4+s^3+3s^2+5s+10"))
 
     def __init__(self, changed):
         super().__init__(changed)
@@ -406,7 +472,8 @@ class TransferFunctionSection(Section):
         self.view.addItems(self.VIEWS)
         self.view.setToolTip("What to show in the lower half.")
         self.stack = QStackedWidget()
-        for w in (self.plot, self.diagram, self.time_plot):            # order matches VIEWS (the two responses share the time plot)
+        self.routh_view = RouthView()
+        for w in (self.plot, self.diagram, self.time_plot, self.routh_view):     # the two responses share the time plot
             self.stack.addWidget(w)
         bottom = QWidget()
         bl = QVBoxLayout(bottom)
@@ -448,10 +515,15 @@ class TransferFunctionSection(Section):
             self.time_plot.set_response(None, "step")
             self.show_view()
             return
-        try:
-            num = core.parse_poly(nt)
-        except core.TFError as e:
-            return self.fail("Numerator: " + str(e))
+        if not nt:                                                 # only Q(s) typed: stability needs the denominator alone
+            num = [1.0]
+            self.msg_note = "Numerator left empty: taken as 1."
+        else:
+            self.msg_note = ""
+            try:
+                num = core.parse_poly(nt)
+            except core.TFError as e:
+                return self.fail("Numerator: " + str(e))
         try:
             den = core.parse_poly(dt)
         except core.TFError as e:
@@ -461,7 +533,8 @@ class TransferFunctionSection(Section):
         except core.TFError as e:
             return self.fail(str(e))
         self.analysis = a
-        self.msg.setText("")
+        self.msg.setStyleSheet("color:#5b6675;")
+        self.msg.setText(self.msg_note)
         self.text.setPlainText(core.report(a) if self.working.isChecked() else core.simple_report(a))
         self.diagram.set_blocks(core.blocks_series(a) if self.diag_mode.currentIndex() == 1 else core.blocks_single(a))
         self.plot.set_roots(a.zeros, a.poles)
@@ -470,12 +543,18 @@ class TransferFunctionSection(Section):
     def show_view(self):
         """Show the picked view in the lower half (and feed the time plot when a response is picked)."""
         i = max(0, self.view.currentIndex())
-        if i >= 2:
+        if i in (2, 3):
             kind = "impulse" if i == 3 else "step"
             self.time_plot.set_response(core.response_of(self.analysis, kind) if self.analysis else None, kind)
-        self.stack.setCurrentIndex(min(i, 2))
+        elif i == 4:
+            try:
+                self.routh_view.set_result(core.routh(self.analysis.den) if self.analysis else None)
+            except core.TFError as e:
+                self.routh_view.set_result(None, str(e))
+        self.stack.setCurrentIndex({0: 0, 1: 1, 2: 2, 3: 2, 4: 3}[min(i, 4)])
 
     def fail(self, why):
+        self.msg.setStyleSheet("color:#b3261e;")
         self.msg.setText(why)
         self.text.setPlainText("")
         self.plot.set_roots([], [])

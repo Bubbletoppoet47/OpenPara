@@ -14,7 +14,10 @@ section on the right. Adding a tool = one `Section` class in `controls_tab.py` p
   e^(sigma t)(A cos wt + B sin wt), a pole at the origin gives a ramp, an improper G(s) gives delta(t) terms; a cancelling pole and zero are reduced first).
   The full working adds Y(s) in partial fractions.
   The right side is two halves: the text answer on top, and below it one view picked from a dropdown: Pole-zero plot, Block diagram
-  (one block or blocks in series, set on the left), Step response, Impulse response (final value dashed). The chosen view is saved in the file.
+  (one block or blocks in series, set on the left), Step response, Impulse response (final value dashed), Routh-Hurwitz (the array as a table with the
+  first column shaded, the verdict and number of right-half-plane poles, the necessary condition, a zero in the first column handled with epsilon, a row of
+  zeros handled with the auxiliary equation, and a cross-check against the roots; a row is coloured when it is special). Leave the Numerator empty to type
+  only Q(s) (taken as 1). The chosen view is saved in the file.
   A new tool later (Bode, Nyquist, root locus) = one view class plus one entry in `TransferFunctionSection.VIEWS`.
   First test: book example 1.4.5.1, G(s) = (2s+3)/(s^2+3s+2): zero -1.5, poles -1 and -2, K = 2, DC gain 1.5.
 
