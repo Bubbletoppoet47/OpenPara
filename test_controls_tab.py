@@ -38,7 +38,8 @@ tf.den.setText("s^2+3s+2")
 a = tf.analysis
 assert a is not None and abs(a.gain - 2.0) < 1e-12 and abs(a.dc - 1.5) < 1e-12
 out = tf.text.toPlainText()
-assert "2 (s + 1.5)" in out and "(s + 1)(s + 2)" in out and "Zeros (roots of the numerator):   -1.5" in out and "G(0) = 3 / 2 = 1.5" in out
+assert out.splitlines() == ["G(s) = 2(s + 1.5) / ((s + 1)(s + 2))", "Zeros: -1.5", "Poles: -1, -2", "Gain K: 2", "DC gain G(0): 1.5", "Stable"], out
+assert tf.diagram.blocks == [("2 (s + 1.5)", "(s + 1)(s + 2)")]
 assert tf.msg.text() == "" and [round(z.real, 9) for z in tf.plot.zeros] == [-1.5] and sorted(round(p.real, 9) for p in tf.plot.poles) == [-2.0, -1.0]
 tf.plot.grab()                                                                  # painting must not raise
 t.grab()
@@ -65,12 +66,36 @@ for i in range(1, tf.ex.count()):
 tf.load_example(1)
 assert tf.num.text() == "2s+3" and tf.den.text() == "s^2+3s+2" and abs(tf.analysis.dc - 1.5) < 1e-12
 tf.load_example(3)
-assert "(s² + 2s + 5)" in tf.text.toPlainText() and len(tf.plot.poles) == 3
+assert "(s² + 2s + 5)" in tf.text.toPlainText() and len(tf.plot.poles) == 3 and "wn = 2.23607" in tf.text.toPlainText()
 tf.load_example(2)
-assert "infinite" in tf.text.toPlainText() and "(repeated 2 times)" in tf.text.toPlainText()
+assert "infinite" in tf.text.toPlainText() and "Marginally stable" in tf.text.toPlainText()
 tf.load_example(4)
 assert tf.analysis.stability == "unstable"
 assert t.is_dirty()
+
+# ---- the full working is one tick away, and the block diagram can be one block or blocks in series ------------------------------------------
+tf.load_example(1)
+tf.working.setChecked(True)
+full = tf.text.toPlainText()
+assert "Pole-zero model" in full and "G(0) = 3 / 2 = 1.5" in full and "time constant 0.5 s" in full and "Zeros (roots of the numerator)" in full
+tf.working.setChecked(False)
+assert tf.text.toPlainText().startswith("G(s) = 2(s + 1.5)") and "Pole-zero model" not in tf.text.toPlainText()
+assert tf.diag_mode.count() == 2 and tf.diag_mode.currentText() == "Single block"
+tf.diag_mode.setCurrentIndex(1)
+tf.diag_mode.activated.emit(1)
+assert tf.diagram.blocks == [("2", None), ("s + 1.5", None), ("1", "s + 1"), ("1", "s + 2")]
+assert t.is_dirty()
+for size in ((1, 1), (60, 40), (150, 140), (400, 160), (1500, 300)):                # painting must not raise, however narrow
+    for blocks in ([], tf.diagram.blocks, [("1", "s + %d" % i) for i in range(30)]):
+        tf.diagram.set_blocks(blocks)
+        tf.diagram.setMinimumHeight(0)
+        tf.diagram.resize(*size)
+        tf.diagram.grab()
+tf.diagram.set_blocks(tf.diagram.blocks)
+tf.load_example(1)                                      # examples keep the chosen diagram style
+assert tf.diag_mode.currentText() == "Blocks in series"
+tf.diag_mode.setCurrentIndex(0)
+tf.update_result()
 
 # ---- files: save, reopen, same answer ------------------------------------------------------------------------------------------------------
 tf.load_example(1)
@@ -79,9 +104,19 @@ t.path = path
 t.save()
 assert os.path.isfile(path) and not t.is_dirty()
 d = json.load(open(path))
-assert d["format"] == "openpara-controls" and d["sections"]["transfer_function"] == {"num": "2s+3", "den": "s^2+3s+2"}
+assert d["format"] == "openpara-controls"
+assert d["sections"]["transfer_function"] == {"num": "2s+3", "den": "s^2+3s+2", "diagram": "Single block", "working": False}
 t2 = T.make_tab(path)
 assert t2.title() == "book.opctl" and not t2.is_dirty() and abs(t2.section("transfer_function").analysis.dc - 1.5) < 1e-12
+tf.diag_mode.setCurrentIndex(1)
+tf.working.setChecked(True)
+t.save()
+t3 = T.make_tab(path)
+assert t3.section("transfer_function").diag_mode.currentText() == "Blocks in series" and t3.section("transfer_function").working.isChecked()
+assert t3.section("transfer_function").text.toPlainText().startswith("Transfer function") and len(t3.section("transfer_function").diagram.blocks) == 4
+tf.diag_mode.setCurrentIndex(0)
+tf.working.setChecked(False)
+t.save()
 t2.new()
 assert t2.section("transfer_function").num.text() == "" and t2.path is None and t2.title() == "Controls"
 t2.section("transfer_function").num.textEdited.emit("x")

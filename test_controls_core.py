@@ -115,4 +115,25 @@ ft = C.fraction_text("G(s) = ", "2s + 3", "s² + 3s + 2").splitlines()
 assert len(ft) == 3 and set(ft[1].strip().replace("G(s) = ", "")) <= {"─"} or "─" in ft[1]
 assert ft[0].strip() == "2s + 3" and ft[2].strip() == "s² + 3s + 2" and ft[1].startswith("G(s) = ")
 assert C.factor_text([]) == "1" and C.factor_text([complex(0, 0)]) == "s"
+
+# ---- the short answer and the block diagram -------------------------------------------------------------------------------------------------
+a = tf("2s+3", "s^2+3s+2")
+assert C.simple_report(a).splitlines() == ["G(s) = 2(s + 1.5) / ((s + 1)(s + 2))", "Zeros: -1.5", "Poles: -1, -2", "Gain K: 2", "DC gain G(0): 1.5", "Stable"]
+assert C.blocks_single(a) == [("2 (s + 1.5)", "(s + 1)(s + 2)")]
+assert C.blocks_series(a) == [("2", None), ("s + 1.5", None), ("1", "s + 1"), ("1", "s + 2")]
+a = tf("1", "s(s+1)^2")
+r = C.simple_report(a).splitlines()
+assert r[0] == "G(s) = 1 / (s(s + 1)²)" and "DC gain G(0): infinite (pole at s = 0)" in r and r[5].startswith("Marginally stable")
+assert C.blocks_single(a) == [("1", "s(s + 1)²")] and C.blocks_series(a) == [("1", "s"), ("1", "(s + 1)²")]
+a = tf("10(s+2)", "(s^2+2s+5)(s+3)")
+r = C.simple_report(a)
+assert "G(s) = 10(s + 2) / ((s + 3)(s² + 2s + 5))" in r and "Poles -1 ± 2j: wn = 2.23607 rad/s, zeta = 0.447214" in r
+assert C.blocks_series(a)[-1] == ("1", "s² + 2s + 5")
+assert "Unstable" in C.simple_report(tf("1", "s^2-s-2")) and "(s - 2)" in C.simple_report(tf("1", "s^2-s-2"))
+assert "Poles ±1j" in C.simple_report(tf("s", "s^2+1"))
+assert "cancel at -2" in C.simple_report(tf("s+2", "(s+2)(s+5)")) and "Improper" in C.simple_report(tf("s^2+1", "s+1"))
+assert C.simple_report(tf("3", "2")).splitlines()[0] == "G(s) = 1.5" and C.blocks_single(tf("3", "2")) == [("1.5", None)] and C.blocks_series(tf("3", "2")) == [("1.5", None)]
+assert C.simple_report(tf("-(s+1)", "(s+2)(s+3)")).splitlines()[0] == "G(s) = -(s + 1) / ((s + 2)(s + 3))"
+assert C.blocks_single(tf("s", "s^2+1")) == [("s", "s² + 1")]
+assert C.pair_text(complex(-1, 2)) == "-1 ± 2j" and C.pair_text(complex(0, 3)) == "±3j"
 print("PASS controls core")

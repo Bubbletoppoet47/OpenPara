@@ -7,10 +7,11 @@ section on the right. Adding a tool = one `Section` class in `controls_tab.py` p
 
 ## Sections
 * **Transfer function: poles, zeros, gain** - type the numerator and denominator of G(s) (`2s+3`, `s^2+3s+2`, `(s+1)(s+2)`, or `[1 3 2]`).
-  Shows G(s) as a fraction, the pole-zero form `K (s - z1)... / ((s - p1)...)` (repeated roots as powers, complex pairs as quadratics), the gain K,
-  zeros, poles, DC gain G(0) with the working, stability, order, relative degree, system type, time constants / natural frequency / damping ratio,
-  and a pole-zero plot. Flags a pole at the origin (infinite DC gain), cancelling pole and zero, and an improper G(s).
-  First test: book example 1.4.5.1, G(s) = (2s+3)/(s^2+3s+2): zero -1.5, poles -1 and -2, K = 2, DC gain 1.5.
+  The short answer: G(s) in pole-zero form on one line, zeros, poles, gain K, DC gain G(0), stable / unstable / marginal; extra lines only
+  when they matter (complex pair: wn and zeta; integrator: infinite DC gain; cancelling pole and zero; improper G(s)). "Show the full working"
+  adds the polynomial form, how K and G(0) are found, order, relative degree, type and the time constants.
+  A block diagram R(s) -> [G(s)] -> Y(s), as one block (typeset fraction) or as blocks in series (K, one block per zero and pole).
+  A pole-zero plot. First test: book example 1.4.5.1, G(s) = (2s+3)/(s^2+3s+2): zero -1.5, poles -1 and -2, K = 2, DC gain 1.5.
 
 ## Files
 * `ctl_core.py` - maths, no Qt (`parse_poly`, `analyze`, `report`).  `controls_tab.py` - the tab.

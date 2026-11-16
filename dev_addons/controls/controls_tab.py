@@ -9,8 +9,8 @@ import math
 import os
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
-from PyQt6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSplitter,
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QPainter, QPen
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSplitter,
                              QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 import ctl_core as core
@@ -135,6 +135,87 @@ class PoleZeroPlot(QWidget):
         p.drawText(QRectF(area.right() - 120, area.top() + 16, 118, 14), Qt.AlignmentFlag.AlignRight, "× pole")
 
 
+# ------------------------------------------------------------------------------------------------------------- block diagram
+class BlockDiagram(QWidget):
+    """R(s) -> [ G(s) ] -> Y(s): one box, or a row of boxes in series.  A block is (top, bottom); bottom None means a lone expression, otherwise a
+    fraction with a real bar.  Too wide for the window: the whole drawing shrinks."""
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumHeight(140)
+        self.blocks = []
+
+    def set_blocks(self, blocks):
+        self.blocks = list(blocks)
+        self.update()
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        try:
+            self.draw(p)
+        except Exception:                      # noqa: BLE001 - an error escaping a paint event would close the whole program
+            pass
+        finally:
+            p.end()
+
+    def draw(self, p):
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        p.fillRect(0, 0, w, h, QColor("#ffffff"))
+        if not self.blocks or w < 80 or h < 60:
+            return
+        f = QFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont))
+        f.setPixelSize(17)
+        p.setFont(f)
+        fm = QFontMetricsF(f)
+        pad, gap = 14.0, 40.0
+        widths = []
+        for top, bot in self.blocks:
+            tw = fm.horizontalAdvance(top)
+            bw = fm.horizontalAdvance(bot) if bot else 0.0
+            widths.append(max(tw, bw) + 2 * pad)
+        lab_in, lab_out = fm.horizontalAdvance("R(s)"), fm.horizontalAdvance("Y(s)")
+        bh = 2 * fm.height() + 22 if any(b for _t, b in self.blocks) else fm.height() + 26
+        total = lab_in + gap + sum(widths) + gap * (len(widths) - 1) + gap + lab_out
+        sc = min(1.0, (w - 24) / total)
+        if sc < 0.3:
+            return
+        p.translate(w / 2, h / 2 + 8)
+        p.scale(sc, sc)
+        x = -total / 2
+        ink = QColor("#1d3557")
+
+        def arrow(x0, x1):
+            p.setPen(QPen(ink, 2))
+            p.drawLine(QPointF(x0, 0), QPointF(x1, 0))
+            p.drawLine(QPointF(x1, 0), QPointF(x1 - 8, -5))
+            p.drawLine(QPointF(x1, 0), QPointF(x1 - 8, 5))
+
+        p.setPen(ink)
+        p.drawText(QRectF(x, -fm.height() / 2, lab_in, fm.height()), Qt.AlignmentFlag.AlignCenter, "R(s)")
+        x += lab_in
+        for i, ((top, bot), bw) in enumerate(zip(self.blocks, widths)):
+            arrow(x, x + gap)
+            x += gap
+            p.setPen(QPen(ink, 2))
+            p.setBrush(QColor("#eef3fb"))
+            p.drawRoundedRect(QRectF(x, -bh / 2, bw, bh), 6, 6)
+            p.setPen(QColor("#111111"))
+            if bot:
+                p.drawText(QRectF(x, -bh / 2 + 4, bw, fm.height()), Qt.AlignmentFlag.AlignCenter, top)
+                p.setPen(QPen(QColor("#111111"), 1.6))
+                p.drawLine(QPointF(x + pad * 0.6, 0), QPointF(x + bw - pad * 0.6, 0))
+                p.setPen(QColor("#111111"))
+                p.drawText(QRectF(x, bh / 2 - fm.height() - 4, bw, fm.height()), Qt.AlignmentFlag.AlignCenter, bot)
+            else:
+                p.drawText(QRectF(x, -bh / 2, bw, bh), Qt.AlignmentFlag.AlignCenter, top)
+            x += bw
+        arrow(x, x + gap)
+        x += gap
+        p.setPen(ink)
+        p.drawText(QRectF(x, -fm.height() / 2, lab_out, fm.height()), Qt.AlignmentFlag.AlignCenter, "Y(s)")
+
+
 # ------------------------------------------------------------------------------------------------------------- sections
 class Section:
     """One tool.  `inputs` goes in the left column (shown when the section is open); `results` is its page on the right."""
@@ -183,6 +264,14 @@ class TransferFunctionSection(Section):
         self.msg.setWordWrap(True)
         self.msg.setStyleSheet("color:#b3261e;")
         lay.addWidget(self.msg)
+        lay.addWidget(QLabel("Block diagram"))
+        self.diag_mode = QComboBox()
+        self.diag_mode.addItems(["Single block", "Blocks in series"])
+        self.diag_mode.setToolTip("Single block: G(s) in one box.  Blocks in series: the gain, then one block for each zero and pole.")
+        lay.addWidget(self.diag_mode)
+        self.working = QCheckBox("Show the full working")
+        self.working.setToolTip("Adds the polynomial form, how K and G(0) are found, the order and type, and the time constants.")
+        lay.addWidget(self.working)
         self.ex = QComboBox()
         self.ex.addItem("Examples…")
         for name, *_ in self.EXAMPLES:
@@ -200,18 +289,20 @@ class TransferFunctionSection(Section):
         split = QSplitter(Qt.Orientation.Vertical)
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
-        mono = QFont("Consolas")
-        mono.setStyleHint(QFont.StyleHint.Monospace)
-        mono.setPointSize(11)
-        self.text.setFont(mono)
+        self.text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.diagram = BlockDiagram()
         self.plot = PoleZeroPlot()
         split.addWidget(self.text)
+        split.addWidget(self.diagram)
         split.addWidget(self.plot)
-        split.setSizes([480, 300])
+        split.setSizes([150, 190, 340])
         rl.addWidget(split)
         self.num.textChanged.connect(self.update_result)
         self.den.textChanged.connect(self.update_result)
+        self.diag_mode.activated.connect(lambda _i: (self.update_result(), self.changed()))
+        self.working.toggled.connect(lambda _on: self.update_result())
+        self.working.clicked.connect(lambda _c: self.changed())
         self.num.textEdited.connect(lambda _t: self.changed())
         self.den.textEdited.connect(lambda _t: self.changed())
         self.update_result()
@@ -233,6 +324,7 @@ class TransferFunctionSection(Section):
             self.text.setPlainText("Type the numerator and denominator of G(s) on the left.\n\nExample from the book (1.4.5.1):\n"
                                    "  numerator   2s+3\n  denominator s^2+3s+2\nor pick it from Examples.")
             self.plot.set_roots([], [])
+            self.diagram.set_blocks([])
             return
         try:
             num = core.parse_poly(nt)
@@ -248,18 +340,22 @@ class TransferFunctionSection(Section):
             return self.fail(str(e))
         self.analysis = a
         self.msg.setText("")
-        self.text.setPlainText(core.report(a))
+        self.text.setPlainText(core.report(a) if self.working.isChecked() else core.simple_report(a))
+        self.diagram.set_blocks(core.blocks_series(a) if self.diag_mode.currentIndex() == 1 else core.blocks_single(a))
         self.plot.set_roots(a.zeros, a.poles)
 
     def fail(self, why):
         self.msg.setText(why)
         self.text.setPlainText("")
         self.plot.set_roots([], [])
+        self.diagram.set_blocks([])
 
     def to_json(self):
-        return {"num": self.num.text(), "den": self.den.text()}
+        return {"num": self.num.text(), "den": self.den.text(), "diagram": self.diag_mode.currentText(), "working": self.working.isChecked()}
 
     def from_json(self, d):
+        self.diag_mode.setCurrentIndex(max(0, self.diag_mode.findText(d.get("diagram", "Single block"))))
+        self.working.setChecked(bool(d.get("working", False)))
         self.num.setText(d.get("num", ""))
         self.den.setText(d.get("den", ""))
 

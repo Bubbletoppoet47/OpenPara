@@ -253,8 +253,8 @@ def _snap(roots, poly=None):
     return _order(out)
 
 
-def factor_text(roots, var="s"):
-    """Roots -> '(s + 1)(s + 2)²'; a complex pair becomes one quadratic '(s² + 2s + 5)'; a root at zero is 's'."""
+def factor_list(roots):
+    """Roots -> ['(s + 1)', '(s + 2)²']; a complex pair becomes one quadratic '(s² + 2s + 5)'; a root at zero is 's'.  [] for no roots."""
     roots = _snap(roots)
     real = [r for r in roots if r.imag == 0]
     cplx = [r for r in roots if r.imag > 0]
@@ -266,7 +266,12 @@ def factor_text(roots, var="s"):
         b, c = -2 * r.real, abs(r) ** 2
         quad = "s²" + ("" if abs(b) < 1e-12 else f" {'+' if b > 0 else '-'} {fmt(abs(b))}s") + f" {'+' if c >= 0 else '-'} {fmt(abs(c))}"
         pieces.append(f"({quad})" + (SUP.get(m, f"^{m}") if m > 1 else ""))
-    return "".join(pieces) if pieces else "1"
+    return pieces
+
+
+def factor_text(roots, var="s"):
+    """Roots -> '(s + 1)(s + 2)²' ('1' when there are none)."""
+    return "".join(factor_list(roots)) or "1"
 
 
 def fraction_text(prefix, top, bottom):
@@ -402,3 +407,75 @@ def report(a):
         else:
             L.append(f"  Pole {cfmt(p)}{rep_}:  {'at the origin (integrator)' if p == 0 else 'growing exponential'}")
     return "\n".join(L)
+
+
+# --------------------------------------------------------------------------------------------------- the short answer and the block diagram
+def pz_parts(a):
+    """(K text, zero factors text, pole factors text) of the pole-zero form; the zero / pole text is '' when there are none."""
+    k = a.gain
+    ktxt = "" if abs(k - 1) < 1e-12 else ("-" if abs(k + 1) < 1e-12 else fmt(k))
+    return ktxt, "".join(factor_list(a.zeros)), "".join(factor_list(a.poles))
+
+
+_SINGLE = re.compile(r"^-?[\d.e+]*(\([^()]*\)|s)?[²³⁴⁵⁶⁷⁸⁹]?(\^\d+)?$")
+
+
+def _wrap(x):
+    """Brackets around a product of several factors, none around a single factor ('2(s + 1.5)', 's', '(s² + 1)')."""
+    return x if _SINGLE.match(x) else "(" + x + ")"
+
+
+def pz_one_line(a):
+    """K(s + z1)... / ((s + p1)...) on one line."""
+    ktxt, top, bot = pz_parts(a)
+    num = (ktxt + top) or "1"
+    return _wrap(num) + " / " + _wrap(bot) if bot else num
+
+
+def pair_text(p):
+    """-1 + 2j -> '-1 ± 2j';  0 + 1j -> '±1j'."""
+    re_, im = fmt(p.real), fmt(abs(p.imag))
+    return f"±{im}j" if re_ == "0" else f"{re_} ± {im}j"
+
+
+def simple_report(a):
+    """The short answer: G(s) in pole-zero form, zeros, poles, gain, DC gain, stability - and a line only for what needs a warning."""
+    L = ["G(s) = " + pz_one_line(a)]
+    L.append("Zeros: " + (", ".join(cfmt(z) for z in a.zeros) if a.zeros else "none"))
+    L.append("Poles: " + (", ".join(cfmt(p) for p in a.poles) if a.poles else "none"))
+    L.append(f"Gain K: {fmt(a.gain)}")
+    L.append("DC gain G(0): " + ("infinite (pole at s = 0)" if math.isinf(a.dc) else fmt(a.dc)))
+    L.append({"stable": "Stable", "unstable": "Unstable (a pole is in the right half-plane)",
+              "marginally stable": "Marginally stable (a pole is on the imaginary axis)"}[a.stability])
+    for m in a.modes:
+        if m["kind"] == "pair":
+            L.append(f"Poles {pair_text(m['pole'])}: wn = {fmt(m['wn'])} rad/s, zeta = {fmt(m['zeta'])}")
+    if a.cancels:
+        L.append("Pole and zero cancel at " + ", ".join(cfmt(c) for c in a.cancels))
+    if a.kind == "improper":
+        L.append("Improper: the numerator is a higher power of s than the denominator")
+    return "\n".join(L)
+
+
+def _strip(x):
+    """'(s² + 1)' -> 's² + 1': a lone bracketed factor needs no brackets inside a block."""
+    return x[1:-1] if re.fullmatch(r"\([^()]*\)", x) else x
+
+
+def blocks_single(a):
+    """One block holding G(s): [(top, bottom)] with bottom None when there is no denominator."""
+    ktxt, top, bot = pz_parts(a)
+    num = (ktxt + (" " if ktxt not in ("", "-") and top else "") + top) or "1"
+    return [(_strip(num), _strip(bot) if bot else None)]
+
+
+def blocks_series(a):
+    """G(s) as blocks in a row: the gain K, one block per zero factor (s + z), one per pole factor 1 / (s + p).  [(top, bottom)]"""
+    out = []
+    if abs(a.gain - 1) > 1e-12:
+        out.append((fmt(a.gain), None))
+    for f in factor_list(a.zeros):
+        out.append((_strip(f), None))
+    for f in factor_list(a.poles):
+        out.append(("1", _strip(f)))
+    return out or [("1", None)]
