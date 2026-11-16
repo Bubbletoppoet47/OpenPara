@@ -10,11 +10,13 @@ section on the right. Adding a tool = one `Section` class in `controls_tab.py` p
   The short answer: G(s) in pole-zero form on one line, zeros, poles, gain K, DC gain G(0), stable / unstable / marginal; extra lines only
   when they matter (complex pair: wn and zeta; integrator: infinite DC gain; cancelling pole and zero; improper G(s)). "Show the full working"
   adds the polynomial form, how K and G(0) are found, order, relative degree, type and the time constants.
-  A block diagram R(s) -> [G(s)] -> Y(s), as one block (typeset fraction) or as blocks in series (K, one block per zero and pole).
   Step and impulse responses of G(s) as closed-form answers (partial fractions; repeated poles give t*e^(-at), complex poles give
   e^(sigma t)(A cos wt + B sin wt), a pole at the origin gives a ramp, an improper G(s) gives delta(t) terms; a cancelling pole and zero are reduced first).
-  The full working adds Y(s) in partial fractions. A time plot (Step | Impulse picker, final value dashed) sits beside the pole-zero plot.
-  A pole-zero plot. First test: book example 1.4.5.1, G(s) = (2s+3)/(s^2+3s+2): zero -1.5, poles -1 and -2, K = 2, DC gain 1.5.
+  The full working adds Y(s) in partial fractions.
+  The right side is two halves: the text answer on top, and below it one view picked from a dropdown: Pole-zero plot, Block diagram
+  (one block or blocks in series, set on the left), Step response, Impulse response (final value dashed). The chosen view is saved in the file.
+  A new tool later (Bode, Nyquist, root locus) = one view class plus one entry in `TransferFunctionSection.VIEWS`.
+  First test: book example 1.4.5.1, G(s) = (2s+3)/(s^2+3s+2): zero -1.5, poles -1 and -2, K = 2, DC gain 1.5.
 
 ## Files
 * `ctl_core.py` - maths, no Qt (`parse_poly`, `analyze`, `report`, `response_of`).  `controls_tab.py` - the tab.

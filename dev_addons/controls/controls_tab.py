@@ -12,7 +12,7 @@ import numpy as np
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QPainter, QPen
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSplitter,
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSplitter, QStackedWidget,
                              QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 import ctl_core as core
@@ -341,6 +341,7 @@ class Section:
 class TransferFunctionSection(Section):
     key = "transfer_function"
     title = "Transfer function: poles, zeros, gain"
+    VIEWS = ["Pole-zero plot", "Block diagram", "Step response", "Impulse response"]
     EXAMPLES = (("Book 1.4.5.1:  (2s+3) / (s²+3s+2)", "2s+3", "s^2+3s+2"),
                 ("Integrator:  1 / (s(s+1)²)", "1", "s(s+1)^2"),
                 ("Complex poles:  10(s+2) / ((s²+2s+5)(s+3))", "10(s+2)", "(s^2+2s+5)(s+3)"),
@@ -398,26 +399,27 @@ class TransferFunctionSection(Section):
         self.diagram = BlockDiagram()
         self.plot = PoleZeroPlot()
         self.time_plot = TimePlot()
-        self.resp_kind = QComboBox()
-        self.resp_kind.addItems(["Step response", "Impulse response"])
-        tw = QWidget()
-        tl = QVBoxLayout(tw)
-        tl.setContentsMargins(0, 0, 0, 0)
-        tl.addWidget(self.resp_kind)
-        tl.addWidget(self.time_plot, 1)
-        bottom = QSplitter(Qt.Orientation.Horizontal)
-        bottom.addWidget(tw)
-        bottom.addWidget(self.plot)
+        # the bottom half: one view at a time, picked from a dropdown (a new tool later = one more view and one more entry here)
+        self.view = QComboBox()
+        self.view.addItems(self.VIEWS)
+        self.view.setToolTip("What to show in the lower half.")
+        self.stack = QStackedWidget()
+        for w in (self.plot, self.diagram, self.time_plot):            # order matches VIEWS (the two responses share the time plot)
+            self.stack.addWidget(w)
+        bottom = QWidget()
+        bl = QVBoxLayout(bottom)
+        bl.setContentsMargins(0, 2, 0, 0)
+        bl.addWidget(self.view)
+        bl.addWidget(self.stack, 1)
         split.addWidget(self.text)
-        split.addWidget(self.diagram)
         split.addWidget(bottom)
-        split.setSizes([175, 170, 340])
+        split.setSizes([230, 520])
         rl.addWidget(split)
         self.num.textChanged.connect(self.update_result)
         self.den.textChanged.connect(self.update_result)
         self.diag_mode.activated.connect(lambda _i: (self.update_result(), self.changed()))
         self.working.toggled.connect(lambda _on: self.update_result())
-        self.resp_kind.activated.connect(lambda _i: (self.show_time(), self.changed()))
+        self.view.activated.connect(lambda _i: (self.show_view(), self.changed()))
         self.working.clicked.connect(lambda _c: self.changed())
         self.num.textEdited.connect(lambda _t: self.changed())
         self.den.textEdited.connect(lambda _t: self.changed())
@@ -442,6 +444,7 @@ class TransferFunctionSection(Section):
             self.plot.set_roots([], [])
             self.diagram.set_blocks([])
             self.time_plot.set_response(None, "step")
+            self.show_view()
             return
         try:
             num = core.parse_poly(nt)
@@ -460,11 +463,15 @@ class TransferFunctionSection(Section):
         self.text.setPlainText(core.report(a) if self.working.isChecked() else core.simple_report(a))
         self.diagram.set_blocks(core.blocks_series(a) if self.diag_mode.currentIndex() == 1 else core.blocks_single(a))
         self.plot.set_roots(a.zeros, a.poles)
-        self.show_time()
+        self.show_view()
 
-    def show_time(self):
-        kind = "impulse" if self.resp_kind.currentIndex() == 1 else "step"
-        self.time_plot.set_response(core.response_of(self.analysis, kind) if self.analysis else None, kind)
+    def show_view(self):
+        """Show the picked view in the lower half (and feed the time plot when a response is picked)."""
+        i = max(0, self.view.currentIndex())
+        if i >= 2:
+            kind = "impulse" if i == 3 else "step"
+            self.time_plot.set_response(core.response_of(self.analysis, kind) if self.analysis else None, kind)
+        self.stack.setCurrentIndex(min(i, 2))
 
     def fail(self, why):
         self.msg.setText(why)
@@ -475,12 +482,12 @@ class TransferFunctionSection(Section):
 
     def to_json(self):
         return {"num": self.num.text(), "den": self.den.text(), "diagram": self.diag_mode.currentText(), "working": self.working.isChecked(),
-                "response": self.resp_kind.currentText()}
+                "view": self.view.currentText()}
 
     def from_json(self, d):
         self.diag_mode.setCurrentIndex(max(0, self.diag_mode.findText(d.get("diagram", "Single block"))))
         self.working.setChecked(bool(d.get("working", False)))
-        self.resp_kind.setCurrentIndex(max(0, self.resp_kind.findText(d.get("response", "Step response"))))
+        self.view.setCurrentIndex(max(0, self.view.findText(d.get("view", self.VIEWS[0]))))
         self.num.setText(d.get("num", ""))
         self.den.setText(d.get("den", ""))
 
