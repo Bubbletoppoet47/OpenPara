@@ -163,6 +163,10 @@ class FEAStudy(StudyAdapter):
                 continue
             set_widget(s, d["attr"], d["kind"], text, d.get("choices"))
 
+    def mesh_refinement(self):
+        return {"sizes": ["fea.e_h"], "extra": {"fea.cb_auto": "no"} if "fea.cb_auto" in {d["id"] for d in self.params()} else {},
+                "count": "fea.tris", "dim": 2, "outputs": ["fea.status", "fea.umax", "fea.vm", "fea.energy", "fea.tris"], "unit": ""}
+
     # ------------------------------------------------------------------ results
     def case_outputs(self, case, keys):
         fr = case.get("result")

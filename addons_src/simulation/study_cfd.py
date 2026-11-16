@@ -52,6 +52,11 @@ class CFDStudy(StudyAdapter):
                 ("cfd.tris", "Triangles (final mesh)", True)]
         return [{"id": k, "group": "CFD", "label": lab, "numeric": num} for k, lab, num in rows]
 
+    def mesh_refinement(self):
+        ids = {d["id"] for d in self.params()}
+        return {"sizes": ["cfd.e_hb", "cfd.e_hf"], "extra": {"cfd.cb_auto": "no"} if "cfd.cb_auto" in ids else {}, "count": "cfd.tris", "dim": 2,
+                "outputs": ["cfd.status", "cfd.along", "cfd.across", "cfd.pmax", "cfd.tris"], "unit": ""}
+
     def desc(self, pid):
         if not hasattr(self, "_desc"):
             self._desc = {d["id"]: d for d in self.params()}

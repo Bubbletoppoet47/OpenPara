@@ -58,6 +58,23 @@ class StudyAdapter:
     def show(self, case):
         raise NotImplementedError
 
+    def mesh_refinement(self):
+        """None when a mesh refinement study makes no sense here (1D FEA), else
+              {"sizes": [param ids that are element sizes; the first is the main one],
+               "extra": {param id: text} fixed for every level (for example "Auto-refine the mesh": "no"),
+               "count": output id of the number of elements, "dim": 2 or 3,
+               "outputs": [output ids worth recording], "unit": text for the size (mm, ...)}"""
+        return None
+
+    def set_live(self, pid, text):
+        """Puts one input value into the simulation on screen as if the user had typed it (a text box by default)."""
+        d = next((x for x in self.params() if x["id"] == pid), None)
+        w = getattr(self.tab, d.get("attr", ""), None) if d else None
+        if w is None or not hasattr(w, "setText"):
+            raise ValueError(f"The input '{pid}' cannot be set from here.")
+        w.setText(str(text))
+        w.editingFinished.emit()
+
     # --- shared helpers
     def base_state(self):
         """The saved state of the tab without its mesh and result (the starting point of a case)."""

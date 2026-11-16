@@ -13,10 +13,14 @@ import math
 import os
 import pickle
 import re
+import shutil
 
 STUDY_DIR = "study"
 FILE = "study.json"
 CASES = "cases"
+STUDIES = "studies"                          # the studies after the first one live in study/studies/<name>/ ; the first one stays in study/
+INDEX = "index.json"
+FIRST = "Study 1"
 OPS = ["<", "<=", ">", ">="]
 MAX_CASES = 1_000_000                       # not a real limit: only a guard against typing a count that would never finish or fill the memory
 CONFIRM_ABOVE = 2000                         # a table this long is made only after the user confirms
@@ -24,12 +28,66 @@ FLUSH_EVERY = 200                            # during a long run the finished ca
 GEO = "geo."                                  # ids of the parameters that belong to the source part (its dimensions), not to the adapter
 
 
-def study_file(project):
-    return os.path.join(project, STUDY_DIR, FILE)
+def root_of(project, sub=""):
+    """The folder of one study: study/ for the first, study/studies/<sub>/ for the others."""
+    return os.path.join(project, STUDY_DIR, STUDIES, sub) if sub else os.path.join(project, STUDY_DIR)
+
+
+def study_file(project, sub=""):
+    return os.path.join(root_of(project, sub), FILE)
+
+
+def index_file(project):
+    return os.path.join(project, STUDY_DIR, INDEX)
 
 
 def exists(project):
-    return bool(project) and os.path.isfile(study_file(project))
+    return bool(project) and (os.path.isfile(study_file(project)) or os.path.isfile(index_file(project)))
+
+
+def read_index(project):
+    """([{"name", "sub"}], current): the studies of a project (a project from before there were several has just the first one)."""
+    studies, cur = [], 0
+    try:
+        with open(index_file(project), encoding="utf-8") as f:
+            j = json.load(f)
+    except (OSError, ValueError, TypeError):
+        j = None
+    if isinstance(j, dict) and j.get("format") == "openpara-study-index":
+        for x in j.get("studies", []):
+            if isinstance(x, dict) and isinstance(x.get("name"), str) and isinstance(x.get("sub", ""), str):
+                studies.append({"name": x["name"], "sub": x.get("sub", "")})
+        cur = j.get("current", 0)
+    if not any(x["sub"] == "" for x in studies):
+        studies.insert(0, {"name": FIRST, "sub": ""})
+    if not isinstance(cur, int) or not 0 <= cur < len(studies):
+        cur = 0
+    return studies, cur
+
+
+def write_index(project, studies, current):
+    os.makedirs(os.path.join(project, STUDY_DIR), exist_ok=True)
+    tmp = index_file(project) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"format": "openpara-study-index", "version": 1, "studies": studies, "current": current}, f, indent=1)
+    os.replace(tmp, index_file(project))
+
+
+def new_sub(name, studies):
+    """A folder name for a new study: from its name, never one that is taken."""
+    base = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_").lower() or "study"
+    taken = {x["sub"] for x in studies}
+    sub, i = base, 2
+    while sub in taken:
+        sub, i = f"{base}_{i}", i + 1
+    return sub
+
+
+def delete_files(project, sub):
+    """Removes the folder of a study (never the first one: that one can be cleared and renamed, not deleted)."""
+    if not sub:
+        raise ValueError("The first study cannot be deleted.")
+    shutil.rmtree(root_of(project, sub), ignore_errors=True)
 
 
 def split_list(text):
@@ -123,16 +181,18 @@ class StudyData:
         self.heavy = {}               # case index -> the full case (in memory)
         self.unsaved = set()          # case indexes whose pickle is not on disk yet
         self.folder = None
+        self.sub = ""                 # which study of the project this is ("" = the first)
+        self.refine = None            # set for a mesh refinement study: {"sizes": [ids], "count": id, "dim": 2|3, "ratio", "levels", "tol"}
         self.fill = {}                # what the Fill grid / Fill range windows held when they were last closed: {"grid": ..., "range": ...}
 
     # ---------------------------------------------------------------- save / load
     def to_json(self):
         return {"format": "openpara-study", "version": 1, "checked": self.checked, "rows": self.rows, "outputs": self.out_checked,
                 "exit_conds": self.exit_conds, "cases": self.cases, "run_meta": self.run_meta,
-                "fill": self.fill}
+                "fill": self.fill, "refine": self.refine}
 
     def save(self, project):
-        d = os.path.join(project, STUDY_DIR)
+        d = root_of(project, self.sub)
         cd = os.path.join(d, CASES)
         os.makedirs(cd, exist_ok=True)
         keep = set()
@@ -163,9 +223,10 @@ class StudyData:
         self.folder = project
 
     @classmethod
-    def load(cls, project):
+    def load(cls, project, sub=""):
         s = cls()
-        with open(study_file(project), encoding="utf-8") as f:
+        s.sub = sub
+        with open(study_file(project, sub), encoding="utf-8") as f:
             j = json.load(f)
         if j.get("format") != "openpara-study":
             raise ValueError("This is not a parametric study file.")
@@ -176,6 +237,7 @@ class StudyData:
         s.cases = list(j.get("cases", []))
         s.run_meta = j.get("run_meta") or {"params": [], "outputs": [], "unit": None}
         s.fill = dict(j.get("fill") or {})
+        s.refine = dict(j["refine"]) if isinstance(j.get("refine"), dict) else None
         s.folder = project
         return s
 
@@ -186,7 +248,7 @@ class StudyData:
         c = self.cases[i] if 0 <= i < len(self.cases) else None
         if not c or not c.get("file") or not self.folder:
             return None
-        p = os.path.join(self.folder, STUDY_DIR, CASES, c["file"])
+        p = os.path.join(root_of(self.folder, self.sub), CASES, c["file"])
         if not os.path.isfile(p):
             return None
         with open(p, "rb") as f:
@@ -244,3 +306,142 @@ class StudyData:
         if case.get("early_exit") or case.get("early_skipped") or (st and not (st == "ok" or st == "converged")):
             return "warn"
         return ""
+
+
+# ---------------------------------------------------------------------------------------------------------------- mesh refinement
+REFINE_MIN_RATIO, REFINE_MAX_RATIO = 0.2, 0.95
+REFINE_MAX_LEVELS = 12
+
+
+def refine_check(start, ratio, levels):
+    """The numbers of a refinement study, validated: (start, ratio, levels) or ValueError in plain words."""
+    try:
+        start, ratio, levels = float(start), float(ratio), int(levels)
+    except (TypeError, ValueError):
+        raise ValueError("The start size, the factor and the number of levels must be numbers.")
+    if not start > 0:
+        raise ValueError("The start element size must be greater than 0.")
+    if not REFINE_MIN_RATIO <= ratio <= REFINE_MAX_RATIO:
+        raise ValueError(f"The factor per level must be between {REFINE_MIN_RATIO:g} and {REFINE_MAX_RATIO:g} (0.7 makes every level 30% finer).")
+    if not 2 <= levels <= REFINE_MAX_LEVELS:
+        raise ValueError(f"The number of levels must be from 2 to {REFINE_MAX_LEVELS}.")
+    return start, ratio, levels
+
+
+def refinement_rows(sizes, nows, start, ratio, levels, extra=None):
+    """The design-point rows of a refinement study.  `sizes`: the size inputs (ids); the first starts at `start`, the others keep their
+    proportion to it (CFD: body and far-field sizes together).  `nows`: {id: current value text}.  `extra`: {id: text} for columns that are
+    the same in every row (such as 'Auto-refine the mesh' = no)."""
+    start, ratio, levels = refine_check(start, ratio, levels)
+    try:
+        base0 = float(nows[sizes[0]])
+    except (KeyError, ValueError, TypeError):
+        base0 = 0.0
+    rows = []
+    for k in range(levels):
+        row = {}
+        for pid in sizes:
+            if pid == sizes[0]:
+                base = start
+            else:
+                try:
+                    base = float(nows[pid]) * (start / base0 if base0 > 0 else 1.0)
+                except (KeyError, ValueError, TypeError):
+                    raise ValueError("The input '%s' has no number to scale yet." % pid)
+            row[pid] = format(base * ratio ** k, ".4g")
+        row.update(extra or {})
+        rows.append(row)
+    return rows
+
+
+def _num(x):
+    if isinstance(x, bool) or x is None or isinstance(x, str):
+        return None
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def convergence(levels, dim=2, tol=2.0):
+    """How the outputs of a refinement study settle as the mesh gets finer.
+
+    levels: [{"label", "h", "n", "outputs": {output id: number}}], any order (sorted here by the number of elements, coarse to fine).
+    Returns {"levels", "outputs": {id: info}, "recommend": index of the coarsest level that is good enough, or None, "notes", "tol"}.
+    info: values, pct (change from the previous level, in %), order, limit (Richardson extrapolation), verdict, text, idx (the levels it has a value at).
+    """
+    lv = sorted([l for l in levels if _num(l.get("n")) and l["n"] > 0], key=lambda l: l["n"])
+    res = {"levels": lv, "outputs": {}, "recommend": None, "tol": tol, "notes": []}
+    ids = []
+    for l in lv:
+        for k in l.get("outputs", {}):
+            if k not in ids:
+                ids.append(k)
+    for k in ids:
+        pts = [(i, _num(l["outputs"].get(k))) for i, l in enumerate(lv)]
+        pts = [(i, v) for i, v in pts if v is not None]
+        if len(pts) < 2:
+            continue
+        idx = [i for i, _ in pts]
+        vals = [v for _, v in pts]
+        pct = [None]
+        for a, b in zip(vals, vals[1:]):
+            pct.append(0.0 if a == b else ((b - a) / abs(b) * 100.0 if b != 0 else None))
+        info = {"idx": idx, "values": vals, "pct": pct, "order": None, "limit": None, "verdict": "", "text": ""}
+        last = pct[-1]
+        r = (lv[idx[-1]]["n"] / lv[idx[-2]]["n"]) ** (1.0 / dim)
+        d2 = vals[-1] - vals[-2]
+        shrinking = False
+        if len(vals) >= 3:
+            d1 = vals[-2] - vals[-3]
+            if d1 * d2 > 0:
+                shrinking = abs(d2) < 0.9 * abs(d1)
+                if shrinking and r > 1.02:
+                    p = math.log(abs(d1 / d2)) / math.log(r)
+                    if 0.5 <= p <= 4.0 and r ** p > 1.0001:
+                        info["order"] = p
+                        info["limit"] = vals[-1] + d2 / (r ** p - 1.0)
+            elif d1 != 0 and d2 != 0:
+                info["oscillating"] = True
+        small = last is not None and abs(last) <= tol
+        prev_small = len(pct) > 2 and pct[-2] is not None and abs(pct[-2]) <= tol
+        if last is None:
+            info["verdict"], info["text"] = "too few levels", "no relative change (the value is 0)"
+        elif len(vals) == 2:
+            info["verdict"] = "looks converged" if small else "still changing"
+            info["text"] = (f"last change {abs(last):.2g}%" + (" (only two levels: add one to be sure)" if small else ""))
+        elif info.get("oscillating") and not small:
+            info["verdict"], info["text"] = "oscillating", f"goes up and down; last change {abs(last):.2g}%"
+        elif small and (prev_small or shrinking):
+            info["verdict"] = "converged"
+            info["text"] = f"last change {abs(last):.2g}%" + (f", estimated limit {info['limit']:.5g}" if info["limit"] is not None else "")
+        elif small:
+            info["verdict"], info["text"] = "looks converged", f"last change {abs(last):.2g}%, but the change before it was larger"
+        elif d1 * d2 > 0 and not shrinking:
+            info["verdict"], info["text"] = "not converging", f"changes are not getting smaller (last {abs(last):.2g}%)"
+        else:
+            info["verdict"] = "still changing"
+            info["text"] = f"last change {abs(last):.2g}%" + (f", estimated limit {info['limit']:.5g}" if info["limit"] is not None else "")
+        res["outputs"][k] = info
+    judged = [info for info in res["outputs"].values() if info["verdict"] in ("converged", "looks converged")]
+    res["pending"] = [k for k, info in res["outputs"].items() if info["verdict"] in ("still changing", "too few levels")]
+    if judged and not res["pending"]:                      # an output that is still changing means: refine further before choosing a size
+        for lvl in range(len(lv)):
+            ok = True
+            for info in judged:
+                if lvl not in info["idx"]:
+                    ok = False
+                    break
+                pos = info["idx"].index(lvl)
+                later = info["pct"][pos + 1:]
+                if any(x is None or abs(x) > tol for x in later):
+                    ok = False
+                    break
+            if ok:
+                res["recommend"] = lvl
+                break
+    for k, info in res["outputs"].items():
+        if info["verdict"] in ("not converging", "oscillating"):
+            res["notes"].append(k)
+    return res

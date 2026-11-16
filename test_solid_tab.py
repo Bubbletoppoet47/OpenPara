@@ -92,6 +92,10 @@ assert not w2.study_box.isHidden() and w2.b_study.text() == "Create parametric s
 tab = w2.open_study()
 tab.threaded = False
 assert tab is not None and tab.adapter.label == "3D FEA" and w2.b_study.text() == "Open parametric study"
+spec = tab.adapter.mesh_refinement()
+assert spec and spec["sizes"] == ["sf.h"] and spec["dim"] == 3 and spec["count"] == "sf.tets" and tab.act_refine.isEnabled()
+assert tab.new_refinement("Mesh refinement", "10", "0.8", 3) and [r["sf.h"] for r in tab.data.rows] == ["10", "8", "6.4"] and tab.data.refine["dim"] == 3
+assert tab.switch_study(0) and tab.data.refine is None
 dd = tab.desc
 geo = next(k for k in dd if k.startswith("geo.") and dd[k]["label"].startswith("Part: D1"))
 assert "sf.mat.E" in dd and "sf.h" in dd and "sf.load0.fx" in dd and dd[geo]["now"] in ("200", "200.0"), (list(dd)[:12], dd[geo]["now"])

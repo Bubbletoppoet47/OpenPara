@@ -23,6 +23,11 @@ ad = t.study_adapter()
 assert ad.ready() is not None
 t.set_model(m, "square")
 assert ad.ready() is None and ad.key == "cfd"
+spec = ad.mesh_refinement()
+assert spec and spec["sizes"] == ["cfd.e_hb", "cfd.e_hf"] and spec["dim"] == 2 and spec["count"] == "cfd.tris" and spec["extra"].get("cfd.cb_auto") == "no"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "addons_src", "parametric")); import study_core as _core
+_r = _core.refinement_rows(spec["sizes"], {"cfd.e_hb": "3", "cfd.e_hf": "12"}, "3", "0.5", 3, spec["extra"])
+assert [x["cfd.e_hb"] for x in _r] == ["3", "1.5", "0.75"] and [x["cfd.e_hf"] for x in _r] == ["12", "6", "3"], "body and far-field sizes scale together"
 # a coarse, short case
 t.e_hb.setText("3"); t.e_hf.setText("12"); t.e_steps.setText("40"); t.cb_until.setChecked(False); t.cb_auto.setChecked(False)
 idx = t.turb.findText("Laminar") if hasattr(t.turb, "findText") else -1

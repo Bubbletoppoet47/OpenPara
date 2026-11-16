@@ -16,11 +16,13 @@ import queue as _queue
 import threading
 import traceback
 
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor
+import math
+
+from PyQt6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHeaderView,
-                             QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox, QSplitter,
-                             QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                             QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
+                             QSpinBox, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import study_core as core
 
@@ -85,6 +87,228 @@ class CaseWorker(QThread):
         self.all_done.emit(stopped)
 
 
+class ConvergencePlot(QWidget):
+    """One output against the number of elements (log scale): the values, the estimated limit (dashed) and the level that is good enough (ring)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(280, 190)
+        self.xs, self.ys, self.limit, self.pick, self.title = [], [], None, None, ""
+
+    def set_data(self, xs, ys, limit=None, pick=None, title=""):
+        self.xs, self.ys, self.limit, self.pick, self.title = list(xs), list(ys), limit, pick, title
+        self.update()
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        try:
+            self.draw(p)
+        except Exception:                      # noqa: BLE001 - an error escaping a paint event would close the whole program
+            pass
+        finally:
+            p.end()
+
+    def draw(self, p):
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        p.fillRect(0, 0, w, h, QColor("#ffffff"))
+        f = QFont("Segoe UI")
+        f.setPixelSize(11)
+        p.setFont(f)
+        r = QRectF(64, 22, w - 80, h - 54)
+        if r.width() < 40 or r.height() < 40:
+            return
+        if len(self.xs) < 2:
+            p.setPen(QColor("#7a8696"))
+            p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "Run the study to see the convergence.")
+            return
+        lx = [math.log10(x) for x in self.xs]
+        x0, x1 = min(lx), max(lx)
+        if x1 - x0 < 1e-9:
+            x0, x1 = x0 - 0.5, x1 + 0.5
+        vals = list(self.ys) + ([self.limit] if self.limit is not None else [])
+        lo, hi = min(vals), max(vals)
+        if hi - lo < 1e-12 * max(1.0, abs(hi)):
+            lo, hi = lo - 1.0, hi + 1.0
+        pad = 0.08 * (hi - lo)
+        lo, hi = lo - pad, hi + pad
+
+        def X(v):
+            return r.left() + (math.log10(v) - x0) / (x1 - x0) * r.width()
+
+        def Y(v):
+            return r.bottom() - (v - lo) / (hi - lo) * r.height()
+        p.setPen(QPen(QColor("#9aa6b8"), 1))
+        p.drawRect(r)
+        p.setPen(QColor("#4a5668"))
+        for i in range(5):
+            v = lo + (hi - lo) * i / 4
+            p.drawText(QRectF(0, Y(v) - 7, r.left() - 5, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, format(v, ".4g"))
+            p.setPen(QPen(QColor("#e6eaf0"), 1))
+            p.drawLine(QPointF(r.left(), Y(v)), QPointF(r.right(), Y(v)))
+            p.setPen(QColor("#4a5668"))
+        for x in self.xs:
+            p.drawText(QRectF(X(x) - 32, r.bottom() + 3, 64, 14), Qt.AlignmentFlag.AlignCenter, format(x, ".4g"))
+        p.drawText(QRectF(r.left(), h - 16, r.width(), 14), Qt.AlignmentFlag.AlignCenter, "number of elements (log scale)")
+        p.drawText(QRectF(r.left(), 2, r.width(), 16), Qt.AlignmentFlag.AlignLeft, self.title)
+        if self.limit is not None:
+            p.setPen(QPen(QColor("#e76f51"), 1, Qt.PenStyle.DashLine))
+            p.drawLine(QPointF(r.left(), Y(self.limit)), QPointF(r.right(), Y(self.limit)))
+            p.drawText(QRectF(r.right() - 190, Y(self.limit) - 16, 186, 14), Qt.AlignmentFlag.AlignRight, "estimated limit " + format(self.limit, ".5g"))
+        p.setPen(QPen(QColor("#1f77b4"), 2))
+        pts = [QPointF(X(x), Y(y)) for x, y in zip(self.xs, self.ys)]
+        for a, b in zip(pts, pts[1:]):
+            p.drawLine(a, b)
+        p.setBrush(QColor("#1f77b4"))
+        for q in pts:
+            p.drawEllipse(q, 3.5, 3.5)
+        if self.pick is not None and 0 <= self.pick < len(pts):
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor("#2a9d4a"), 2))
+            p.drawEllipse(pts[self.pick], 9, 9)
+
+
+class ConvergencePanel(QWidget):
+    """The Convergence tab of a refinement study: a plot of one output, the table of levels, the verdicts and the 'use this size' button."""
+
+    def __init__(self, use_cb):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 6, 6, 6)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Output:"))
+        self.pickbox = QComboBox()
+        self.pickbox.activated.connect(lambda _i: self.show_output())
+        row.addWidget(self.pickbox, 1)
+        lay.addLayout(row)
+        split = QSplitter(Qt.Orientation.Horizontal)
+        self.plot = ConvergencePlot()
+        self.table = QTableWidget(0, 0)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        split.addWidget(self.plot)
+        split.addWidget(self.table)
+        split.setSizes([360, 420])
+        lay.addWidget(split, 1)
+        self.verdicts = QPlainTextEdit()
+        self.verdicts.setReadOnly(True)
+        self.verdicts.setMaximumHeight(110)
+        lay.addWidget(self.verdicts)
+        row = QHBoxLayout()
+        self.summary = QLabel("")
+        self.summary.setWordWrap(True)
+        self.summary.setStyleSheet("font-weight:bold;")
+        row.addWidget(self.summary, 1)
+        self.use = QPushButton("Use this element size in the simulation")
+        self.use.setToolTip("Puts the recommended element size into the simulation on screen. Then make a new study for the real analysis.")
+        self.use.clicked.connect(lambda _c=False: use_cb())
+        row.addWidget(self.use)
+        lay.addLayout(row)
+        self.res = None
+        self.labels = {}
+        self.set_result(None, {})
+
+    def set_result(self, res, labels, sizes_text=""):
+        self.res, self.labels = res, labels
+        self.pickbox.clear()
+        self.table.clear()
+        self.table.setRowCount(0)
+        self.table.setColumnCount(0)
+        self.use.setEnabled(False)
+        if not res or not res["levels"]:
+            self.plot.set_data([], [])
+            self.verdicts.setPlainText("")
+            self.summary.setText("No results yet. Run the study: every level is one solve with a finer mesh.")
+            return
+        for k, info in res["outputs"].items():
+            self.pickbox.addItem(labels.get(k, k), k)
+        lines = []
+        for k, info in res["outputs"].items():
+            lines.append(f"{labels.get(k, k)}: {info['verdict']} ({info['text']})")
+        for k in res["notes"]:
+            lines.append(f"Note on {labels.get(k, k)}: if this is a stress at a point load, a sharp corner or a fixed edge, it never converges (the exact "
+                         "value there is infinite). Read the stress away from that spot, or use a probe average.")
+        if res.get("pending"):
+            lines.append("Still changing: add finer levels (a smaller factor or more levels) before choosing a size.")
+        self.verdicts.setPlainText("\n".join(lines))
+        rec = res["recommend"]
+        if rec is not None:
+            lv = res["levels"][rec]
+            self.summary.setText(f"Good enough: level {lv['label']} ({sizes_text or 'size ' + format(lv['h'], '.4g')}, {lv['n']:.0f} elements): every output "
+                                 f"changes by less than {res['tol']:g}% from here on.")
+            self.use.setEnabled(True)
+        elif res.get("pending"):
+            self.summary.setText("Not converged yet: the finest levels still change the results by more than %g%%." % res["tol"])
+        else:
+            self.summary.setText("No size recommended: " + ("some outputs do not settle." if res["notes"] else "too few levels."))
+        self.show_output()
+
+    def show_output(self):
+        res = self.res
+        if not res or self.pickbox.count() == 0:
+            return
+        k = self.pickbox.currentData() or self.pickbox.itemData(0)
+        info = res["outputs"].get(k)
+        if info is None:
+            return
+        lv = res["levels"]
+        self.plot.set_data([lv[i]["n"] for i in info["idx"]], info["values"], info["limit"],
+                           info["idx"].index(res["recommend"]) if res["recommend"] in info["idx"] else None, self.labels.get(k, k))
+        heads = ["Level", "Element size", "Elements", self.labels.get(k, k), "Change from previous (%)"]
+        self.table.setColumnCount(len(heads))
+        self.table.setHorizontalHeaderLabels(heads)
+        self.table.setRowCount(len(info["idx"]))
+        for r_, (i, v, pc) in enumerate(zip(info["idx"], info["values"], info["pct"])):
+            cells = [str(lv[i]["label"]), format(lv[i]["h"], ".4g") if lv[i].get("h") else "", format(lv[i]["n"], ".0f"), format(v, ".6g"),
+                     "" if pc is None else format(pc, "+.3g")]
+            for c_, txt in enumerate(cells):
+                it = QTableWidgetItem(txt)
+                if res["recommend"] == i:
+                    it.setBackground(QColor("#d6f0dc"))
+                self.table.setItem(r_, c_, it)
+        self.table.resizeColumnsToContents()
+
+
+class RefineDialog(QDialog):
+    """New mesh refinement study: the start size, the factor per level and the number of levels."""
+
+    def __init__(self, parent, start, unit):
+        super().__init__(parent)
+        self.setWindowTitle("New mesh refinement study")
+        lay = QVBoxLayout(self)
+        intro = QLabel("The same analysis is solved on finer and finer meshes. The study then shows how the results settle, so you can pick an "
+                       "element size that is fine enough.")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+        form = QFormLayout()
+        self.name = QLineEdit("Mesh refinement")
+        self.start = QLineEdit(start)
+        self.start.setPlaceholderText("coarsest element size")
+        self.factor = QLineEdit("0.7")
+        self.levels = QSpinBox()
+        self.levels.setRange(2, core.REFINE_MAX_LEVELS)
+        self.levels.setValue(5)
+        form.addRow("Name", self.name)
+        form.addRow("Coarsest element size" + (f" ({unit})" if unit else ""), self.start)
+        form.addRow("Size factor per level", self.factor)
+        form.addRow("Number of levels", self.levels)
+        lay.addLayout(form)
+        hint = QLabel("A factor of 0.7 makes every level 30% finer (about 2x the elements in 2D, 3x in 3D). The size is multiplied by the factor at every level.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#606060;")
+        lay.addWidget(hint)
+        self.msg = QLabel("")
+        self.msg.setStyleSheet("color:#b3261e;")
+        self.msg.setWordWrap(True)
+        lay.addWidget(self.msg)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def values(self):
+        return self.name.text().strip() or "Mesh refinement", self.start.text().strip(), self.factor.text().strip(), self.levels.value()
+
+
 class StudyTab(QWidget):
     def __init__(self, sw, threaded=True):
         super().__init__()
@@ -92,7 +316,8 @@ class StudyTab(QWidget):
         self.kind = "study"                   # (the program window picks the tab's icon by it)
         self.threaded = threaded
         self.path_ = sw.path                  # (not .path: the shell finds the simulation's tab by that name)
-        self.data = core.StudyData.load(sw.path) if core.exists(sw.path) else core.StudyData()
+        self.studies, self.cur = core.read_index(sw.path) if core.exists(sw.path) else ([{"name": core.FIRST, "sub": ""}], 0)
+        self.data = self.load_data(self.studies[self.cur]["sub"])
         self.desc = {}
         self.checked_items = {}
         self.adapter = None
@@ -123,6 +348,32 @@ class StudyTab(QWidget):
         self.b_sim.setToolTip("Shows the simulation tab this study belongs to.")
         self.b_sim.clicked.connect(self.goto_sim)
         topbar.addWidget(self.b_sim)
+
+        # ---- the studies of this project: one at a time (an extra row under the bar)
+        bar2 = QHBoxLayout()
+        bar2.setContentsMargins(6, 0, 6, 4)
+        bar2.setSpacing(6)
+        bar2.addWidget(QLabel("Study:"))
+        self.pick = QComboBox()
+        self.pick.setMinimumWidth(180)
+        self.pick.setToolTip("A project can hold several studies, for example a mesh refinement study and then the real analysis.")
+        self.pick.activated.connect(lambda i: self.switch_study(i))
+        bar2.addWidget(self.pick)
+        self.b_new = QPushButton("New study")
+        menu = QMenu(self.b_new)
+        menu.addAction("Empty study...").triggered.connect(lambda _c=False: self.ask_new_study())
+        self.act_refine = menu.addAction("Mesh refinement study...")
+        self.act_refine.triggered.connect(lambda _c=False: self.ask_refinement())
+        menu.addAction("Copy of this study...").triggered.connect(lambda _c=False: self.ask_copy_study())
+        self.b_new.setMenu(menu)
+        bar2.addWidget(self.b_new)
+        self.b_ren = QPushButton("Rename")
+        self.b_ren.clicked.connect(lambda _c=False: self.ask_rename_study())
+        bar2.addWidget(self.b_ren)
+        self.b_del = QPushButton("Delete")
+        self.b_del.clicked.connect(lambda _c=False: self.ask_delete_study())
+        bar2.addWidget(self.b_del)
+        bar2.addStretch(1)
 
         # ---- the left panel: three numbered steps (they fold), and the Run bar that is always in view
         left = QWidget()
@@ -273,15 +524,19 @@ class StudyTab(QWidget):
         self.b_back.clicked.connect(self.back_to_own)
         row.addWidget(self.b_back)
         b = QPushButton("Export table (CSV)...")
-        b.clicked.connect(self.export_csv)
+        b.clicked.connect(lambda _c=False: self.export_csv())            # (a direct connection hands the button's "checked" False in as the file name)
         row.addWidget(b)
         self.b_clear = QPushButton("Clear results")
         self.b_clear.clicked.connect(self.clear_results)
         row.addWidget(self.b_clear)
         row.addStretch(1)
         bl_.addLayout(row)
+        self.conv = ConvergencePanel(self.use_size)
+        self.tabs_bottom = QTabWidget()
+        self.tabs_bottom.addTab(bottom, "Results")
+        self.tabs_bottom.addTab(self.conv, "Convergence")
         right.addWidget(top)
-        right.addWidget(bottom)
+        right.addWidget(self.tabs_bottom)
         right.setStretchFactor(0, 1)
         right.setStretchFactor(1, 1)
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -295,12 +550,15 @@ class StudyTab(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         outer.addLayout(topbar)
+        outer.addLayout(bar2)
         outer.addWidget(split, 1)
+        self.fill_picker()
 
         self.refresh_params()
         self.fill_exit_table()
         self.rebuild_design()
         self.rebuild_results()
+        self.refresh_convergence()
         if self.data.cases:
             self.case_lbl.setText("Results of the last run, loaded from the project. Click a row to show it.")
 
@@ -400,6 +658,8 @@ class StudyTab(QWidget):
             self.building = False
         self.rebuild_design()
         self.fill_exit_table()
+        if hasattr(self, "pick"):
+            self.fill_picker()
 
     def param_toggled(self, item, col):
         if self.building or col != 0:
@@ -828,7 +1088,7 @@ class StudyTab(QWidget):
         w.queue.put(spec)
 
     def set_busy(self, on):
-        for w in (self.b_all, self.b_sel, self.b_cur):
+        for w in (self.b_all, self.b_sel, self.b_cur, self.pick, self.b_new, self.b_ren, self.b_del):
             w.setEnabled(not on)
         self.b_stop.setEnabled(on)
         self.tab().setEnabled(not on)                  # nothing else may use the mesher or the solvers during a batch
@@ -923,6 +1183,8 @@ class StudyTab(QWidget):
             t.resizeColumnsToContents()
         finally:
             t.setUpdatesEnabled(True)
+        if hasattr(self, "conv"):
+            self.refresh_convergence()
 
     def append_result(self, i):
         """Adds the row of case i to the table (during a run: the work per case stays the same however many cases there are)."""
@@ -984,6 +1246,8 @@ class StudyTab(QWidget):
         self.rebuild_results()
 
     def export_csv(self, path=None):
+        if not isinstance(path, str):
+            path = None
         if not self.data.cases:
             QMessageBox.information(self, "Export", "No results yet.")
             return False
@@ -994,11 +1258,238 @@ class StudyTab(QWidget):
         self.data.write_csv(path)
         return True
 
+    # ------------------------------------------------------------------ several studies in one project
+    def load_data(self, sub):
+        if os.path.isfile(core.study_file(self.sw.path, sub)):
+            return core.StudyData.load(self.sw.path, sub)
+        d = core.StudyData()
+        d.sub = sub
+        return d
+
+    def fill_picker(self):
+        self.pick.blockSignals(True)
+        self.pick.clear()
+        for x in self.studies:
+            self.pick.addItem(x["name"])
+        self.pick.setCurrentIndex(self.cur)
+        self.pick.blockSignals(False)
+        self.b_del.setEnabled(bool(self.studies[self.cur]["sub"]) and not self.running())
+        self.b_del.setToolTip("" if self.studies[self.cur]["sub"] else "The first study cannot be deleted (it can be renamed and its results cleared).")
+        spec = self.adapter.mesh_refinement() if self.adapter is not None else None
+        self.act_refine.setEnabled(spec is not None)
+        self.act_refine.setToolTip("" if spec is not None else "Not available for this kind of simulation (it has no mesh).")
+
+    def adopt(self, data):
+        """Makes `data` the study on screen: every table is rebuilt from it."""
+        self.data = data
+        self.own_state = None
+        self.refresh_params()
+        self.rebuild_results()
+        self.case_lbl.setText("Results of this study, loaded from the project. Click a row to show it." if self.data.cases else "")
+        self.fill_picker()
+
+    def switch_study(self, i):
+        if self.running() or not 0 <= i < len(self.studies) or i == self.cur:
+            self.fill_picker()
+            return False
+        if self.own_state is not None:
+            self.back_to_own()
+        self.save()
+        self.cur = i
+        self.adopt(self.load_data(self.studies[i]["sub"]))
+        core.write_index(self.sw.path, self.studies, self.cur)
+        return True
+
+    def add_study(self, name, data):
+        """Saves the study on screen, makes `data` a new study called `name` and shows it."""
+        if self.running():
+            return False
+        if self.own_state is not None:
+            self.back_to_own()
+        self.save()
+        data.sub = core.new_sub(name, self.studies)
+        self.studies.append({"name": name, "sub": data.sub})
+        self.cur = len(self.studies) - 1
+        self.adopt(data)
+        self.mark()
+        self.save()
+        return True
+
+    def unique_name(self, base):
+        names = {x["name"] for x in self.studies}
+        name, i = base, 2
+        while name in names:
+            name, i = f"{base} {i}", i + 1
+        return name
+
+    def ask_new_study(self):
+        name, ok = QInputDialog.getText(self, "New study", "Name:", text=self.unique_name(f"Study {len(self.studies) + 1}"))
+        if ok and name.strip():
+            self.new_empty(name.strip())
+
+    def new_empty(self, name):
+        d = core.StudyData()
+        d.checked, d.rows = [], [{}]
+        return self.add_study(self.unique_name(name), d)
+
+    def ask_copy_study(self):
+        name, ok = QInputDialog.getText(self, "Copy of this study", "Name:", text=self.unique_name(self.studies[self.cur]["name"] + " copy"))
+        if ok and name.strip():
+            self.copy_study(name.strip())
+
+    def copy_study(self, name):
+        """The inputs, rows, outputs and conditions of this study, without its results."""
+        src = self.data
+        d = core.StudyData()
+        d.checked, d.rows = list(src.checked), [dict(r) for r in src.rows]
+        d.out_checked, d.exit_conds = list(src.out_checked), [dict(c) for c in src.exit_conds]
+        d.refine = dict(src.refine) if src.refine else None
+        return self.add_study(self.unique_name(name), d)
+
+    def ask_rename_study(self):
+        name, ok = QInputDialog.getText(self, "Rename study", "Name:", text=self.studies[self.cur]["name"])
+        if ok and name.strip():
+            self.rename_study(name.strip())
+
+    def rename_study(self, name):
+        if any(x["name"] == name and i != self.cur for i, x in enumerate(self.studies)):
+            QMessageBox.information(self, "Rename study", "Another study already has that name.")
+            return False
+        self.studies[self.cur]["name"] = name
+        self.mark()
+        self.fill_picker()
+        return True
+
+    def ask_delete_study(self):
+        x = self.studies[self.cur]
+        if not x["sub"] or self.running():
+            return
+        if QMessageBox.question(self, "Delete study", f"Delete the study '{x['name']}' with all its results? This cannot be undone."
+                                ) != QMessageBox.StandardButton.Yes:
+            return
+        self.delete_study()
+
+    def delete_study(self):
+        x = self.studies[self.cur]
+        if not x["sub"] or self.running():
+            return False
+        core.delete_files(self.sw.path, x["sub"])
+        del self.studies[self.cur]
+        self.cur = 0
+        self.adopt(self.load_data(self.studies[0]["sub"]))
+        self.mark()
+        self.save()
+        return True
+
+    # ------------------------------------------------------------------ mesh refinement
+    def refinement_spec(self):
+        return self.adapter.mesh_refinement() if self.adapter is not None else None
+
+    def ask_refinement(self):
+        spec = self.refinement_spec()
+        if spec is None:
+            QMessageBox.information(self, "Mesh refinement", "A mesh refinement study is not available for this simulation.")
+            return
+        why = self.adapter.ready()
+        if why:
+            QMessageBox.information(self, "Mesh refinement", why)
+            return
+        now = self.now(spec["sizes"][0])
+        try:
+            start = now if float(now) > 0 else ""
+        except ValueError:
+            start = ""
+        dlg = RefineDialog(self, start, spec.get("unit", ""))
+        while True:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            name, st, fac, lev = dlg.values()
+            try:
+                self.new_refinement(name, st, fac, lev)
+                return
+            except ValueError as ex:
+                dlg.msg.setText(str(ex))
+
+    def new_refinement(self, name, start, ratio, levels):
+        """Makes a mesh refinement study: the rows, the inputs, the outputs and the convergence settings.  ValueError says what is wrong."""
+        spec = self.refinement_spec()
+        if spec is None:
+            raise ValueError("A mesh refinement study is not available for this simulation.")
+        self.refresh_params()
+        sizes = spec["sizes"]
+        nows = {p: self.now(p) for p in sizes}
+        rows = core.refinement_rows(sizes, nows, start, ratio, levels, spec.get("extra"))
+        st, ra, lv = core.refine_check(start, ratio, levels)
+        d = core.StudyData()
+        d.checked = [p for p in sizes + list(spec.get("extra", {})) if p in self.desc]
+        d.rows = [{p: r[p] for p in d.checked} for r in rows]
+        have = {o["id"] for o in self.outs}
+        d.out_checked = [o for o in spec["outputs"] if o in have]
+        d.refine = {"sizes": list(sizes), "count": spec["count"], "dim": spec["dim"], "ratio": ra, "levels": lv, "tol": 2.0}
+        return self.add_study(self.unique_name(name or "Mesh refinement"), d)
+
+    def refinement_levels(self):
+        """[{"label", "h", "n", "outputs"}] of the finished cases of a refinement study."""
+        rf = self.data.refine
+        out = []
+        if not rf:
+            return out
+        for c in self.data.cases:
+            if c.get("status") not in ("ok", "converged") or c.get("early_skipped"):
+                continue
+            try:
+                h = float(c["values"].get(rf["sizes"][0]))
+            except (TypeError, ValueError):
+                continue
+            n = c.get("outputs", {}).get(rf["count"])
+            if not isinstance(n, (int, float)) or n <= 0:
+                n = (1.0 / h) ** rf["dim"] if h > 0 else None
+            out.append({"label": c["label"], "h": h, "n": n, "outputs": {k: v for k, v in c.get("outputs", {}).items() if k != rf["count"] or True}})
+        return out
+
+    def refresh_convergence(self):
+        rf = self.data.refine
+        idx = self.tabs_bottom.indexOf(self.conv)
+        self.tabs_bottom.setTabVisible(idx, bool(rf))
+        if not rf:
+            self.conv.set_result(None, {})
+            self.conv.res = None
+            return
+        res = core.convergence(self.refinement_levels(), dim=rf.get("dim", 2), tol=float(rf.get("tol", 2.0)))
+        labels = dict(self.data.run_meta.get("outputs", []))
+        res["outputs"] = {k: v for k, v in res["outputs"].items() if k != rf["count"]}
+        res["notes"] = [k for k in res["notes"] if k != rf["count"]]
+        res["pending"] = [k for k in res.get("pending", []) if k != rf["count"]]
+        self.conv.set_result(res, labels)
+
+    def use_size(self):
+        """The recommended element size goes into the simulation on screen."""
+        res = self.conv.res
+        rf = self.data.refine
+        if not res or not rf or res["recommend"] is None:
+            return False
+        lv = res["levels"][res["recommend"]]
+        case = next((c for c in self.data.cases if str(c["label"]) == str(lv["label"])), None)
+        if case is None:
+            return False
+        try:
+            for pid in rf["sizes"]:
+                if pid in case["values"]:
+                    self.adapter.set_live(pid, case["values"][pid])
+        except ValueError as ex:
+            QMessageBox.information(self, "Use this element size", str(ex))
+            return False
+        shown = ", ".join(f"{self.desc[p]['label']} = {case['values'][p]}" for p in rf["sizes"] if p in case["values"] and p in self.desc)
+        self.prog.setText(f"The simulation now uses {shown}. Make a new study (New study > Empty) for the real analysis.")
+        self.refresh_params()
+        return True
+
     # ------------------------------------------------------------------ save
     def save(self, as_new=False):
         if not self.sw.path:
             return False
         self.data.save(self.sw.path)
+        core.write_index(self.sw.path, self.studies, self.cur)
         self.dirty = False
         return True
 

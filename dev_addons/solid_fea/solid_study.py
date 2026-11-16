@@ -46,6 +46,19 @@ class SolidStudy(StudyAdapter):
                 ("sf.mass", "Mass (kg)", True), ("sf.volume", "Volume (mm3)", True), ("sf.tets", "Tetrahedra", True), ("sf.nodes", "Nodes", True)]
         return [{"id": k, "group": "3D FEA", "label": lab, "numeric": n} for k, lab, n in rows]
 
+    def mesh_refinement(self):
+        return {"sizes": ["sf.h"], "extra": {}, "count": "sf.tets", "dim": 3, "outputs": ["sf.status", "sf.umax", "sf.vm", "sf.energy", "sf.tets", "sf.nodes"],
+                "unit": "mm"}
+
+    def set_live(self, pid, text):
+        """The element size goes into the window's box in the program's units (the study works in mm)."""
+        if pid != "sf.h":
+            raise ValueError(f"The input '{pid}' cannot be set from here.")
+        import sys
+        mod = sys.modules[type(self.tab).__module__]
+        self.tab.e_h.setText(format(mod.l_out(float(text)), ".8g"))
+        self.tab.e_h.editingFinished.emit()
+
     def apply(self, setup, values):
         known = {d["id"] for d in self.params()}
         for pid, text in values.items():
