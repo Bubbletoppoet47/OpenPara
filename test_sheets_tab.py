@@ -67,7 +67,7 @@ def close(a, b, tol=1e-9):
 # ================================================================ the window
 t = fresh()
 g, wb = t.grid, t.wb
-assert [t.ribbon.tabText(i) for i in range(t.ribbon.count())] == ["Home", "Data", "Charts", "Engineering"]
+assert [t.ribbon.tabText(i) for i in range(t.ribbon.count())] == ["Home", "Data", "Charts", "Engineering", "View"]
 assert t.title() == "Sheets" and not t.is_dirty() and t.can_close()
 std_buttons = [k for k in t.act if k.startswith("std_")]
 assert "std_aisi-s100-16" in std_buttons and "std_select" in std_buttons
@@ -354,12 +354,9 @@ t2.chart_new()
 assert len(g2.sheet_obj().charts) == 2 and g2.sheet_obj().charts[1]["id"] != ch["id"]
 t2.chart_copy(ch["id"])
 assert len(g2.sheet_obj().charts) == 3
-t2.chart_edit(ch["id"])
-ed = t2.dialogs[-1]
-assert isinstance(ed, D.ChartDialog)
-got, msg = ed.collect()
-assert not msg and got["series"] and got["x"] == ch["x"], msg
-ed.ok()
+t2.chart_edit(ch["id"])                                                                 # the panel on the right opens for the chart
+assert t2.panel_open() and t2.panel.chart is ch and not t2.panel.isHidden() and t2.panel.heading.text().startswith("Chart")
+assert t2.panel.data_range.text() == ch["data"]["range"] and len(t2.panel.rows) == 2 and t2.panel.xrange.text() == ch["x"]
 for f in g2.frames.values():
     f.redraw()
 app.processEvents()
@@ -376,8 +373,9 @@ assert len(g2.sheet_obj().charts) == 2 and ch["id"] not in g2.frames
 g2.select(20, 20)
 for c_ in list(g2.sheet_obj().charts):
     g2.delete_chart(c_["id"])
-t2.chart_new()
-assert g2.sheet_obj().charts == [] and "Select the cells" in t2.status.text()                          # nothing to plot: say what to do
+t2.chart_new()                                                                        # nothing to plot: an empty chart, and the panel waits for cells
+assert len(g2.sheet_obj().charts) == 1 and g2.sheet_obj().charts[0]["series"] == [] and t2.panel_open() and t2.panel.picking()
+assert "Select its cells" in t2.status.text()
 for d in list(t2.dialogs):
     d.close()
 

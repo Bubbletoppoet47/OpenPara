@@ -3,7 +3,7 @@ sh_dialogs.py - the windows of Sheets:
 
     FunctionArgsDialog   Excel's "Function Arguments": one box per argument (name, units, a short hint), the value of each box and the result at the bottom
     StandardsBrowser     the standards as a tree (standard > connections > screws / bolts / welds > equation) with a search box and a detail pane
-    ChartDialog          insert / edit a chart: ranges, series with left / right axis, axes, limit lines, shaded zones, notes
+    ColorButton, RowTable    small parts the chart panel (sh_panel.py) uses: a colour button, an editable table with Add / Remove
     StudyImportDialog    pick a finished parametric study to bring in as a block of cells
     FormatDialog, PasteSpecialDialog, NamesDialog
 
@@ -11,14 +11,13 @@ The windows that need to read cells (the arguments and chart windows) stay open 
 """
 import os
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
-from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
                              QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QRadioButton,
-                             QScrollArea, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                             QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import sh_book as B
-import sh_chart
 import sh_engine as E
 import sh_fmt
 import sh_std
@@ -73,12 +72,18 @@ def norm_value(wb, text, sheet):
     p = wb.parse_range(t, sheet)
     if p is not None and (p[1], p[2]) == (p[3], p[4]):
         return f"{E.quote_sheet(p[0])}!${E.col_letter(p[2])}${p[1]}"
-    return t if wb.evaluate(t if t.startswith("=") else "=" + t, sheet) is not None else None
+    r = wb.evaluate(t if t.startswith("=") else "=" + t, sheet)
+    return t if isinstance(r, float) and r == r else None                                   # (a formula that gives a number)
+
+
+def rect_text(sheet, rect):
+    """A block of cells as text with its sheet: 'Sheet1'!B2:C9 (one cell: 'Sheet1'!B2)."""
+    r1, c1, r2, c2 = rect
+    return f"{E.quote_sheet(sheet)}!{E.addr(r1, c1)}" + (f":{E.addr(r2, c2)}" if (r1, c1) != (r2, c2) else "")
 
 
 def selection_range(grid):
-    r1, c1, r2, c2 = grid.sel()
-    return f"{E.quote_sheet(grid.sheet)}!{E.addr(r1, c1)}" + (f":{E.addr(r2, c2)}" if (r1, c1) != (r2, c2) else "")
+    return rect_text(grid.sheet, grid.sel())
 
 
 def split_call(text):
@@ -524,6 +529,8 @@ class StandardsBrowser(QDialog):
 
 # ------------------------------------------------------------------------------------------------------------------ charts
 class ColorButton(QPushButton):
+    picked = pyqtSignal(str)
+
     def __init__(self, color):
         super().__init__()
         self.color = color
@@ -539,10 +546,13 @@ class ColorButton(QPushButton):
         if c.isValid():
             self.color = c.name()
             self.paint()
+            self.picked.emit(self.color)
 
 
 class RowTable(QWidget):
     """A small editable table with Add / Remove buttons.  columns: [(title, kind, options)] with kind text | combo | color."""
+
+    changed = pyqtSignal()                       # a cell, a choice or a colour was changed, or a row added or removed
 
     def __init__(self, columns, new_row, add_text="Add", parent=None):
         super().__init__(parent)
@@ -557,10 +567,11 @@ class RowTable(QWidget):
         for i, c in enumerate(columns):
             if c[1] == "text" and c[2] == "wide":
                 self.t.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
+        self.t.itemChanged.connect(lambda _it: self.changed.emit())
         lay.addWidget(self.t)
         row = QHBoxLayout()
         b_add = QPushButton(add_text)
-        b_add.clicked.connect(lambda _c=False: self.add(self.new_row()))
+        b_add.clicked.connect(lambda _c=False: (self.add(self.new_row()), self.changed.emit()))
         b_del = QPushButton("Remove")
         b_del.clicked.connect(lambda _c=False: self.remove())
         row.addWidget(b_add)
@@ -579,9 +590,12 @@ class RowTable(QWidget):
                     cb.addItem(text, key)
                 k = cb.findData(v)
                 cb.setCurrentIndex(max(0, k))
+                cb.currentIndexChanged.connect(lambda _i=0: self.changed.emit())
                 self.t.setCellWidget(r, i, cb)
             elif kind == "color":
-                self.t.setCellWidget(r, i, ColorButton(v or "#2b7de9"))
+                cbtn = ColorButton(v or "#2b7de9")
+                cbtn.picked.connect(lambda _c="": self.changed.emit())
+                self.t.setCellWidget(r, i, cbtn)
             else:
                 self.t.setItem(r, i, QTableWidgetItem("" if v is None else str(v)))
 
@@ -589,6 +603,7 @@ class RowTable(QWidget):
         rows = sorted({i.row() for i in self.t.selectedIndexes()}, reverse=True)
         for r in rows or ([self.t.rowCount() - 1] if self.t.rowCount() else []):
             self.t.removeRow(r)
+        self.changed.emit()
 
     def value(self, r, c):
         w = self.t.cellWidget(r, c)
@@ -610,204 +625,6 @@ class RowTable(QWidget):
 
 AXES = [("L", "Left"), ("R", "Right")]
 AXES_X = [("L", "Left Y"), ("R", "Right Y"), ("X", "X")]
-STYLES = [("line", "Line"), ("markers", "Markers"), ("both", "Both")]
-
-
-class ChartDialog(QDialog):
-    """Insert / edit a chart.  Apply shows the change on the grid; OK applies and closes.  `chart` is edited in place."""
-    applied = pyqtSignal(dict)
-
-    def __init__(self, wb, sheet, chart, grid=None, parent=None, new=False):
-        super().__init__(parent)
-        self.wb, self.sheet, self.chart, self.grid = wb, sheet, chart, grid
-        self.setWindowTitle("Insert chart" if new else "Edit chart")
-        self.resize(640, 540)
-        lay = QVBoxLayout(self)
-        form = QFormLayout()
-        self.title = QLineEdit(chart.get("title", ""))
-        form.addRow("Title", self.title)
-        lay.addLayout(form)
-        tabs = QTabWidget()
-        lay.addWidget(tabs, 1)
-        # ---- data
-        d = QWidget()
-        dl = QVBoxLayout(d)
-        xr = QHBoxLayout()
-        self.x = QLineEdit(chart.get("x", ""))
-        self.x.setPlaceholderText("Cells for X (blank: 1, 2, 3 ...)")
-        b = QPushButton("Use selection")
-        b.clicked.connect(lambda _c=False: self.use_selection(self.x))
-        xr.addWidget(QLabel("X values"))
-        xr.addWidget(self.x, 1)
-        xr.addWidget(b)
-        dl.addLayout(xr)
-        xr2 = QHBoxLayout()
-        self.x_label, self.x_units = QLineEdit(chart.get("x_label", "")), QLineEdit(chart.get("x_units", ""))
-        self.x_label.setPlaceholderText("X label")
-        self.x_units.setPlaceholderText("units")
-        self.x_units.setMaximumWidth(90)
-        self.x_log = QCheckBox("Log")
-        self.x_log.setChecked(bool(chart.get("x_log")))
-        for w in (self.x_label, self.x_units, self.x_log):
-            xr2.addWidget(w)
-        dl.addLayout(xr2)
-        dl.addWidget(muted("Each series is one set of Y values against the X values, on the left or the right axis."))
-        self.series = RowTable([("Y values", "text", "wide"), ("Name", "text", ""), ("Axis", "combo", AXES), ("Style", "combo", STYLES), ("Colour", "color", None)],
-                               self.new_series, "Add series")
-        for s in chart.get("series", []):
-            self.series.add([s.get("y", ""), s.get("label", ""), s.get("axis", "L"), s.get("style", "line"), s.get("color")])
-        b2 = QPushButton("Set Y values from selection")
-        b2.clicked.connect(lambda _c=False: self.series_from_selection())
-        dl.addWidget(self.series, 1)
-        dl.addWidget(b2)
-        tabs.addTab(d, "Data")
-        # ---- axes
-        a = QWidget()
-        al = QFormLayout(a)
-        self.axes = {}
-        for key, title in (("left", "Left Y axis"), ("right", "Right Y axis")):
-            ad = chart.get(key, {})
-            fields = (QLineEdit(ad.get("label", "")), QLineEdit(ad.get("units", "")), QCheckBox("Log scale"), QLineEdit(_t(ad.get("min"))), QLineEdit(_t(ad.get("max"))))
-            fields[2].setChecked(bool(ad.get("log")))
-            fields[3].setPlaceholderText("auto")
-            fields[4].setPlaceholderText("auto")
-            self.axes[key] = fields
-            lab = QLabel(title)
-            lab.setStyleSheet("font-weight:600;")
-            al.addRow(lab)
-            al.addRow("Label", fields[0])
-            al.addRow("Units", fields[1])
-            al.addRow("", fields[2])
-            al.addRow("Minimum", fields[3])
-            al.addRow("Maximum", fields[4])
-        self.x_min, self.x_max = QLineEdit(_t(chart.get("x_min"))), QLineEdit(_t(chart.get("x_max")))
-        lab = QLabel("X axis")
-        lab.setStyleSheet("font-weight:600;")
-        al.addRow(lab)
-        self.x_min.setPlaceholderText("auto")
-        self.x_max.setPlaceholderText("auto")
-        al.addRow("Minimum", self.x_min)
-        al.addRow("Maximum", self.x_max)
-        self.grid_cb = QCheckBox("Grid lines")
-        self.grid_cb.setChecked(chart.get("grid", True))
-        self.legend_cb = QCheckBox("Legend")
-        self.legend_cb.setChecked(chart.get("legend", True))
-        al.addRow(self.grid_cb)
-        al.addRow(self.legend_cb)
-        tabs.addTab(a, "Axes")
-        # ---- guides
-        g = QWidget()
-        gl = QVBoxLayout(g)
-        gl.addWidget(muted("A value is a number or a cell (so a limit follows the sheet)."))
-        self.limits = RowTable([("Axis", "combo", AXES_X), ("Value", "text", ""), ("Label", "text", "wide"), ("Colour", "color", None)],
-                               lambda: ["L", "", "", "#c0392b"], "Add limit line")
-        for x in chart.get("limits", []):
-            self.limits.add([x.get("axis", "L"), _t(x.get("value")), x.get("label", ""), x.get("color")])
-        self.zones = RowTable([("Axis", "combo", AXES_X), ("From", "text", ""), ("To", "text", ""), ("Label", "text", "wide"), ("Colour", "color", None)],
-                              lambda: ["L", "", "", "", "#e8590c"], "Add shaded zone")
-        for x in chart.get("zones", []):
-            self.zones.add([x.get("axis", "L"), _t(x.get("lo")), _t(x.get("hi")), x.get("label", ""), x.get("color")])
-        self.notes = RowTable([("X", "text", ""), ("Y", "text", ""), ("Axis", "combo", AXES), ("Text", "text", "wide")], lambda: ["", "", "L", ""], "Add note")
-        for x in chart.get("notes", []):
-            self.notes.add([_t(x.get("x")), _t(x.get("y")), x.get("axis", "L"), x.get("text", "")])
-        for title, w in (("Limit lines", self.limits), ("Shaded zones", self.zones), ("Notes (text with an arrow)", self.notes)):
-            lab = QLabel(title)
-            lab.setStyleSheet("font-weight:600;")
-            gl.addWidget(lab)
-            gl.addWidget(w)
-        tabs.addTab(g, "Limits and notes")
-        self.msg = QLabel("")
-        self.msg.setStyleSheet(f"color:{ui_kit.BAD};")
-        lay.addWidget(self.msg)
-        bb = QDialogButtonBox()
-        ok = bb.addButton("OK", QDialogButtonBox.ButtonRole.AcceptRole)
-        ui_kit.primary(ok)
-        ap = bb.addButton("Apply", QDialogButtonBox.ButtonRole.ApplyRole)
-        bb.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
-        ok.clicked.connect(lambda _c=False: self.ok())
-        ap.clicked.connect(lambda _c=False: self.apply())
-        bb.rejected.connect(self.reject)
-        lay.addWidget(bb)
-
-    def new_series(self):
-        n = self.series.t.rowCount()
-        return ["", "", "L", "line", sh_chart.PALETTE[n % len(sh_chart.PALETTE)]]
-
-    def use_selection(self, edit):
-        if self.grid is not None:
-            edit.setText(selection_range(self.grid))
-
-    def series_from_selection(self):
-        if self.grid is None:
-            return
-        rows = {i.row() for i in self.series.t.selectedIndexes()} or ({self.series.t.rowCount() - 1} if self.series.t.rowCount() else set())
-        if not rows:
-            self.series.add(self.new_series())
-            rows = {0}
-        for r in rows:
-            self.series.set_text(r, 0, selection_range(self.grid))
-
-    def collect(self):
-        """The chart dictionary from the window, or (None, message)."""
-        wb, sh = self.wb, self.sheet
-        ch = dict(self.chart)
-        ch["title"] = self.title.text().strip()
-        xr = self.x.text().strip()
-        if xr:
-            n = norm_range(wb, xr, sh)
-            if n is None:
-                return None, f"The X values {xr} are not a range of cells."
-            xr = n
-        ch["x"] = xr
-        ch["x_label"], ch["x_units"], ch["x_log"] = self.x_label.text().strip(), self.x_units.text().strip(), self.x_log.isChecked()
-        ch["x_min"], ch["x_max"] = _num(self.x_min.text()), _num(self.x_max.text())
-        sers = []
-        for i, (y, name, axis, style, color) in enumerate(self.series.rows()):
-            n = norm_range(wb, y, sh)
-            if n is None:
-                return None, f"Series {i + 1}: '{y}' is not a range of cells."
-            sers.append({"y": n, "label": name.strip(), "axis": axis or "L", "style": style or "line", "color": color})
-        ch["series"] = sers
-        for key in ("left", "right"):
-            f = self.axes[key]
-            ch[key] = sh_chart.axis_def(label=f[0].text().strip(), units=f[1].text().strip(), log=f[2].isChecked(), min=_num(f[3].text()), max=_num(f[4].text()))
-        lim = []
-        for axis, val, label, color in self.limits.rows():
-            v = norm_value(wb, val, sh)
-            if v is None or v == "":
-                return None, f"Limit line value '{val}' is not a number or a cell."
-            lim.append({"axis": axis, "value": v, "label": label.strip(), "color": color})
-        ch["limits"] = lim
-        zs = []
-        for axis, lo, hi, label, color in self.zones.rows():
-            a, b = norm_value(wb, lo, sh), norm_value(wb, hi, sh)
-            if a in (None, "") or b in (None, ""):
-                return None, f"Zone '{lo}' to '{hi}': both ends must be a number or a cell."
-            zs.append({"axis": axis, "lo": a, "hi": b, "label": label.strip(), "color": color})
-        ch["zones"] = zs
-        ns = []
-        for x, y, axis, text in self.notes.rows():
-            a, b = norm_value(wb, x, sh), norm_value(wb, y, sh)
-            if a in (None, "") or b in (None, ""):
-                return None, f"Note '{text}': X and Y must be a number or a cell."
-            ns.append({"x": a, "y": b, "axis": axis, "text": text.strip()})
-        ch["notes"] = ns
-        ch["grid"], ch["legend"] = self.grid_cb.isChecked(), self.legend_cb.isChecked()
-        return ch, ""
-
-    def apply(self):
-        ch, msg = self.collect()
-        self.msg.setText(msg)
-        if ch is None:
-            return False
-        self.chart.clear()
-        self.chart.update(ch)
-        self.applied.emit(self.chart)
-        return True
-
-    def ok(self):
-        if self.apply():
-            self.accept()
 
 
 def _t(v):

@@ -130,9 +130,15 @@ class ChartFrame(QWidget):
             return
         try:
             sh_chart.draw(self.fig, self.grid.wb, ch, compact=self.width() < 380)
-            self.canvas.draw_idle()
+            self.canvas.draw()                           # (now, not later: a failure while painting would not be caught)
         except Exception:                                # noqa: BLE001 - a chart that cannot be drawn must not stop the grid
             log_error("A chart could not be drawn:\n" + traceback.format_exc())
+            try:
+                self.fig.clear()
+                self.fig.text(0.5, 0.5, "This chart could not be drawn.\nCheck its Advanced settings.", ha="center", va="center", color="#b00020")
+                self.canvas.draw()
+            except Exception:                            # noqa: BLE001
+                pass
 
     def place(self):
         ch = self.chart()
@@ -241,9 +247,10 @@ class Grid(QAbstractScrollArea):
         self.x0 = self.y0 = 0
         self.r = self.c = 1                   # the active cell (the one that is typed into)
         self.er = self.ec = 1                 # the other corner of the selected block
+        self.areas = []                       # the blocks kept earlier in a selection made with Ctrl (the block being worked on is sel())
         self.nr, self.nc = 120, 40
         self.views = {}                       # sheet name -> (r, c, er, ec, x0, y0)
-        self.copied = None                    # (sheet, rect, cut) shown with a dashed border
+        self.copied = None                    # (sheet, [rects], cut) shown with a dashed border
         self.edit = None                      # {"sheet", "r", "c"} while a cell is being edited
         self.frames = {}
         self.sel_chart = None
@@ -304,6 +311,7 @@ class Grid(QAbstractScrollArea):
         self.frames = {}
         self.sheet = wb.sheets[min(wb.active, len(wb.sheets) - 1)].name
         self.r = self.c = self.er = self.ec = 1
+        self.areas = []
         self.nr, self.nc = 120, 40
         self._load_sizes()
         self._update_scroll()
@@ -328,6 +336,7 @@ class Grid(QAbstractScrollArea):
         if self.edit is None or not keep_edit:
             self.finish_edit(commit=self.edit is not None)
         self.views[self.sheet] = (self.r, self.c, self.er, self.ec, self.x0, self.y0)
+        self.areas = []
         self.sheet = name
         self.wb.active = self.wb.sheet_names().index(name)
         self._load_sizes()
@@ -363,10 +372,39 @@ class Grid(QAbstractScrollArea):
 
     # ------------------------------------------------------------------ selection
     def sel(self):
+        """The block being worked on (the active cell is one of its corners)."""
         return (min(self.er, self.r), min(self.ec, self.c), max(self.er, self.r), max(self.ec, self.c))
 
-    def select(self, r1, c1, r2=None, c2=None, active=None):
-        """Selects a block; the active cell is its first cell unless `active` = (r, c) names another cell of it."""
+    def rects(self):
+        """Every selected block: the ones kept with Ctrl first, the current one last (each once)."""
+        out = []
+        for a in list(self.areas) + [self.sel()]:
+            if a not in out:
+                out.append(a)
+        return out
+
+    def used_rects(self):
+        """The selected blocks cut down to the used area (a whole column or row stops where the data stops)."""
+        mr, mc = self.wb.extent(self.sheet)
+        return [(r1, c1, max(r1, min(r2, mr)), max(c1, min(c2, mc))) for r1, c1, r2, c2 in self.rects()]
+
+    def add_area(self):
+        """Keeps the current block, so that the next click or drag starts another one (Ctrl + click)."""
+        cur = self.sel()
+        if cur not in self.areas:
+            self.areas.append(cur)
+
+    def selected_rows(self):
+        """The rows that any selected block touches, as sorted (first, last) runs."""
+        return _runs([(a[0], a[2]) for a in self.rects()])
+
+    def selected_cols(self):
+        return _runs([(a[1], a[3]) for a in self.rects()])
+
+    def select(self, r1, c1, r2=None, c2=None, active=None, keep=False):
+        """Selects a block; the active cell is its first cell unless `active` = (r, c) names another cell of it.  `keep`: the blocks chosen with Ctrl stay."""
+        if not keep:
+            self.areas = []
         r2 = r1 if r2 is None else r2
         c2 = c1 if c2 is None else c2
         r1, r2 = sorted((max(1, min(r1, E.MAXROW)), max(1, min(r2, E.MAXROW))))
@@ -380,9 +418,12 @@ class Grid(QAbstractScrollArea):
         self.viewport().update()
         self.selection_changed.emit()
 
-    def move_to(self, r, c, extend=False):
-        """Moves the active cell (extend=False) or the other corner of the selected block (extend=True)."""
+    def move_to(self, r, c, extend=False, keep=False):
+        """Moves the active cell (extend=False) or the other corner of the selected block (extend=True).  Moving alone drops the blocks chosen with Ctrl
+        (`keep` leaves them: that is what a Ctrl + click does after it has put the old block aside)."""
         r, c = max(1, min(r, E.MAXROW)), max(1, min(c, E.MAXCOL))
+        if not extend and not keep:
+            self.areas = []
         if extend:
             self.er, self.ec = r, c
         else:
@@ -536,7 +577,14 @@ class Grid(QAbstractScrollArea):
                 p.drawRect(rr.adjusted(0, 0, -1, -1))
         # the selection
         sel = self.block_rect(sr1, sc1, sr2, sc2)
-        if (sr1, sc1) != (sr2, sc2):
+        for a in self.areas:                              # blocks kept with Ctrl: shaded, with a thinner border
+            ar = self.block_rect(*a)
+            if ar.intersects(QRect(0, 0, vw, vh)):
+                p.fillRect(ar, SEL_FILL)
+                p.setPen(QPen(ACCENT, 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(ar.adjusted(0, 0, -1, -1))
+        if (sr1, sc1) != (sr2, sc2) or self.areas:
             p.fillRect(sel, SEL_FILL)
             act = self.cell_rect(self.r, self.c)
             p.fillRect(act.adjusted(0, 0, -1, -1), QColor("white"))
@@ -552,11 +600,12 @@ class Grid(QAbstractScrollArea):
             p.drawRect(sel.right() - 5, sel.bottom() - 5, 6, 6)                # the fill handle
         # copied block
         if self.copied and self.copied[0] == sheet:
-            cr = self.block_rect(*self.copied[1])
             pen = QPen(QColor("#2b7de9"), 1, Qt.PenStyle.DashLine)
             p.setPen(pen)
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRect(cr.adjusted(1, 1, -2, -2))
+            for rect in self.copied[1]:
+                cr = self.block_rect(*rect)
+                p.drawRect(cr.adjusted(1, 1, -2, -2))
         # warnings
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(WARN_INK))
@@ -615,10 +664,11 @@ class Grid(QAbstractScrollArea):
         p.setFont(self.f_head)
         p.fillRect(0, 0, vw, self.hh, HEAD_BG)
         p.fillRect(0, 0, self.hw, vh, HEAD_BG)
+        rects = self.rects()
         p.setClipRect(QRect(self.hw, 0, vw - self.hw, self.hh))
         for c in range(c_first, c_last + 1):
             x, w = self.hw + self.cols.pos(c) - self.x0, self.cols.size(c)
-            on = sc1 <= c <= sc2
+            on = any(a[1] <= c <= a[3] for a in rects)
             if on:
                 p.fillRect(x, 0, w, self.hh, HEAD_SEL)
             p.setPen(QPen(QColor("#c5ccd8"), 1))
@@ -628,7 +678,7 @@ class Grid(QAbstractScrollArea):
         p.setClipRect(QRect(0, self.hh, self.hw, vh - self.hh))
         for r in range(r_first, r_last + 1):
             y, h = self.hh + self.rows.pos(r) - self.y0, self.rows.size(r)
-            on = sr1 <= r <= sr2
+            on = any(a[0] <= r <= a[2] for a in rects)
             if on:
                 p.fillRect(0, y, self.hw, h, HEAD_SEL)
             p.setPen(QPen(QColor("#c5ccd8"), 1))
@@ -732,6 +782,7 @@ class Grid(QAbstractScrollArea):
         if ed["sheet"] != self.sheet:
             self.set_sheet(ed["sheet"])
         self.wb.set_input(ed["sheet"], ed["r"], ed["c"], text)
+        self.areas = []
         self.r = self.er = ed["r"]
         self.c = self.ec = ed["c"]
         self.edit_ended.emit()
@@ -768,6 +819,7 @@ class Grid(QAbstractScrollArea):
         self.setFocus()
         right = ev.button() == Qt.MouseButton.RightButton
         shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        ctrl = bool(ev.modifiers() & Qt.KeyboardModifier.ControlModifier)
         hit = self.cell_at(pos)
         if self.edit is not None and hit is not None and self.editor_for_point().can_point():
             ed = self.editor_for_point()
@@ -784,12 +836,15 @@ class Grid(QAbstractScrollArea):
             return
         if hit is not None:
             sel = self.block_rect(*self.sel())
-            if QRect(sel.right() - 9, sel.bottom() - 9, 14, 14).contains(pos) and self.sel_chart is None:
+            if QRect(sel.right() - 9, sel.bottom() - 9, 14, 14).contains(pos) and self.sel_chart is None and not ctrl:
                 self._drag = ("fill", self.sel())
                 self._timer.start()
                 return
             if shift:
                 self.move_to(hit[0], hit[1], extend=True)
+            elif ctrl:                                       # another block: the old one stays selected
+                self.add_area()
+                self.move_to(hit[0], hit[1], keep=True)
             else:
                 self.move_to(*hit)
             self._drag = ("cells",)
@@ -805,10 +860,17 @@ class Grid(QAbstractScrollArea):
                 self._drag = ("colsize", k, pos.x(), self.cols.size(k))
                 return
             c = self.cols.index_at(pos.x() - self.hw + self.x0)
-            if shift:
+            if shift:                                        # from the active column to this one (Ctrl + Shift keeps the other blocks)
+                if not ctrl:
+                    self.areas = []
                 self.r, self.er, self.ec = 1, self.nr, c
             else:
+                if ctrl:
+                    self.add_area()
+                else:
+                    self.areas = []
                 self.r, self.c, self.er, self.ec = 1, c, self.nr, c
+            self.sel_chart = None
             self._drag = ("cols", c)
             self.selection_changed.emit()
             self.viewport().update()
@@ -818,7 +880,17 @@ class Grid(QAbstractScrollArea):
             self._drag = ("rowsize", k, pos.y(), self.rows.size(k))
             return
         r = self.rows.index_at(pos.y() - self.hh + self.y0)
-        self.r, self.c, self.er, self.ec = r, 1, r, self.nc
+        if shift:
+            if not ctrl:
+                self.areas = []
+            self.c, self.ec, self.er = 1, self.nc, r
+        else:
+            if ctrl:
+                self.add_area()
+            else:
+                self.areas = []
+            self.r, self.c, self.er, self.ec = r, 1, r, self.nc
+        self.sel_chart = None
         self._drag = ("rows", r)
         self.selection_changed.emit()
         self.viewport().update()
@@ -956,8 +1028,9 @@ class Grid(QAbstractScrollArea):
     def _set_col_width(self, c, w, live=False):
         s = self.sheet_obj()
         w = max(MIN_W, int(w))
-        sr1, sc1, sr2, sc2 = self.sel()
-        cols = range(sc1, sc2 + 1) if sc1 <= c <= sc2 and sc2 > sc1 else [c]
+        runs = self.selected_cols()
+        total = sum(b - a + 1 for a, b in runs)
+        cols = [k for a, b in runs for k in range(a, b + 1)] if total > 1 and any(a <= c <= b for a, b in runs) else [c]
         for k in cols:
             if w == DEF_W:
                 s.col_w.pop(k, None)
@@ -974,8 +1047,9 @@ class Grid(QAbstractScrollArea):
     def _set_row_height(self, r, h, live=False):
         s = self.sheet_obj()
         h = max(MIN_H, int(h))
-        sr1, sc1, sr2, sc2 = self.sel()
-        rows = range(sr1, sr2 + 1) if sr1 <= r <= sr2 and sr2 > sr1 else [r]
+        runs = self.selected_rows()
+        total = sum(b - a + 1 for a, b in runs)
+        rows = [k for a, b in runs for k in range(a, b + 1)] if total > 1 and any(a <= r <= b for a, b in runs) else [r]
         for k in rows:
             if h == DEF_H:
                 s.row_h.pop(k, None)
@@ -988,8 +1062,9 @@ class Grid(QAbstractScrollArea):
         self.viewport().update()
 
     def set_width(self, w):
-        for c in range(self.sel()[1], self.sel()[3] + 1):
-            self._set_col_width(c, w)
+        for a, b in self.selected_cols():
+            for c in range(a, b + 1):
+                self._set_col_width(c, w)
 
     def autofit_column(self, c):
         s = self.sheet_obj()
@@ -1001,8 +1076,9 @@ class Grid(QAbstractScrollArea):
         self._set_col_width(c, min(best, 520))
 
     def autofit_selection(self):
-        for c in range(self.sel()[1], self.sel()[3] + 1):
-            self.autofit_column(c)
+        for a, b in self.selected_cols():
+            for c in range(a, b + 1):
+                self.autofit_column(c)
 
     # ------------------------------------------------------------------ keyboard
     def keyPressEvent(self, ev):
@@ -1160,26 +1236,51 @@ class Grid(QAbstractScrollArea):
             self.selection_changed.emit()
 
     def clear_selection(self, styles=False):
-        self.wb.clear(self.sheet, self.sel(), styles=styles)
+        self.wb.begin("Clear")                                 # one undo step for every block
+        for rect in self.rects():
+            self.wb.clear(self.sheet, rect, styles=styles)
+        self.wb.end()
         self.viewport().update()
         self.selection_changed.emit()
 
-    def selection_text(self):
-        r1, c1, r2, c2 = self.sel()
+    def selection_text(self, rects=None):
+        """The selected cells as tab-separated text.  Several blocks join up when they share their rows (side by side) or their columns (one under the other)."""
+        rects = rects or [self.sel()]
+        layout = _layout(rects)
+        if layout is None:
+            rects, layout = [rects[-1]], "row"
+        if layout == "col":
+            lines = []
+            for r1, c1, r2, c2 in rects:
+                for r in range(r1, min(r2, r1 + 20000) + 1):
+                    lines.append("\t".join(self.wb.display(self.sheet, r, c) for c in range(c1, min(c2, c1 + 400) + 1)))
+            return "\n".join(lines)
+        r1, r2 = rects[0][0], rects[0][2]
         lines = []
         for r in range(r1, min(r2, r1 + 20000) + 1):
-            lines.append("\t".join(self.wb.display(self.sheet, r, c) for c in range(c1, min(c2, c1 + 400) + 1)))
+            lines.append("\t".join(self.wb.display(self.sheet, r, c) for a in rects for c in range(a[1], min(a[3], a[1] + 400) + 1)))
         return "\n".join(lines)
 
     def copy(self, cut=False):
-        rect = self.sel()
+        rects = self.rects()
+        layout = _layout(rects)
+        if len(rects) > 1:
+            if cut:
+                self.message.emit("Cut does not work on several blocks. Copy them instead.", "warn")
+                return
+            if layout is None:
+                self.message.emit("Copy needs blocks that are in the same rows or in the same columns.", "warn")
+                return
+            rects = sorted(rects, key=(lambda a: a[1]) if layout == "row" else (lambda a: a[0]))
         md = QMimeData()
-        md.setText(self.selection_text())
-        md.setData(MIME, json.dumps({"token": TOKEN, "sheet": self.sheet, "rect": list(rect), "cut": cut}).encode("utf-8"))
+        md.setText(self.selection_text(rects))
+        md.setData(MIME, json.dumps({"token": TOKEN, "sheet": self.sheet, "rect": list(rects[-1]), "rects": [list(a) for a in rects], "layout": layout or "row",
+                                     "cut": cut}).encode("utf-8"))
         QGuiApplication.clipboard().setMimeData(md)
-        self.copied = (self.sheet, rect, cut)
+        self.copied = (self.sheet, rects, cut)
         self.viewport().update()
-        self.message.emit(("Cut " if cut else "Copied ") + self._rect_name(rect) + ": choose where it goes, then Paste.", "")
+        name = self._rect_name(rects[0]) if len(rects) == 1 else f"{len(rects)} blocks"
+        self.message.emit(("Cut " if cut else "Copied ") + name + ": choose where it goes, then Paste.", "")
 
     def _rect_name(self, rect):
         r1, c1, r2, c2 = rect
@@ -1197,6 +1298,24 @@ class Grid(QAbstractScrollArea):
                 info = json.loads(bytes(md.data(MIME)).decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
                 info = None
+        if info and info.get("token") == TOKEN and wb.get_sheet(info["sheet"]) is not None and len(info.get("rects") or []) > 1:
+            blocks = [tuple(a) for a in info["rects"]]
+            wb.begin("Paste")
+            at_r, at_c = r1, c1
+            end_r, end_c = r1, c1
+            for src in blocks:
+                h, w = src[2] - src[0] + 1, src[3] - src[1] + 1
+                if at_r + h - 1 > E.MAXROW or at_c + w - 1 > E.MAXCOL:
+                    break
+                wb.copy_cells(info["sheet"], src, self.sheet, at_r, at_c, what)
+                end_r, end_c = max(end_r, at_r + h - 1), max(end_c, at_c + w - 1)
+                if info.get("layout") == "col":
+                    at_r += h
+                else:
+                    at_c += w
+            wb.end()
+            self.select(r1, c1, end_r, end_c, active=(r1, c1))
+            return
         if info and info.get("token") == TOKEN and wb.get_sheet(info["sheet"]) is not None:
             src = tuple(info["rect"])
             sh, cut = info["sheet"], bool(info["cut"])
@@ -1239,20 +1358,24 @@ class Grid(QAbstractScrollArea):
         self.wb.set_raw(self.sheet, r, c, raw, st)
 
     def fill_down(self):
-        r1, c1, r2, c2 = self.sel()
-        if r2 > r1:
-            self.wb.fill(self.sheet, (r1, c1, r1, c2), (r1 + 1, c1, r2, c2))
-        elif r1 > 1:
-            self.wb.fill(self.sheet, (r1 - 1, c1, r1 - 1, c2), (r1, c1, r1, c2))
+        self.wb.begin("Fill down")
+        for r1, c1, r2, c2 in self.rects():
+            if r2 > r1:
+                self.wb.fill(self.sheet, (r1, c1, r1, c2), (r1 + 1, c1, r2, c2))
+            elif r1 > 1:
+                self.wb.fill(self.sheet, (r1 - 1, c1, r1 - 1, c2), (r1, c1, r1, c2))
+        self.wb.end()
         self.viewport().update()
         self.selection_changed.emit()
 
     def fill_right(self):
-        r1, c1, r2, c2 = self.sel()
-        if c2 > c1:
-            self.wb.fill(self.sheet, (r1, c1, r2, c1), (r1, c1 + 1, r2, c2))
-        elif c1 > 1:
-            self.wb.fill(self.sheet, (r1, c1 - 1, r2, c1 - 1), (r1, c1, r2, c1))
+        self.wb.begin("Fill right")
+        for r1, c1, r2, c2 in self.rects():
+            if c2 > c1:
+                self.wb.fill(self.sheet, (r1, c1, r2, c1), (r1, c1 + 1, r2, c2))
+            elif c1 > 1:
+                self.wb.fill(self.sheet, (r1, c1 - 1, r2, c1 - 1), (r1, c1, r2, c1))
+        self.wb.end()
         self.viewport().update()
         self.selection_changed.emit()
 
@@ -1275,9 +1398,16 @@ class Grid(QAbstractScrollArea):
         s = self.sheet_obj()
         if hit is not None:
             r, c = hit
-            r1, c1, r2, c2 = self.sel()
-            if not (r1 <= r <= r2 and c1 <= c <= c2):
+            if not any(a[0] <= r <= a[2] and a[1] <= c <= a[3] for a in self.rects()):
                 self.move_to(r, c)
+        elif pos.y() < self.hh and pos.x() >= self.hw:                  # a right-click on a column or row header selects it unless it already is
+            c = self.cols.index_at(pos.x() - self.hw + self.x0)
+            if not any(a[0] <= c <= a[1] for a in self.selected_cols()):
+                self.select(1, c, self.nr, c)
+        elif pos.x() < self.hw and pos.y() >= self.hh:
+            r = self.rows.index_at(pos.y() - self.hh + self.y0)
+            if not any(a[0] <= r <= a[1] for a in self.selected_rows()):
+                self.select(r, 1, r, self.nc)
         menu = QMenu(self)
         if hit is not None:
             for text, fn in (("Cut", lambda: self.copy(True)), ("Copy", lambda: self.copy(False)), ("Paste", self.paste),
@@ -1351,6 +1481,7 @@ class Grid(QAbstractScrollArea):
             self.frames[cid].show()
             self.frames[cid].raise_()
             self.frames[cid].later()
+            self.frames[cid].update()
         if self.sel_chart not in self.frames:
             self.sel_chart = None
 
@@ -1360,6 +1491,20 @@ class Grid(QAbstractScrollArea):
 
     def refresh_charts(self):
         self._sync_charts()
+
+    def reveal_chart(self, cid):
+        """Scrolls so the chart can be seen (the side panel took some of the width)."""
+        ch = next((c for c in (self.sheet_obj().charts if self.sheet_obj() else []) if c.get("id") == cid), None)
+        if ch is None:
+            return
+        x, y = ch.get("pos", [40, 40])
+        w, h = ch.get("size", sh_chart.DEFAULT_SIZE)
+        vw, vh = self.viewport().width() - self.hw, self.viewport().height() - self.hh
+        hb, vb = self.horizontalScrollBar(), self.verticalScrollBar()
+        if x + w > self.x0 + vw or x < self.x0:
+            hb.setValue(int(max(0, min(x - 10, x + w - vw + 10))))
+        if y + h > self.y0 + vh or y < self.y0:
+            vb.setValue(int(max(0, min(y - 10, y + h - vh + 10))))
 
     def pick_chart(self, cid):
         self.sel_chart = cid
@@ -1398,6 +1543,29 @@ class Grid(QAbstractScrollArea):
         c = (rect[3] if rect else mc) + 2
         r = rect[0] if rect else 1
         return [self.cols.pos(c), self.rows.pos(r)]
+
+
+def _layout(rects):
+    """How several copied blocks join up: "row" when they all have the same rows (side by side), "col" when they all have the same columns (one under the
+    other); a single block is "row"; None when they do not line up."""
+    if len(rects) == 1:
+        return "row"
+    if len({(a[0], a[2]) for a in rects}) == 1:
+        return "row"
+    if len({(a[1], a[3]) for a in rects}) == 1:
+        return "col"
+    return None
+
+
+def _runs(spans):
+    """[(first, last), ...] in any order -> the same spans merged where they touch or overlap, sorted."""
+    out = []
+    for a, b in sorted((min(x), max(x)) for x in spans):
+        if out and a <= out[-1][1] + 1:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
 
 
 def _link_at(sheet_obj, r, c):

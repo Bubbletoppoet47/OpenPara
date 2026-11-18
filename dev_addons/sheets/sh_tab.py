@@ -10,7 +10,7 @@ import threading
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QApplication, QColorDialog, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QProgressDialog,
-                             QPushButton, QSizePolicy, QTabBar, QTabWidget, QToolButton, QVBoxLayout, QWidget)
+                             QPushButton, QScrollArea, QSizePolicy, QSplitter, QTabBar, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 import sh_book as B
 import sh_chart
@@ -20,6 +20,9 @@ import sh_edit
 import sh_engine as E
 import sh_fmt
 import sh_grid
+import sh_prefs
+import sh_presets
+import sh_ribbon
 import sh_std
 import sh_study
 import sh_xlsx
@@ -29,7 +32,7 @@ import ui_kit
 FILTER = "Sheets workbook (*.opsheet);;All files (*)"
 OPEN_FILTER = "Sheets and Excel files (*.opsheet *.xlsx);;Sheets workbook (*.opsheet);;Excel workbook (*.xlsx);;All files (*)"
 CHIP = "#1d7a45"
-RIBBON_QSS = ("QToolButton{font-size:11px; padding:2px;} QToolButton:disabled{color:#a0a0a0;} "
+RIBBON_QSS = ("QToolButton{padding:2px;} QToolButton:disabled{color:#a0a0a0;} "
               "QToolButton:checked{background:#cfe3fb; border:1px solid #6aa0e0;} QToolButton::menu-indicator{image:none;}")
 
 
@@ -54,6 +57,7 @@ class SheetsTab(QWidget):
         self.saved_version = self.wb.version
         self.extra_dirty = False
         self.dialogs = []                       # windows that stay open next to the grid
+        self.panel = None                       # the chart panel to the right of the grid (made when it is first needed)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -67,9 +71,16 @@ class SheetsTab(QWidget):
         self.help.setStyleSheet(f"color:{ui_kit.MUTED}; padding:1px 8px; font-size:11px;")
         self.help.setMinimumHeight(18)
         lay.addWidget(self.help)
-        lay.addWidget(self.grid, 1)
+        self.split = QSplitter(Qt.Orientation.Horizontal)
+        self.split.setChildrenCollapsible(False)
+        self.split.setHandleWidth(5)
+        self.split.addWidget(self.grid)
+        self.split.setStretchFactor(0, 1)
+        lay.addWidget(self.split, 1)
         lay.addWidget(self.build_bottom())
         self.wire()
+        sh_prefs.on_change(self.prefs_changed)
+        self.apply_ribbon_sizes()
         self.on_selection()
         self.wb.listeners.append(self.wb_changed)
         self.rebuild_sheet_tabs()
@@ -141,8 +152,9 @@ class SheetsTab(QWidget):
     # ------------------------------------------------------------------ the ribbon
     def build_ribbon(self):
         self.act = {}
+        self.ribbon_buttons = []
+        self.ribbon_captions = []
         tabs = QTabWidget()
-        tabs.setFixedHeight(122)
         tabs.setDocumentMode(True)
         self.ribbon = tabs
         sel = self.grid
@@ -172,15 +184,17 @@ class SheetsTab(QWidget):
                         ("sh_del", "⊟", "Delete\nsheet", "Delete the sheet", self.delete_sheet), ("sh_paste", "⇉", "Paste to\nsheets", "Copy the selected cells to the same place on other sheets", self.paste_to_sheets)]),
         ]
         charts = [
-            ("Insert", [("ch_new", "◔", "Insert\nchart", "A chart from the selected cells: the first column is X, each other column a Y series", self.chart_new)]),
-            ("Chart", [("ch_edit", "✎", "Edit\nchart", "Series, axes, limit lines, zones, notes", self.chart_edit), ("ch_copy", "⧉", "Copy\nchart", "Duplicate the chart", self.chart_copy),
+            ("Insert", [("ch_new", "◔", "Insert\nchart", "A chart from the selected cells, or an empty one that you fill from the panel on the right", self.chart_new)]),
+            ("Chart", [("ch_edit", "✎", "Edit\nchart", "Open the chart panel: data, series, look and advanced settings", self.chart_edit), ("ch_copy", "⧉", "Copy\nchart", "Duplicate the chart", self.chart_copy),
                        ("ch_export", "⇪", "Export\nchart", "Save the chart as PNG, SVG or PDF", self.chart_export), ("ch_del", "✕", "Delete\nchart", "Remove the chart", self.chart_delete)]),
         ]
         eng = [("Functions", [("fx", "ƒ", "Insert\nfunction", "Insert a function with its Function Arguments window", self.fx)]),
                ("Standards", self.standard_items()),
                ("Browse", [("std_select", "☷", "Standard\nselect", "Browse every installed standard", lambda: self.standards(None))])]
-        for title, groups in (("Home", home), ("Data", data), ("Charts", charts), ("Engineering", eng)):
+        view = [("Ribbon", [("ribbon_size", "Aa", "Ribbon\nsize", "Icon size and text size of the ribbon", self.ribbon_size_dialog)])]
+        for title, groups in (("Home", home), ("Data", data), ("Charts", charts), ("Engineering", eng), ("View", view)):
             tabs.addTab(self.ribbon_page(groups), title)
+        QTimer.singleShot(0, self.apply_ribbon_sizes)
         return tabs
 
     def standard_items(self):
@@ -198,6 +212,7 @@ class SheetsTab(QWidget):
         lay = QHBoxLayout(page)
         lay.setContentsMargins(6, 2, 6, 0)
         lay.setSpacing(0)
+        icon_pt, text_pt = sh_prefs.get("ribbon_icon"), sh_prefs.get("ribbon_text")
         for gi, (caption, items) in enumerate(groups):
             if gi:
                 f = QFrame()
@@ -211,12 +226,9 @@ class SheetsTab(QWidget):
             row = QHBoxLayout()
             row.setSpacing(2)
             for key, glyph, text, tip, fn in items:
-                b = QToolButton()
-                b.setText(f"{glyph}\n{text}")
+                b = sh_ribbon.RibbonButton(glyph, text, icon_pt, text_pt)
                 b.setToolTip(tip or text.replace("\n", " "))
                 b.setAutoRaise(True)
-                b.setMinimumWidth(62)
-                b.setMinimumHeight(66)
                 b.setStyleSheet(RIBBON_QSS)
                 if key == "menu":
                     m = QMenu(b)
@@ -231,15 +243,45 @@ class SheetsTab(QWidget):
                 if key in ("bold", "italic"):
                     b.setCheckable(True)
                 self.act[key] = b
+                self.ribbon_buttons.append(b)
                 row.addWidget(b)
             v.addLayout(row)
             cap = QLabel(caption)
             cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            cap.setStyleSheet(f"color:{ui_kit.FAINT}; font-size:10px;")
+            cap.setStyleSheet(f"color:{ui_kit.FAINT};")
+            self.ribbon_captions.append(cap)
             v.addWidget(cap)
             lay.addWidget(box)
         lay.addStretch(1)
-        return page
+        scroll = QScrollArea()                           # a ribbon that is wider than the window scrolls sideways
+        scroll.setWidget(page)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setStyleSheet("QScrollBar:horizontal { height:8px; } QScrollArea { background:transparent; } ")
+        page.setObjectName("ribbonpage")
+        page.setStyleSheet("#ribbonpage { background:transparent; }")
+        return scroll
+
+    def apply_ribbon_sizes(self):
+        """Icon size and text size from the settings, onto every button and caption; the ribbon grows or shrinks to fit."""
+        icon_pt, text_pt = sh_prefs.get("ribbon_icon"), sh_prefs.get("ribbon_text")
+        cap_pt = max(7, text_pt - 1)
+        for b in self.ribbon_buttons:
+            b.set_sizes(icon_pt, text_pt)
+        for cap in self.ribbon_captions:
+            f = cap.font()
+            f.setPointSizeF(float(cap_pt))
+            cap.setFont(f)
+        self.ribbon.setFixedHeight(sh_ribbon.page_height(self.ribbon_buttons, cap_pt) + self.ribbon.tabBar().sizeHint().height() + 8)
+
+    def prefs_changed(self, keys):
+        if "ribbon_icon" in keys or "ribbon_text" in keys:
+            self.apply_ribbon_sizes()
+
+    def ribbon_size_dialog(self):
+        sh_ribbon.RibbonSizeDialog(self).exec()
 
     # ------------------------------------------------------------------ wiring
     def wire(self):
@@ -247,7 +289,7 @@ class SheetsTab(QWidget):
         g.selection_changed.connect(self.on_selection)
         g.message.connect(lambda t, lv: self.status.say(t, lv))
         g.command.connect(self.run_command)
-        g.charts_changed.connect(self.mark_extra)
+        g.charts_changed.connect(self.on_charts_changed)
         g.edit_text.connect(self.on_edit_text)
         g.edit_started.connect(self.on_edit_started)
         g.edit_ended.connect(self.on_edit_ended)
@@ -330,14 +372,17 @@ class SheetsTab(QWidget):
         self.update_ribbon()
         self.update_stats()
         self.update_help()
+        self.follow_panel()
 
     def update_stats(self):
         g = self.grid
-        r1, c1, r2, c2 = g.sel()
-        if (r2 - r1 + 1) * (c2 - c1 + 1) < 2 or (r2 - r1 + 1) * (c2 - c1 + 1) > 50000:
+        rects = g.rects()
+        cells = sum((a[2] - a[0] + 1) * (a[3] - a[1] + 1) for a in rects)
+        if cells < 2 or cells > 50000:
             self.stats.setText("")
             return
-        vals = [v for v in (self.wb.value(g.sheet, r, c) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)) if isinstance(v, float)]
+        seen = {(r, c) for a in rects for r in range(a[0], a[2] + 1) for c in range(a[1], a[3] + 1)}      # a cell in two blocks counts once
+        vals = [v for v in (self.wb.value(g.sheet, r, c) for r, c in seen) if isinstance(v, float)]
         if not vals:
             self.stats.setText("")
             return
@@ -461,6 +506,7 @@ class SheetsTab(QWidget):
                 return
         g.set_sheet(name)
         self.update_ribbon()
+        self.follow_panel()
 
     def sheet_tab_moved(self, frm, to):
         name = self.tabbar.tabText(to)
@@ -528,21 +574,28 @@ class SheetsTab(QWidget):
                 self.status.say(f"Copied to {', '.join(t)}.", "good")
 
     # ------------------------------------------------------------------ editing commands
+    def style_selection(self, **kw):
+        """Changes the style of every selected block as one undo step."""
+        g = self.grid
+        self.wb.begin("Format")
+        for rect in g.rects():
+            self.wb.set_style(g.sheet, rect, **kw)
+        self.wb.end()
+
     def toggle(self, attr):
         g = self.grid
         cell = self.wb.cell(g.sheet, g.r, g.c)
         on = not bool(cell and cell.st and getattr(cell.st, attr))
-        self.wb.set_style(g.sheet, g.sel(), **{attr: on})
+        self.style_selection(**{attr: on})
         self.update_ribbon()
 
     def pick_colour(self, which):
-        g = self.grid
         c = QColorDialog.getColor(QColor("#1f2a3c" if which == "fg" else "#fff3bf"), self, "Colour")
         if c.isValid():
-            self.wb.set_style(g.sheet, g.sel(), **{which: c.name()})
+            self.style_selection(**{which: c.name()})
 
     def set_format(self, fmt):
-        self.wb.set_style(self.grid.sheet, self.grid.sel(), fmt=fmt)
+        self.style_selection(fmt=fmt)
         self.grid.viewport().update()
 
     def decimals(self, d):
@@ -561,7 +614,7 @@ class SheetsTab(QWidget):
         cell = self.wb.cell(g.sheet, g.r, g.c)
         dlg = D.FormatDialog(cell.st if cell else None, self)
         if dlg.exec():
-            self.wb.set_style(g.sheet, g.sel(), **dlg.values())
+            self.style_selection(**dlg.values())
 
     def paste_special(self):
         dlg = D.PasteSpecialDialog(self)
@@ -569,21 +622,23 @@ class SheetsTab(QWidget):
             self.grid.paste(dlg.what())
 
     def insert(self, axis):
+        """Inserts rows (or columns) above (left of) every selected block, as many as the block spans; blocks lower down go first so the numbers stay true."""
         g = self.grid
-        r1, c1, r2, c2 = g.sel()
-        if axis == "r":
-            self.wb.insert(g.sheet, "r", r1, r2 - r1 + 1)
-        else:
-            self.wb.insert(g.sheet, "c", c1, c2 - c1 + 1)
+        runs = g.selected_rows() if axis == "r" else g.selected_cols()
+        self.wb.begin_group("Insert rows" if axis == "r" else "Insert columns")
+        for a, b in reversed(runs):
+            self.wb.insert(g.sheet, axis, a, b - a + 1)
+        self.wb.end_group()
         g.viewport().update()
 
     def delete(self, axis):
         g = self.grid
-        r1, c1, r2, c2 = g.sel()
-        if axis == "r":
-            self.wb.delete(g.sheet, "r", r1, r2 - r1 + 1)
-        else:
-            self.wb.delete(g.sheet, "c", c1, c2 - c1 + 1)
+        runs = g.selected_rows() if axis == "r" else g.selected_cols()
+        self.wb.begin_group("Delete rows" if axis == "r" else "Delete columns")
+        for a, b in reversed(runs):
+            self.wb.delete(g.sheet, axis, a, b - a + 1)
+        self.wb.end_group()
+        g.areas = []
         g.viewport().update()
 
     def col_width(self):
@@ -658,20 +713,26 @@ class SheetsTab(QWidget):
         return next((c for c in s.charts if c.get("id") == cid), None)
 
     def chart_new(self):
+        """Insert chart: from the selected cells when there are some; otherwise an empty chart and the panel waits for the cells to be picked."""
         g = self.grid
-        rect = g.sel()
-        if (rect[0], rect[1]) == (rect[2], rect[3]):         # one cell: the block of numbers around it, as Excel does
-            rect = self.region_around(rect[0], rect[1])
-            if rect is None:
-                self.status.say("Select the cells to plot first (a column of X and the columns of Y next to it).", "warn")
-                return
-        ch = sh_chart.from_selection(self.wb, g.sheet, rect, g.sheet_obj().charts)
-        if not ch["series"]:
-            self.status.say("Select the cells to plot first (a column of X and the columns of Y next to it).", "warn")
+        if sh_deps.matplotlib() is None:
+            self.status.say("matplotlib is needed to draw charts.", "bad")
             return
-        ch["pos"] = g.default_chart_pos(rect)
+        rects = g.used_rects()
+        if len(rects) == 1 and rects[0][:2] == rects[0][2:]:     # one cell: the block of numbers around it, as Excel does
+            around = self.region_around(rects[0][0], rects[0][1])
+            rects = [around] if around else []
+        charts = g.sheet_obj().charts
+        preset = sh_presets.get(sh_presets.default_name())
+        ch = sh_chart.from_rects(self.wb, g.sheet, rects, charts, preset) if rects else None
+        if ch is None or not ch["series"]:
+            ch = sh_chart.blank(sh_chart.new_id(charts), preset=preset)
+            rects = []
+        bounds = (min(a[0] for a in rects), min(a[1] for a in rects), max(a[2] for a in rects), max(a[3] for a in rects)) if rects else None
+        ch["pos"] = g.default_chart_pos(bounds)
         g.add_chart(ch)
-        self.status.say("Chart added. Double-click it to change series, axes, limit lines and notes.", "good")
+        self.open_panel(ch, start_pick=not ch["series"])
+        self.status.say("Chart added." if ch["series"] else "Chart added. Select its cells on the sheet.", "good")
         self.update_ribbon()
 
     def region_around(self, r, c):
@@ -705,12 +766,71 @@ class SheetsTab(QWidget):
         if ch is None:
             self.status.say("There is no chart on this sheet yet: select cells, then Insert chart.", "warn")
             return
-        g = self.grid
-        dlg = D.ChartDialog(self.wb, g.sheet, ch, grid=g, parent=self)
-        dlg.applied.connect(lambda _c: (g.refresh_charts(), self.mark_extra()))
-        dlg.finished.connect(lambda _x, d=dlg: self.dialogs.remove(d) if d in self.dialogs else None)
-        self.dialogs.append(dlg)
-        dlg.show()
+        if sh_deps.matplotlib() is None:
+            self.status.say("matplotlib is needed to draw charts.", "bad")
+            return
+        self.grid.pick_chart(ch["id"])
+        self.open_panel(ch)
+
+    # ------------------------------------------------------------------ the chart panel
+    def ensure_panel(self):
+        if self.panel is None:
+            import sh_panel
+            p = sh_panel.ChartPanel()
+            p.set_context(self.wb, self.grid)
+            p.changed.connect(self.panel_changed)
+            p.closed.connect(self.panel_closed)
+            p.export_asked.connect(lambda cid: self.chart_export(cid))
+            p.message.connect(lambda t, lv: self.status.say(t, lv))
+            p.hide()
+            self.split.addWidget(p)
+            self.split.setStretchFactor(1, 0)
+            self.panel = p
+        return self.panel
+
+    def panel_open(self):
+        return self.panel is not None and not self.panel.isHidden() and self.panel.chart is not None
+
+    def open_panel(self, ch, start_pick=False):
+        p = self.ensure_panel()
+        was_hidden = p.isHidden()
+        p.set_context(self.wb, self.grid)
+        p.show()
+        if was_hidden:
+            total = max(self.split.width(), 900)
+            self.split.setSizes([max(300, total - 400), 400])
+        p.open_chart(ch, self.grid.sheet, start_pick)
+        self.grid.reveal_chart(ch["id"])
+
+    def panel_changed(self, cid):
+        self.grid.refresh_charts()
+        self.mark_extra()
+
+    def panel_closed(self):
+        self.grid.setFocus()
+
+    def follow_panel(self):
+        """The panel shows the chart that is picked on the sheet; it closes when its chart is gone; while it is picking, the selection goes into its box."""
+        if not self.panel_open():
+            return
+        p, g = self.panel, self.grid
+        s = g.sheet_obj()
+        ids = {c.get("id"): c for c in (s.charts if s else [])}
+        if g.sel_chart in ids and ids[g.sel_chart] is not p.chart:
+            p.open_chart(ids[g.sel_chart], g.sheet)
+            return
+        if ids.get(p.chart.get("id")) is not p.chart and not p.picking():
+            p.close_panel()                                    # (its chart was deleted, or this is another sheet)
+            return
+        p.grid_selection()
+
+    def on_charts_changed(self):
+        self.mark_extra()
+        self.update_ribbon()
+        if self.panel_open():
+            self.follow_panel()
+            if self.panel_open():
+                self.panel.sync_size()
 
     def chart_copy(self, cid=None):
         ch = self.chart_by_id(cid or None)
@@ -884,6 +1004,9 @@ class SheetsTab(QWidget):
         except ValueError:
             pass
         self.wb = wb
+        if self.panel is not None:
+            self.panel.close_panel()
+            self.panel.set_context(wb, self.grid)
         self.grid.set_workbook(wb)                          # the grid listens first, so it already shows a sheet that exists
         wb.listeners.append(self.wb_changed)
         self.path = path
@@ -953,6 +1076,11 @@ class SheetsTab(QWidget):
         return True
 
     def shutdown(self):
+        sh_prefs.off_change(self.prefs_changed)
+        if self.panel is not None:
+            self.panel.stop_pick()
+            self.panel.timer.stop()
+            self.panel.note_timer.stop()
         for d in list(self.dialogs):
             d.close()
         self.grid.finish_edit(commit=False)
