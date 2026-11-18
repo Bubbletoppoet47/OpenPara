@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboB
 import sh_book as B
 import sh_engine as E
 import sh_fmt
+import sh_prefs
 import sh_std
 import sh_study
 import ui_kit
@@ -528,22 +529,49 @@ class StandardsBrowser(QDialog):
 
 
 # ------------------------------------------------------------------------------------------------------------------ charts
+def load_custom_colors():
+    """Puts the person's saved "Custom colors" into the colour picker (Qt keeps them for the running program only)."""
+    for i, t in enumerate((sh_prefs.get("custom_colors") or "").split(",")[:QColorDialog.customCount()]):
+        c = QColor(t.strip())
+        if c.isValid():
+            QColorDialog.setCustomColor(i, c)
+
+
+def save_custom_colors():
+    sh_prefs.set_many({"custom_colors": ",".join(QColorDialog.customColor(i).name() for i in range(QColorDialog.customCount()))})
+
+
+def pick_color(parent, initial, title="Colour"):
+    """The colour picker, opened on the window of `parent` (so it keeps the program's look) with the person's custom colours.  Returns the colour, or None."""
+    load_custom_colors()
+    dlg = QColorDialog(QColor(initial or "#ffffff"), parent.window() if parent is not None else None)
+    dlg.setWindowTitle(title)
+    ok = dlg.exec()
+    save_custom_colors()
+    c = dlg.currentColor()
+    dlg.deleteLater()
+    return c if ok and c.isValid() else None
+
+
 class ColorButton(QPushButton):
+    """A colour swatch.  Its colour is painted by a rule for this button only: a rule without a target would reach everything opened from the button,
+    and the colour picker took the colour of the swatch."""
     picked = pyqtSignal(str)
 
     def __init__(self, color):
         super().__init__()
         self.color = color
+        self.setObjectName("colorswatch")
         self.setFixedWidth(46)
         self.clicked.connect(lambda _c=False: self.pick())
         self.paint()
 
     def paint(self):
-        self.setStyleSheet(f"background:{self.color}; border:1px solid #8a93a3; border-radius:4px;")
+        self.setStyleSheet(f"QPushButton#colorswatch {{ background:{self.color}; border:1px solid #8a93a3; border-radius:4px; }}")
 
     def pick(self):
-        c = QColorDialog.getColor(QColor(self.color), self, "Colour")
-        if c.isValid():
+        c = pick_color(self, self.color)                               # (on the window, not on the swatch)
+        if c is not None:
             self.color = c.name()
             self.paint()
             self.picked.emit(self.color)
@@ -754,8 +782,8 @@ class FormatDialog(QDialog):
 
     def pick(self, which):
         cur = self.fg if which == "fg" else self.bg
-        c = QColorDialog.getColor(QColor(cur or "#ffffff"), self, "Colour")
-        if c.isValid():
+        c = pick_color(self, cur)
+        if c is not None:
             setattr(self, which, c.name())
         else:
             setattr(self, which, None)

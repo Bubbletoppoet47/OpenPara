@@ -16,7 +16,7 @@ import sh_dialogs as D
 import sh_presets
 import ui_kit
 
-WARN_QSS = "border:1px solid #c04040;"
+WARN_QSS = "QLineEdit { border:1px solid #c04040; }"
 SET_INK = "#1a56c4"
 LINE_TYPES = ("line", "step")
 
@@ -109,7 +109,7 @@ class PickEdit(QWidget):
         self.btn.blockSignals(True)
         self.btn.setChecked(on)
         self.btn.blockSignals(False)
-        self.edit.setStyleSheet("border:1px solid #2b7de9;" if on else "")
+        self.edit.setStyleSheet("QLineEdit { border:1px solid #2b7de9; }" if on else "")
 
 
 class SeriesRow(QFrame):

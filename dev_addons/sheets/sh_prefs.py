@@ -1,7 +1,8 @@
 """
 sh_prefs.py - the few settings Sheets keeps for itself (in its own file, <user folder>/sheets/prefs.json): they are the person's, not a workbook's.
 
-    get(key)  /  set_many({...})  /  on_change(fn)        ribbon_icon (pt), ribbon_text (pt), chart_preset (name of the style new charts start from)
+    get(key)  /  set_many({...})  /  on_change(fn)        ribbon_icon (pt), ribbon_text (pt), chart_preset (name of the style new charts start from),
+                                                           custom_colors (the colour picker's "Custom colors", as #rrggbb separated by commas)
     LIMITS                                                 the bounds of every number, so a box can never take a value that breaks the ribbon
 
 The file is read when needed and written at once; a missing or damaged file reads as the defaults.  `use_folder(path)` points it somewhere else (tests).
@@ -9,7 +10,7 @@ The file is read when needed and written at once; a missing or damaged file read
 import json
 import os
 
-DEFAULTS = {"ribbon_icon": 20, "ribbon_text": 10, "chart_preset": "Default"}
+DEFAULTS = {"ribbon_icon": 20, "ribbon_text": 10, "chart_preset": "Default", "custom_colors": ""}
 LIMITS = {"ribbon_icon": (10, 48), "ribbon_text": (8, 20)}
 
 _folder = None

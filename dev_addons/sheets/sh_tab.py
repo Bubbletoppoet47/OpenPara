@@ -8,8 +8,7 @@ import os
 import threading
 
 from PyQt6.QtCore import QSize, Qt, QTimer
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (QApplication, QColorDialog, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QProgressDialog,
+from PyQt6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QProgressDialog,
                              QPushButton, QScrollArea, QSizePolicy, QSplitter, QTabBar, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 import sh_book as B
@@ -590,8 +589,8 @@ class SheetsTab(QWidget):
         self.update_ribbon()
 
     def pick_colour(self, which):
-        c = QColorDialog.getColor(QColor("#1f2a3c" if which == "fg" else "#fff3bf"), self, "Colour")
-        if c.isValid():
+        c = D.pick_color(self, "#1f2a3c" if which == "fg" else "#fff3bf")
+        if c is not None:
             self.style_selection(**{which: c.name()})
 
     def set_format(self, fmt):
