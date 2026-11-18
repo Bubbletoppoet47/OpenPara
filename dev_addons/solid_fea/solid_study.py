@@ -85,7 +85,7 @@ class SolidStudy(StudyAdapter):
     def geometry_state(self, src, vals):
         """The part after changing its dimensions: src is a fresh copy of the project's part."""
         src.set_values({**self.tab.setup.get("dims", {}), **vals})
-        return {"geom": sg.analyze(src.doc.solid)}
+        return {"geom": sg.analyze(src.doc.solid, self.tab.setup.get("splits"))}
 
     def prepare(self, values, ctx, state=None):
         spec = {"error": None, "run": None}

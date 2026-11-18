@@ -18,7 +18,7 @@ import traceback
 import numpy as np
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
-                             QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSplitter,
+                             QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter,
                              QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 import anim_export
@@ -215,6 +215,31 @@ class SolidWindow(QWidget):
         self.faces.setMaximumHeight(130)
         self.faces.itemSelectionChanged.connect(self.faces_selected)
         v.addWidget(self.faces)
+        self.split_lbl = QLabel("Split a flat face into patches (to load or support only a part of it): select the face, then choose how many columns "
+                                "(along its longer side) and rows (across it).")
+        self.split_lbl.setWordWrap(True)
+        self.split_lbl.setStyleSheet("color:#707070;")
+        v.addWidget(self.split_lbl)
+        row = QHBoxLayout()
+        self.sp_cols = QSpinBox()
+        self.sp_rows = QSpinBox()
+        for sbx, word in ((self.sp_cols, "columns"), (self.sp_rows, "rows")):
+            sbx.setRange(1, sg.MAX_SPLIT)
+            sbx.setValue(1)
+            sbx.setToolTip(f"1 to {sg.MAX_SPLIT}. The grid is shown on the selected face before you press Split.")
+            sbx.valueChanged.connect(self.preview_grid)
+            row.addWidget(sbx)
+            row.addWidget(QLabel(word + ("  x" if word == "columns" else "")))
+        row.addStretch(1)
+        self.b_split = QPushButton("Split")
+        self.b_split.setToolTip("Cuts the selected flat face into equal columns x rows patches. Supports and loads on the whole face stay and apply to every patch.")
+        self.b_split.clicked.connect(lambda: self.split_selected())
+        self.b_unsplit = QPushButton("Unsplit")
+        self.b_unsplit.setToolTip("Puts the patches of the selected face back together into one face.")
+        self.b_unsplit.clicked.connect(lambda: self.unsplit_selected())
+        row.addWidget(self.b_split)
+        row.addWidget(self.b_unsplit)
+        v.addLayout(row)
         # --- 2 material and analysis
         v = self.sec(2, "Material and analysis", True, summary=lambda: self.mat_combo.currentText().strip() or "custom material")
         self.mat_combo = QComboBox()
@@ -540,6 +565,8 @@ class SolidWindow(QWidget):
         for b in (self.b_anim, self.b_play, self.b_stop):
             b.setEnabled(self.result is not None)
         self.b_study.setEnabled(have and not busy)
+        if hasattr(self, "b_split"):
+            self.preview_grid()
 
     # ------------------------------------------------------------------ the project
     def title(self):
@@ -715,7 +742,7 @@ class SolidWindow(QWidget):
                 self.apply_dims()
             elif self.setup["dims"]:
                 self.source.set_values(self.setup["dims"])
-            g = sg.analyze(self.source.doc.solid)
+            g = sg.analyze(self.source.doc.solid, self.setup.get("splits"))
         except sg.GeomError as ex:
             self.say(str(ex))
             return False
@@ -737,11 +764,19 @@ class SolidWindow(QWidget):
                 self.read_inputs()
                 if self.mat_combo.currentData() is not None:
                     self.setup["mat_name"] = self.mat_combo.currentData()
+        for sp in self.setup.get("splits") or []:                       # remember the column direction that was used, so a rebuild keeps it
+            pid = sg.match_face(g.get("orig") or g, sp["face"])
+            if pid in g["split_of"] and not sp.get("u"):
+                sp["u"] = list(g["split_of"][pid]["u"])
         self.fill_faces()
         self.fill_dims()
         P, T, F = sg.display_mesh(g)
         self.view.set_geometry(P, T, F)
+        self.view.set_lines("grid", sg.patch_outlines(g))
+        self.view.set_lines("preview", [])
         self.set_geo_text()
+        if g["notes"]:
+            self.say(" ".join(g["notes"]))
         self.refresh_lists()
         self.colour()
         self.enable_buttons()
@@ -755,7 +790,9 @@ class SolidWindow(QWidget):
         bb = g["bbox"]
         L = UD()["L"]
         k = l_out(1.0)
-        self.geo_lbl.setText(f"{self.src.get('name') or 'part'}: {len(g['faces'])} faces, volume {g['volume'] * k ** 3:.5g} {L}3, size "
+        nf = len((g.get("orig") or g)["faces"])
+        extra = f" ({len(g['faces'])} with the patches)" if g.get("orig") else ""
+        self.geo_lbl.setText(f"{self.src.get('name') or 'part'}: {nf} faces{extra}, volume {g['volume'] * k ** 3:.5g} {L}3, size "
                              f"{(bb[1][0] - bb[0][0]) * k:.4g} x {(bb[1][1] - bb[0][1]) * k:.4g} x {(bb[1][2] - bb[0][2]) * k:.4g} {L}")
 
     def fill_faces(self):
@@ -763,9 +800,18 @@ class SolidWindow(QWidget):
         self.faces.clear()
         for f in self.geom["faces"]:
             n = f["normal"]
-            self.faces.addItem(f"Face {f['id'] + 1}: {f['kind']}, area {f['area'] * l_out(1.0) ** 2:.4g} {UD()['L']}2, "
+            self.faces.addItem(f"{self.face_label(f['id'])}: {f['kind']}, area {f['area'] * l_out(1.0) ** 2:.4g} {UD()['L']}2, "
                                f"normal ({n[0]:.2f}, {n[1]:.2f}, {n[2]:.2f})")
         self.faces.blockSignals(False)
+
+    def face_label(self, fid):
+        """'Face 3' - or, for a patch of a split face, 'Face 3, column 2 row 1' (the number of the face in the unsplit part)."""
+        f = self.geom["faces"][fid]
+        p = f.get("parent")
+        n = (p if p is not None else fid) + 1
+        if f.get("cell") is not None:
+            return f"Face {n}, column {f['cell'][0] + 1} row {f['cell'][1] + 1}"
+        return f"Face {n}"
 
     def fill_dims(self):
         self.dims.blockSignals(True)
@@ -803,6 +849,7 @@ class SolidWindow(QWidget):
     def faces_selected(self):
         self.sel_faces = sorted(self.faces.row(i) for i in self.faces.selectedItems())
         self.colour()
+        self.preview_grid()
 
     def picked(self, fid, point):
         mods = QApplication_keyboard()
@@ -821,7 +868,8 @@ class SolidWindow(QWidget):
             self.faces.item(f).setSelected(True)
         self.faces.blockSignals(False)
         self.colour()
-        self.say(f"Picked face {fid + 1}" + (f" (nearest vertex {self.sel_vertex + 1})" if self.sel_vertex is not None else ""))
+        self.preview_grid()
+        self.say(f"Picked {self.face_label(fid).lower()}" + (f" (nearest vertex {self.sel_vertex + 1})" if self.sel_vertex is not None else ""))
 
     def select_faces(self, fids):
         """Selects faces without the mouse (also used by the tests)."""
@@ -832,6 +880,110 @@ class SolidWindow(QWidget):
             self.faces.item(f).setSelected(True)
         self.faces.blockSignals(False)
         self.colour()
+        self.preview_grid()
+
+    # ------------------------------------------------------------------ splitting a flat face into patches
+    def split_target(self):
+        """(face id, why not) of the one face the Split / Unsplit buttons work on: the selected face (or a patch of it)."""
+        if self.geom is None:
+            return None, "Import a part first."
+        parents = {self.geom["faces"][f].get("parent") for f in self.sel_faces}
+        if len(self.sel_faces) == 0:
+            return None, "Select the flat face to split first."
+        if len(parents) != 1:
+            return None, "Select one face (or the patches of one face) to split."
+        return self.sel_faces[0], None
+
+    def preview_grid(self, *_a):
+        """Shows the grid the Split button would cut on the selected face, and enables / disables the buttons."""
+        segs = []
+        fid, _why = self.split_target() if self.geom is not None else (None, None)
+        split_now = False
+        key = None
+        if fid is not None:
+            f = self.geom["faces"][fid]
+            split_now = f.get("cell") is not None
+            if f["kind"] == "plane" and not split_now:
+                key = (id(self.geom), fid, self.sp_cols.value(), self.sp_rows.value())
+        if key != getattr(self, "_prev_key", None):
+            self._prev_key = key
+            if key is not None:
+                try:
+                    segs = sg.grid_lines(self.geom, fid, key[2], key[3])
+                except Exception:                                        # noqa: BLE001 - a preview never stops the program
+                    segs = []
+            self.view.set_lines("preview", segs, color=(0.95, 0.5, 0.05), width=3.0)
+        have = fid is not None and self.job is None
+        self.b_split.setEnabled(have)
+        self.b_unsplit.setEnabled(have and split_now)
+
+    def split_selected(self, cols=None, rows=None, confirm=True):
+        """Cuts the selected flat face into cols x rows patches (the numbers in the boxes by default).  Conditions on the whole face stay (they now
+        apply to all its patches); conditions on patches of the face's earlier split are removed, after asking."""
+        cols = self.sp_cols.value() if cols is None else int(cols)
+        rows = self.sp_rows.value() if rows is None else int(rows)
+        fid, why = self.split_target()
+        if fid is None:
+            self.say(why)
+            return False
+        f = self.geom["faces"][fid]
+        if f["kind"] != "plane":
+            self.say("Only flat faces can be split for now.")
+            return False
+        if cols * rows < 2:
+            self.say("Choose 2 or more columns or rows (or press Unsplit to put a split face back together).")
+            return False
+        return self.apply_split(fid, cols, rows, confirm)
+
+    def unsplit_selected(self, confirm=True):
+        fid, why = self.split_target()
+        if fid is None:
+            self.say(why)
+            return False
+        if sm.split_of_face(self.setup, self.geom, fid)[1] is None:
+            self.say("That face is not split.")
+            return False
+        return self.apply_split(fid, 1, 1, confirm)
+
+    def apply_split(self, fid, cols, rows, confirm=True):
+        o = self.geom.get("orig") or self.geom
+        pid = self.geom["faces"][fid]["parent"]
+        i, rec = sm.split_of_face(self.setup, self.geom, fid)
+        if rec is not None and rec["cols"] == cols and rec["rows"] == rows:
+            self.say(f"That face is already split into {cols} x {rows}.")
+            return False
+        lost = sm.patch_conditions(self.setup, self.geom, fid)
+        if lost and confirm:
+            r = QMessageBox.question(self, "Split face", ("Changing the split removes the supports and loads that are on single patches of this face:\n\n  "
+                                     + "\n  ".join(lost) + "\n\nSupports and loads on the whole face stay. Continue?"))
+            if r != QMessageBox.StandardButton.Yes:
+                return False
+        before = json.loads(json.dumps(self.setup))
+        sm.set_split(self.setup, self.geom, fid, cols, rows)
+        keep_sel = self.sp_cols.value(), self.sp_rows.value()
+        if not self.load_geometry():
+            self.setup = before
+            return False
+        if cols * rows > 1 and pid not in self.geom["split_of"]:                 # the cut did not work: back to what it was
+            why = " ".join(self.geom["notes"]) or "The face could not be split here."
+            self.setup = before
+            self.load_geometry()
+            self.say(why)
+            return False
+        self.sp_cols.blockSignals(True)
+        self.sp_rows.blockSignals(True)
+        self.sp_cols.setValue(keep_sel[0])
+        self.sp_rows.setValue(keep_sel[1])
+        self.sp_cols.blockSignals(False)
+        self.sp_rows.blockSignals(False)
+        self.after_edit()
+        n = pid + 1
+        if cols * rows > 1:
+            self.say(f"Face {n} is split into {cols} x {rows} patches. Click a patch to select it (Ctrl/Shift for several), then add a support or a load.")
+        else:
+            self.say(f"Face {n} is one face again.")
+        self.preview_grid()
+        return True
 
     def colour(self):
         if self.geom is None:
@@ -1336,7 +1488,8 @@ class SolidWindow(QWidget):
     def import_state(self, st):
         s = st.get("setup") or sm.default_setup()
         s.setdefault("dims", {})
-        dims_changed = s["dims"] != self.setup.get("dims") or getattr(self, "geom_case", False)
+        s.setdefault("splits", [])
+        dims_changed = (s["dims"] != self.setup.get("dims") or s["splits"] != (self.setup.get("splits") or []) or getattr(self, "geom_case", False))
         self.geom_case = False
         self.setup = json.loads(json.dumps(s))
         self.put_material(self.setup["material"])
@@ -1405,6 +1558,7 @@ class SolidWindow(QWidget):
                     st = json.load(f).get("setup")
                 if st:
                     st.setdefault("dims", {})
+                    st.setdefault("splits", [])
                     w.setup = st
             except Exception:
                 pass

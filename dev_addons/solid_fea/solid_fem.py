@@ -416,10 +416,20 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     r = K @ u - force
     reac = []
     allnodes = set()
-    for nd, d in constraints:
+    owner = {}                                   # a node held by several constraints (a support on a whole face and one on a patch of it, or two faces
+    for ci, (nd, d) in enumerate(constraints):   # that share an edge) is counted for ONE of them: the strictest, and the later one among equals
+        for n in np.unique(nd):
+            key = (1 if d is None else 0, ci)
+            if int(n) not in owner or key >= owner[int(n)]:
+                owner[int(n)] = key
+    for ci, (nd, d) in enumerate(constraints):
         nd = np.unique(nd)
         allnodes.update(int(n) for n in nd)
-        idx = (3 * nd[:, None] + np.arange(3)[None, :]).ravel()
+        mine = np.array([n for n in nd if owner[int(n)][1] == ci], dtype=int)
+        if not len(mine):
+            reac.append(np.zeros(3))
+            continue
+        idx = (3 * mine[:, None] + np.arange(3)[None, :]).ravel()
         rr = r[idx].reshape(-1, 3)
         if d is None:
             reac.append(rr.sum(axis=0))

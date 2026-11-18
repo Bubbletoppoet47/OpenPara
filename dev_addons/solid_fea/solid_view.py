@@ -101,6 +101,8 @@ class SolidView:
         self.legend = None                         # the legend picture in the corner: {"rep", "widget", "w", "h"}
         self.legend_note = False                   # True when the legend had to fall back to one line of text
         self.axes_on = False
+        self.lines = {}                            # name -> actor of a line overlay (see set_lines)
+        self.line_data = {}                        # name -> its segments (kept for the tests and when there is no 3D view)
         if QtInteractor is None:
             return
         try:
@@ -124,6 +126,8 @@ class SolidView:
         if self.plotter is None:
             return
         self.clear_result()
+        for name in list(self.lines):
+            self.set_lines(name, [])
         if self.actor is not None:
             self.plotter.remove_actor(self.actor)
             self.actor = None
@@ -134,6 +138,24 @@ class SolidView:
         self.poly.cell_data["rgb"] = (self.rgb * 255).astype(np.uint8)
         self.actor = self.plotter.add_mesh(self.poly, scalars="rgb", rgb=True, show_edges=False, pickable=True, reset_camera=False)
         self.plotter.reset_camera()
+        self.plotter.render()
+
+    def set_lines(self, name, segs, color=(0.1, 0.12, 0.2), width=1.5):
+        """Draws line segments [(p0, p1)] over the part under `name` ('grid' = the outlines of the patches of split faces, 'preview' = the grid that
+        Split would cut); an empty list takes them away."""
+        old = self.lines.pop(name, None)
+        self.line_data[name] = list(segs)
+        if self.plotter is None:
+            return
+        if old is not None:
+            self.plotter.remove_actor(old)
+        if not len(segs):
+            self.plotter.render()
+            return
+        P = np.array([p for s in segs for p in s], float).reshape(-1, 3)
+        cells = np.hstack([np.full((len(segs), 1), 2), np.arange(0, 2 * len(segs), 2)[:, None], np.arange(1, 2 * len(segs), 2)[:, None]]).ravel()
+        poly = pv.PolyData(P, lines=cells)
+        self.lines[name] = self.plotter.add_mesh(poly, color=color, line_width=width, pickable=False, reset_camera=False, show_scalar_bar=False)
         self.plotter.render()
 
     def colour_faces(self, colours):
