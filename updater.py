@@ -71,12 +71,24 @@ def _vkey(v):
     return tuple(int(p) if p.isdigit() else 0 for p in str(v).replace("-", ".").split("."))
 
 
-def fetch_latest(url=None, tok=None, timeout=8):
-    """The newest release as {'version','notes','page','app':asset|None,'setup':asset|None}, or None when there is none / no network."""
+def fetch_latest(url=None, tok=None, timeout=8, cache=None):
+    """The newest release as {'version','notes','page','app':asset|None,'setup':asset|None}, or None when there is none / no network.
+
+    cache: a dict kept by the caller ({"etag", "rel"}).  With it the request is a conditional one: when nothing changed GitHub answers 304 (and does not
+    count it against the rate limit), and the release from the last answer is returned."""
     tok = tok or token()
+    req = _request(url or feed_url(), "application/vnd.github+json", tok)
+    if cache is not None and cache.get("etag") and cache.get("rel") is not None:
+        req.add_header("If-None-Match", cache["etag"])
+    etag = None
     try:
-        with _open(_request(url or feed_url(), "application/vnd.github+json", tok), timeout) as r:
+        with _open(req, timeout) as r:
+            etag = r.headers.get("ETag")
             rel = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as ex:
+        if ex.code == 304 and cache is not None and cache.get("rel") is not None:
+            return cache["rel"]
+        return None
     except (urllib.error.URLError, OSError, ValueError):
         return None
     if isinstance(rel, list):                       # the playground feed is a list of releases, newest first: take the newest dev build
@@ -94,6 +106,8 @@ def fetch_latest(url=None, tok=None, timeout=8):
             out["app"] = a
         elif n.startswith(pre + "Setup-") and n.endswith(".exe"):
             out["setup"] = a
+    if cache is not None and etag:
+        cache["etag"], cache["rel"] = etag, out
     return out
 
 

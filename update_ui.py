@@ -42,8 +42,12 @@ def save_state(st):
 class CheckThread(QThread):
     got = pyqtSignal(object)
 
+    def __init__(self, parent=None, cache=None):
+        super().__init__(parent)
+        self.cache = cache
+
     def run(self):
-        self.got.emit(updater.fetch_latest())
+        self.got.emit(updater.fetch_latest(cache=self.cache))
 
 
 class DownloadThread(QThread):
@@ -66,7 +70,10 @@ class DownloadThread(QThread):
 
 
 class UpdateController(QObject):
-    """Owned by the main window: check_later() at start-up (at most once a day), check_now() from Help."""
+    """Owned by the main window: check_later() at start-up, check_now() from Help, and in the Playground the watch (Help > Watch for new builds):
+    the same check every WATCH_MS, which opens the usual "Update available" window when a newer build is out."""
+
+    WATCH_MS = 5 * 60 * 1000
 
     def __init__(self, shell):
         super().__init__(shell)
@@ -74,6 +81,12 @@ class UpdateController(QObject):
         self.thread = None
         self.dl = None
         self.manual = False
+        self.watching = False                       # True while the check on its way was started by the watch
+        self.watched_offer = False                  # True while the "Update available" window on screen was opened by the watch
+        self.etag_cache = {}                        # for the conditional requests of the checks
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.watch_tick)
+        self.apply_watch()
 
     # ---- settings
     def auto_enabled(self):
@@ -86,6 +99,59 @@ class UpdateController(QObject):
         st["auto"] = bool(on)
         save_state(st)
 
+    # ---- the watch (Playground only)
+    def watch_available(self):
+        """The watch exists in the Playground, in a copy that can be updated (a source copy, OPARA_NO_UPDATE=1, never updates itself)."""
+        return channel.is_playground() and os.environ.get("OPARA_NO_UPDATE") != "1"
+
+    def watch_enabled(self):
+        return self.watch_available() and bool(load_state().get("watch", False))
+
+    def set_watch(self, on):
+        st = load_state()
+        st["watch"] = bool(on)
+        st.pop("watch_later", None)                   # switching it on asks again about a build that was put off
+        save_state(st)
+        self.apply_watch()
+        if on and self.watch_available():
+            self.watch_tick(force=True)               # look right away
+
+    def apply_watch(self):
+        if self.watch_enabled():
+            self.timer.start(self.WATCH_MS)
+        else:
+            self.timer.stop()
+
+    def in_the_way(self):
+        """True while a question would be a nuisance: a window that must be answered, the program busy, or a 3D FEA solve / mesh running."""
+        if QApplication.activeModalWidget() is not None:
+            return True
+        if getattr(self.shell, "_busy_depth", 0) > 0:
+            return True
+        try:
+            tabs = self.shell.tabs
+            return any(getattr(tabs.widget(i), "job", None) is not None for i in range(tabs.count()))
+        except Exception:                                # noqa: BLE001 - no tabs to ask: nothing in the way
+            return False
+
+    def watch_busy(self):
+        """True when the watch should not look now: something is in the way, or a check or a download is on its way."""
+        if self.in_the_way():
+            return True
+        if self.thread is not None and self.thread.isRunning():
+            return True
+        if self.dl is not None and self.dl.isRunning():
+            return True
+        return False
+
+    def watch_tick(self, force=False):
+        if not self.watch_enabled():
+            self.timer.stop()
+            return
+        if self.watch_busy():                         # not now: the next tick (a few minutes) asks again
+            return
+        self.check(False, watch=True)
+
     def check_later(self, ms=4000):
         """At every start-up (unless switched off in Help): look for a newer version a few seconds after the window opened."""
         if self.auto_enabled():
@@ -94,11 +160,12 @@ class UpdateController(QObject):
     def check_now(self):
         self.check(True)
 
-    def check(self, manual):
+    def check(self, manual, watch=False):
         if self.thread is not None and self.thread.isRunning():
             return
         self.manual = manual
-        self.thread = CheckThread(self)
+        self.watching = bool(watch)
+        self.thread = CheckThread(self, self.etag_cache)
         self.thread.got.connect(self.checked)
         self.thread.start()
 
@@ -107,7 +174,10 @@ class UpdateController(QObject):
         st = load_state()
         st["last"] = time.time()
         save_state(st)
+        watching, self.watching = self.watching, False
         if rel is None:
+            if watching:
+                return                                  # the watch says nothing about a failed look; the next one tries again
             if not self.manual:
                 try:
                     self.shell.statusBar().showMessage("Could not check for updates (no internet connection?).", 8000)
@@ -123,6 +193,11 @@ class UpdateController(QObject):
             return
         if not self.manual and st.get("skip") == rel["version"]:
             return
+        if watching and st.get("watch_later") == rel["version"]:
+            return                                      # "Later" was chosen for this build: only a newer build asks again
+        if watching and self.in_the_way():
+            return                                      # a window is open or a solve is running: the next look asks again
+        self.watched_offer = watching
         self.offer(rel)
 
     def offer(self, rel):
@@ -138,7 +213,7 @@ class UpdateController(QObject):
         b_inst = box.addButton("Update now", QMessageBox.ButtonRole.AcceptRole) if can_app else None
         b_page = box.addButton("Open download page", QMessageBox.ButtonRole.ActionRole)
         b_skip = box.addButton("Skip this version", QMessageBox.ButtonRole.RejectRole)
-        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        b_later = box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
         if lay is None:
             box.setInformativeText("This copy was not installed with the installer (it runs from source), so it cannot update itself.")
         box.exec()
@@ -150,6 +225,10 @@ class UpdateController(QObject):
         elif c is b_skip:
             st = load_state()
             st["skip"] = rel["version"]
+            save_state(st)
+        elif getattr(self, "watched_offer", False):                  # Later (or the window closed): the watch does not ask about this build again
+            st = load_state()
+            st["watch_later"] = rel["version"]
             save_state(st)
 
     # ---- download + install

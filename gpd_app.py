@@ -353,6 +353,15 @@ class AppShell(QMainWindow):
         self.auto_upd.setChecked(self.updates.auto_enabled())
         self.auto_upd.toggled.connect(lambda on: self.updates.set_auto(on))
         hm.addAction(self.auto_upd)
+        if channel.is_playground():
+            self.watch_upd = QAction("Watch for new builds", self)
+            self.watch_upd.setCheckable(True)
+            self.watch_upd.setEnabled(self.updates.watch_available())
+            self.watch_upd.setChecked(self.updates.watch_enabled())
+            self.watch_upd.setToolTip("Looks for a newer Playground build every few minutes, like Check for updates, and asks if you want it. Nothing is "
+                                      "installed without your answer.")
+            self.watch_upd.toggled.connect(lambda on: self.updates.set_watch(on))
+            hm.addAction(self.watch_upd)
         add(hm, "Open the data folder", self.open_data_folder)
         add(hm, "Show the error log...", self.show_error_log)
         self.addon_commands(hm, "help", add)
