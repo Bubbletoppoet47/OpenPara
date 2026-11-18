@@ -22,6 +22,7 @@ import numpy as np
 from PyQt6.QtCore import QItemSelectionModel, Qt, QTimer
 from PyQt6.QtGui import QBrush, QColor, QFont, QGuiApplication, QKeySequence, QShortcut
 import sim_icons  # noqa: F401
+import sim_matdlg
 import sim_ui
 import sim_report
 import anim_export
@@ -138,18 +139,20 @@ class BeamTab(QWidget):
             self.sections.append(s_)
             return s_.body
         lay = sec(1, "Geometry", True, summary=lambda: self.info.text().split("\n")[0][:90])
-        self.cb_tie = QCheckBox("Connect points that lie on members (auto tie)")
-        self.cb_tie.setChecked(True)
-        self.cb_tie.setToolTip("A point that lies in the middle of a member (a diagonal meeting a long rail, say) becomes part of that "
-                               "member: the member is continuous through the point and whatever else meets there is connected to it. "
-                               "Applies at once. Without it such points are NOT connected, unless you tie them by hand (Tie point to member).")
-        self.cb_tie.toggled.connect(self.ties_changed)
-        lay.addWidget(self.cb_tie)
         self.picker = SketchPicker(self.win, self.import_picked,
                                    "Makes a copy of the chosen sketch as it is now: every line is a member, every shared point a joint "
                                    "(construction lines are ignored). Importing the same sketch again after changing it keeps the profiles, "
                                    "supports and loads of the lines that still exist.")
         lay.addWidget(self.picker)
+        b = QPushButton("Clear (start over)")
+        b.setToolTip("Removes the imported copy of the sketch and everything set up on this tab (supports, loads, results...) so you can "
+                     "import the sketch again from scratch. The sketch itself is not touched.")
+        b.clicked.connect(self.clear_tab)
+        lay.addWidget(b)
+        self.info = QLabel("Nothing imported yet.")
+        self.info.setWordWrap(True)
+        lay.addWidget(self.info)
+
         lb = QLabel("Profile sketches (cross-sections drawn as a sketch)")
         lb.setToolTip("A member's profile can be a sketch of its cross-section instead of one of the basic shapes. Add the sketch here (from "
                       "the frame's part or from another part, which is then copied into the project), then choose it in a member's Profile.")
@@ -170,31 +173,40 @@ class BeamTab(QWidget):
             b.clicked.connect(fn)
             row.addWidget(b)
         lay.addLayout(row)
-        b = QPushButton("Clear (start over)")
-        b.setToolTip("Removes the imported copy of the sketch and everything set up on this tab (supports, loads, results...) so you can "
-                     "import the sketch again from scratch. The sketch itself is not touched.")
-        b.clicked.connect(self.clear_tab)
-        lay.addWidget(b)
-        self.info = QLabel("Nothing imported yet.")
-        self.info.setWordWrap(True)
-        lay.addWidget(self.info)
+        self.cb_tie = QCheckBox("Connect points that lie on members (auto tie)")
+        self.cb_tie.setChecked(True)
+        self.cb_tie.setToolTip("A point that lies in the middle of a member (a diagonal meeting a long rail, say) becomes part of that "
+                               "member: the member is continuous through the point and whatever else meets there is connected to it. "
+                               "Applies at once. Without it such points are NOT connected, unless you tie them by hand (Tie point to member).")
+        self.cb_tie.toggled.connect(self.ties_changed)
+        lay.addWidget(self.cb_tie)
 
         lay = sec(2, "Material and analysis", False, help_text="The material is used by every member that does not choose its own. Materials come from "
                   "the shared library (materials.json); add your own in the 2D FEA tab. A member can pick another material in its table row. "
                   "Analysis: the linear solver (small displacements, elastic) is exact for the beam theory; the nonlinear solver adds large "
                   "displacements and yielding. Both ticked: solve linear first and switch to nonlinear when a trigger is passed.",
                   summary=lambda: self.mat_combo.currentText() + (" - " + self.solver_text() if hasattr(self, "cb_lin") else ""))
-        form = QFormLayout()
         self.mat_combo = QComboBox()
+        row = QHBoxLayout()
+        row.addWidget(self.mat_combo, 1)
+        b = QPushButton("Add material...")
+        b.setToolTip("Adds the numbers now in the boxes below (or others you type in the box that opens) to your material library.")
+        b.clicked.connect(self.add_material)
+        row.addWidget(b)
+        self.b_del_mat = QPushButton("Delete")
+        self.b_del_mat.setToolTip("Deletes a material you added. The built-in ones stay.")
+        self.b_del_mat.clicked.connect(self.delete_material)
+        row.addWidget(self.b_del_mat)
+        lay.addLayout(row)
+        form = QFormLayout()
         self.e_E, self.e_sy, self.e_su = QLineEdit("200000"), QLineEdit("250"), QLineEdit("400")
         self.lbl_E, self.lbl_sy, self.lbl_su = QLabel("E"), QLabel("Yield strength"), QLabel("Ultimate strength")
         self.e_sy.setToolTip("Yield strength. 0 or empty = no yield check (brittle material).")
-        form.addRow("Material", self.mat_combo)
         form.addRow(self.lbl_E, self.e_E)
         form.addRow(self.lbl_sy, self.e_sy)
         form.addRow(self.lbl_su, self.e_su)
         self.e_nu = QLineEdit("0.3")
-        self.e_nu.setToolTip("Poisson's ratio: only used for the shear modulus when 'Include shear deformation' (Mesh section) is on.")
+        self.e_nu.setToolTip("Poisson's ratio: only used for the shear modulus when 'Include shear deformation' is on.")
         form.addRow("Poisson's ratio", self.e_nu)
         self.e_eu = QLineEdit("10")
         self.e_eu.setToolTip("Nonlinear solver: the plastic strain (in %) at which the stress reaches the ultimate strength. The stress rises in a "
@@ -217,6 +229,11 @@ class BeamTab(QWidget):
         form.addRow(self.cb_nl)
         form.addRow(self.lbl_nld, self.e_nld)
         form.addRow("Stress trigger (% of yield)", self.e_nly)
+        self.cb_shear = QCheckBox("Include shear deformation (Timoshenko)")
+        self.cb_shear.setToolTip("Short or deep members also deflect by shear. Uses the shear area of each profile (web area for I / channel / "
+                                 "tee sections, 5/6 of the area for a rectangle...). Off = pure bending (Euler-Bernoulli). Sections entered by "
+                                 "numbers have no shear area and stay Euler-Bernoulli. The nonlinear solver does not include shear deformation.")
+        form.addRow(self.cb_shear)
         lay.addLayout(form)
         self.units_note = self.note("")
         lay.addWidget(self.units_note)
@@ -235,7 +252,7 @@ class BeamTab(QWidget):
         lay = sec(3, "Joints", True, help_text="Select joints or members on the drawing first. Rigid joint: the selected joints carry bending "
                   "moment between the members that meet there. Pinned joint: the members can rotate freely there; a frame with pinned joints "
                   "everywhere is a truss.", summary=lambda: self.info.text().split("\n")[0][:60])
-        row = QHBoxLayout()
+        lay.addWidget(self.note("Select the joints (or members) first (click them in the view), then press a button."))
         for text, icn, pinned, tip in (("Rigid joint", "rigid_joint", False,
                                         "The selected joints carry bending moment between the members that meet there (all members meeting at a "
                                         "selected joint, or both ends of a selected member)."),
@@ -244,11 +261,11 @@ class BeamTab(QWidget):
                                         "A frame with pinned joints everywhere is a truss.")):
             b = sim_ui.icon_button(text, icn, tip)
             b.clicked.connect(lambda _=False, p_=pinned: self.set_joint(p_))
-            row.addWidget(b)
-        lay.addLayout(row)
+            lay.addWidget(b)
 
-        lay = sec(4, "Supports", True, help_text="Select joints (or members) on the drawing first, then press a button.",
+        lay = sec(5, "Supports", True, help_text="Select joints (or members) on the drawing first, then press a button.",
                   summary=lambda: self.count_text(self.supports, "support"))
+        lay.addWidget(self.note("Select the joints (or members) first (click them in the view), then press a button."))
         for text, mode, icn, tip in (("Fixed", "fixed", "fixed", "Holds x, y and rotation."),
                                      ("Pinned", "pinned", "pinned", "Holds x and y; rotation is free."),
                                      ("ux = 0", "x", "ux", "Holds x only (a roller that rolls in y)."),
@@ -257,10 +274,11 @@ class BeamTab(QWidget):
             b.clicked.connect(lambda _=False, m_=mode: self.add_support(m_))
             lay.addWidget(b)
 
-        lay = sec(5, "Loads", True, help_text="Select joints or members first. Double-click a Name in the table to rename it (the Parameterization "
+        lay = sec(6, "Loads", True, help_text="Select joints or members first. Double-click a Name in the table to rename it (the Parameterization "
                   "tab uses these names). Forces, moments and line loads can be edited in the Value column (force: Fx, Fy; moment: Mz; line "
                   "load: the two values you entered). Wind and snow need each member's in-plane depth (Depth column).",
                   summary=lambda: self.count_text(self.loads, "load"))
+        lay.addWidget(self.note("Select the joints (or members) first (click them in the view), then press a button."))
         for text, icn, fn, tip in (("Force...", "force", self.add_force, "A force on each selected joint."),
                                    ("Moment...", "moment", self.add_moment, "A moment on each selected joint (counter-clockwise positive)."),
                                    ("Line load...", "line_load", self.add_dist, "A uniform load per length on each selected member."),
@@ -282,15 +300,17 @@ class BeamTab(QWidget):
         self.cond_table.itemChanged.connect(self.cond_item_changed)
         lay.addWidget(self.cond_table)
         row = QHBoxLayout()
-        b = QPushButton("Edit selected wind / snow...")
-        b.clicked.connect(self.edit_pressure)
+        b = QPushButton("Edit selected...")
+        b.setToolTip("Edits the selected row: a wind or snow load opens its box again; a force, moment or line load lets you type a new Value; "
+                     "a support lets you rename it.")
+        b.clicked.connect(self.edit_condition)
         row.addWidget(b)
-        b = QPushButton("Remove selected item")
+        b = QPushButton("Remove selected")
         b.clicked.connect(self.remove_condition)
         row.addWidget(b)
         lay.addLayout(row)
 
-        lay = sec(6, "Mesh", True, help_text="Every member is cut into equal elements. The result is the same as one element for a uniform "
+        lay = sec(7, "Mesh", True, help_text="Every member is cut into equal elements. The result is the same as one element for a uniform "
                   "member under end loads (that one is exact), but the mesh shows where the results are computed, lets you read values at "
                   "the nodes, and is needed by the nonlinear solver (at least 8 elements per member are used there). Set either the number of "
                   "elements per member or a target element size (the size wins when both are set).",
@@ -304,23 +324,14 @@ class BeamTab(QWidget):
         self.lbl_msize = QLabel("Element size")
         form.addRow("Elements per member", self.e_nel)
         form.addRow(self.lbl_msize, self.e_msize)
-        self.cb_shear = QCheckBox("Include shear deformation (Timoshenko)")
-        self.cb_shear.setToolTip("Short or deep members also deflect by shear. Uses the shear area of each profile (web area for I / channel / "
-                                 "tee sections, 5/6 of the area for a rectangle...). Off = pure bending (Euler-Bernoulli). Sections entered by "
-                                 "numbers have no shear area and stay Euler-Bernoulli. The nonlinear solver does not include shear deformation.")
-        form.addRow(self.cb_shear)
-        self.cb_mesh = QCheckBox("Show the mesh on the drawing")
-        self.cb_mesh.setChecked(True)
-        form.addRow(self.cb_mesh)
         lay.addLayout(form)
         self.mesh_lbl = self.note("")
         lay.addWidget(self.mesh_lbl)
         for e in (self.e_nel, self.e_msize):
             e.editingFinished.connect(self.changed)
         self.cb_shear.toggled.connect(self.changed)
-        self.cb_mesh.toggled.connect(self.view_changed)
 
-        lay = sec(7, "Ties", False, help_text="Select one or more joints and the member they lie on (in the middle of it), then press Tie point to "
+        lay = sec(4, "Ties", False, help_text="Select one or more joints and the member they lie on (in the middle of it), then press Tie point to "
                   "member. The joint becomes part of the member (the member is continuous through it), so other members that end there are "
                   "connected to it. Ties made by hand are listed here (automatic ones are counted in the line under the import buttons). In the "
                   "results a tied member is still ONE member.", summary=lambda: self.count_text(self.ties, "manual tie"))
@@ -351,7 +362,6 @@ class BeamTab(QWidget):
         self.cb_auto = QCheckBox("Solve automatically after every change")
         self.cb_auto.setChecked(True)
         self.cb_auto.setToolTip("A frame solves in a fraction of a second, so this is on by default.")
-        lay.addWidget(self.cb_auto)
         self.b_solve = sim_ui.solve_button()
         self.study_box = sim_ui.study_slot()
         self.b_solve.clicked.connect(lambda: self.solve(auto=False))
@@ -377,6 +387,11 @@ class BeamTab(QWidget):
         self.e_def.editingFinished.connect(self.view_changed)
         row.addWidget(self.e_def)
         lay.addLayout(row)
+        self.cb_mesh = QCheckBox("Show mesh")
+        self.cb_mesh.setChecked(True)
+        self.cb_mesh.setToolTip("Draws the element nodes on the drawing.")
+        self.cb_mesh.toggled.connect(self.view_changed)
+        lay.addWidget(self.cb_mesh)
         self.cb_names = QCheckBox("Show member names")
         self.cb_names.toggled.connect(self.view_changed)
         lay.addWidget(self.cb_names)
@@ -419,17 +434,20 @@ class BeamTab(QWidget):
         self.res_lbl.setWordWrap(True)
         self.res_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(self.res_lbl)
+        row = QHBoxLayout()
         b = QPushButton("Member report...")
         b.setToolTip("Every member's end forces, peaks and stresses as text you can copy.")
         b.clicked.connect(self.show_report)
-        lay.addWidget(b)
+        row.addWidget(b)
         b = QPushButton("Zoom to fit")
         b.clicked.connect(self.canvas.fit)
-        lay.addWidget(b)
+        row.addWidget(b)
+        lay.addLayout(row)
 
         for s_ in sorted(self.sections, key=lambda x: x.number):
             if s_.number == 8:
                 lay0.addWidget(self.b_solve)          # the one big Solve button sits between the setup sections and the Results
+                lay0.addWidget(self.cb_auto)          # with its "solve automatically" choice right under it
                 lay0.addWidget(self.study_box)
             lay0.addWidget(s_)
         lay0.addStretch(1)
@@ -667,6 +685,19 @@ class BeamTab(QWidget):
         self.mat_combo.setCurrentIndex(max(0, i))
         self.mat_combo.blockSignals(False)
 
+    def add_material(self):
+        nm = sim_matdlg.add_material(self, self.library, self.cur_unit,
+                                     {"E": self.e_E.text(), "nu": self.e_nu.text(), "sy": self.e_sy.text(), "su": self.e_su.text(),
+                                      "eu": self.e_eu.text()})
+        if nm is not None:
+            self.fill_materials(select=nm)
+            self.material_picked()
+
+    def delete_material(self):
+        if sim_matdlg.delete_material(self, self.mat_combo.currentData(), self.library):
+            self.fill_materials()
+            self.material_picked()
+
     def library_entry(self, name):
         return next((x for x in self.library if x["name"] == name), None)
 
@@ -679,6 +710,7 @@ class BeamTab(QWidget):
             if m_.get("Sy_MPa") is not None and m_.get("Su_MPa") is not None:
                 self.e_sy.setText(f"{pm.from_mpa(m_['Sy_MPa'], u):.10g}")
                 self.e_su.setText(f"{pm.from_mpa(m_['Su_MPa'], u):.10g}")
+        self.b_del_mat.setEnabled(sim_matdlg.can_delete(name))
         if self.model is not None:
             self.changed()
 
@@ -687,6 +719,7 @@ class BeamTab(QWidget):
             self.mat_combo.blockSignals(True)
             self.mat_combo.setCurrentIndex(0)
             self.mat_combo.blockSignals(False)
+            self.b_del_mat.setEnabled(False)
 
     def showEvent(self, ev):
         super().showEvent(ev)
@@ -1579,6 +1612,25 @@ class BeamTab(QWidget):
         self.loads[r] = dict(dlg.values, targets=list(dlg.targets), **keep)
         self.fill_members()
         self.after_conditions()
+
+    def edit_condition(self):
+        """Edit selected: wind / snow open their box; a force, moment or line load starts editing its Value; a support (or anything else
+        without an editable value) lets you rename it."""
+        t = self.cond_table
+        r = t.currentRow()
+        if not (0 <= r < t.rowCount()):
+            self.status("Select a row of the list first.")
+            return False
+        is_sup, idx, item = self._cond_ref(r)
+        if not is_sup and item.get("kind") in ("wind", "snow"):
+            self.edit_pressure()
+            return True
+        it = t.item(r, 3)
+        if it is None or not (it.flags() & Qt.ItemFlag.ItemIsEditable):
+            it = t.item(r, 0)
+        t.setCurrentItem(it)
+        t.editItem(it)
+        return True
 
     def apply_depth(self, targets, depth):
         if depth is None:

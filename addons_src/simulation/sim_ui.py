@@ -3,8 +3,10 @@ sim_ui.py - the shared building blocks of the left panels of 1D FEA, 2D FEA and 
 
   Section      a numbered, collapsible block: header (click to fold / unfold, one-line summary while folded, optional "?" help) + body
   icon_button  a full-width button with a sketched icon, text left-aligned (supports and loads are stacked with these)
+  solve_button / solve_side_button   the big Solve button, and the Stop / Cancel button that sits beside it
   help_button  a small "?" that opens a pop-up with a long note, so the panel itself stays short
   make_panel   puts the scrolling sections and the pinned bar (Mesh / Solve ...) into one widget
+  soften       gives a finished panel the soft bevel look of sim_style (make_panel does it; call it again when sections are added later)
 
 Whether a section is folded is remembered between runs (sim_panels.json in the user folder).
 """
@@ -82,6 +84,7 @@ def help_button(text):
         b._popup.show()
     b.clicked.connect(show)
     b.help_text = text
+    b.setProperty("simrole", "help")
     return b
 
 
@@ -150,6 +153,15 @@ class Section(QWidget):
     def is_open(self):
         return self.toggle.isChecked()
 
+    def soften(self):
+        """The soft bevel look (sim_style): a raised bar for the header, a faint tile around the open part."""
+        import sim_style
+        self.toggle.setStyleSheet(sim_style.SECTION_BAR)
+        self.sum_lbl.setStyleSheet("color:#53647c; font-size:11px; padding-left:18px; background:transparent;")
+        self.frame.setObjectName("secbody")
+        self.frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.frame.setStyleSheet(sim_style.BODY)
+
     def refresh_summary(self):
         txt = ""
         if not self.is_open() and self.summary is not None:
@@ -164,9 +176,18 @@ class Section(QWidget):
 def solve_button(text="Solve"):
     """The one big full-width Solve button that sits between the setup sections and the Results."""
     b = QPushButton(text)
+    b.setProperty("simrole", "solve")
     b.setMinimumHeight(46)
     b.setStyleSheet("QPushButton { background:#0e7f86; color:white; font-size:15px; font-weight:bold; border:none; border-radius:8px; margin:6px 4px; }"
                     "QPushButton:hover { background:#12949c; } QPushButton:disabled { background:#b9c4cc; color:#eef2f4; }")
+    return b
+
+
+def solve_side_button(text):
+    """Stop / Cancel, sitting right of the Solve button: as tall as it."""
+    b = QPushButton(text)
+    b.setProperty("simrole", "solveside")
+    b.setMinimumHeight(46)
     return b
 
 
@@ -203,6 +224,7 @@ def make_panel(content, pinned_widgets, min_w=340, max_w=None):
         panel.default_w = 400
         panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         panel.scroll = scroll
+        soften(panel)
         return panel
     bar = QFrame()
     bar.setFrameShape(QFrame.Shape.NoFrame)
@@ -218,6 +240,34 @@ def make_panel(content, pinned_widgets, min_w=340, max_w=None):
     panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
     panel.scroll = scroll
     panel.bar = bar
+    soften(panel)
+    return panel
+
+
+def soften(panel):
+    """Gives a panel (from make_panel) the soft bevel look of sim_style.  Safe to call again, for instance after more sections were added."""
+    try:
+        import sim_style
+        sheet = sim_style.stylesheet()
+    except Exception:  # noqa: BLE001 - a look must never break the panel
+        return panel
+    panel.setObjectName("simpanel")
+    panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    content = panel.scroll.widget() if getattr(panel, "scroll", None) is not None else None
+    if content is not None:
+        content.setObjectName("simcontent")
+        content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    panel.setStyleSheet(sheet)
+    for s_ in panel.findChildren(Section):
+        s_.soften()
+    for b in panel.findChildren(QPushButton):
+        if b.property("simrole") == "solve":
+            b.setStyleSheet(sim_style.SOLVE)
+        elif b.property("simrole") == "solveside":
+            b.setStyleSheet(sim_style.SOLVE_SIDE)
+    for tb in panel.findChildren(QToolButton):
+        if tb.text() == "?":
+            tb.setStyleSheet(sim_style.HELP)
     return panel
 
 

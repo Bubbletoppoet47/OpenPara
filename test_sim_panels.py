@@ -30,8 +30,8 @@ for n in sim_icons.NAMES:
 
 # --- sections
 tabs = {"2D FEA": physics_tab.PhysicsTab(Win()), "1D FEA": beam_tab.BeamTab(Win()), "2D CFD": cfd_tab.CFDTab(Win())}
-want = {"2D FEA": ["Geometry", "Material and analysis", "Supports", "Loads", "Mesh", "Probe regions", "Results"],
-        "1D FEA": ["Geometry", "Material and analysis", "Joints", "Supports", "Loads", "Mesh", "Ties", "Results"],
+want = {"2D FEA": ["Geometry", "Material and analysis", "Supports", "Loads", "Mesh", "Results"],
+        "1D FEA": ["Geometry", "Material and analysis", "Joints", "Ties", "Supports", "Loads", "Mesh", "Results"],
         "2D CFD": ["Geometry", "Fluid and flow", "Domain", "Mesh", "Solver", "Results"]}
 for name, t in tabs.items():
     t.resize(1200, 800); t.show(); app.processEvents()
@@ -68,7 +68,7 @@ beam = tabs["1D FEA"]
 assert texts(beam, "Supports") == ["Fixed", "Pinned", "ux = 0", "uy = 0"]
 assert texts(beam, "Loads")[:5] == ["Force...", "Moment...", "Line load...", "Wind...", "Snow..."]
 assert texts(beam, "Joints") == ["Rigid joint", "Pinned joint"]
-for t in tabs.values():
+for name, t in tabs.items():
     assert not [b for b in t.findChildren(QPushButton) if b.parent() is not None and b.parent().objectName() == "pinned"], "no pinned bar any more"
     assert t.b_solve.text() == "Solve" and t.b_solve.minimumHeight() >= 40
     col = t.sections[0].parent()
@@ -76,8 +76,12 @@ for t in tabs.values():
     lay = col.layout()
     i = lay.indexOf(holder)
     assert i >= 0, "Solve sits in the scrolled column"
-    assert lay.itemAt(i + 1).widget() is t.study_box, "the parametric-study slot is right under Solve"
-    assert lay.itemAt(i + 2).widget() is [x for x in t.sections if x.title == "Results"][0], "Solve (and its study slot) sit directly above the Results"
+    under = {"1D FEA": ["cb_auto"], "2D CFD": ["solve_status"]}.get(name, [])
+    under = [getattr(t, a) for a in under]        # what belongs right under the Solve button of a panel
+    for k, w in enumerate(under):
+        assert lay.itemAt(i + 1 + k).widget() is w, (name, "the Solve bar's own status / choice is right under Solve")
+    assert lay.itemAt(i + 1 + len(under)).widget() is t.study_box, "the parametric-study slot is under Solve (and what belongs to it)"
+    assert lay.itemAt(i + 2 + len(under)).widget() is [x for x in t.sections if x.title == "Results"][0], "Solve (and its study slot) sit directly above the Results"
     pan = col
     while pan is not None and not hasattr(pan, "default_w"):
         pan = pan.parent()

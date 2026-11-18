@@ -25,6 +25,7 @@ import anim_export
 import ext
 import physics_materials as pm
 import result_style
+import sim_matdlg
 import sim_project
 import sim_report as R
 import sim_ui
@@ -195,6 +196,14 @@ class SolidWindow(QWidget):
         self.sections.append(s_)
         return s_.body
 
+    @staticmethod
+    def hint(text):
+        """The one-line hint over the support / load buttons: small grey text, like the other simulation panels."""
+        lb = QLabel(text)
+        lb.setWordWrap(True)
+        lb.setStyleSheet("color:#555555; font-size:11px;")
+        return lb
+
     def build_panel(self):
         # --- 1 geometry
         v = self.sec(1, "Geometry", True, summary=lambda: self.geo_lbl.text().split("\n")[0][:90])
@@ -272,11 +281,21 @@ class SolidWindow(QWidget):
         v = self.sec(2, "Material and analysis", True, summary=lambda: self.mat_combo.currentText().strip() or "custom material")
         self.mat_combo = QComboBox()
         self.mat_combo.activated.connect(self.material_picked)
-        v.addWidget(self.mat_combo)
+        row = QHBoxLayout()
+        row.addWidget(self.mat_combo, 1)
+        b = QPushButton("Add material...")
+        b.setToolTip("Adds the numbers now in the boxes below (or others you type in the box that opens) to your material library "
+                     "(the same one 1D and 2D FEA use).")
+        b.clicked.connect(self.add_material)
+        row.addWidget(b)
+        self.b_del_mat = QPushButton("Delete")
+        self.b_del_mat.setToolTip("Deletes a material you added. The built-in ones stay.")
+        self.b_del_mat.clicked.connect(self.delete_material)
+        row.addWidget(self.b_del_mat)
+        v.addLayout(row)
         self.mat_note = QLabel("")
         self.mat_note.setWordWrap(True)
         self.mat_note.setStyleSheet("color:#707070;")
-        v.addWidget(self.mat_note)
         f = QFormLayout()
         self.e_E, self.e_nu, self.e_rho, self.e_sy, self.e_su = (QLineEdit() for _ in range(5))
         self.mat_labels = {}
@@ -286,26 +305,25 @@ class SolidWindow(QWidget):
             f.addRow(lab, e)
             e.editingFinished.connect(self.inputs_changed)
         v.addLayout(f)
-        v.addWidget(QLabel("Analysis: linear elastic, small displacements, quadratic tetrahedra."))
+        v.addWidget(sim_ui.wrapped("Analysis: linear elastic, small displacements, quadratic tetrahedra."))
+        v.addWidget(self.mat_note)
         self.fill_materials()
         self.put_material(self.setup["material"])
         # --- 3 supports
         v = self.sec(3, "Supports", True, summary=lambda: f"{len(self.setup['supports'])} support(s)")
-        v.addWidget(QLabel("Select the face(s) first (click them in the view), then press a button."))
+        v.addWidget(self.hint("Select the face(s) first (click them in the view), then press a button."))
         for mode, icn, tip in (("fixed", "fixed", "Holds the selected faces in every direction."),
                                ("slide", "ux", "Holds the selected faces only in the direction normal to them; they slide freely along it."),
                                ("bolt", "bolt", "A bolt or pin hole: the selected hole surface is held fixed.")):
             b = sim_ui.icon_button({"fixed": "Fixed", "slide": "One direction (normal)", "bolt": "Bolt / pin hole"}[mode], icn, tip)
             b.clicked.connect(lambda _c=False, m_=mode: self.add_support(m_))
             v.addWidget(b)
-        self.sup_list = QListWidget()
-        self.sup_list.setMaximumHeight(90)
+        self.sup_list = QListWidget()                 # the plain-text copy of the supports (kept for scripts); the table under Loads shows them
+        self.sup_list.hide()
         v.addWidget(self.sup_list)
-        b = QPushButton("Remove selected support")
-        b.clicked.connect(lambda: self.remove_item("supports", self.sup_list))
-        v.addWidget(b)
         # --- 4 loads
         v = self.sec(4, "Loads", True, summary=lambda: f"{len(self.setup['loads'])} load(s)")
+        v.addWidget(self.hint("Select the face(s) first (click them in the view), then press a button."))
         for text, icn, kind, tip in (("Force on face(s)...", "force", "force", "A total force spread over the selected faces."),
                                      ("Pressure on face(s)...", "pressure", "pressure", "Pressure on the selected faces; positive pushes into the part."),
                                      ("Force at vertex...", "force", "point", "A force at the selected vertex (a click on a face picks its nearest vertex)."),
@@ -313,16 +331,29 @@ class SolidWindow(QWidget):
             b = sim_ui.icon_button(text, icn, tip)
             b.clicked.connect(lambda _c=False, k=kind: self.add_load(k))
             v.addWidget(b)
-        self.load_list = QListWidget()
-        self.load_list.setMaximumHeight(100)
-        self.load_list.itemDoubleClicked.connect(lambda it: self.edit_load(self.load_list.row(it)))
+        self.load_list = QListWidget()                # the plain-text copy of the loads (kept for scripts)
+        self.load_list.hide()
         v.addWidget(self.load_list)
+        v.addWidget(QLabel("Conditions on this model"))
+        self.cond_table = QTableWidget(0, 4)
+        self.cond_table.setHorizontalHeaderLabels(["Name", "Type", "Applied to", "Value"])
+        self.cond_table.verticalHeader().hide()
+        self.cond_table.setMinimumHeight(110)
+        self.cond_table.setMaximumHeight(200)
+        self.cond_table.horizontalHeader().setStretchLastSection(True)
+        self.cond_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.cond_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.cond_table.setToolTip("Supports first, then loads. Double-click a Name to rename it; double-click a load to change its numbers.")
+        self.cond_table.itemChanged.connect(self.cond_item_changed)
+        self.cond_table.cellDoubleClicked.connect(self.cond_double_clicked)
+        v.addWidget(self.cond_table)
         row = QHBoxLayout()
-        b = QPushButton("Edit selected")
-        b.clicked.connect(lambda: self.edit_load(self.load_list.currentRow()))
+        b = QPushButton("Edit selected...")
+        b.setToolTip("Edits the selected row: a load opens its numbers again; a support lets you rename it.")
+        b.clicked.connect(self.edit_condition)
         row.addWidget(b)
-        b = QPushButton("Remove selected load")
-        b.clicked.connect(lambda: self.remove_item("loads", self.load_list))
+        b = QPushButton("Remove selected")
+        b.clicked.connect(self.remove_condition)
         row.addWidget(b)
         v.addLayout(row)
         # --- 5 mesh
@@ -441,8 +472,7 @@ class SolidWindow(QWidget):
         self.b_solve = sim_ui.solve_button()
         self.b_solve.clicked.connect(self.run_solve)
         row.addWidget(self.b_solve, 1)
-        self.b_cancel = QPushButton("Cancel")
-        self.b_cancel.setMinimumHeight(44)
+        self.b_cancel = sim_ui.solve_side_button("Cancel")
         self.b_cancel.setEnabled(False)
         self.b_cancel.clicked.connect(self.cancel)
         row.addWidget(self.b_cancel)
@@ -460,6 +490,7 @@ class SolidWindow(QWidget):
             self.col.addWidget(s_)
         self.study_box.setVisible(False)
         self.col.addStretch(1)
+        sim_ui.soften(self.panel)                    # the sections were added after make_panel: give them the soft bevel look too
         self.refresh_labels()
         self.enable_buttons()
 
@@ -523,10 +554,23 @@ class SolidWindow(QWidget):
         self.mat_combo.blockSignals(True)
         self.mat_combo.setCurrentIndex(i)
         self.mat_combo.blockSignals(False)
+        self.b_del_mat.setEnabled(sim_matdlg.can_delete(self.mat_combo.currentData()))
         self.update_mat_note()
 
     def library_entry(self, name):
         return next((x for x in self.library if x["name"] == name), None)
+
+    def add_material(self):
+        nm = sim_matdlg.add_material(self, self.library, unitctl.system(),
+                                     {"E": self.e_E.text(), "nu": self.e_nu.text(), "sy": self.e_sy.text(), "su": self.e_su.text(), "eu": ""})
+        if nm is not None:
+            self.fill_materials(select=nm)
+            self.material_picked()
+
+    def delete_material(self):
+        if sim_matdlg.delete_material(self, self.mat_combo.currentData(), self.library):
+            self.fill_materials()
+            self.material_picked()
 
     def update_mat_note(self):
         name = self.mat_combo.currentData()
@@ -547,6 +591,7 @@ class SolidWindow(QWidget):
             self.setup["mat_name"] = name
         else:
             self.setup.pop("mat_name", None)
+        self.b_del_mat.setEnabled(sim_matdlg.can_delete(name))
         self.update_mat_note()
         self.inputs_changed()
 
@@ -1259,6 +1304,8 @@ class SolidWindow(QWidget):
             cols[f] = sv.PICK
         self.view.colour_faces(cols)
 
+    SUPPORT_TYPES = {"fixed": "Fixed", "slide": "One direction (normal)", "bolt": "Bolt / pin hole"}
+
     def refresh_lists(self):
         self.sup_list.clear()
         for i, s in enumerate(self.setup["supports"]):
@@ -1266,6 +1313,84 @@ class SolidWindow(QWidget):
         self.load_list.clear()
         for i, l in enumerate(self.setup["loads"]):
             self.load_list.addItem(f"{sm.name_of('Load', i, l)}: {self.load_text(l)}")
+        t = self.cond_table
+        t.blockSignals(True)
+        t.setRowCount(0)
+        ro = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        rows = [(sm.name_of("Support", i, s), self.SUPPORT_TYPES.get(s["mode"], s["mode"]), f"{len(s['faces'])} face(s)", "") for i, s in enumerate(self.setup["supports"])]
+        rows += [(sm.name_of("Load", i, l),) + self.load_cells(l) for i, l in enumerate(self.setup["loads"])]
+        for r, cells in enumerate(rows):
+            t.insertRow(r)
+            for c, text in enumerate(cells):
+                it = QTableWidgetItem(text)
+                it.setFlags(ro | Qt.ItemFlag.ItemIsEditable if c == 0 else ro)
+                t.setItem(r, c, it)
+        t.blockSignals(False)
+
+    @staticmethod
+    def load_cells(l):
+        """(type, applied to, value) of a load for the conditions table."""
+        D = UD()
+        k = l["kind"]
+        if k == "force":
+            return "Force", f"{len(l['faces'])} face(s)", f"({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']}"
+        if k == "pressure":
+            return "Pressure", f"{len(l['faces'])} face(s)", f"{s_out(l['p']):.5g} {D['S']}"
+        if k == "point":
+            return ("Force at vertex", "1 vertex", f"({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']}")
+        return "Gravity", "whole part", f"{l['g']:g} m/s2 along {tuple(l['dir'])}"
+
+    def cond_ref(self, r):
+        """Table row -> (key in the setup, index): the supports come first, then the loads."""
+        n = len(self.setup["supports"])
+        if 0 <= r < n:
+            return "supports", r
+        if n <= r < n + len(self.setup["loads"]):
+            return "loads", r - n
+        return None, -1
+
+    def cond_item_changed(self, it):
+        if it.column() != 0:
+            return
+        key, i = self.cond_ref(it.row())
+        if key is None:
+            return
+        item = self.setup[key][i]
+        default = sm.name_of("Support" if key == "supports" else "Load", i)
+        text = it.text().strip()
+        if text and text != default:
+            item["name"] = text
+        else:
+            item.pop("name", None)
+        self.refresh_lists()
+
+    def cond_double_clicked(self, r, c):
+        key, i = self.cond_ref(r)
+        if key == "loads" and c != 0:
+            QTimer.singleShot(0, lambda: self.edit_load(i))
+
+    def edit_condition(self):
+        """Edit selected: a load opens its numbers again; a support lets you rename it."""
+        r = self.cond_table.currentRow()
+        key, i = self.cond_ref(r)
+        if key is None:
+            self.say("Select a row of the list first.")
+            return False
+        if key == "loads":
+            return self.edit_load(i)
+        it = self.cond_table.item(r, 0)
+        self.cond_table.setCurrentItem(it)
+        self.cond_table.editItem(it)
+        return True
+
+    def remove_condition(self):
+        key, i = self.cond_ref(self.cond_table.currentRow())
+        if key is None:
+            self.say("Select a row of the list first.")
+            return False
+        del self.setup[key][i]
+        self.after_edit()
+        return True
 
     @staticmethod
     def load_text(l):

@@ -35,6 +35,7 @@ import sketcher_core as sc
 from sketch_pick import SketchPicker
 import sketcher_script as scr
 import sim_icons
+import sim_matdlg
 import sim_ui
 import sim_report
 import legend_draw
@@ -837,6 +838,18 @@ class PhysicsTab(QWidget):
                   help_text="One material for everything. Quadratic elements need only a coarse mesh to capture bending (at least 2 elements "
                             "through a thin sheet); linear ones are much too stiff in bending.",
                   summary=lambda: f"{self.mat_combo.currentText()}, {'plane stress' if self.rb_stress.isChecked() else 'plane strain'}")
+        self.mat_combo = QComboBox()
+        row = QHBoxLayout()
+        row.addWidget(self.mat_combo, 1)
+        b = QPushButton("Add material...")
+        b.setToolTip("Adds the numbers now in the boxes below (or others you type in the box that opens) to your material library.")
+        b.clicked.connect(self.add_material)
+        row.addWidget(b)
+        self.b_del_mat = QPushButton("Delete")
+        self.b_del_mat.setToolTip("Deletes a material you added. The built-in ones stay.")
+        self.b_del_mat.clicked.connect(self.delete_material)
+        row.addWidget(self.b_del_mat)
+        lay.addLayout(row)
         row = QHBoxLayout()
         self.rb_stress = QRadioButton("Plane stress")
         self.rb_strain = QRadioButton("Plane strain")
@@ -845,7 +858,6 @@ class PhysicsTab(QWidget):
         row.addWidget(self.rb_strain)
         lay.addLayout(row)
         form = QFormLayout()
-        self.mat_combo = QComboBox()
         self.unit_combo = QComboBox()
         for u in pm.UNITS:
             self.unit_combo.addItem(u)
@@ -872,7 +884,6 @@ class PhysicsTab(QWidget):
         self.unit_combo.hide()                       # holds the program-wide unit system (File > Units); never shown
         self.lbl_E, self.lbl_t, self.lbl_h = QLabel("E"), QLabel("Thickness (depth)"), QLabel("Element size")
         self.lbl_sy, self.lbl_su, self.lbl_nld = QLabel("Yield strength"), QLabel("Ultimate strength"), QLabel("Displacement trigger")
-        form.addRow("Material", self.mat_combo)
         form.addRow(self.lbl_E, self.e_E)
         form.addRow("Poisson's ratio", self.e_nu)
         form.addRow(self.lbl_t, self.e_t)
@@ -900,15 +911,6 @@ class PhysicsTab(QWidget):
         lay.addWidget(self.profile_lbl)
         self.units_note = self.note("")
         lay.addWidget(self.units_note)
-        row = QHBoxLayout()
-        b = QPushButton("Add material...")
-        b.clicked.connect(self.add_material)
-        row.addWidget(b)
-        self.b_del_mat = QPushButton("Delete")
-        self.b_del_mat.setToolTip("Deletes a material you added. The built-in ones stay.")
-        self.b_del_mat.clicked.connect(self.delete_material)
-        row.addWidget(self.b_del_mat)
-        lay.addLayout(row)
         self.mat_note = self.note("")
         lay.addWidget(self.mat_note)
         self.order_combo = QComboBox()
@@ -963,6 +965,7 @@ class PhysicsTab(QWidget):
         lay = sec(3, "Supports", True, help_text="Select edges or points on the drawing first, then press a button. Bolt and Screw ask for the head "
                   "width. Contact lets the selected edges rest against a frictionless surface: they cannot move into it but are free to lift off.",
                   summary=lambda: self.count_text(self.supports, "support"))
+        lay.addWidget(self.note("Select the edge(s) or point(s) first (click them in the view), then press a button."))
         for text, mode, icn, tip in (("Fixed", "fixed", "fixed", "Holds x and y."), ("ux = 0", "x", "ux", "Holds x only."),
                                      ("uy = 0", "y", "uy", "Holds y only.")):
             b = sim_ui.icon_button(text, icn, tip)
@@ -984,6 +987,7 @@ class PhysicsTab(QWidget):
                   "along the whole length of each edge. Double-click a Name in the table to rename it (the Parameterization tab uses these names). "
                   "Force, pressure and screw / bolt head widths can be edited in the Value column.",
                   summary=lambda: self.count_text(self.loads, "load"))
+        lay.addWidget(self.note("Select the edge(s) or point(s) first (click them in the view), then press a button."))
         for text, icn, fn, tip in (("Force...", "force", self.add_force, "A force on the selected points (total force)."),
                                    ("Pressure...", "pressure", self.add_pressure, "Pressure on the selected edges; positive pushes into the material."),
                                    ("Pressure from CFD...", "pressure_cfd", self.add_cfd_load,
@@ -1004,37 +1008,21 @@ class PhysicsTab(QWidget):
         self.cond_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.cond_table.itemChanged.connect(self.cond_item_changed)
         lay.addWidget(self.cond_table)
-        b = QPushButton("Remove selected item")
-        b.clicked.connect(self.remove_condition)
-        lay.addWidget(b)
-
-        lay = sec(6, "Probe regions", False, help_text="A probe is an area of the original geometry whose average stress is reported. "
-                  "FoS: the marked probe's average von Mises stress is used for the factors of safety (none marked = the largest stress). "
-                  "Trigger: the marked probe's average is tested against the nonlinear stress trigger (none marked = the largest stress). "
-                  "Rectangle: x0, y0, x1, y1. Circle: centre x, y, radius.",
-                  summary=lambda: self.count_text(self.probes, "probe"))
         row = QHBoxLayout()
-        self.b_prect = QPushButton("Rectangle (drag)")
-        self.b_pcirc = QPushButton("Circle (drag)")
-        for b_, mode in ((self.b_prect, "rect"), (self.b_pcirc, "circle")):
-            b_.setCheckable(True)
-            b_.clicked.connect(lambda on, m=mode: self.set_tool(m if on else "select"))
-            row.addWidget(b_)
+        b = QPushButton("Edit selected...")
+        b.setToolTip("Edit the Value of the selected row (a force, a pressure, a head width); a row without a value lets you rename it.")
+        b.clicked.connect(self.edit_condition)
+        row.addWidget(b)
+        b = QPushButton("Remove selected")
+        b.clicked.connect(self.remove_condition)
+        row.addWidget(b)
         lay.addLayout(row)
-        self.probe_table = QTableWidget(0, 5)
-        self.probe_table.setHorizontalHeaderLabels(["Name", "Shape", "Geometry", "FoS", "Trigger"])
-        self.probe_table.verticalHeader().hide()
-        self.probe_table.setMinimumHeight(90)
-        self.probe_table.setMaximumHeight(160)
-        self.probe_table.horizontalHeader().setStretchLastSection(True)
-        self.probe_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.probe_table.itemChanged.connect(self.probe_item_changed)
-        lay.addWidget(self.probe_table)
-        b = QPushButton("Remove selected probe")
-        b.clicked.connect(self.remove_probe)
-        lay.addWidget(b)
 
-        lay = sec(7, "Results", True, summary=lambda: self.field.currentText())
+        lay = sec(6, "Results", True, summary=lambda: self.field.currentText(),
+                  help_text="Probe: a probe is an area of the original geometry whose average stress is reported. "
+                            "FoS: the marked probe's average von Mises stress is used for the factors of safety (none marked = the largest stress). "
+                            "Trigger: the marked probe's average is tested against the nonlinear stress trigger (none marked = the largest stress). "
+                            "Rectangle: x0, y0, x1, y1. Circle: centre x, y, radius. Node probe: click near a node on the result.")
         self.field = QComboBox()
         self.field.addItem("(none - show the mesh)", None)
         for name, key, _ in FIELDS:
@@ -1096,6 +1084,9 @@ class PhysicsTab(QWidget):
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self.anim_step)
         self.anim_dir = 1
+        pl = QLabel("<b>Probe</b>")
+        pl.setToolTip("A probe is an area of the original geometry whose average stress is reported (see the ? of this section).")
+        lay.addWidget(pl)
         self.b_node = QPushButton("Node probe (click a node)")
         self.b_node.setCheckable(True)
         self.b_node.setToolTip("Click near a node on the result to read every result at that node, whichever field is coloured.")
@@ -1105,20 +1096,42 @@ class PhysicsTab(QWidget):
         self.node_lbl.setWordWrap(True)
         self.node_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(self.node_lbl)
+        row = QHBoxLayout()
+        self.b_prect = QPushButton("Rectangle (drag)")
+        self.b_pcirc = QPushButton("Circle (drag)")
+        for b_, mode in ((self.b_prect, "rect"), (self.b_pcirc, "circle")):
+            b_.setCheckable(True)
+            b_.clicked.connect(lambda on, m=mode: self.set_tool(m if on else "select"))
+            row.addWidget(b_)
+        lay.addLayout(row)
+        self.probe_table = QTableWidget(0, 5)
+        self.probe_table.setHorizontalHeaderLabels(["Name", "Shape", "Geometry", "FoS", "Trigger"])
+        self.probe_table.verticalHeader().hide()
+        self.probe_table.setMinimumHeight(90)
+        self.probe_table.setMaximumHeight(160)
+        self.probe_table.horizontalHeader().setStretchLastSection(True)
+        self.probe_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.probe_table.itemChanged.connect(self.probe_item_changed)
+        lay.addWidget(self.probe_table)
+        b = QPushButton("Remove selected probe")
+        b.clicked.connect(self.remove_probe)
+        lay.addWidget(b)
         self.res_lbl = QLabel("")
         self.res_lbl.setWordWrap(True)
         lay.addWidget(self.res_lbl)
+        row = QHBoxLayout()
         b = QPushButton("Diagnostics report...")
         b.setToolTip("A text report of the geometry, mesh, setup and solution that you can copy and paste to me.")
         b.clicked.connect(self.show_diag)
-        lay.addWidget(b)
+        row.addWidget(b)
         b = QPushButton("Zoom to fit")
         b.clicked.connect(self.canvas.fit)
-        lay.addWidget(b)
+        row.addWidget(b)
+        lay.addLayout(row)
         lay.addStretch(1)
 
         for s_ in sorted(self.sections, key=lambda x: x.number):
-            if s_.number == 7:
+            if s_.number == 6:
                 lay0.addWidget(self.b_solve)          # the one big Solve button sits between the setup sections and the Results
                 lay0.addWidget(self.study_box)
             lay0.addWidget(s_)
@@ -1637,6 +1650,20 @@ class PhysicsTab(QWidget):
         else:
             del self.loads[r - len(self.supports)]
         self.after_conditions()
+
+    def edit_condition(self):
+        """Edit selected: starts editing the Value of the selected row; a row that has no editable value lets you rename it."""
+        t = self.cond_table
+        r = t.currentRow()
+        if not (0 <= r < t.rowCount()):
+            self.status("Select a row of the list first.")
+            return False
+        it = t.item(r, 3)
+        if it is None or not (it.flags() & Qt.ItemFlag.ItemIsEditable):
+            it = t.item(r, 0)
+        t.setCurrentItem(it)
+        t.editItem(it)
+        return True
 
     # --- profile properties (ribbed panel idealised as a thin strip)
     def profile_for_solver(self):
@@ -2255,68 +2282,16 @@ class PhysicsTab(QWidget):
         return self.unit_combo.currentText()
 
     def add_material(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Add a material")
-        form = QFormLayout(dlg)
-        name = QLineEdit()
-        E = QLineEdit(self.e_E.text())
-        unit = QComboBox()
-        for u in pm.UNITS:
-            unit.addItem(u)
-        unit.setCurrentText(self.unit_combo.currentText())
-        nu = QLineEdit(self.e_nu.text())
-        SY, SU, EU = QLineEdit(self.e_sy.text()), QLineEdit(self.e_su.text()), QLineEdit(self.e_eu.text())
-        form.addRow("Name", name)
-        form.addRow("E", E)
-        form.addRow("E is in", unit)
-        form.addRow("Poisson's ratio", nu)
-        form.addRow("Yield strength (same unit, 0 = brittle)", SY)
-        form.addRow("Ultimate strength (same unit)", SU)
-        form.addRow("Plastic strain at ultimate (%)", EU)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        bb.accepted.connect(dlg.accept)
-        bb.rejected.connect(dlg.reject)
-        form.addRow(bb)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-        nm = name.text().strip()
-        try:
-            e_val, nu_val = float(E.text()), float(nu.text())
-            sy_val, su_val = float(SY.text() or 0), float(SU.text() or 0)
-            eu_val = float(EU.text()) / 100.0 if EU.text().strip() else None
-        except ValueError:
-            QMessageBox.warning(self, "Add a material", "E, Poisson's ratio and the strengths must be numbers.")
-            return
-        if not nm or e_val <= 0 or not (-1 < nu_val < 0.5 + 1e-12):
-            QMessageBox.warning(self, "Add a material", "Give a name, a positive E and -1 < nu < 0.5.")
-            return
-        if any(x["name"].lower() == nm.lower() for x in self.library):
-            QMessageBox.warning(self, "Add a material", "A material with that name already exists.")
-            return
-        lib = list(self.library) + [{"name": nm, "E_MPa": pm.to_mpa(e_val, unit.currentText()), "nu": nu_val,
-                                          "Sy_MPa": pm.to_mpa(max(sy_val, 0.0), unit.currentText()),
-                                          "Su_MPa": pm.to_mpa(max(su_val, 0.0), unit.currentText()),
-                                          **({"eps_u": eu_val} if eu_val is not None else {})}]
-        try:
-            pm.save(lib)
-        except OSError as ex:
-            QMessageBox.warning(self, "Add a material", f"Could not write {pm.library_path()}:\n{ex}")
-            return
-        self.fill_materials(select=nm)
-        self.material_picked()
+        nm = sim_matdlg.add_material(self, self.library, self.unit_combo.currentText(),
+                                     {"E": self.e_E.text(), "nu": self.e_nu.text(), "sy": self.e_sy.text(), "su": self.e_su.text(),
+                                      "eu": self.e_eu.text()})
+        if nm is not None:
+            self.fill_materials(select=nm)
+            self.material_picked()
 
     def delete_material(self):
-        name = self.mat_combo.currentData()
-        if name is None or name in {n for n, _, _ in pm.DEFAULTS}:
-            return
-        if QMessageBox.question(self, "Delete material", f"Delete '{name}' from materials.json?") != QMessageBox.StandardButton.Yes:
-            return
-        try:
-            pm.save([x for x in self.library if x["name"] != name])
-        except OSError as ex:
-            QMessageBox.warning(self, "Delete material", f"Could not write {pm.library_path()}:\n{ex}")
-            return
-        self.fill_materials()
+        if sim_matdlg.delete_material(self, self.mat_combo.currentData(), self.library):
+            self.fill_materials()
 
     # --- animation (a ramp of the finished linear result)
     def anim_toggled(self, on):
