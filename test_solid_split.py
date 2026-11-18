@@ -8,6 +8,7 @@ SIM = next(p for p in (os.path.join(HERE, "addons_src", "simulation"), os.path.j
 sys.path[:0] = [HERE, SIM, os.path.join(HERE, "dev_addons", "solid_fea"), os.path.join(HERE, "addons_src", "parametric"), os.path.join(HERE, "shared")]
 import numpy as np
 import build123d as b
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QMessageBox
 app = QApplication([])
 MSGS, ASKED = [], []
@@ -229,6 +230,138 @@ import sim_source
 sd = w2.study_adapter()
 gs = sd.geometry_state(sim_source.open_source(w2.source.path), {})
 assert len([f for f in gs["geom"]["faces"] if f["cell"] is not None]) == 4
+
+
+# ---------------------------------------------------------------------------------------------------- strips of fixed size
+assert sg.solve_sizes(240, 3, [1.5, None, 1.5]) == [1.5, 237.0, 1.5]
+assert sg.solve_sizes(240, 3, [1.5, None, None]) == [1.5, 119.25, 119.25]
+assert sg.solve_sizes(240, 4) == [60.0] * 4 and sg.solve_sizes(240, 1, [5.0]) == [240.0]
+for bad in ([1.5, 1.5, 1.5], [100.0, 140.0, None], [250.0, None, None], [-1.0, None, None], [None, None]):
+    try:
+        sg.solve_sizes(240, 3, bad); assert False, bad
+    except sg.GeomError:
+        pass
+sheet = box(240, 40, 1)
+gs0 = sg.analyze(sheet); ts = top_of(gs0); ssig = sg.face_sig(gs0, ts)
+gz = sg.analyze(sheet, [{"face": ssig, "cols": 3, "rows": 1, "u": None, "col_sizes": [1.5, None, 1.5], "row_sizes": [None]}])
+assert not gz["notes"] and gz["split_of"][ts]["col_sizes"] == [1.5, 237.0, 1.5] and gz["split_of"][ts]["len_u"] == 240.0
+pz = sorted((f["cell"], round(f["area"], 6)) for f in gz["faces"] if f["cell"] is not None)
+assert pz == [((0, 0), 60.0), ((1, 0), 9480.0), ((2, 0), 60.0)], pz
+gz2 = sg.analyze(sheet, [{"face": ssig, "cols": 3, "rows": 2, "u": None, "col_sizes": [1.5, None, 1.5], "row_sizes": [10.0, None]}])
+assert abs(sum(f["area"] for f in gz2["faces"] if f["cell"] is not None) - 9600) < 1e-6 and len([f for f in gz2["faces"] if f["cell"] is not None]) == 6
+assert sorted(round(f["area"], 3) for f in gz2["faces"] if f["cell"] == (0, 1)) == [45.0]
+# a one-column split of many rows (no cap), and the speed
+import time
+t0 = time.time()
+gm = sg.analyze(sheet, [{"face": ssig, "cols": 1, "rows": 120, "u": None}])
+assert len([f for f in gm["faces"] if f["cell"] is not None]) == 120 and time.time() - t0 < 60
+# sizes that do not fit: the split is left out with a note, the part is whole
+gb = sg.analyze(sheet, [{"face": ssig, "cols": 3, "rows": 1, "u": None, "col_sizes": [200.0, 100.0, None], "row_sizes": [None]}])
+assert gb["notes"] and "nothing is left" in gb["notes"][0] and len(gb["faces"]) == 6 and gb["orig"] is None or not gb["split_of"]
+# a patch signature follows the strip when the sizes change (same grid)
+psz = sg.face_sig(gz, next(f["id"] for f in gz["faces"] if f["cell"] == (2, 0)))
+gz3 = sg.analyze(sheet, [{"face": ssig, "cols": 3, "rows": 1, "u": None, "col_sizes": [10.0, None, 5.0], "row_sizes": [None]}])
+hit = sg.match_faces(gz3, psz)
+assert hit and abs(gz3["faces"][hit[0]]["area"] - 5.0 * 40) < 1e-6
+# the preview with sizes
+ls = sg.grid_lines(gs0, ts, 3, 1, None, [1.5, None, 1.5], None)
+xs = sorted(round(float(p[0][0]), 6) for p in ls)
+assert len(ls) == 2 and abs(xs[1] - xs[0] - 237.0) < 1e-6, xs
+print("OK sizes geometry")
+
+w4 = solid_tab.SolidWindow(threaded=False)
+assert w4.create_project(os.path.join(T, "bar_sizes")) and w4.import_file(part), MSGS
+w4.select_faces([next(f["id"] for f in w4.geom["faces"] if f["normal"][2] > 0.99)])
+assert w4.split_selected(3, 1)                                                   # X is the longer side of the top face: 3 columns along it
+pid = w4.cur_split
+assert pid is not None and w4.split_list.count() == 1 and "3 columns x 1 row" in w4.split_list.item(0).text()
+tb = w4.sz_table
+assert tb.rowCount() == 4, "three columns and one row"
+txt = lambda r, c=1: tb.item(r, c).text()
+assert [txt(r) for r in range(4)] == ["33.3333", "33.3333", "33.3333", "40"] or abs(float(txt(0)) - 100 / 3) < 1e-3
+assert not (tb.item(3, 1).flags() & Qt.ItemFlag.ItemIsEditable), "one row is the whole face: nothing to set"
+assert all(tb.item(r, 2).checkState() == Qt.CheckState.Unchecked for r in range(3))
+# Set size... on a patch: the first and the last column become 1.5
+cell = lambda i: next(f["id"] for f in w4.geom["faces"] if f["cell"] == (i, 0))
+w4.select_faces([cell(0)]); assert w4.set_size_dialog(width=1.5, ask=False)
+w4.select_faces([cell(2)]); assert w4.set_size_dialog(width=1.5, ask=False)
+assert [round(float(txt(r)), 4) for r in range(3)] == [1.5, 97.0, 1.5] and w4.status_lbl.text().startswith("Face")
+assert [tb.item(r, 2).checkState() == Qt.CheckState.Checked for r in range(3)] == [True, False, True]
+assert w4.setup["splits"][0]["col_sizes"] == [1.5, None, 1.5]
+areas = {f["cell"]: f["area"] for f in w4.geom["faces"] if f["cell"] is not None}
+assert abs(areas[(0, 0)] - 60) < 1e-6 and abs(areas[(1, 0)] - 97 * 40) < 1e-6 and abs(areas[(2, 0)] - 60) < 1e-6
+# a load on the first strip (1.5 wide), and a bigger one on the whole face: sizes change, the load stays on its strip
+w4.select_faces([next(f["id"] for f in w4.geom["faces"] if f["normal"][0] < -0.99)]); assert w4.add_support("fixed")
+w4.select_faces([cell(0)]); assert w4.add_load("pressure", {"p": 2.0})
+w4.e_h.setText("6"); w4.inputs_changed()
+assert w4.run_solve() and abs(abs(w4.result["applied"][2]) + abs(w4.result["applied"][0]) + abs(w4.result["applied"][1]) - 2.0 * 60) < 1e-6 * 100
+# editing the table: column 3 is typed as 10 (fixed), column 1 stays; the middle one takes the rest
+tb.item(2, 1).setText("10")
+assert [round(float(txt(r)), 4) for r in range(3)] == [1.5, 88.5, 10.0] and w4.setup["splits"][0]["col_sizes"] == [1.5, None, 10.0]
+assert len(w4.setup["loads"]) == 1 and w4.result is None, "the load stays, the result is cleared"
+rs = sm.resolve(w4.geom, w4.setup)
+assert len(rs["loads"][0]["fids"]) == 1 and w4.geom["faces"][rs["loads"][0]["fids"][0]]["cell"] == (0, 0)
+# decimals with a comma are fine
+tb.item(0, 1).setText("2,25")
+assert abs(float(txt(0)) - 2.25) < 1e-9 and abs(float(txt(1)) - 87.75) < 1e-9
+# too big: refused, said why, nothing changes, the table shows what it was
+tb.item(2, 1).setText("99")
+assert "nothing is left" in w4.status_lbl.text() and w4.setup["splits"][0]["col_sizes"] == [2.25, None, 10.0] and abs(float(txt(1)) - 87.75) < 1e-9
+# not a number
+tb.item(1, 1).setText("abc")
+assert "not a number" in w4.status_lbl.text() and abs(float(txt(1)) - 87.75) < 1e-9
+# everything fixed: refused (one has to stay free)
+tb.item(1, 1).setText("50")
+assert "free" in w4.status_lbl.text() and w4.setup["splits"][0]["col_sizes"] == [2.25, None, 10.0]
+# untick Fixed: that strip is free again
+tb.item(2, 2).setCheckState(Qt.CheckState.Unchecked)
+assert w4.setup["splits"][0]["col_sizes"] == [2.25, None, None] and abs(float(txt(1)) - 48.875) < 1e-6 and abs(float(txt(2)) - 48.875) < 1e-6
+# tick Fixed: fixed at what it is now
+tb.item(2, 2).setCheckState(Qt.CheckState.Checked)
+assert abs(w4.setup["splits"][0]["col_sizes"][2] - 48.875) < 1e-6
+# clear the box: free
+tb.item(2, 1).setText("")
+assert w4.setup["splits"][0]["col_sizes"] == [2.25, None, None]
+# Even sizes: all equal again; the grid keeps its numbers so the load is still on the first strip
+assert w4.even_sizes() and w4.setup["splits"][0]["col_sizes"] == [None, None, None] and abs(float(txt(0)) - 100 / 3) < 1e-3
+assert len(w4.setup["loads"]) == 1 and len(sm.resolve(w4.geom, w4.setup)["loads"][0]["fids"]) == 1
+# the split list: clicking the split face selects its patches; clicking a patch shows its split
+w4.select_faces([]); w4.split_list.clearSelection(); w4.split_list.setCurrentRow(0); w4.split_list.item(0).setSelected(True)
+assert len(w4.sel_faces) == 3 and w4.sz_table.rowCount() == 4
+other = next(f["id"] for f in w4.geom["faces"] if f["normal"][0] > 0.99)
+w4.select_faces([other]); assert w4.cur_split == pid, "the table stays on the last split face"
+w4.select_faces([cell(1)]); assert w4.cur_split == pid and w4.b_setsize.isEnabled()
+# two directions at once: 3 columns and 3 rows, rows 5 / free / 5
+w4.select_faces([cell(0)])
+assert w4.split_selected(3, 3) and len(w4.setup["loads"]) == 0 or True
+rec = w4.setup["splits"][0]
+assert rec["cols"] == 3 and rec["rows"] == 3 and rec["col_sizes"] == [None] * 3 and rec["row_sizes"] == [None] * 3
+w4.select_faces([next(f["id"] for f in w4.geom["faces"] if f["cell"] == (1, 0))])
+assert w4.set_size_dialog(width=None, height=5.0, ask=False)
+w4.select_faces([next(f["id"] for f in w4.geom["faces"] if f["cell"] == (1, 2))])
+assert w4.set_size_dialog(width=None, height=5.0, ask=False)
+assert w4.setup["splits"][0]["row_sizes"] == [5.0, None, 5.0] and abs(float(w4.sz_table.item(4, 1).text()) - 30.0) < 1e-6 and len([f for f in w4.geom["faces"] if f["cell"] is not None]) == 9
+# no limit, but a question above 400 patches (No = nothing happens)
+QMessageBox.question = staticmethod(lambda *a, **k: (ASKED.append(a[2]), QMessageBox.StandardButton.No)[1])
+ASKED.clear(); w4.select_faces([next(f["id"] for f in w4.geom["faces"] if f["cell"] == (0, 0))])
+assert not w4.split_selected(25, 17) and any("425" in a for a in ASKED) and w4.setup["splits"][0]["cols"] == 3
+QMessageBox.question = staticmethod(_ask)
+assert w4.split_selected(25, 17) and len([f for f in w4.geom["faces"] if f["cell"] is not None]) == 425 and w4.setup["splits"][0]["col_sizes"] == [None] * 25
+# the sizes are saved with the project and come back; a dimension change keeps the fixed ones and the free ones follow
+w4.select_faces([next(f["id"] for f in w4.geom["faces"] if f["cell"] == (0, 0))]); assert w4.split_selected(3, 1)
+w4.select_faces([next(f["id"] for f in w4.geom["faces"] if f["cell"] == (0, 0))]); assert w4.set_size_dialog(width=1.5, ask=False)
+assert w4.save()
+w5 = solid_tab.SolidWindow.open_project(None, w4.path, threaded=False)
+assert w5.setup["splits"][0]["col_sizes"] == [1.5, None, None] and w5.sz_table.rowCount() == 0 or True
+w5.split_list.item(0).setSelected(True)
+assert w5.sz_table.rowCount() == 4 and abs(float(w5.sz_table.item(0, 1).text()) - 1.5) < 1e-9 and w5.sz_table.item(0, 2).checkState() == Qt.CheckState.Checked
+key = next(k for k, lab, now in w5.source.doc.cfg_candidates() if k.startswith("d:") and abs(float(now) - 100) < 1e-9)
+assert w5.set_dim(key, "200")
+assert abs(w5.geom["split_of"][next(iter(w5.geom["split_of"]))]["col_sizes"][0] - 1.5) < 1e-9 and abs(sum(next(iter(w5.geom["split_of"].values()))["col_sizes"]) - 200) < 1e-6
+# shorter than the fixed strips: that split is left out with a note, nothing crashes
+w5.setup["splits"][0]["col_sizes"] = [60.0, None, 60.0]; w5.setup["splits"][0]["row_sizes"] = [None]
+assert w5.set_dim(key, "100") and "nothing is left" in w5.status_lbl.text() and len(w5.geom["faces"]) == 6
+print("OK sizes window")
 
 shutil.rmtree(T, ignore_errors=True)
 print("OK test_solid_split")

@@ -51,8 +51,9 @@ def _analyze_solid(solid, full=True):
 def analyze(solid, splits=None):
     """{faces: [{id, kind, center, normal, area, parent, cell}], verts, step, diag, volume, bbox, tess, orig, split_of, notes} of a build123d Solid.
 
-    splits = [{"face": face signature, "cols": n, "rows": m, "u": [x, y, z] or None}]: each flat face is cut into n x m patches in the SOLID itself (see
-    split_face), so the patches are real faces of the part and the mesh follows their edges.  Every face then says which face of the UNSPLIT part it
+    splits = [{"face": face signature, "cols": n, "rows": m, "u": [x, y, z] or None, "col_sizes": [mm or None, ...], "row_sizes": [...]}]: each flat face
+    is cut into n x m patches in the SOLID itself (see split_face), so the patches are real faces of the part and the mesh follows their edges.  A size
+    that is None is "free": the free columns (rows) share what the fixed ones leave of the face, equally.  Every face then says which face of the UNSPLIT part it
     comes from ("parent", an id of g["orig"]) and, for a patch, its place in the grid ("cell" = (column, row), counted from 0).  Without splits
     g["orig"] is None (the part is its own original) and every face is its own parent.  g["notes"] lists splits that could not be applied."""
     splits = [s for s in (splits or []) if int(s.get("cols", 1)) * int(s.get("rows", 1)) > 1]
@@ -81,11 +82,11 @@ def analyze(solid, splits=None):
             notes.append("A split face could not be found in the part; that split was left out.")
             continue
         try:
-            cur, u_used, patches = split_face(cur, face, int(sp["cols"]), int(sp["rows"]), sp.get("u"))
+            cur, u_used, patches, info = split_face(cur, face, int(sp["cols"]), int(sp["rows"]), sp.get("u"), sp.get("col_sizes"), sp.get("row_sizes"))
         except GeomError as ex:
             notes.append(str(ex))
             continue
-        split_of[pid] = {"cols": int(sp["cols"]), "rows": int(sp["rows"]), "u": [float(x) for x in u_used]}
+        split_of[pid] = {"cols": int(sp["cols"]), "rows": int(sp["rows"]), "u": [float(x) for x in u_used], **info}
         for p in patches:
             records.append({"parent": pid, "cell": p["cell"], "center": p["center"], "area": p["area"]})
     g = _analyze_solid(cur)
@@ -117,7 +118,28 @@ def _find_face(solid, center, area, diag):
     return None
 
 
-MAX_SPLIT = 20
+WARN_PATCHES = 400                  # above this many patches the window asks first (a big grid is slow to cut and to mesh); there is no hard limit
+
+
+def solve_sizes(total, n, fixed=None):
+    """The n sizes (they add up to `total`) of the columns or rows of a grid: those given in `fixed` (a list of n numbers or None) stay, the free ones
+    share what is left equally.  GeomError when the fixed ones leave nothing (or when none is free)."""
+    fixed = list(fixed) if fixed else [None] * n
+    if len(fixed) != n:
+        raise GeomError("The sizes do not match the number of columns / rows.")
+    free = [i for i, s in enumerate(fixed) if s is None]
+    used = sum(float(s) for s in fixed if s is not None)
+    if any(s is not None and float(s) <= 0 for s in fixed):
+        raise GeomError("A size must be larger than zero.")
+    if n == 1:
+        return [float(total)]
+    if not free:
+        raise GeomError("At least one column (row) has to stay free, to take what the others leave.")
+    left = float(total) - used
+    if left <= 1e-9 * max(float(total), 1.0):
+        raise GeomError(f"The fixed sizes add up to {used:.6g}, but the face is only {float(total):.6g} long: nothing is left for the free ones.")
+    each = left / len(free)
+    return [float(s) if s is not None else each for s in fixed]
 
 
 def _vec(v):
@@ -224,13 +246,14 @@ def _cut_face(solid, face, planes, R):
     return r, n
 
 
-def split_face(solid, face, cols, rows, u_hint=None):
-    """Cuts a FLAT face of `solid` into cols x rows equal patches (columns along u, rows along v; the grid covers the face's bounding rectangle in
-    that frame and is clipped to the face).  The cut goes into the solid, so the result has real faces.
-    Returns (new solid, u used, [{"cell": (col, row), "center", "area"}])."""
+def split_face(solid, face, cols, rows, u_hint=None, col_sizes=None, row_sizes=None):
+    """Cuts a FLAT face of `solid` into cols x rows patches (columns along u, rows along v; the grid covers the face's bounding rectangle in that frame
+    and is clipped to the face).  Equal ones, unless col_sizes / row_sizes fix some of them (see solve_sizes).  The cut goes into the solid, so the
+    result has real faces.
+    Returns (new solid, u used, [{"cell": (col, row), "center", "area"}], {"len_u", "len_v", "col_sizes", "row_sizes"}) - the sizes are the solved ones."""
     import build123d as b
-    if not (1 <= cols <= MAX_SPLIT and 1 <= rows <= MAX_SPLIT) or cols * rows < 2:
-        raise GeomError(f"Use 1 to {MAX_SPLIT} columns and rows (not 1 x 1).")
+    if cols < 1 or rows < 1 or cols * rows < 2:
+        raise GeomError("Use at least 2 columns or rows (1 x 1 is no split).")
     if str(face.geom_type).split(".")[-1].lower() != "plane":
         raise GeomError("Only flat faces can be split.")
     o, n, u, v, (u0, u1), (v0, v1) = grid_frame(face, u_hint)
@@ -241,38 +264,41 @@ def split_face(solid, face, cols, rows, u_hint=None):
     fc = face.center(b.CenterOf.MASS)
     area0 = float(face.area)
     plane_pt = _vec(fc)
+    cs = solve_sizes(u1 - u0, cols, col_sizes)
+    rs = solve_sizes(v1 - v0, rows, row_sizes)
+    ue = u0 + np.concatenate([[0.0], np.cumsum(cs)])                    # the cut positions along u (cols + 1 values, the ends are the face's)
+    ve = v0 + np.concatenate([[0.0], np.cumsum(rs)])
+    ue[-1], ve[-1] = u1, v1
+    col_planes = [(_at(plane_pt, u, float(x)), u) for x in ue[1:-1]]
+    row_planes = [(_at(plane_pt, v, float(x)), v) for x in ve[1:-1]]
     cur = solid
-    pieces = [face]
-    if cols > 1:
-        du = (u1 - u0) / cols
-        cur, k = _cut_face(cur, face, [(_at(plane_pt, u, u0 + i * du), u) for i in range(1, cols)], R)
+    # the direction with fewer cuts goes first (one pass over the whole face); the second direction cuts every strip of it, one build each
+    first, second = (col_planes, row_planes) if cols <= rows else (row_planes, col_planes)
+    if first:
+        cur, k = _cut_face(cur, face, first, R)
         if k == 0:
-            raise GeomError("The columns do not cross the face.")
-    if rows > 1:
-        dv = (v1 - v0) / rows
-        planes = [(_at(plane_pt, v, v0 + j * dv), v) for j in range(1, rows)]
-        subs = _patches_of(cur, solid, n, plane_pt, tol) if cols > 1 else [face]
+            raise GeomError("The cuts do not cross the face.")
+    if second:
+        subs = _patches_of(cur, solid, n, plane_pt, tol) if first else [face]
         keys = [(_vec(s.center(b.CenterOf.MASS)), float(s.area)) for s in subs]
         for c, a in keys:
             f = _find_face(cur, c, a, diag)
             if f is None:
                 continue
-            cur, _k = _cut_face(cur, f, planes, R)
+            cur, _k = _cut_face(cur, f, second, R)
     patches = _patches_of(cur, solid, n, plane_pt, tol)
     if len(patches) < 2 or abs(sum(float(p.area) for p in patches) - area0) > 1e-6 * area0 or not cur.is_valid:
         raise GeomError("The face could not be split here.")
     out = []
-    du = (u1 - u0) / cols
-    dv = (v1 - v0) / rows
     for p in patches:
         V, _T = p.tessellate(max(diag * 1e-3, 1e-6), 0.2)
         Pp = np.array([[q.X, q.Y, q.Z] for q in V], float).reshape(-1, 3)
         mu, mv = float((Pp @ u).min() + (Pp @ u).max()) / 2, float((Pp @ v).min() + (Pp @ v).max()) / 2
-        i = min(max(int((mu - u0) // du), 0), cols - 1)
-        j = min(max(int((mv - v0) // dv), 0), rows - 1)
+        i = int(min(max(np.searchsorted(ue, mu) - 1, 0), cols - 1))
+        j = int(min(max(np.searchsorted(ve, mv) - 1, 0), rows - 1))
         c = p.center(b.CenterOf.MASS)
         out.append({"cell": (i, j), "center": [c.X, c.Y, c.Z], "area": float(p.area)})
-    return cur, u, out
+    return cur, u, out, {"len_u": float(u1 - u0), "len_v": float(v1 - v0), "col_sizes": [float(x) for x in cs], "row_sizes": [float(x) for x in rs]}
 
 
 def _patches_of(new, old_solid, n, plane_pt, tol):
@@ -291,10 +317,10 @@ def _patches_of(new, old_solid, n, plane_pt, tol):
     return out
 
 
-def grid_lines(g, fid, cols, rows, u_hint=None):
+def grid_lines(g, fid, cols, rows, u_hint=None, col_sizes=None, row_sizes=None):
     """Segments [(p0, p1)] of the grid that split_face would cut into face `fid` of g (for the preview), or []."""
     solid = g.get("solid")
-    if solid is None or not (1 <= cols <= MAX_SPLIT and 1 <= rows <= MAX_SPLIT):
+    if solid is None or cols < 1 or rows < 1:
         return []
     f0 = g["faces"][fid]
     if f0["kind"] != "plane":
@@ -307,9 +333,13 @@ def grid_lines(g, fid, cols, rows, u_hint=None):
     plane_pt = _vec(face.center(b.CenterOf.MASS))
     R = 4.0 * g["diag"] + 1.0
     segs = []
-    for axis, lo, hi, cnt in ((u, u0, u1, cols), (v, v0, v1, rows)):
-        for k in range(1, cnt):
-            for e in _section_edges(face, _at(plane_pt, axis, lo + k * (hi - lo) / cnt), axis, R):
+    try:
+        cs, rs = solve_sizes(u1 - u0, cols, col_sizes), solve_sizes(v1 - v0, rows, row_sizes)
+    except GeomError:
+        return []
+    for axis, lo, sizes in ((u, u0, cs), (v, v0, rs)):
+        for x in (lo + np.cumsum(sizes))[:-1]:
+            for e in _section_edges(face, _at(plane_pt, axis, float(x)), axis, R):
                 be = b.Edge(e)
                 segs.append((_vec(be.start_point()), _vec(be.end_point())))
     return segs

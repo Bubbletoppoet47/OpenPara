@@ -10,7 +10,8 @@ setup = {
               | {"kind": "point", "vertex": vertex signature, "f": [Fx, Fy, Fz]}
               | {"kind": "gravity", "g": m/s2, "dir": [x, y, z]}],
   "probe": [x, y, z] or None,
-  "splits": [{"face": face signature, "cols": n, "rows": m, "u": [x, y, z]}]       flat faces cut into patches (see solid_geom.analyze)
+  "splits": [{"face": face signature, "cols": n, "rows": m, "u": [x, y, z], "col_sizes": [mm | None, ...], "row_sizes": [...]}]
+                                      flat faces cut into patches (see solid_geom.analyze); a size that is None is free (the free ones share the rest equally)
 }
 A face signature in a support or a load is either a WHOLE face (all its patches when it was split later) or a patch of a split face (see solid_geom.face_sig);
 conditions on a whole face and on its patches add up.
@@ -97,7 +98,7 @@ def patch_conditions(setup, geom, fid):
 
 
 def set_split(setup, geom, fid, cols, rows):
-    """Cuts the (whole) face of `fid` into cols x rows patches in the setup - 1 x 1 removes the split.  Conditions on the patches of that face are
+    """Cuts the (whole) face of `fid` into cols x rows EQUAL patches in the setup - 1 x 1 removes the split.  Conditions on the patches of that face are
     dropped (those on the whole face stay).  Returns the names of the conditions that were changed or removed."""
     o = geom.get("orig") or geom
     pid = geom["faces"][fid]["parent"]
@@ -114,9 +115,26 @@ def set_split(setup, geom, fid, cols, rows):
         setup[key] = keep
     splits = [s for k, s in enumerate(setup.get("splits") or []) if k != i]
     if cols * rows > 1:
-        splits.append({"face": sg._base_sig(o["faces"][pid]), "cols": int(cols), "rows": int(rows), "u": (geom.get("split_of") or {}).get(pid, {}).get("u")})
+        splits.append({"face": sg._base_sig(o["faces"][pid]), "cols": int(cols), "rows": int(rows), "u": (geom.get("split_of") or {}).get(pid, {}).get("u"),
+                       "col_sizes": [None] * int(cols), "row_sizes": [None] * int(rows)})
     setup["splits"] = splits
     return changed
+
+
+def set_sizes(setup, geom, fid, col_sizes, row_sizes):
+    """Fixes the size (mm) of some columns / rows of the split of the face of `fid` (None = free: the free ones share the rest equally).  The number of
+    columns and rows stays, so the supports and loads on its patches stay on their patches.  Raises sg.GeomError when the sizes do not fit the face."""
+    i, rec = split_of_face(setup, geom, fid)
+    pid = geom["faces"][fid].get("parent")
+    info = (geom.get("split_of") or {}).get(pid)
+    if rec is None or info is None:
+        raise sg.GeomError("That face is not split.")
+    cs = [None if s is None else float(s) for s in col_sizes]
+    rs = [None if s is None else float(s) for s in row_sizes]
+    sg.solve_sizes(info["len_u"], rec["cols"], cs)                 # raises when they do not fit
+    sg.solve_sizes(info["len_v"], rec["rows"], rs)
+    rec["col_sizes"], rec["row_sizes"] = cs, rs
+    return rec
 
 
 def check_ready(setup):

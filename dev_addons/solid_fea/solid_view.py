@@ -120,7 +120,9 @@ class SolidView:
         self.plotter.installEventFilter(self._resized)
 
     # ------------------------------------------------------------------ the part
-    def set_geometry(self, P, T, F):
+    def set_geometry(self, P, T, F, keep_camera=False):
+        """keep_camera: the part is the same part with other faces (a split was changed): the view stays where it is."""
+        keep_camera = keep_camera and self.actor is not None
         self.cell_face = F
         self.rgb = np.tile(GREY, (len(T), 1))
         if self.plotter is None:
@@ -137,7 +139,8 @@ class SolidView:
         self.poly = pv.PolyData(P, faces)
         self.poly.cell_data["rgb"] = (self.rgb * 255).astype(np.uint8)
         self.actor = self.plotter.add_mesh(self.poly, scalars="rgb", rgb=True, show_edges=False, pickable=True, reset_camera=False)
-        self.plotter.reset_camera()
+        if not keep_camera:
+            self.plotter.reset_camera()
         self.plotter.render()
 
     def set_lines(self, name, segs, color=(0.1, 0.12, 0.2), width=1.5):

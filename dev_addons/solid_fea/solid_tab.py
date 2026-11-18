@@ -18,7 +18,7 @@ import traceback
 import numpy as np
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
-                             QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter,
+                             QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter,
                              QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 import anim_export
@@ -224,9 +224,9 @@ class SolidWindow(QWidget):
         self.sp_cols = QSpinBox()
         self.sp_rows = QSpinBox()
         for sbx, word in ((self.sp_cols, "columns"), (self.sp_rows, "rows")):
-            sbx.setRange(1, sg.MAX_SPLIT)
+            sbx.setRange(1, 9999)
             sbx.setValue(1)
-            sbx.setToolTip(f"1 to {sg.MAX_SPLIT}. The grid is shown on the selected face before you press Split.")
+            sbx.setToolTip(f"How many equal strips. The grid is shown on the selected face before you press Split; there is no limit, but above {sg.WARN_PATCHES} patches it asks first.")
             sbx.valueChanged.connect(self.preview_grid)
             row.addWidget(sbx)
             row.addWidget(QLabel(word + ("  x" if word == "columns" else "")))
@@ -240,6 +240,34 @@ class SolidWindow(QWidget):
         row.addWidget(self.b_split)
         row.addWidget(self.b_unsplit)
         v.addLayout(row)
+        self.split_hdr = QLabel("Split faces (click one to see and change the sizes of its columns and rows):")
+        self.split_hdr.setWordWrap(True)
+        v.addWidget(self.split_hdr)
+        self.split_list = QListWidget()
+        self.split_list.setMaximumHeight(70)
+        self.split_list.itemSelectionChanged.connect(self.split_list_changed)
+        v.addWidget(self.split_list)
+        self.sz_table = QTableWidget(0, 3)
+        self.sz_table.setHorizontalHeaderLabels(["Strip", "Size", "Fixed"])
+        self.sz_table.horizontalHeader().setStretchLastSection(True)
+        self.sz_table.verticalHeader().setVisible(False)
+        self.sz_table.setMaximumHeight(190)
+        self.sz_table.setToolTip("Type a size to fix it (decimals are fine, in the program's length unit). Strips that are not fixed share what is left "
+                                 "equally. Clear the box, or untick Fixed, to make a strip free again.")
+        self.sz_table.itemChanged.connect(self.size_item_changed)
+        v.addWidget(self.sz_table)
+        row = QHBoxLayout()
+        self.b_setsize = QPushButton("Set size...")
+        self.b_setsize.setToolTip("Sets the width of the column and the height of the row of the selected patch.")
+        self.b_setsize.clicked.connect(lambda: self.set_size_dialog())
+        self.b_even = QPushButton("Even sizes")
+        self.b_even.setToolTip("Makes every column and row of the selected split face equal again.")
+        self.b_even.clicked.connect(lambda: self.even_sizes())
+        row.addWidget(self.b_setsize)
+        row.addWidget(self.b_even)
+        row.addStretch(1)
+        v.addLayout(row)
+        self.cur_split = None
         # --- 2 material and analysis
         v = self.sec(2, "Material and analysis", True, summary=lambda: self.mat_combo.currentText().strip() or "custom material")
         self.mat_combo = QComboBox()
@@ -455,6 +483,7 @@ class SolidWindow(QWidget):
             self.e_h.setText(format(l_out(self.setup["h"]), ".8g") if self.setup.get("h") else "")
             if self.geom is not None:
                 self.fill_faces()
+                self.fill_splits()
                 self.set_geo_text()
             self.refresh_lists()
             if self.result is not None:
@@ -735,7 +764,7 @@ class SolidWindow(QWidget):
             fresh.set_values(self.setup["dims"])
         self.source = fresh
 
-    def load_geometry(self, first=False):
+    def load_geometry(self, first=False, keep_view=False):
         """(Re)analyses the solid of the source (with the dimension edits) and rematches the faces of the supports and loads."""
         try:
             if not first:
@@ -770,8 +799,9 @@ class SolidWindow(QWidget):
                 sp["u"] = list(g["split_of"][pid]["u"])
         self.fill_faces()
         self.fill_dims()
+        self.fill_splits()
         P, T, F = sg.display_mesh(g)
-        self.view.set_geometry(P, T, F)
+        self.view.set_geometry(P, T, F, keep_camera=keep_view)
         self.view.set_lines("grid", sg.patch_outlines(g))
         self.view.set_lines("preview", [])
         self.set_geo_text()
@@ -916,6 +946,9 @@ class SolidWindow(QWidget):
         have = fid is not None and self.job is None
         self.b_split.setEnabled(have)
         self.b_unsplit.setEnabled(have and split_now)
+        self.b_setsize.setEnabled(have and split_now)
+        self.b_even.setEnabled(self.cur_split is not None and self.job is None)
+        self.sync_splits()
 
     def split_selected(self, cols=None, rows=None, confirm=True):
         """Cuts the selected flat face into cols x rows patches (the numbers in the boxes by default).  Conditions on the whole face stay (they now
@@ -952,6 +985,10 @@ class SolidWindow(QWidget):
         if rec is not None and rec["cols"] == cols and rec["rows"] == rows:
             self.say(f"That face is already split into {cols} x {rows}.")
             return False
+        if confirm and cols * rows > sg.WARN_PATCHES:
+            r = QMessageBox.question(self, "Split face", f"{cols} x {rows} makes {cols * rows:,} patches. That can take a long time to cut and to mesh. Continue?")
+            if r != QMessageBox.StandardButton.Yes:
+                return False
         lost = sm.patch_conditions(self.setup, self.geom, fid)
         if lost and confirm:
             r = QMessageBox.question(self, "Split face", ("Changing the split removes the supports and loads that are on single patches of this face:\n\n  "
@@ -961,15 +998,17 @@ class SolidWindow(QWidget):
         before = json.loads(json.dumps(self.setup))
         sm.set_split(self.setup, self.geom, fid, cols, rows)
         keep_sel = self.sp_cols.value(), self.sp_rows.value()
-        if not self.load_geometry():
+        if not self.load_geometry(keep_view=True):
             self.setup = before
             return False
         if cols * rows > 1 and pid not in self.geom["split_of"]:                 # the cut did not work: back to what it was
             why = " ".join(self.geom["notes"]) or "The face could not be split here."
             self.setup = before
-            self.load_geometry()
+            self.load_geometry(keep_view=True)
             self.say(why)
             return False
+        self.cur_split = pid if cols * rows > 1 else None
+        self.fill_splits()
         self.sp_cols.blockSignals(True)
         self.sp_rows.blockSignals(True)
         self.sp_cols.setValue(keep_sel[0])
@@ -984,6 +1023,223 @@ class SolidWindow(QWidget):
             self.say(f"Face {n} is one face again.")
         self.preview_grid()
         return True
+
+    # ------------------------------------------------------------------ the sizes of the columns and rows of a split face
+    def fill_splits(self):
+        """The list of the split faces and the table of the sizes of the one on show (the program's current length unit)."""
+        if not hasattr(self, "split_list"):
+            return
+        so = (self.geom or {}).get("split_of") or {}
+        self.split_list.blockSignals(True)
+        self.split_list.clear()
+        for pid in sorted(so):
+            sp = so[pid]
+            it = QListWidgetItem(f"Face {pid + 1}: {sp['cols']} column{'s' if sp['cols'] != 1 else ''} x {sp['rows']} row{'s' if sp['rows'] != 1 else ''}")
+            it.setData(Qt.ItemDataRole.UserRole, pid)
+            self.split_list.addItem(it)
+        if self.cur_split not in so:
+            self.cur_split = None
+        for i in range(self.split_list.count()):
+            if self.split_list.item(i).data(Qt.ItemDataRole.UserRole) == self.cur_split:
+                self.split_list.item(i).setSelected(True)
+        self.split_list.blockSignals(False)
+        self.fill_sizes()
+
+    def split_record(self, pid):
+        o = (self.geom.get("orig") or self.geom)
+        for s in self.setup.get("splits") or []:
+            if sg.match_face(o, s["face"]) == pid:
+                return s
+        return None
+
+    def fill_sizes(self):
+        """The table: one line per column and per row with its size (solved for the free ones) and whether it is fixed."""
+        tb = self.sz_table
+        tb.blockSignals(True)
+        tb.setRowCount(0)
+        pid = self.cur_split
+        so = (self.geom or {}).get("split_of") or {}
+        rec = self.split_record(pid) if pid in so else None
+        tb.setHorizontalHeaderLabels(["Strip", f"Size ({UD()['L']})", "Fixed"])
+        if rec is not None:
+            info = so[pid]
+            for kind, word, sizes, fixed in (("c", "Column", info["col_sizes"], rec.get("col_sizes") or []), ("r", "Row", info["row_sizes"], rec.get("row_sizes") or [])):
+                for i, sz in enumerate(sizes):
+                    fx = fixed[i] if i < len(fixed) else None
+                    r = tb.rowCount()
+                    tb.insertRow(r)
+                    a = QTableWidgetItem(f"{word} {i + 1}")
+                    a.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                    b_ = QTableWidgetItem(format(l_out(sz), ".6g"))
+                    c = QTableWidgetItem()
+                    only = len(sizes) == 1                                   # one column (row) is the whole face: nothing to set
+                    b_.setFlags((Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable) if not only else Qt.ItemFlag.ItemIsEnabled)
+                    c.setFlags((Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable) if not only else Qt.ItemFlag.ItemIsEnabled)
+                    c.setCheckState(Qt.CheckState.Checked if fx is not None else Qt.CheckState.Unchecked)
+                    if fx is not None:
+                        f = b_.font()
+                        f.setBold(True)
+                        b_.setFont(f)
+                    for it in (a, b_, c):
+                        it.setData(Qt.ItemDataRole.UserRole, (kind, i))
+                    tb.setItem(r, 0, a)
+                    tb.setItem(r, 1, b_)
+                    tb.setItem(r, 2, c)
+        tb.blockSignals(False)
+        self.b_even.setEnabled(rec is not None and self.job is None)
+
+    def split_list_changed(self):
+        it = self.split_list.selectedItems()
+        self.cur_split = it[0].data(Qt.ItemDataRole.UserRole) if it else None
+        self.fill_sizes()
+        if self.cur_split is not None and self.geom is not None:           # its patches are selected in the view
+            ids = [f["id"] for f in self.geom["faces"] if f.get("parent") == self.cur_split and f.get("cell") is not None]
+            self._syncing = True
+            try:
+                self.select_faces(ids)
+            finally:
+                self._syncing = False
+
+    def sync_splits(self):
+        """The face selection points at a split face: that one is shown in the list and the table."""
+        if getattr(self, "_syncing", False) or self.geom is None or not hasattr(self, "split_list"):
+            return
+        ps = {self.geom["faces"][f].get("parent") for f in self.sel_faces if self.geom["faces"][f].get("cell") is not None}
+        if len(ps) == 1:
+            pid = next(iter(ps))
+            if pid != self.cur_split:
+                self.cur_split = pid
+                self.split_list.blockSignals(True)
+                self.split_list.clearSelection()
+                for i in range(self.split_list.count()):
+                    if self.split_list.item(i).data(Qt.ItemDataRole.UserRole) == pid:
+                        self.split_list.item(i).setSelected(True)
+                self.split_list.blockSignals(False)
+                self.fill_sizes()
+
+    def size_item_changed(self, item):
+        data = item.data(Qt.ItemDataRole.UserRole)
+        pid = self.cur_split
+        rec = self.split_record(pid) if pid is not None else None
+        if data is None or rec is None:
+            return
+        kind, i = data
+        key = "col_sizes" if kind == "c" else "row_sizes"
+        sizes = list(rec.get(key) or [None] * (rec["cols"] if kind == "c" else rec["rows"]))
+        now = self.geom["split_of"][pid]["col_sizes" if kind == "c" else "row_sizes"][i]
+        if item.column() == 1:
+            text = item.text().strip().replace(",", ".")
+            if text == "" or text.lower() in ("even", "free", "-"):
+                sizes[i] = None
+            else:
+                try:
+                    x = float(format(l_in(float(text)), ".12g"))                  # no unit-conversion noise (2.25 stays 2.25)
+                except ValueError:
+                    self.say(f"'{item.text()}' is not a number.")
+                    self.fill_sizes()
+                    return
+                sizes[i] = x
+        elif item.column() == 2:
+            sizes[i] = now if item.checkState() == Qt.CheckState.Checked else None
+        else:
+            return
+        cs = list(rec.get("col_sizes") or [None] * rec["cols"])
+        rs = list(rec.get("row_sizes") or [None] * rec["rows"])
+        if kind == "c":
+            cs = sizes
+        else:
+            rs = sizes
+        self.apply_sizes(pid, cs, rs)
+
+    def apply_sizes(self, pid, cs, rs):
+        """Sets the fixed sizes of the split of face `pid` (the others are free), cuts again and shows the solved sizes.  The patches keep their numbers, so
+        the supports and loads on them stay."""
+        fid = next((f["id"] for f in self.geom["faces"] if f.get("parent") == pid and f.get("cell") is not None), None)
+        if fid is None:
+            return False
+        before = json.loads(json.dumps(self.setup))
+        keep = {(self.geom["faces"][f].get("parent"), self.geom["faces"][f].get("cell")) for f in self.sel_faces}
+        try:
+            sm.set_sizes(self.setup, self.geom, fid, cs, rs)
+        except sg.GeomError as ex:
+            self.setup = before
+            self.say(str(ex))
+            self.fill_sizes()
+            return False
+        if not self.load_geometry(keep_view=True) or pid not in self.geom["split_of"]:
+            why = " ".join(self.geom["notes"]) if self.geom is not None and self.geom.get("notes") else "The sizes could not be applied."
+            self.setup = before
+            self.load_geometry(keep_view=True)
+            self.say(why)
+            return False
+        self.cur_split = pid
+        self.fill_splits()
+        ids = [f["id"] for f in self.geom["faces"] if (f.get("parent"), f.get("cell")) in keep]
+        self._syncing = True
+        try:
+            self.select_faces(ids)
+        finally:
+            self._syncing = False
+        self.after_edit()
+        info = self.geom["split_of"][pid]
+        self.say(f"Face {pid + 1}: columns " + ", ".join(format(l_out(x), ".5g") for x in info["col_sizes"][:6]) + (" ..." if info["cols"] > 6 else "")
+                 + f"; rows " + ", ".join(format(l_out(x), ".5g") for x in info["row_sizes"][:6]) + (" ..." if info["rows"] > 6 else "") + f" ({UD()['L']}).")
+        return True
+
+    def even_sizes(self):
+        if self.cur_split is None or self.geom is None:
+            self.say("Click a split face in the list first.")
+            return False
+        rec = self.split_record(self.cur_split)
+        if rec is None:
+            return False
+        return self.apply_sizes(self.cur_split, [None] * rec["cols"], [None] * rec["rows"])
+
+    def set_size_dialog(self, width=None, height=None, ask=True):
+        """Sets the width of the column and the height of the row of the selected patch (a blank box = free).  width / height (in the program's unit,
+        None = leave) skip the window (used by the tests)."""
+        fid, why = self.split_target()
+        if fid is None or self.geom["faces"][fid].get("cell") is None:
+            self.say("Select a patch of a split face first.")
+            return False
+        f = self.geom["faces"][fid]
+        pid, (ci, ri) = f["parent"], f["cell"]
+        rec = self.split_record(pid)
+        info = self.geom["split_of"][pid]
+        cs = list(rec.get("col_sizes") or [None] * rec["cols"])
+        rs = list(rec.get("row_sizes") or [None] * rec["rows"])
+        if ask:
+            dlg = QDialog(self)
+            dlg.setWindowTitle(f"Size of {self.face_label(fid)}")
+            form = QFormLayout(dlg)
+            edits = {}
+            for key, label, arr, idx, n, solved in (("w", f"Width of column {ci + 1} ({UD()['L']})", cs, ci, rec["cols"], info["col_sizes"]),
+                                                    ("h", f"Height of row {ri + 1} ({UD()['L']})", rs, ri, rec["rows"], info["row_sizes"])):
+                e = QLineEdit(format(l_out(arr[idx]), ".8g") if arr[idx] is not None else "")
+                e.setPlaceholderText(f"free ({l_out(solved[idx]):.6g})")
+                if n == 1:
+                    e.setEnabled(False)
+                    e.setPlaceholderText("the whole face")
+                form.addRow(label, e)
+                edits[key] = e
+            form.addRow(QLabel("Leave a box blank to let that strip take its share of what is left."))
+            bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            bb.accepted.connect(dlg.accept)
+            bb.rejected.connect(dlg.reject)
+            form.addRow(bb)
+            if not dlg.exec():
+                return False
+            try:
+                vals = {k: (None if e.text().strip() == "" else float(e.text().replace(",", "."))) for k, e in edits.items() if e.isEnabled()}
+            except ValueError:
+                QMessageBox.warning(self, "Size", "Type numbers.")
+                return False
+            width, height = vals.get("w", "keep"), vals.get("h", "keep")
+        if width != "keep" and rec["cols"] > 1 and (ask or width is not None):
+            cs[ci] = None if width is None else float(format(l_in(width), ".12g"))
+        if height != "keep" and rec["rows"] > 1 and (ask or height is not None):
+            rs[ri] = None if height is None else float(format(l_in(height), ".12g"))
+        return self.apply_sizes(pid, cs, rs)
 
     def colour(self):
         if self.geom is None:
