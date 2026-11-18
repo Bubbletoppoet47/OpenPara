@@ -23,6 +23,7 @@ NAVY, MID, TEAL, SKY, SNOW = "#0a2f55", "#0f4a6e", "#12b5b0", "#8fd3f4", "#f3fbf
 DEEP, SHADOW = "#04122e", "#02091c"                  # the top of the panel, and the hard shadows
 INK, BODY, LO, HI, BLUE = "#10204d", "#cbd3e0", "#7a869c", "#ffffff", "#3b6fd0"    # the look of the icons (icon_kit.py): navy, blue-grey, raised edge, block colour
 SPLIT = 300                                           # the dark panel is above this line, the strip below it
+LOOK = "boot"                                         # "boot": this file's card.  "classic": the previous card (splash_classic.py), kept but not used.
 NAME = ("Open", "Para")
 TAG1 = "Parametric by design. Open by nature."
 TAG2 = "Built for the future."
@@ -191,6 +192,15 @@ class Splash(QWidget):
         p.end()
 
 
+def card_class(look=None):
+    """The class of the card to show: the look named, else OPENPARA_SPLASH_LOOK, else LOOK.  An unknown name gives the boot look."""
+    look = (look or os.environ.get("OPENPARA_SPLASH_LOOK") or LOOK).strip().lower()
+    if look == "classic":
+        from splash_classic import ClassicSplash
+        return ClassicSplash
+    return Splash
+
+
 def show(app=None):
     """Make the card and put it on the screen at once (None when it is switched off: OPENPARA_NO_SPLASH=1 or --no-splash)."""
     if os.environ.get("OPENPARA_NO_SPLASH") == "1" or "--no-splash" in sys.argv:
@@ -198,7 +208,7 @@ def show(app=None):
     try:
         scr = QGuiApplication.primaryScreen()
         avail = scr.availableGeometry().width() if scr is not None else W
-        sp = Splash(scale=min(1.0, 0.8 * avail / W))
+        sp = card_class()(scale=min(1.0, 0.8 * avail / W))
         sp.show()
         QApplication.processEvents()
         sp.repaint()
