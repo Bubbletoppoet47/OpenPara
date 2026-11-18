@@ -721,8 +721,9 @@ class AppShell(QMainWindow):
         return True
 
     def offer_addon_updates(self):
-        """At start: add-ons you installed that are older than this program (it was just updated) are offered an update, with their packages.
-        'Not now' is remembered for this version of the program; File > Add-ons > Update still works."""
+        """At start: add-ons you installed that CHANGED in this version of the program (it was just updated) are offered an update, with their
+        packages; add-ons whose code is the same are left alone.  'Not now' is remembered for this version of the program; File > Add-ons > Update
+        still works."""
         if os.environ.get("OPARA_NO_UPDATE") or addons.update_prompt_declined():
             return
         old = addons.outdated()
@@ -730,7 +731,7 @@ class AppShell(QMainWindow):
             return
         names = ", ".join(addons.info(a)["name"] for a in old)
         r = QMessageBox.question(self, "Add-ons need an update",
-                                 f"OpenPara was updated. These add-ons are for the previous version: {names}.\n\nUpdate them now? This downloads what they need from "
+                                 f"OpenPara was updated. These add-ons changed in this version: {names}.\n\nUpdate them now? This downloads what they need from "
                                  "GitHub (an add-on with AI support can be a few hundred MB, so it may take a few minutes) and needs an internet connection. "
                                  "Your own files are not touched.\n\nIf you choose No, they keep working as they are and you can update them later in File > Add-ons.")
         if r != QMessageBox.StandardButton.Yes:

@@ -60,6 +60,8 @@ jobs:
           Copy-Item assets -Destination "$app\assets" -Recurse          # the logo of the start-up card, its fonts and the icons
           foreach ($f in "assets\openpara-logo.svg", "assets\fonts\Lora-Variable.ttf") { if (-not (Test-Path "$app\$f")) { throw "missing from the app: $f" } }
           '{"runtime": ' + $env:RUNTIME + ', "version": "' + $env:VERSION + '"}' | Set-Content "$app\runtime.json"
+          python tools\build_addons.py --prints "$app\addon_prints.json" --release          # which add-ons changed in this build: only those are offered an update
+          if (-not (Test-Path "$app\addon_prints.json")) { throw "missing from the app: addon_prints.json" }
 
       - name: Smoke test (imports and the updater test, no window)
         shell: pwsh

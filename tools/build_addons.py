@@ -1,6 +1,9 @@
 """
 build_addons.py <out-dir> [--release] - zip the add-ons in addons_src/ for the GitHub release and write addons-index.json (names, sizes, sha256).
 The version inside each zipped addon.json is set to the program version (version.py), so an add-on always matches the release it came from.
+Each add-on also gets a FINGERPRINT (addon_print.py: a hash of its files): in its addon.json and in addons-index.json.  With  --prints <file>  the script
+writes {"api", "addons": {id: fingerprint}} for the add-ons of this build (the workflows put it into the program as addon_prints.json), so an installed
+program knows which of its add-ons really changed and only those are updated.
 --release leaves out the add-ons that are not released yet (addons.NOT_RELEASED): a normal release does not carry them; a Playground build
 (no --release) carries every add-on.  Run from the repository root.
 """
@@ -12,7 +15,10 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+import addon_print
 import version
+
+API = getattr(version, "ADDON_API", 1)
 
 
 def not_released():
@@ -23,10 +29,22 @@ def not_released():
     return tuple(ast.literal_eval(re.search(r"^NOT_RELEASED\s*=\s*(\(.*?\))", text, re.M).group(1)))
 
 
+def prints(release=False):
+    """{"api": n, "addons": {id: fingerprint}} of the add-ons in addons_src/ (the released ones with release=True)."""
+    src = os.path.join(ROOT, "addons_src")
+    skip = not_released() if release else ()
+    out = {}
+    for aid in sorted(os.listdir(src)):
+        d = os.path.join(src, aid)
+        if os.path.isfile(os.path.join(d, "addon.json")) and aid not in skip:
+            out[aid] = addon_print.fingerprint(d, API)
+    return {"api": API, "addons": out}
+
+
 def build(out, release=False):
     os.makedirs(out, exist_ok=True)
     src = os.path.join(ROOT, "addons_src")
-    index = {"core": version.__version__, "addons": {}}
+    index = {"core": version.__version__, "api": API, "addons": {}}
     skip = not_released() if release else ()
     for aid in sorted(os.listdir(src)):
         d = os.path.join(src, aid)
@@ -36,6 +54,8 @@ def build(out, release=False):
         m = json.load(open(mp, encoding="utf-8"))
         assert m["id"] == aid, (m["id"], aid)
         m["version"] = version.__version__
+        fp = addon_print.fingerprint(d, API)
+        m["fingerprint"], m["api"] = fp, API
         name = f"addon-{aid}.zip"
         zp = os.path.join(out, name)
         with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
@@ -48,14 +68,21 @@ def build(out, release=False):
                     full = os.path.join(base, f)
                     z.write(full, os.path.relpath(full, d).replace(os.sep, "/"))
         h = hashlib.sha256(open(zp, "rb").read()).hexdigest()
-        index["addons"][aid] = {"file": name, "sha256": h, "version": version.__version__, "bytes": os.path.getsize(zp)}
+        index["addons"][aid] = {"file": name, "sha256": h, "version": version.__version__, "fingerprint": fp, "bytes": os.path.getsize(zp)}
     with open(os.path.join(out, "addons-index.json"), "w", encoding="utf-8") as f:
         json.dump(index, f, indent=1)
     return index
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    argv = sys.argv[1:]
+    if "--prints" in argv:                                   # build_addons.py --prints <file> [--release]
+        target = argv[argv.index("--prints") + 1]
+        with open(target, "w", encoding="utf-8") as f:
+            json.dump(prints("--release" in argv), f, indent=1)
+        print("fingerprints written to", target)
+        sys.exit(0)
+    args = [a for a in argv if not a.startswith("--")]
     idx = build(args[0] if args else "dist", release="--release" in sys.argv[1:])
     for a, e in idx["addons"].items():
         print(a, e["file"], e["bytes"], "bytes")

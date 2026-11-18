@@ -261,13 +261,45 @@ def is_active(aid):
     return is_installed(aid) and installed_path(aid) in sys.path
 
 
+PRINTS_FILE = "addon_prints.json"               # {"api", "addons": {id: fingerprint}} of this build's add-ons, written into the program by the build (addon_print.py)
+_PRINTS = {}
+
+
+def _prints():
+    """{id: fingerprint} of the add-ons that belong to this copy of the program; empty when the program does not carry the file (a source checkout)."""
+    p = os.path.join(paths.CODE_DIR, PRINTS_FILE)
+    try:
+        st = os.stat(p)
+        key = (p, st.st_mtime_ns, st.st_size)
+        if _PRINTS.get("key") != key:
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)
+            _PRINTS.update(key=key, data={k: v for k, v in (d.get("addons") or {}).items() if isinstance(v, str)})
+        return _PRINTS["data"]
+    except (OSError, ValueError, AttributeError):
+        _PRINTS.clear()
+        return {}
+
+
+def target_print(aid):
+    """The fingerprint the add-on `aid` of this copy of the program has (None when the program does not know it)."""
+    return _prints().get(aid)
+
+
 def status(aid):
-    """'installed', 'update' (the add-on is older than this program) or 'not installed'."""
+    """'installed', 'update' (the add-on differs from the one that belongs to this program) or 'not installed'.
+
+    An add-on whose fingerprint (a hash of its code) is the one this program knows is up to date, whatever version number it carries: a program
+    update only changes the add-ons that really changed.  An add-on installed before fingerprints existed (no fingerprint in its addon.json) or a
+    program that does not carry the list (a source checkout) falls back to the version number: older than the program = update."""
     m = installed_manifest(aid)
     if m is None:
         return "not installed"
     if is_dev(aid):
         return "installed"
+    want, have = target_print(aid), m.get("fingerprint")
+    if want is not None and have is not None:
+        return "installed" if have == want else "update"
     if _vkey(target_version()) > _vkey(m["version"]):
         return "update"
     return "installed"

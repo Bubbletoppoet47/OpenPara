@@ -74,6 +74,8 @@ jobs:
           foreach ($f in "assets\openpara-logo.svg", "assets\fonts\Lora-Variable.ttf") { if (-not (Test-Path "$app\$f")) { throw "missing from the app: $f" } }
           foreach ($f in 'channel.json', 'dev_addons\dev_host\addon.json', 'shared\boot.py') { if (-not (Test-Path "$app\$f")) { throw "missing from the app: $f" } }
           '{"runtime": ' + $env:RUNTIME + ', "version": "' + $env:VERSION + '"}' | Set-Content "$app\runtime.json"
+          python tools\build_addons.py --prints "$app\addon_prints.json"          # which add-ons changed in this build: only those are offered an update
+          if (-not (Test-Path "$app\addon_prints.json")) { throw "missing from the app: addon_prints.json" }
 
       - name: Smoke test (imports and the updater test, no window)
         shell: pwsh
