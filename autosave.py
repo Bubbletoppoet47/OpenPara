@@ -2,9 +2,10 @@
 autosave.py - the AutoSave switch at the top of the window, like Word's.
 
 One switch for the tab on screen (every tab that has a file of its own: Sketch/Part, Assembly, Assembly Sketch, Simulation, Truss, Circuits ...).
-While it is On, the tab's file is written whenever the tab has unsaved changes and they have settled: the check runs twice a second, a change is
-saved on the second look that still finds it unsaved, so a burst of edits or a rebuild after every keystroke writes once, and nothing is written
-while a mouse button is held (a drag) or a dialog is open.  The file is replaced in one step (see fileio.py) and no backup is made; Undo / Redo are
+While it is On, the tab is looked at once every "AutoSave every" (Settings > Performance, minutes:seconds, 1:00 unless changed; never sooner than
+5 seconds): a tab with unsaved changes is written then, so a burst of edits or a rebuild after every keystroke writes once, the (costly) test
+"has this changed?" runs once per interval and not all the time, and nothing is written while a mouse button is held (a drag) or a dialog is open
+(the look is then repeated a second later).  The file is replaced in one step (see fileio.py) and no backup is made; Undo / Redo are
 not touched (saving never changes the history).  The switch is remembered per file in userdata/autosave.json.  Off by default; a file with no name
 asks for one when the switch is turned on.
 """
@@ -12,14 +13,26 @@ import json
 import os
 import time
 
+import settings
+
 from PyQt6.QtCore import QObject, QRectF, QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QAbstractButton, QApplication, QHBoxLayout, QLabel, QToolBar, QWidget
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STORE = os.path.join(HERE, "userdata", "autosave.json")
-TICK_MS = 500
-RETRY_TICKS = 10
+TICK_MS = 1000                 # the timer only compares clocks; the "changed?" test runs when a tab's interval is up
+RETRY_S = 5.0                  # a failed save is tried again after this long (or the interval, when that is shorter)
+BUSY_S = 1.0                   # a look that finds a drag or a dialog is repeated after this long
+clock = time.monotonic         # (a test puts its own clock here)
+
+
+def interval():
+    """Seconds between two looks at a tab."""
+    try:
+        return max(5.0, float(settings.get("autosave_s")))
+    except Exception:          # noqa: BLE001
+        return 60.0
 
 
 class Switch(QAbstractButton):
@@ -94,7 +107,7 @@ class AutoSave(QObject):
 
     # ------------------------------------------------------------------ one tab
     def state(self, w):
-        return w.__dict__.setdefault("_autosave", {"on": False, "dirty_ticks": 0, "fail": 0, "msg": "", "bad": False})
+        return w.__dict__.setdefault("_autosave", {"on": False, "last": 0.0, "wait": None, "fail": 0, "msg": "", "bad": False})
 
     def available(self, w):
         return self.host.saveable(w)
@@ -112,7 +125,7 @@ class AutoSave(QObject):
                 st["on"] = False
                 self.sync()
                 return False
-        st["on"], st["dirty_ticks"], st["fail"], st["bad"] = bool(on), 0, 0, False
+        st["on"], st["last"], st["wait"], st["fail"], st["bad"] = bool(on), clock(), None, 0, False
         k = _key(getattr(w, "path", None))
         if k:
             (self.remembered.add if on else self.remembered.discard)(k)
@@ -143,7 +156,7 @@ class AutoSave(QObject):
         if ok is False:
             st["bad"], st["msg"] = True, "AutoSave could not save"
             return False
-        st["bad"], st["fail"], st["dirty_ticks"] = False, 0, 0
+        st["bad"], st["fail"], st["last"], st["wait"] = False, 0, clock(), None
         st["msg"] = "Saved " + time.strftime("%I:%M:%S %p").lstrip("0")
         try:
             self.host.refresh_titles()
@@ -161,7 +174,7 @@ class AutoSave(QObject):
             self._in_tick = False
 
     def _tick(self):
-        busy = QApplication.mouseButtons() != Qt.MouseButton.NoButton or QApplication.activeModalWidget() is not None
+        now = clock()
         for i in range(self.host.tabs.count()):
             w = self.host.tabs.widget(i)
             if not self.available(w):
@@ -170,20 +183,20 @@ class AutoSave(QObject):
             if not st["on"]:
                 k = _key(getattr(w, "path", None))
                 if k and k in self.remembered:             # a file opened that was left with AutoSave on
-                    st["on"] = True
+                    st["on"], st["last"], st["wait"] = True, now, None
                     st["msg"] = "AutoSave is on"
                 continue
-            if busy or not self.host.tab_dirty(w):
-                st["dirty_ticks"] = 0 if not busy else st["dirty_ticks"]
+            if now - st["last"] < (interval() if st["wait"] is None else st["wait"]):      # (a change of the setting counts at once)
                 continue
-            st["dirty_ticks"] += 1
-            if st["fail"] > 0:                              # a failed save is retried every few looks
+            st["last"], st["wait"] = now, None
+            if QApplication.mouseButtons() != Qt.MouseButton.NoButton or QApplication.activeModalWidget() is not None:
+                st["wait"] = BUSY_S                         # not during a drag or with a dialog open: look again in a moment
+                continue
+            if not self.host.tab_dirty(w):                  # (the costly test: once per interval)
+                continue
+            if not self.write(w):
                 st["fail"] += 1
-                if st["fail"] < RETRY_TICKS:
-                    continue
-            if st["dirty_ticks"] >= 2:                      # the change has settled
-                if not self.write(w):
-                    st["fail"] = 1
+                st["wait"] = min(RETRY_S, interval())       # a failed save is retried soon, without a dialog
         self.sync()
 
     def sync(self):

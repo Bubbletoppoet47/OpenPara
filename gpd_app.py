@@ -5,9 +5,14 @@ Run:  python gpd_app.py [file.gpd | file.gpa ...]
 """
 import os
 import sys
+import time
 import contextlib
 
 import channel
+import perf
+
+if __name__ == "__main__":
+    perf.startup()          # the core limit (Settings > Performance) before numpy and the other libraries are loaded
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
@@ -109,8 +114,10 @@ class AppShell(QMainWindow):
                 opened = True
         self.show_stack()
         self.timer = QTimer(self)                     # a star after the tab name while a document has unsaved changes
-        self.timer.timeout.connect(self.refresh_titles)
+        self.timer.timeout.connect(self.tick_titles)
         self.timer.start(1500)
+        self._title_next = 0.0
+        perf.follow_settings()                        # the core limit and the slow-moment log follow Settings > Performance
 
     def add_gl_anchor(self):
         """The first 3D tab used to make the whole window close and open again: Qt re-creates a window that is already on screen the first time
@@ -1017,8 +1024,27 @@ class AppShell(QMainWindow):
         w = self.tabs.widget(i)
         return getattr(w, "doc", None) if isinstance(w, pm_app.MainWindow) else None
 
-    def refresh_titles(self):
-        for i in range(self.tabs.count()):
+    TITLE_DUTY = 0.03           # the timer's "has it changed?" test may take at most this share of the time, however big the document is
+
+    def tick_titles(self):
+        """What the timer does: the star after the name of the tab ON SCREEN.  The test costs time that grows with the size of the document, so
+        it is skipped during a drag or a dialog, and spaced out so that it never takes more than TITLE_DUTY of the time.  The other tabs are
+        looked at when a tab is switched to or a file is saved (refresh_titles)."""
+        now = time.monotonic()
+        if now < self._title_next:
+            return
+        if QApplication.mouseButtons() != Qt.MouseButton.NoButton or QApplication.activeModalWidget() is not None:
+            self._title_next = now + 0.5
+            return
+        t0 = time.perf_counter()
+        i = self.tabs.currentIndex()
+        if i >= 0:
+            self.refresh_titles(only=i)
+        cost = time.perf_counter() - t0
+        self._title_next = now + cost * (1.0 / self.TITLE_DUTY - 1.0)
+
+    def refresh_titles(self, only=None):
+        for i in (range(self.tabs.count()) if only is None else [only]):
             w = self.tabs.widget(i)
             try:
                 t = w.title() + (" *" if w.is_dirty() else "")

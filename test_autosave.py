@@ -1,13 +1,23 @@
-"""AutoSave switch: saves after changes have settled (once for a burst), never during a drag or with a dialog open, keeps Undo / Redo, retries a
-failed save without popping a dialog, is remembered per file, leaves no temporary files, and is offered on every tab that has a file."""
+"""AutoSave switch: looks at a tab once per interval (Settings > AutoSave every) and saves it then (once for a burst), never during a drag or with a
+dialog open, keeps Undo / Redo, retries a failed save without popping a dialog, is remembered per file, leaves no temporary files, and is offered on
+every tab that has a file.  The tests drive a fake clock."""
 import faulthandler; faulthandler.dump_traceback_later(170, exit=True)
 import os, tempfile, json
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QFileDialog
 app = QApplication([])
-import autosave, fileio, pm_model as pm, sk_tools as sk
+import autosave, fileio, pm_model as pm, sk_tools as sk, settings
 import gpd_app
+
+FAKE = [1000.0]
+autosave.clock = lambda: FAKE[0]
+
+
+def look(seconds=None):
+    """Let the interval (or `seconds`) pass, then the timer ticks once."""
+    FAKE[0] += (autosave.interval() + 0.1) if seconds is None else seconds
+    A.tick()
 
 
 class playground:                       # the same tests as the Playground's, on the program window
@@ -43,34 +53,35 @@ def edit():
 for _ in range(4):
     w.snapshot(); edit()
 assert pg.tab_dirty(w)
-A.tick(); assert len(writes) == n0, "not on the first look (the change may still be settling)"
-A.tick(); assert len(writes) == n0 + 1, "the burst of four edits is written once"
+A.tick(); assert len(writes) == n0, "nothing is written before the interval is up"
+look(autosave.interval() - 5); assert len(writes) == n0, "...not even just before it"
+look(6); assert len(writes) == n0 + 1, "the burst of four edits is written once, when the interval is up"
 assert not pg.tab_dirty(w) and json.loads(open(target).read())["features"].__len__() == len(w.doc.features)
-A.tick(); A.tick(); assert len(writes) == n0 + 1, "nothing changed, nothing written"
+look(); look(); assert len(writes) == n0 + 1, "nothing changed, nothing written"
 assert "Saved" in A.status.text()
 # --- Undo / Redo keep working across saves, and the undone state is saved too
 nu = len(w.undo); assert nu >= 4
 w.do_undo(); assert len(w.undo) == nu - 1 and pg.tab_dirty(w)
-A.tick(); A.tick()
+look()
 assert len(json.loads(open(target).read())["features"]) == len(w.doc.features), "the undone part is what is on disk"
-w.do_redo(); A.tick(); A.tick(); assert len(w.redo) == 0 and len(json.loads(open(target).read())["features"]) == len(w.doc.features)
+w.do_redo(); look(); assert len(w.redo) == 0 and len(json.loads(open(target).read())["features"]) == len(w.doc.features)
 # --- not while the mouse is held (a drag) or a dialog is open
 w.snapshot(); edit(); n = len(writes)
 real = QApplication.mouseButtons
 QApplication.mouseButtons = staticmethod(lambda: Qt.MouseButton.LeftButton)
-for _ in range(4): A.tick()
+for _ in range(4): look()
 assert len(writes) == n, "no save during a drag"
 QApplication.mouseButtons = real
-A.tick(); A.tick(); assert len(writes) == n + 1
+look(autosave.BUSY_S + 0.1); assert len(writes) == n + 1, "saved a moment after the drag ended (the look was only put off)"
 # --- a failing save: no dialog, a red message, retried later, saved when it works again
 orig_save = w.save
 def boom(*a, **k): raise OSError("disk is full")
 w.save = boom
 w.snapshot(); edit()
-A.tick(); A.tick()
+look()
 assert A.state(w)["bad"] and "disk is full" in A.status.text() and A.status.styleSheet().find("c00000") >= 0
 w.save = orig_save
-for _ in range(autosave.RETRY_TICKS + 3): A.tick()
+for _ in range(3): look(autosave.RETRY_S + 0.1)
 assert not A.state(w)["bad"] and not pg.tab_dirty(w), "saved after the problem went away"
 # --- no temporary files left behind
 assert not [f for f in os.listdir(tmp) if f.endswith(".tmp")], os.listdir(tmp)
@@ -82,8 +93,25 @@ pg2.autosave.tick(); assert pg2.autosave.is_on(w2), "remembered"
 # --- turning it off stops saving and forgets it
 A.set_on(w, False); assert not A.is_on(w) and autosave._key(target) not in json.load(open(autosave.STORE))
 w.snapshot(); edit(); n = len(writes)
-for _ in range(4): A.tick()
+for _ in range(4): look()
 assert len(writes) == n and pg.tab_dirty(w)
+# --- the interval is a setting (minutes:seconds); the costly "changed?" test runs once per interval, not on every tick
+A.set_on(w, True); look(); n = len(writes)
+settings.set_many({"autosave_s": 300.0}, persist=False)
+assert autosave.interval() == 300.0
+w.snapshot(); edit()
+calls = []
+real_dirty = pg.tab_dirty
+pg.tab_dirty = lambda t: (calls.append(1), real_dirty(t))[1]
+FAKE[0] += 1.0; A.tick()
+for _ in range(100): look(2.0)                    # 200 seconds of ticks
+assert len(writes) == n and not calls, ("nothing before 5:00, and the costly test not run meanwhile", len(writes) - n, len(calls))
+look(150.0); assert len(writes) == n + 1 and len(calls) == 1, ("written at 5:00, tested once", len(writes) - n, len(calls))
+settings.set_many({"autosave_s": 1.0}, persist=False)
+assert autosave.interval() == 5.0, "never sooner than 5 seconds"
+pg.tab_dirty = real_dirty
+settings.set_many({"autosave_s": 60.0}, persist=False)
+
 # --- the switch follows the tab on screen, and is disabled where there is no file
 kinds = {}
 for kind in ("sketch", "assembly", "truss"):

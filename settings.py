@@ -58,6 +58,9 @@ SPEC = {
     "dim_color": ("#1a1a1a", None, "color", "Dimension colour"),
     "dim_sel_color": ("#ff7300", None, "color", "Selected dimension colour"),
     "dim_driven_color": ("#6f7f9e", None, "color", "Driven (measured) dimension colour"),
+    "autosave_s": (60.0, 5.0, 86400.0, "AutoSave every"),                    # seconds; the dialog shows minutes:seconds
+    "cores": (0, 0, 512, "Cores OpenPara may use"),                          # 0 = Auto (all but one core for calculations); see perf.py
+    "slow_log": (False, False, True, "Record slow moments of the window"),   # perf.SlowWatch writes slow.log in the user's data folder
 }
 FINE_EDGE, FINE_SURF = 0.004, 0.02          # below these a big model gets slow: the dialog warns
 _state = {}
@@ -72,6 +75,12 @@ def clamp(key, val):
     d, lo, hi, _ = SPEC[key]
     if isinstance(d, bool):
         return bool(val)
+    if key == "cores":                                  # whole numbers (0 = Auto), never more than there are
+        try:
+            n = int(round(float(val)))
+        except (TypeError, ValueError, OverflowError):
+            return d
+        return max(0, min(n, os.cpu_count() or 1))
     if isinstance(d, str):
         if hi == "color":
             return val.lower() if isinstance(val, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", val) else d

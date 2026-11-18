@@ -236,6 +236,8 @@ class DimPreview(Preview):
 
 # ------------------------------------------------------------------------------------------------------------ the inputs
 HINTS = {
+    "autosave_s": "How often a tab with AutoSave on is looked at; a tab with unsaved changes is written then. Type minutes:seconds, for example 5:00 (not under 0:05).",
+    "cores": "Auto, or the number of cores OpenPara may use. Calculations (FEA, CFD, meshing, studies) use one less, so the window stays responsive.",
     "edge_gap": "Largest gap between a drawn line and the true curve.",
     "surf_gap": "Largest gap between shaded facets and the true surface.",
     "line_px": "Thickness of outlines.",
@@ -259,9 +261,29 @@ HINTS = {
     "dim_sel_color": "Colour of a selected dimension.",
     "dim_driven_color": "Colour of a driven dimension (it measures; label in brackets).",
 }
-UNITS = {"zoom_pct": "%", "line_px": "px", "pull_px": "px", "pick3d_px": "px", "snap_px": "px", "pick_px": "px", "label_px": "px", "dim_line_px": "px",
+UNITS = {"autosave_s": "min:sec", "zoom_pct": "%", "line_px": "px", "pull_px": "px", "pick3d_px": "px", "snap_px": "px", "pick_px": "px", "label_px": "px", "dim_line_px": "px",
          "ext_line_px": "px", "ext_gap_pct": "%", "ext_over_pct": "%", "arrow_pct": "%", "text_pt": "pt"}
 LENGTHY = ("edge_gap", "surf_gap")
+
+
+def parse_duration(text):
+    """'5:00', '1:30:00', '90', '90s', '5m', '1h' -> seconds (None when it is not a time)."""
+    t = text.strip().lower().replace(",", ".")
+    if not t:
+        return None
+    try:
+        if ":" in t:
+            parts = [float(x) for x in t.split(":")]
+            if len(parts) > 3 or any(x < 0 for x in parts):
+                return None
+            sec = 0.0
+            for x in parts:
+                sec = sec * 60 + x
+            return sec
+        mult = {"s": 1, "m": 60, "h": 3600}.get(t[-1])
+        return float(t[:-1]) * mult if mult else float(t)
+    except ValueError:
+        return None
 
 
 class Field:
@@ -319,9 +341,20 @@ class Field:
 
     # numbers
     def to_text(self, v):
+        if self.key == "autosave_s":
+            t = int(round(v))
+            return f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}" if t >= 3600 else f"{t // 60}:{t % 60:02d}"
+        if self.key == "cores":
+            return "Auto" if not v else f"{int(v)}"
         return f"{unitctl.to_disp(v):.5g}" if self.lengthy else f"{v:g}"
 
     def parse(self, text):
+        if self.key == "autosave_s":
+            return parse_duration(text)
+        if self.key == "cores":
+            t = text.strip().lower()
+            if t in ("", "auto", "0"):
+                return 0.0
         try:
             x = float(text.strip().replace(",", "."))
         except ValueError:
@@ -410,6 +443,18 @@ class SettingsDialog(QDialog):
         self.hover.setChecked(bool(settings.get("hover")))
         self.section("Picking && Snapping", [("pick3d_px", None), ("snap_px", None), ("pick_px", None), ("label_px", None)], extra=self.hover)
         self.section("Navigation", [("zoom_pct", None)])
+        self.slow = QCheckBox("Record the moments when the window stops answering (slow.log in OpenPara's data folder)")
+        self.slow.setChecked(bool(settings.get("slow_log")))
+        self.slow.setToolTip("Each entry says when, for how long, and which lines of the program the window was in. For finding what makes it freeze.")
+        self.cores_note = QLabel("")
+        self.cores_note.setStyleSheet("color:#506080;")
+        self.cores_note.setWordWrap(True)
+        perf_extra = QWidget()
+        pl = QVBoxLayout(perf_extra)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.addWidget(self.cores_note)
+        pl.addWidget(self.slow)
+        self.section("Performance", [("autosave_s", None), ("cores", None)], extra=perf_extra)
         self.sections.setCurrentRow(0)
 
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Apply | QDialogButtonBox.StandardButton.Cancel)
@@ -457,6 +502,12 @@ class SettingsDialog(QDialog):
         self.dimprev.values = {k: x for k, x in v.items() if k not in ("hover",)}
         for w in (self.curve, self.surf, self.line, self.pull, self.dimprev):
             w.update()
+        try:
+            import perf
+            self.cores_note.setText("This computer: " + perf.describe(int(v["cores"])) + ". The cores the program may use change at once; the thread limit "
+                                    "of the math libraries is complete from the next start.")
+        except Exception:                                   # noqa: BLE001
+            pass
         msgs = []
         if v["edge_gap"] < settings.FINE_EDGE:
             msgs.append("Curve accuracy this fine makes big models slow to draw.")
@@ -467,6 +518,7 @@ class SettingsDialog(QDialog):
     def values(self):
         out = {k: f.value for k, f in self.fields.items()}
         out["hover"] = self.hover.isChecked()
+        out["slow_log"] = self.slow.isChecked()
         return out
 
     def reset_defaults(self):
@@ -475,6 +527,7 @@ class SettingsDialog(QDialog):
             f.note.setText("")
             f.set_value(d[k])
         self.hover.setChecked(bool(d["hover"]))
+        self.slow.setChecked(bool(d["slow_log"]))
 
     def apply(self):
         settings.set_many(self.values())
