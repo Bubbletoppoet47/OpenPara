@@ -3,8 +3,10 @@ solid_tab.py - the 3D FEA window (project folder .gpv): a SINGLE parametric part
 
 Project bar:  New project / Import source / Update from original / Save   (the same project folder machinery as the 1D / 2D simulations:
               the part is COPIED into  source/  and the simulation only uses the copy)
-Left panel:   Geometry (part dimensions you can edit), Material, Supports, Loads, Mesh, Solve, [parametric study], Results
-Right:        the part in 3D; click a face to pick it (the Faces list does the same without the mouse)
+Left panel:   the sections of 1D FEA: Geometry (part dimensions you can edit), Material, Supports, Loads, Mesh, then Solve, [parametric study] and
+              Results (result, Colours, deformed shape, scale, Animate with Play / Export, the Probe)
+Right:        the part in 3D with the X / Y / Z triad bottom-left and the colour legend top-right; click a face to pick it (the Faces list
+              does the same without the mouse)
 
 The window is also the 'tab' the parametric studies talk to (study_adapter), so it offers export_state / import_state / unit_name.
 """
@@ -19,8 +21,10 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, Q
                              QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSplitter,
                              QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
+import anim_export
 import ext
 import physics_materials as pm
+import result_style
 import sim_project
 import sim_report as R
 import sim_ui
@@ -32,7 +36,10 @@ import solid_view as sv
 import unitctl
 import units
 
-FIELDS = ["Von Mises stress", "Displacement", "Safety factor (yield)"]
+# the results the "Result" box offers (key, name); displacement magnitude first, as in 1D FEA.  Units are added to the names by refresh_labels().
+FIELDS = [("umag", "Displacement magnitude"), ("ux", "Displacement X"), ("uy", "Displacement Y"), ("uz", "Displacement Z"),
+          ("vm", "Von Mises stress"), ("fos", "Safety factor (yield)")]
+FOS_LOW, FOS_HIGH = 0.5, 3.0                 # the safety-factor colours, as in 1D FEA: red at or below FOS_LOW, blue at or above FOS_HIGH
 
 
 # --- the program's global units (File > Units).  The solver works in mm / N / MPa / kg per m3; these convert only what is shown or typed.
@@ -280,8 +287,82 @@ class SolidWindow(QWidget):
         self.mesh_lbl = QLabel("")
         self.mesh_lbl.setWordWrap(True)
         v.addWidget(self.mesh_lbl)
-        # --- 6 probe
-        v = self.sec(6, "Probe", True, summary=lambda: "click a point on the result")
+        # --- 6 results (laid out like the Results of 1D FEA: result, colours, deformed shape, scale, animation; the probe is part of it)
+        v = self.sec(6, "Results", True, summary=lambda: self.cb_field.currentText(),
+                     help_text="Linear elastic, small displacements, quadratic tetrahedra. Stresses are values at the nodes (the average of the elements "
+                               "around each node). The safety factor is the yield strength divided by the von Mises stress (red at 0.5 or less, "
+                               "blue at 3 or more; grey = no yield strength typed). The X, Y and Z of the results and loads are the axes of the part "
+                               "- the triad in the bottom-left corner of the view shows them.")
+        self.cb_field = QComboBox()
+        for key, name in FIELDS:
+            self.cb_field.addItem(name, key)
+        self.cb_field.currentIndexChanged.connect(lambda _i: self.show_field())
+        v.addWidget(self.cb_field)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Colours"))
+        self.cmap_combo = result_style.make_combo(self, self.colours_changed)
+        row.addWidget(self.cmap_combo, 1)
+        v.addLayout(row)
+        self.cb_def = QCheckBox("Show deformed shape")
+        self.cb_def.setChecked(True)
+        self.cb_def.toggled.connect(lambda _on: self.show_field())
+        v.addWidget(self.cb_def)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Deformation scale"))
+        self.e_scale = QLineEdit("")
+        self.e_scale.setPlaceholderText("auto")
+        self.e_scale.setToolTip("Displacement magnification. Blank (auto) = the largest displacement is about a tenth of the part; 1 = the true "
+                                "shape (you will hardly see it); any number you type is used as it is.")
+        self.e_scale.editingFinished.connect(self.show_field)
+        row.addWidget(self.e_scale)
+        v.addLayout(row)
+        self.cb_edges = QCheckBox("Show mesh edges")
+        self.cb_edges.toggled.connect(lambda _on: self.show_field())
+        v.addWidget(self.cb_edges)
+        self.cb_anim = QCheckBox("Animate")
+        self.cb_anim.setToolTip("Ramps the load from 0 to its full value. The analysis is linear and static, so this is a ramp, not a time simulation.")
+        self.cb_anim.toggled.connect(self.anim_toggled)
+        v.addWidget(self.cb_anim)
+        self.anim_box = QWidget()
+        al = QFormLayout(self.anim_box)
+        al.setContentsMargins(14, 0, 0, 0)
+        self.e_frames = QLineEdit("30")
+        self.e_dur = QLineEdit("3")
+        self.loop_combo = QComboBox()
+        self.loop_combo.addItems(["Once", "Loop", "Back and forth"])
+        al.addRow("Frames", self.e_frames)
+        al.addRow("Duration (s)", self.e_dur)
+        al.addRow("Playback", self.loop_combo)
+        arow = QHBoxLayout()
+        self.b_play = QPushButton("Play")
+        self.b_play.clicked.connect(self.anim_play)
+        self.b_stop = QPushButton("Stop")
+        self.b_stop.clicked.connect(self.anim_stop)
+        arow.addWidget(self.b_play)
+        arow.addWidget(self.b_stop)
+        al.addRow(arow)
+        self.b_anim = QPushButton("Export animation...")
+        self.b_anim.setToolTip("Saves the animation as a transparent animated WebP or PNG (only what is drawn is kept), an animated GIF"
+                               + (", an MP4 video" if anim_export.mp4_available() else " (an MP4 video too when OpenCV or imageio-ffmpeg is installed)")
+                               + " or a folder of PNG pictures, seen from where the part is on screen now. It uses the Frames, Duration and Playback above.")
+        self.b_anim.clicked.connect(lambda: self.export_animation())
+        al.addRow(self.b_anim)
+        note = QLabel("Ramp of the load from 0 to full (linear static analysis, not a time simulation). The colour scale stays that of the "
+                      "final result.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color:#707070;")
+        al.addRow(note)
+        self.anim_box.setVisible(False)
+        v.addWidget(self.anim_box)
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self.anim_step)
+        self.anim_dir, self.anim_k, self.anim_n = 1, 0, 0
+        self.res_lbl = QLabel("No result yet.")
+        self.res_lbl.setWordWrap(True)
+        self.res_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        v.addWidget(self.res_lbl)
+        pl = QLabel("<b>Probe</b>")
+        v.addWidget(pl)
         self.b_probe = QPushButton("Probe by clicking the surface")
         self.b_probe.setCheckable(True)
         self.b_probe.setToolTip("Switch this on, then click the solved part: the values of the node nearest to the click appear below. "
@@ -299,28 +380,9 @@ class SolidWindow(QWidget):
         self.probe_lbl.setWordWrap(True)
         self.probe_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         v.addWidget(self.probe_lbl)
-        # --- 7 results
-        v = self.sec(7, "Results", True)
-        self.res_lbl = QLabel("No result yet.")
-        self.res_lbl.setWordWrap(True)
-        self.res_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        v.addWidget(self.res_lbl)
-        f = QFormLayout()
-        self.cb_field = QComboBox()
-        self.cb_field.addItems(FIELDS)
-        self.cb_field.currentIndexChanged.connect(lambda _i: self.show_field())
-        f.addRow("Show", self.cb_field)
-        self.e_scale = QLineEdit("0")
-        self.e_scale.setToolTip("Displacement magnification; 0 = true shape, 'auto' = about a tenth of the part")
-        self.e_scale.editingFinished.connect(self.show_field)
-        f.addRow("Deformation scale", self.e_scale)
-        v.addLayout(f)
-        self.cb_edges = QCheckBox("Show mesh edges")
-        self.cb_edges.toggled.connect(lambda _on: self.show_field())
-        v.addWidget(self.cb_edges)
-        self.b_anim = QPushButton("Export animation...")
-        self.b_anim.clicked.connect(lambda: self.export_animation())
-        v.addWidget(self.b_anim)
+        b = QPushButton("Zoom to fit")
+        b.clicked.connect(self.view.fit)
+        v.addWidget(b)
         # --- the Solve button (wide), the study slot, then the Results
         row = QHBoxLayout()
         self.b_solve = sim_ui.solve_button()
@@ -339,7 +401,7 @@ class SolidWindow(QWidget):
         self.b_study.clicked.connect(self.open_study)
         sl.addWidget(self.b_study)
         for s_ in sorted(self.sections, key=lambda x: x.number):
-            if s_.number == 7:
+            if s_.number == 6:
                 self.col.addLayout(row)
                 self.col.addWidget(self.study_box)
             self.col.addWidget(s_)
@@ -356,8 +418,9 @@ class SolidWindow(QWidget):
             self.mat_labels[key].setText(text)
         self.h_label.setText(f"Element size ({D['L']}, blank = auto)")
         self.e_probe.setPlaceholderText(f"x, y, z  ({D['L']})")
-        for i, base in enumerate(("Von Mises stress", "Displacement")):
-            self.cb_field.setItemText(i, f"{base} ({D['S'] if i == 0 else D['L']})")
+        for i, (key, name) in enumerate(FIELDS):
+            unit = D["S"] if key == "vm" else (D["L"] if key.startswith("u") else None)
+            self.cb_field.setItemText(i, name + (f" ({unit})" if unit else ""))
         self.update_mat_note()
 
     def units_changed(self, *_a):
@@ -456,10 +519,12 @@ class SolidWindow(QWidget):
         self.invalidate(mesh=True)
 
     def invalidate(self, mesh=False):
+        had = self.result is not None
+        self.anim_timer.stop()
         self.result = None
         if mesh:
             self.mesh_q = None
-        self.res_lbl.setText("No result yet.")
+        self.res_lbl.setText("The setup changed since the last solve: press Solve." if had else "No result yet.")
         self.view.clear_result()
         self.enable_buttons()
 
@@ -472,7 +537,8 @@ class SolidWindow(QWidget):
         self.b_mesh.setEnabled(have and not busy)
         self.b_solve.setEnabled(have and not busy)
         self.b_cancel.setEnabled(busy)
-        self.b_anim.setEnabled(self.result is not None)
+        for b in (self.b_anim, self.b_play, self.b_stop):
+            b.setEnabled(self.result is not None)
         self.b_study.setEnabled(have and not busy)
 
     # ------------------------------------------------------------------ the project
@@ -1038,24 +1104,49 @@ class SolidWindow(QWidget):
         self.say("Solved.")
 
     def scale_value(self):
+        """The displacement magnification on screen: 0 when the deformed shape is off, a tenth of the part when blank / auto."""
+        if self.result is None or not self.cb_def.isChecked():
+            return 0.0
         t = self.e_scale.text().strip().lower()
-        if t == "auto" and self.result is not None:
-            return 0.1 * self.geom["diag"] / max(self.result["umax"], 1e-300)
+        if t in ("", "auto"):
+            umax = float(self.result["umax"])
+            return 0.1 * self.geom["diag"] / umax if umax > 0 else 0.0
         try:
-            return float(t)
+            return float(t.replace(",", "."))
         except ValueError:
             return 0.0
 
-    def field_values(self):
+    def field_key(self):
+        return self.cb_field.currentData() or "umag"
+
+    def field_values(self, ramp=1.0):
+        """-> (value per node with the load at `ramp` of its full value, the legend: {"title", "labels", "lo", "hi", "flip", "subtitle"}).
+        The colour range (lo, hi) and the legend are always those of the full result, so an animation keeps one scale."""
         r = self.result
-        i = self.cb_field.currentIndex()
+        key = self.field_key()
         D = UD()
-        if i == 0:
-            return s_out(r["vm_node"]), f"von Mises ({D['S']})"
-        if i == 1:
-            return l_out(r["un"]), f"displacement ({D['L']})"
-        sy = r["material"].get("sy") or 0.0
-        return np.where(r["vm_node"] > 1e-12, sy / np.maximum(r["vm_node"], 1e-12), 100.0).clip(0, 100), "safety factor (yield)"
+        if key == "fos":
+            sy = float(r["material"].get("sy") or 0.0)
+            if sy > 0:
+                vals = (sy / np.maximum(np.asarray(r["vm_node"], float) * ramp, 1e-12)).clip(0, 100)
+            else:
+                vals = np.full(len(r["vm_node"]), np.nan)
+            leg = {"title": "Factor of safety, yield", "lo": FOS_LOW, "hi": FOS_HIGH, "flip": True,
+                   "labels": [(0.0, f"{FOS_LOW:g} or less"), (1.0, f"{FOS_HIGH:g} or more")],
+                   "subtitle": "grey = no yield strength" if sy <= 0 else None}
+            return vals, leg
+        full, name, unit = {"umag": (lambda: l_out(r["un"]), "Displacement magnitude", D["L"]),
+                            "ux": (lambda: l_out(r["u"][:, 0]), "Displacement X", D["L"]),
+                            "uy": (lambda: l_out(r["u"][:, 1]), "Displacement Y", D["L"]),
+                            "uz": (lambda: l_out(r["u"][:, 2]), "Displacement Z", D["L"]),
+                            "vm": (lambda: s_out(r["vm_node"]), "von Mises stress", D["S"])}[key]
+        full = np.asarray(full(), float)
+        lo, hi = float(np.nanmin(full)), float(np.nanmax(full))
+        if not hi > lo:
+            hi = lo + 1.0
+        leg = {"title": f"{name}  [{unit}]", "lo": lo, "hi": hi, "flip": False,
+               "labels": [(0.0, f"{hi:.4g}"), (0.5, f"{(hi + lo) / 2:.4g}"), (1.0, f"{lo:.4g}")], "subtitle": None}
+        return full * ramp, leg
 
     def show_field(self, mesh_only=False):
         if self.result is None:
@@ -1064,8 +1155,77 @@ class SolidWindow(QWidget):
                 self.view.show_mesh(q["nodes"], q["tets"])          # grey surface with the mesh edges: no result colours before Solve
             return
         r = self.result
-        vals, title = self.field_values()
-        self.view.show_result(r["nodes"], r["conn"], r["u"], vals, title, self.scale_value(), self.cb_edges.isChecked())
+        vals, leg = self.field_values()
+        self.view.show_result(r["nodes"], r["conn"], r["u"], vals, self.scale_value(), self.cb_edges.isChecked(), leg["lo"], leg["hi"], leg["flip"],
+                              legend={"title": leg["title"], "labels": leg["labels"], "subtitle": leg["subtitle"]})
+
+    def colours_changed(self, *_a):
+        """The shared colour scheme was changed (here or in another tab)."""
+        try:
+            if self.result is not None:
+                self.show_field()
+        except RuntimeError:
+            result_style.unsubscribe(self.cmap_combo._external)        # the window is gone
+
+    # ------------------------------------------------------------------ animation: the load ramps from 0 to full (deformation and colours scale with it)
+    def anim_toggled(self, on):
+        self.anim_box.setVisible(on)
+        if not on:
+            self.anim_stop()
+
+    def anim_inputs(self, what):
+        try:
+            n = int(float(self.e_frames.text()))
+            dur = float(self.e_dur.text())
+        except ValueError:
+            QMessageBox.warning(self, what, "Frames and duration must be numbers.")
+            return None
+        if not (2 <= n <= 300) or dur <= 0:
+            QMessageBox.warning(self, what, "Use 2 to 300 frames and a positive duration.")
+            return None
+        return n, dur
+
+    def apply_ramp(self, ramp):
+        if self.result is None:
+            return
+        vals, _leg = self.field_values(ramp)
+        self.view.set_ramp(ramp, vals)
+
+    def anim_play(self):
+        if self.result is None:
+            QMessageBox.information(self, "Animate", "Solve first.")
+            return
+        got = self.anim_inputs("Animate")
+        if got is None:
+            return
+        n, dur = got
+        self.anim_timer.stop()
+        self.anim_n, self.anim_k, self.anim_dir = n, 0, 1
+        self.apply_ramp(0.0)
+        self.anim_timer.start(max(10, int(dur * 1000 / n)))
+
+    def anim_step(self):
+        n = self.anim_n
+        k = self.anim_k + self.anim_dir
+        mode = self.loop_combo.currentIndex()
+        if k >= n:
+            if mode == 0:
+                self.anim_timer.stop()
+                k = n - 1
+            elif mode == 1:
+                k = 0
+            else:
+                self.anim_dir = -1
+                k = max(0, n - 2)
+        elif k < 0:
+            self.anim_dir = 1
+            k = min(1, n - 1)
+        self.anim_k = k
+        self.apply_ramp(k / (n - 1) if n > 1 else 1.0)
+
+    def anim_stop(self):
+        self.anim_timer.stop()
+        self.apply_ramp(1.0)
 
     # ------------------------------------------------------------------ probes
     def set_probe_mode(self, on):
@@ -1124,28 +1284,43 @@ class SolidWindow(QWidget):
                  f"{R.num(l_out(pr['dist']), 3)} {D['L']} from the point")
         self.probe_lbl.setText(R.probe_block("Probe", where, d, st, D["L"], D["S"], "Stress: value at the node (average of the elements around it)."))
 
-    def export_animation(self, path=None, frames=16):
+    def export_animation(self, path_fmt=None, frames=None, dur=None):
+        """Saves the load ramp as WebP / PNG / GIF / MP4 / PNG pictures (Frames, Duration and Playback of the Animate box).  `path_fmt` =
+        (path, format) skips the Save box; a plain path is read as GIF / by its extension.  -> the path written or None."""
         if self.result is None:
+            QMessageBox.information(self, "Export animation", "Solve first.")
             return None
-        if path is None:
-            path, _ = QFileDialog.getSaveFileName(self, "Export animation", "result.gif", "GIF (*.gif)")
-            if not path:
-                return None
-        from PIL import Image
-        r = self.result
-        vals, title = self.field_values()
-        sc = self.scale_value() or 0.1 * self.geom["diag"] / max(r["umax"], 1e-300)
+        if isinstance(path_fmt, str):
+            fmt = {".webp": "webp", ".mp4": "mp4", ".png": "png"}.get(os.path.splitext(path_fmt)[1].lower(), "gif")
+            path_fmt = (path_fmt, fmt)
+        got = self.anim_inputs("Export animation")
+        if got is None:
+            return None
+        n, d = got
+        n = int(frames) if frames else n
+        d = float(dur) if dur else d
+        self.anim_timer.stop()
+        self.show_field()                                      # the full result on screen: the pictures are made from this view
+        sess = self.view.export_session()
+        if sess is None:
+            QMessageBox.information(self, "Export animation", "The 3D view is not available here, so there is nothing to draw the pictures with.")
+            return None
+        state = {"bg": None}
+
+        def grab(k):
+            ramp = k / (n - 1)
+            vals, _leg = self.field_values(ramp)
+            return sess.frame(ramp, vals, state["bg"])
+
+        def set_bg(level):
+            state["bg"] = level
         try:
-            arr = sv.SolidView.render_frames(r["nodes"], r["conn"], r["u"], vals, title, sc, frames, self.cb_edges.isChecked())
-        except Exception as ex:
+            return anim_export.export(self, "3D FEA", n, grab, n / d, self.loop_combo.currentIndex(), say=self.say, path_fmt=path_fmt, set_bg=set_bg)
+        except Exception as ex:                                  # noqa: BLE001 - a drawing failure is shown, not raised into the event loop
             self.say(f"Could not render the animation: {ex}")
             return None
-        imgs = [Image.fromarray(a) for a in arr]
-        if not imgs:
-            return None
-        imgs = imgs + imgs[::-1][1:-1]
-        imgs[0].save(path, save_all=True, append_images=imgs[1:], duration=80, loop=0)
-        return path
+        finally:
+            sess.close()
 
     # ------------------------------------------------------------------ state, save, open
     def setup_json(self):

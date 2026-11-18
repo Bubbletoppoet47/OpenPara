@@ -275,6 +275,27 @@ class BeamCanvas(QWidget):
             p.setBrush(Qt.BrushStyle.NoBrush)
         if res is not None:
             self.paint_legend(p, res, mode)
+        self.paint_compass(p)
+
+    def paint_compass(self, p):
+        """The directions of the drawing in the bottom-left corner: X to the right, Y up (loads, supports and angles use these; an angle is
+        counted counter-clockwise from +X).  Part of the picture, so it is in the exported animations too."""
+        o = QPointF(24, self.height() - 24)
+        L = 32.0
+        p.save()
+        try:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+            for tip, col, name, at in ((QPointF(o.x() + L, o.y()), "#d62728", "X", QPointF(o.x() + L + 5, o.y() + 4)),
+                                       (QPointF(o.x(), o.y() - L), "#2ca02c", "Y", QPointF(o.x() - 4, o.y() - L - 5))):
+                p.setPen(QPen(QColor(col), 2.2))
+                self.arrow(p, o, tip)
+                p.drawText(at, name)
+            p.setPen(QColor("#707070"))
+            p.setFont(QFont("Arial", 7))
+            p.drawText(QPointF(o.x() + L + 22, o.y() + 4), "angles: 0\u00b0 = +X, counter-clockwise")
+        finally:
+            p.restore()
 
     def station_values(self, res, mode):
         """-> (low, high, {member id: array per station}) for a colour mode."""
