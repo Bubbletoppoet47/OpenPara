@@ -160,37 +160,37 @@ class SheetsTab(QWidget):
         fmts = [("General", "General"), ("Number 0.00", "0.00"), ("Percent", "0%"), ("Scientific", "0.00E+00"), ("Currency", "$#,##0.00"),
                 ("Thousands 1,234", "#,##0")]
         home = [
-            ("File", [("new", "▢", "New", "A new workbook in another tab", self.file_new), ("open", "▤", "Open", "Open a .opsheet or an Excel file", self.open_dialog),
-                      ("save", "▣", "Save", "Save the workbook (Ctrl+S)", lambda: self.save()), ("save_as", "▧", "Save as", "Save under a new name", lambda: self.save(True))]),
-            ("Clipboard", [("paste", "⎘", "Paste", "Paste (Ctrl+V)", sel.paste), ("paste_special", "⎘", "Paste\nspecial", "Paste values, formulas or formats only", self.paste_special),
-                           ("cut", "✂", "Cut", "Cut (Ctrl+X)", lambda: sel.copy(True)), ("copy", "⧉", "Copy", "Copy (Ctrl+C)", lambda: sel.copy(False))]),
-            ("Font", [("bold", "B", "Bold", "Bold (Ctrl+B)", lambda: self.toggle("bold")), ("italic", "I", "Italic", "Italic (Ctrl+I)", lambda: self.toggle("italic")),
-                      ("fg", "A", "Text\ncolour", "Colour of the text", lambda: self.pick_colour("fg")), ("bg", "▩", "Fill", "Fill colour", lambda: self.pick_colour("bg"))]),
-            ("Number", [("menu", "0.0", "Number\nformat", "How the numbers show", [(t, (lambda _c=False, f=f: self.set_format(f))) for t, f in fmts] + [("More...", self.format_dialog)]),
-                        ("dec_up", ".0+", "More\ndecimals", "Show one more decimal", lambda: self.decimals(1)), ("dec_dn", ".0−", "Fewer\ndecimals", "Show one decimal less", lambda: self.decimals(-1))]),
-            ("Cells", [("ins_row", "⊕", "Insert\nrow", "Insert rows above the selection", lambda: self.insert("r")), ("ins_col", "⊕", "Insert\ncolumn", "Insert columns left of the selection", lambda: self.insert("c")),
-                       ("del_row", "⊖", "Delete\nrow", "Delete the selected rows", lambda: self.delete("r")), ("del_col", "⊖", "Delete\ncolumn", "Delete the selected columns", lambda: self.delete("c"))]),
-            ("Editing", [("fill_down", "⤓", "Fill\ndown", "Copy the top cell down (Ctrl+D)", sel.fill_down), ("fill_right", "⤒", "Fill\nright", "Copy the left cell right (Ctrl+R)", sel.fill_right),
-                         ("clear", "⌫", "Clear", "Clear the selected cells (Delete)", sel.clear_selection), ("fit", "↔", "Fit\nwidth", "Make the columns fit what is in them", sel.autofit_selection),
-                         ("undo", "↶", "Undo", "Undo (Ctrl+Z)", sel.undo), ("redo", "↷", "Redo", "Redo (Ctrl+Y)", sel.redo)]),
+            ("File", [("new", "s_new", "New", "A new workbook in another tab", self.file_new), ("open", "s_open", "Open", "Open a .opsheet or an Excel file", self.open_dialog),
+                      ("save", "s_save", "Save", "Save the workbook (Ctrl+S)", lambda: self.save()), ("save_as", "s_save_as", "Save as", "Save under a new name", lambda: self.save(True))]),
+            ("Clipboard", [("paste", "s_paste", "Paste", "Paste (Ctrl+V)", sel.paste), ("paste_special", "s_paste_special", "Paste\nspecial", "Paste values, formulas or formats only", self.paste_special),
+                           ("cut", "s_cut", "Cut", "Cut (Ctrl+X)", lambda: sel.copy(True)), ("copy", "s_copy", "Copy", "Copy (Ctrl+C)", lambda: sel.copy(False))]),
+            ("Font", [("bold", "s_bold", "Bold", "Bold (Ctrl+B)", lambda: self.toggle("bold")), ("italic", "s_italic", "Italic", "Italic (Ctrl+I)", lambda: self.toggle("italic")),
+                      ("fg", "s_fg", "Text\ncolour", "Colour of the text", lambda: self.pick_colour("fg")), ("bg", "s_bg", "Fill", "Fill colour", lambda: self.pick_colour("bg"))]),
+            ("Number", [("menu", "s_number", "Number\nformat", "How the numbers show", [(t, (lambda _c=False, f=f: self.set_format(f))) for t, f in fmts] + [("More...", self.format_dialog)]),
+                        ("dec_up", "s_dec_up", "More\ndecimals", "Show one more decimal", lambda: self.decimals(1)), ("dec_dn", "s_dec_dn", "Fewer\ndecimals", "Show one decimal less", lambda: self.decimals(-1))]),
+            ("Cells", [("ins_row", "s_ins_row", "Insert\nrow", "Insert rows above the selection", lambda: self.insert("r")), ("ins_col", "s_ins_col", "Insert\ncolumn", "Insert columns left of the selection", lambda: self.insert("c")),
+                       ("del_row", "s_del_row", "Delete\nrow", "Delete the selected rows", lambda: self.delete("r")), ("del_col", "s_del_col", "Delete\ncolumn", "Delete the selected columns", lambda: self.delete("c"))]),
+            ("Editing", [("fill_down", "s_fill_down", "Fill\ndown", "Copy the top cell down (Ctrl+D)", sel.fill_down), ("fill_right", "s_fill_right", "Fill\nright", "Copy the left cell right (Ctrl+R)", sel.fill_right),
+                         ("clear", "s_clear", "Clear", "Clear the selected cells (Delete)", sel.clear_selection), ("fit", "s_fit", "Fit\nwidth", "Make the columns fit what is in them", sel.autofit_selection),
+                         ("undo", "s_undo", "Undo", "Undo (Ctrl+Z)", sel.undo), ("redo", "s_redo", "Redo", "Redo (Ctrl+Y)", sel.redo)]),
         ]
         data = [
-            ("Study", [("study_in", "⇩", "Import\nstudy", "Bring a finished parametric study onto a sheet", self.study_import),
-                       ("study_refresh", "⟳", "Refresh from\nstudy", "Read the study again; formulas next to it fill down", self.study_refresh)]),
-            ("Excel", [("xl_in", "▥", "Import\n.xlsx", "Open an Excel workbook", self.import_xlsx_dialog), ("xl_out", "▦", "Export\n.xlsx", "Save as an Excel workbook", self.export_xlsx_dialog)]),
-            ("Names", [("names", "☰", "Names", "Names for cells and ranges (NumScrews)", self.names_dialog)]),
-            ("Sheets", [("sh_add", "⊞", "Add\nsheet", "Add a sheet", self.add_sheet), ("sh_dup", "⧉", "Copy\nsheet", "Copy the sheet", self.duplicate_sheet),
-                        ("sh_del", "⊟", "Delete\nsheet", "Delete the sheet", self.delete_sheet), ("sh_paste", "⇉", "Paste to\nsheets", "Copy the selected cells to the same place on other sheets", self.paste_to_sheets)]),
+            ("Study", [("study_in", "s_study_in", "Import\nstudy", "Bring a finished parametric study onto a sheet", self.study_import),
+                       ("study_refresh", "s_study_refresh", "Refresh from\nstudy", "Read the study again; formulas next to it fill down", self.study_refresh)]),
+            ("Excel", [("xl_in", "s_xl_in", "Import\n.xlsx", "Open an Excel workbook", self.import_xlsx_dialog), ("xl_out", "s_xl_out", "Export\n.xlsx", "Save as an Excel workbook", self.export_xlsx_dialog)]),
+            ("Names", [("names", "s_names", "Names", "Names for cells and ranges (NumScrews)", self.names_dialog)]),
+            ("Sheets", [("sh_add", "s_sh_add", "Add\nsheet", "Add a sheet", self.add_sheet), ("sh_dup", "s_sh_dup", "Copy\nsheet", "Copy the sheet", self.duplicate_sheet),
+                        ("sh_del", "s_sh_del", "Delete\nsheet", "Delete the sheet", self.delete_sheet), ("sh_paste", "s_sh_paste", "Paste to\nsheets", "Copy the selected cells to the same place on other sheets", self.paste_to_sheets)]),
         ]
         charts = [
-            ("Insert", [("ch_new", "◔", "Insert\nchart", "A chart from the selected cells, or an empty one that you fill from the panel on the right", self.chart_new)]),
-            ("Chart", [("ch_edit", "✎", "Edit\nchart", "Open the chart panel: data, series, look and advanced settings", self.chart_edit), ("ch_copy", "⧉", "Copy\nchart", "Duplicate the chart", self.chart_copy),
-                       ("ch_export", "⇪", "Export\nchart", "Save the chart as PNG, SVG or PDF", self.chart_export), ("ch_del", "✕", "Delete\nchart", "Remove the chart", self.chart_delete)]),
+            ("Insert", [("ch_new", "s_ch_new", "Insert\nchart", "A chart from the selected cells, or an empty one that you fill from the panel on the right", self.chart_new)]),
+            ("Chart", [("ch_edit", "s_ch_edit", "Edit\nchart", "Open the chart panel: data, series, look and advanced settings", self.chart_edit), ("ch_copy", "s_ch_copy", "Copy\nchart", "Duplicate the chart", self.chart_copy),
+                       ("ch_export", "s_ch_export", "Export\nchart", "Save the chart as PNG, SVG or PDF", self.chart_export), ("ch_del", "s_ch_del", "Delete\nchart", "Remove the chart", self.chart_delete)]),
         ]
-        eng = [("Functions", [("fx", "ƒ", "Insert\nfunction", "Insert a function with its Function Arguments window", self.fx)]),
+        eng = [("Functions", [("fx", "s_fx", "Insert\nfunction", "Insert a function with its Function Arguments window", self.fx)]),
                ("Standards", self.standard_items()),
-               ("Browse", [("std_select", "☷", "Standard\nselect", "Browse every installed standard", lambda: self.standards(None))])]
-        view = [("Ribbon", [("ribbon_size", "Aa", "Ribbon\nsize", "Icon size and text size of the ribbon", self.ribbon_size_dialog)])]
+               ("Browse", [("std_select", "s_std_select", "Standard\nselect", "Browse every installed standard", lambda: self.standards(None))])]
+        view = [("Ribbon", [("ribbon_size", "s_ribbon_size", "Ribbon\nsize", "Icon size and text size of the ribbon", self.ribbon_size_dialog)])]
         for title, groups in (("Home", home), ("Data", data), ("Charts", charts), ("Engineering", eng), ("View", view)):
             tabs.addTab(self.ribbon_page(groups), title)
         QTimer.singleShot(0, self.apply_ribbon_sizes)
@@ -201,9 +201,9 @@ class SheetsTab(QWidget):
         for p in sh_std.packs():
             short = p.short
             text = short.replace(" ", "\n", 1) if " " in short else short
-            out.append((f"std_{p.id}", "§", text, f"{p.title} ({p.edition}, {p.publisher})", (lambda pid=p.id: self.standards(pid))))
+            out.append((f"std_{p.id}", "s_std", text, f"{p.title} ({p.edition}, {p.publisher})", (lambda pid=p.id: self.standards(pid))))
         if not out:
-            out.append(("std_none", "§", "No standards\ninstalled", "No engineering standard is installed", None))
+            out.append(("std_none", "s_std", "No standards\ninstalled", "No engineering standard is installed", None))
         return out
 
     def ribbon_page(self, groups):
@@ -224,8 +224,8 @@ class SheetsTab(QWidget):
             v.setSpacing(0)
             row = QHBoxLayout()
             row.setSpacing(2)
-            for key, glyph, text, tip, fn in items:
-                b = sh_ribbon.RibbonButton(glyph, text, icon_pt, text_pt)
+            for key, icon_key, text, tip, fn in items:
+                b = sh_ribbon.RibbonButton(icon_key, text, icon_pt, text_pt)
                 b.setToolTip(tip or text.replace("\n", " "))
                 b.setAutoRaise(True)
                 b.setStyleSheet(RIBBON_QSS)

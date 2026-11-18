@@ -59,15 +59,15 @@ P.reset()
 assert P.get("ribbon_icon") == 20 and P.get("ribbon_text") == 10
 P.use_folder(os.path.join(T, "tab"))
 
-# ---- one button: two sizes, and the glyph and the label are drawn
-b = R.RibbonButton("◔", "Insert\nchart", 20, 10)
+# ---- one button: two sizes, and the icon and the label are drawn
+b = R.RibbonButton("s_ch_new", "Insert\nchart", 20, 10)
 small = b.sizeHint()
 b.set_sizes(48, 20)
 big = b.sizeHint()
 assert big.width() > small.width() and big.height() > small.height() and b.minimumSize() == big
 b.set_sizes(10, 8)
 tiny = b.sizeHint()
-assert tiny.height() < small.height() and b.text() == "◔\nInsert\nchart"
+assert tiny.height() < small.height() and b.text() == "Insert\nchart"
 b.resize(b.sizeHint())
 assert not b.grab().isNull()                                                                    # (painting works at every size)
 for ip, tp in ((10, 8), (48, 20), (20, 10), (48, 8), (10, 20)):

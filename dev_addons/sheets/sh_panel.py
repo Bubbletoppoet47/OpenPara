@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, 
 import sh_adv
 import sh_chart
 import sh_dialogs as D
+import sh_icons
 import sh_presets
 import ui_kit
 
@@ -85,7 +86,7 @@ class PickEdit(QWidget):
         self.edit = QLineEdit()
         self.edit.setPlaceholderText(placeholder)
         self.btn = QToolButton()
-        self.btn.setText("▦")
+        sh_icons.decorate(self.btn, "s_pick_range")
         self.btn.setCheckable(True)
         self.btn.setToolTip("Select the cells on the sheet")
         lay.addWidget(self.edit, 1)
@@ -140,7 +141,7 @@ class SeriesRow(QFrame):
         self.style.setVisible(ctype in LINE_TYPES)
         self.style.currentIndexChanged.connect(lambda _i: self.edited.emit(self.index, "style", self.style.currentData()))
         b_del = QToolButton()
-        b_del.setText("✕")
+        sh_icons.decorate(b_del, "s_remove")
         b_del.setToolTip("Remove the series")
         b_del.clicked.connect(lambda _c=False: self.removed.emit(self.index))
         for w in (self.color, self.name, self.axis, self.style, b_del):
@@ -190,7 +191,7 @@ class ChartPanel(QWidget):
         b_exp.setToolTip("Save the chart as PNG, SVG or PDF")
         b_exp.clicked.connect(lambda _c=False: self.chart and self.export_asked.emit(self.chart["id"]))
         b_x = QToolButton()
-        b_x.setText("✕")
+        sh_icons.decorate(b_x, "s_remove")
         b_x.setToolTip("Close the panel")
         b_x.clicked.connect(lambda _c=False: self.close_panel())
         head.addWidget(b_exp)
@@ -208,7 +209,7 @@ class ChartPanel(QWidget):
         b_save = QPushButton("Save as…")
         b_save.clicked.connect(lambda _c=False: self.save_preset())
         self.b_more = QToolButton()
-        self.b_more.setText("⋯")
+        sh_icons.decorate(self.b_more, "s_more")
         self.b_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(self.b_more)
         menu.addAction("Use for new charts", self.preset_default)
@@ -972,7 +973,7 @@ class ChartPanel(QWidget):
         v = QVBoxLayout(page)
         v.setContentsMargins(4, 6, 4, 6)
         v.setSpacing(4)
-        v.addWidget(_hint("Everything matplotlib can change. A setting you change here wins over the basic look; ✕ puts it back."))
+        v.addWidget(_hint("Everything matplotlib can change. A setting you change here wins over the basic look; the cross button next to it puts it back."))
         top = QHBoxLayout()
         self.adv_search = QLineEdit()
         self.adv_search.setPlaceholderText("Search the settings")
@@ -1204,7 +1205,7 @@ class ChartPanel(QWidget):
 
 
 class AdvRow:
-    """One advanced property: its name, an input of the right kind, and a ✕ that puts it back."""
+    """One advanced property: its name, an input of the right kind, and a cross button that puts it back."""
 
     def __init__(self, p, panel):
         self.p, self.panel = p, panel
@@ -1212,7 +1213,7 @@ class AdvRow:
         self.label.setToolTip(p.key)
         self.label.setWordWrap(True)
         self.reset = QToolButton()
-        self.reset.setText("✕")
+        sh_icons.decorate(self.reset, "s_remove")
         self.reset.setToolTip("Put it back")
         self.reset.clicked.connect(lambda _c=False: self.on_reset())
         self.shown = None                                  # the text last shown or sent (a box that was only passed through changes nothing)

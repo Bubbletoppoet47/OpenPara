@@ -332,7 +332,14 @@ class CircuitsTab(QWidget):
             top.addWidget(b)
             self.buttons[key] = b
         top.addSpacing(14)
-        self.run_btn = QPushButton("▶ Run")
+        self.run_btn = QPushButton("Run")
+        try:
+            import icon_kit                              # the core's icon look (an older core has none: the button is then just "Run")
+            from PyQt6.QtCore import QSize
+            self.run_btn.setIcon(icon_kit.qicon("run", 16))
+            self.run_btn.setIconSize(QSize(16, 16))
+        except Exception:                                # noqa: BLE001
+            self.run_btn.setText("▶ Run")
         self.run_btn.setToolTip("Simulate over time (the oscilloscope and the meters' average / RMS use this)")
         self.run_btn.setStyleSheet("font-weight:bold;")
         self.run_btn.clicked.connect(self.run)

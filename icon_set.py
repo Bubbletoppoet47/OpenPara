@@ -1,20 +1,13 @@
 """
 icon_set.py - the picked icon set: one style for the ribbon, the part tree and the assembly tree.
 
-Each icon is a small SVG on a 24 x 24 grid.  The shapes carry a class (b body, a accent, l line, n accent line, d dot, th pipe) that is turned into plain
-attributes here (the soft tint is a fill opacity), so Qt's SVG renderer needs no stylesheet.  Colour says what the thing is: blue = features that add
-material, red = cuts, amber = reference geometry, teal = assembly structure, purple = simulation and render, grey = configurations.
+Each icon is a small drawing on a 24 x 24 grid.  The shapes carry a role in their class (b body, a accent, l line, n accent line, d dot, th pipe);
+icon_kit.py dresses them in the program's look (flat blue-grey bodies, raised edge, navy outline).  Colour says what the thing is: blue = features that
+add material, red = cuts, amber = reference geometry, teal = assembly structure, purple = simulation and render, grey = configurations.
 
 qicon(key, size) -> QIcon;  by_label(button text) -> QIcon or None;  decorate_tree(tree, root_key) puts icons on tree rows that start with a glyph.
 """
-import re
-
-from PyQt6.QtCore import QByteArray, QRectF, Qt, QSize
-from PyQt6.QtGui import QIcon, QPainter, QPixmap
-from PyQt6.QtSvg import QSvgRenderer
-
-INK = "#26303c"
-HUE = {"feat": "#2f6fed", "cut": "#d6453d", "ref": "#c27a00", "asm": "#0e9488", "ana": "#7c4dcc", "cfg": "#5f6b7a", "ai": "#b83280"}
+from PyQt6.QtCore import QSize
 
 PICKS = {
     'assembly': ('<path class="b" d="M12 3l9 4.5-9 4.5-9-4.5z"/><path class="l" d="M3 12l9 4.5 9-4.5M3 16.5l9 4.5 9-4.5"/>', 'asm'),
@@ -101,51 +94,16 @@ FEATURE = {"sketch": "sketch", "extrude": "boss_extrude", "cut": "cut_extrude", 
 # the glyph a tree row used to start with -> icon key
 GLYPH = {"▯": "plane", "⊹": "origin", "∿": "simulation", "◉": "render", "▣": "component", "▱": "refplane", "⁞": "refaxis", "·": "refpoint", "☷": "pattern", "⚯": "mate", "∑": "equations", "◈": "material"}
 
-_ATTR = {
-    "b": 'fill="{h}" fill-opacity="0.22" stroke="{i}"',
-    "a": 'fill="{h}" stroke="{h}"',
-    "l": 'fill="none" stroke="{i}"',
-    "n": 'fill="none" stroke="{h}"',
-    "d": 'fill="{h}" stroke="none"',
-    "th": 'fill="none" stroke="{h}" stroke-width="5.5" opacity="0.28"',
-}
-_cache = {}
-
-
-def svg_text(key):
-    inner, role = PICKS[key]
-    h = HUE[role]
-
-    def sub(m):
-        return f"<{m.group(1)} " + _ATTR[m.group(2)].format(h=h, i=INK) + m.group(3)
-
-    inner = re.sub(r'<(path|circle|ellipse|rect) class="(\w+)"([^>]*)', sub, inner)
-    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' + inner + "</svg>")
-
 
 def pixmap(key, size, ratio=2):
-    r = QSvgRenderer(QByteArray(svg_text(key).encode("utf-8")))
-    px = QPixmap(size * ratio, size * ratio)
-    px.fill(Qt.GlobalColor.transparent)
-    g = QPainter(px)
-    g.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pad = size * ratio * 0.04
-    r.render(g, QRectF(pad, pad, size * ratio - 2 * pad, size * ratio - 2 * pad))
-    g.end()
-    px.setDevicePixelRatio(ratio)
-    return px
+    import icon_kit
+    return icon_kit.pixmap(key, size, ratio)
 
 
 def qicon(key, size=40):
-    if key not in PICKS:
-        return None
-    k = (key, size)
-    if k not in _cache:
-        ic = QIcon()
-        for s in sorted({size, 16, 24, 32, 40}):
-            ic.addPixmap(pixmap(key, s))
-        _cache[k] = ic
-    return _cache[k]
+    """The QIcon of a drawing (this module's, or one another module registered with the kit); None when there is none."""
+    import icon_kit
+    return icon_kit.qicon(key, size)
 
 
 def by_label(name, size=40):
@@ -178,3 +136,9 @@ def decorate_tree(tree, root_key="assembly"):
 
     for i in range(tree.topLevelItemCount()):
         walk(tree.topLevelItem(i), True)
+
+
+def register_shapes():
+    """Hand the tree / tab drawings to the icon kit (icon_kit.py), which dresses every icon in the program's look."""
+    import icon_kit
+    icon_kit.register(PICKS)

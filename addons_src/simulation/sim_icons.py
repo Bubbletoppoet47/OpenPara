@@ -1,5 +1,6 @@
 """
-sim_icons.py - the little line icons of the FEA / CFD panels (drawn with QPainter, no image files, no extra libraries).
+sim_icons.py - the little icons of the FEA / CFD panels.  With a core that has the icon kit (icon_kit.py) they are drawn by it, in the program's one
+icon look; with an older core the QPainter drawings below are used, so the add-on still works there.
 
 Each icon is drawn on a 24 x 24 grid in one colour; icon(name) returns a QIcon (sharp on high-DPI screens too).
 The first group are drawn from Ian's own sketches (made symmetrical): pressure, pressure_cfd, fixed, bolt, screw, contact, line_load, ux, uy, joints.
@@ -163,7 +164,15 @@ _DRAW = {"pressure_cfd": _pressure_cfd, "pressure": _pressure, "fixed": _fixed, 
 assert set(_DRAW) == set(NAMES)
 
 
-def pixmap(name, size=48):
+try:
+    import icon_kit                  # the core's icon look (0.8.7 on); an older core has no kit and the drawings below are used
+    if not icon_kit.has("l_bolt"):
+        icon_kit = None
+except Exception:                    # noqa: BLE001 (any failure: fall back to the drawings below)
+    icon_kit = None
+
+
+def _legacy_pixmap(name, size):
     pm = QPixmap(size, size)
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
@@ -177,8 +186,14 @@ def pixmap(name, size=48):
     return pm
 
 
+def pixmap(name, size=48, ratio=2):
+    if icon_kit is not None:
+        return icon_kit.pixmap("l_" + name, size, ratio)
+    return _legacy_pixmap(name, size)
+
+
 def icon(name):
     """The QIcon of one of NAMES (cached; needs a QApplication)."""
     if name not in _cache:
-        _cache[name] = QIcon(pixmap(name))
+        _cache[name] = icon_kit.qicon("l_" + name, 24) if icon_kit is not None else QIcon(_legacy_pixmap(name, 48))
     return _cache[name]

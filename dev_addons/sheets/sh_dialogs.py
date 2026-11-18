@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboB
 import sh_book as B
 import sh_engine as E
 import sh_fmt
+import sh_icons
 import sh_prefs
 import sh_std
 import sh_study
@@ -207,7 +208,8 @@ class FunctionArgsDialog(QDialog):
         field.installEventFilter(self)
         field._row = i
         h.addWidget(ed, 1)
-        pk = QPushButton("⊞")
+        pk = QPushButton()
+        sh_icons.decorate(pk, "s_pick_range")
         pk.setFixedWidth(28)
         pk.setToolTip("Pick cells: select them in the grid")
         pk.setCheckable(True)
