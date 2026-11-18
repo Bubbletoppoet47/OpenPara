@@ -17,7 +17,7 @@ sp.step("Loading geometry kernel...", 0.4)
 img = QImage(880, 400, QImage.Format.Format_ARGB32)
 img.fill(0)
 sp.render(img)
-assert img.pixelColor(440, 200).alpha() > 0 and img.pixelColor(0, 0).alpha() == 0       # card drawn, corners rounded away
+assert img.pixelColor(440, 200).alpha() > 0 and img.pixelColor(0, 0).alpha() > 0 and img.pixelColor(879, 399).alpha() > 0      # the card fills the whole window (square corners)
 assert 0.0 <= sp.frac <= 1.0
 from PyQt6.QtCore import Qt
 fl = sp.windowFlags()

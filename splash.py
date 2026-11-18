@@ -1,4 +1,5 @@
-"""The start-up card: the logo, the name, the tag line, a loading bar and what the program is loading right now.
+"""The start-up card (the boot-screen look): the logo and the name on a dark blue panel, the tag lines, and below it a blue-grey strip with what the
+program is loading right now and a block loading bar.
 
     sp = splash.show(app)          # first thing after QApplication exists, before the slow imports
     sp.step("Loading geometry kernel...", 0.2)
@@ -12,14 +13,16 @@ import os
 import sys
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import (QBrush, QColor, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen,
-                         QPixmap, QRadialGradient)
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QLinearGradient, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import QApplication, QWidget
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 W, H = 880, 400
 NAVY, MID, TEAL, SKY, SNOW = "#0a2f55", "#0f4a6e", "#12b5b0", "#8fd3f4", "#f3fbff"      # the palette of the logo
+DEEP, SHADOW = "#04122e", "#02091c"                  # the top of the panel, and the hard shadows
+INK, BODY, LO, HI, BLUE = "#10204d", "#cbd3e0", "#7a869c", "#ffffff", "#3b6fd0"    # the look of the icons (icon_kit.py): navy, blue-grey, raised edge, block colour
+SPLIT = 300                                           # the dark panel is above this line, the strip below it
 NAME = ("Open", "Para")
 TAG1 = "Parametric by design. Open by nature."
 TAG2 = "Built for the future."
@@ -48,7 +51,6 @@ def version_text():
 class Splash(QWidget):
     def __init__(self, scale=1.0):
         super().__init__(None, Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint)     # not always-on-top: other windows can cover it
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.scale = scale
         self.setFixedSize(int(W * scale), int(H * scale))
@@ -91,62 +93,48 @@ class Splash(QWidget):
     # ------------------------------------------------------------------------------------------------------------ drawing
     def font(self, key, px, weight=400, italic=False, spacing=0.0):
         f = QFont(self.fam["it" if italic else "up"])
-        f.setPixelSize(max(1, int(round(px * self.scale))))
+        f.setPixelSize(max(1, int(round(px))))               # (in card units: the painter is already scaled to the window)
         f.setWeight(QFont.Weight(weight))
-        f.setItalic(False)                                 # the italic file is its own family
+        f.setItalic(italic)                                # both Lora files are the family "Lora": the italic one is picked by the italic flag
         if spacing:
-            f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing * self.scale)
+            f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
         return f
 
     def background(self):
-        """Card, grid (fading out downwards) and wave, drawn once."""
+        """The parts that never change, drawn once: the dark panel with its grid, the teal stripe, the blue-grey strip."""
         s = self.scale
         pm = QPixmap(int(W * s), int(H * s))
-        pm.fill(Qt.GlobalColor.transparent)
+        pm.fill(QColor(BODY))
         p = QPainter(pm)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.scale(s, s)
-        clip = QPainterPath()
-        clip.addRoundedRect(QRectF(0, 0, W, H), 14, 14)
-        p.setClipPath(clip)
-        g = QRadialGradient(QPointF(W * 0.5, H * 0.38), W * 0.62)
-        g.setColorAt(0.0, QColor(MID))
-        g.setColorAt(0.75, QColor(NAVY))
-        g.setColorAt(1.0, QColor(NAVY))
-        p.fillRect(QRectF(0, 0, W, H), QBrush(g))
-        grid = QPixmap(int(W * s), int(H * s))                 # the grid on its own, then faded with a vertical mask
-        grid.fill(Qt.GlobalColor.transparent)
-        gp = QPainter(grid)
-        gp.scale(s, s)
+        g = QLinearGradient(0, 0, 0, SPLIT)
+        g.setColorAt(0.0, QColor(DEEP))
+        g.setColorAt(0.55, QColor(NAVY))
+        g.setColorAt(1.0, QColor(MID))
+        p.fillRect(QRectF(0, 0, W, SPLIT), QBrush(g))
         c = QColor(SKY)
-        c.setAlphaF(0.20)
-        gp.setPen(QPen(c, 1.0))
-        for x in range(0, W + 1, 28):
-            gp.drawLine(x, 0, x, H)
-        for y in range(0, H + 1, 28):
-            gp.drawLine(0, y, W, y)
-        gp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-        fade = QLinearGradient(0, 0, 0, H)
-        fade.setColorAt(0.0, QColor(255, 255, 255, 255))
-        fade.setColorAt(1.0, QColor(255, 255, 255, 0))
-        gp.fillRect(QRectF(0, 0, W, H), QBrush(fade))
-        gp.end()
-        p.resetTransform()
-        p.drawPixmap(0, 0, grid)
-        p.scale(s, s)
-        wave = QColor(TEAL)
-        wave.setAlphaF(0.35)
-        for dy in (0, 20):                                        # two overlapping bands along the bottom
-            path = QPainterPath()
-            path.moveTo(0, 340 + dy)
-            path.cubicTo(150, 310 + dy, 250, 390 + dy, 420, 350 + dy)
-            path.cubicTo(590, 310 + dy, 700, 300 + dy, 880, 345 + dy)
-            path.lineTo(W, H)
-            path.lineTo(0, H)
-            path.closeSubpath()
-            p.fillPath(path, wave)
+        c.setAlphaF(0.13)
+        for x in range(0, W + 1, 28):                                     # the grid: one pixel lines
+            p.fillRect(QRectF(x, 0, 1, SPLIT), c)
+        for y in range(0, SPLIT, 28):
+            p.fillRect(QRectF(0, y, W, 1), c)
+        p.fillRect(QRectF(0, SPLIT - 4, W, 4), QColor(TEAL))               # the stripe between the two, with a lit top edge and a dark bottom edge
+        p.fillRect(QRectF(0, SPLIT - 4, W, 1), QColor("#7ee8e3"))
+        p.fillRect(QRectF(0, SPLIT - 1, W, 1), QColor("#08716e"))
+        p.fillRect(QRectF(0, SPLIT, W, 1), QColor(HI))
         p.end()
         return pm
+
+    def sunken(self, p, r):
+        """A sunken box (white inside) like the edit boxes of the window."""
+        x, y, w, h = r.x(), r.y(), r.width(), r.height()
+        p.fillRect(r, QColor(HI))
+        p.fillRect(QRectF(x, y, w, 1), QColor(LO))                          # outer edge: dark top and left, light bottom and right
+        p.fillRect(QRectF(x, y, 1, h), QColor(LO))
+        p.fillRect(QRectF(x, y + h - 1, w, 1), QColor(HI))
+        p.fillRect(QRectF(x + w - 1, y, 1, h), QColor(HI))
+        p.fillRect(QRectF(x + 1, y + 1, w - 2, 1), QColor(INK))             # inner edge: navy top and left
+        p.fillRect(QRectF(x + 1, y + 1, 1, h - 2), QColor(INK))
 
     def paintEvent(self, _ev):
         if self.bg is None:
@@ -157,48 +145,49 @@ class Splash(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         p.drawPixmap(0, 0, self.bg)
         p.scale(s, s)
-        # logo with a soft shadow
-        lx, ly, lw = (W - 92) / 2, 44.0, 92.0
-        for i in range(6):
-            sh = QColor(0, 0, 0, 16)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(sh)
-            p.drawRoundedRect(QRectF(lx - i, ly + 8 - i, lw + 2 * i, lw + 2 * i), 21 + i, 21 + i)
-        self.logo.render(p, QRectF(lx, ly, lw, lw))
-        # the name: Open (bold) + Para (italic)
-        f1, f2 = self.font("up", 56, 700, spacing=1.0), self.font("it", 56, 400, spacing=1.0)
-        m1, m2 = QFontMetricsF(f1), QFontMetricsF(f2)
-        w1, w2 = m1.horizontalAdvance(NAME[0]) / s, m2.horizontalAdvance(NAME[1]) / s
-        x0 = (W - (w1 + w2)) / 2
-        base = 232.0
-        p.setPen(QColor(SNOW))
-        p.setFont(f1)
-        p.drawText(QPointF(x0, base), NAME[0])
-        p.setFont(f2)
-        p.drawText(QPointF(x0 + w1, base), NAME[1])
-        # tag lines
-        for text, key, wt, ital, y, col, a in (((TAG1_PLAYGROUND + " (" + self.mode_text + ")") if self.playground else TAG1, "up", 400, False, 268.0, SNOW if not self.playground else "#f08a24", 0.95), (TAG2, "it", 600, True, 293.0, SKY, 1.0)):
-            f = self.font(key, 19, wt)
-            c = QColor(col)
-            c.setAlphaF(a)
-            p.setFont(f)
-            p.setPen(c)
-            p.drawText(QRectF(0, y - 18, W, 26), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, text)
-        # loading bar and status
-        bx0, bx1, by = 270.0, 610.0, 340.0
-        track = QColor(SKY)
-        track.setAlphaF(0.25)
+        # logo with a hard shadow
+        lx, ly, lw = 70.0, 62.0, 150.0
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(track)
-        p.drawRoundedRect(QRectF(bx0, by, bx1 - bx0, 4), 2, 2)
-        p.setBrush(QColor(TEAL))
-        p.drawRoundedRect(QRectF(bx0, by, max(4.0, (bx1 - bx0) * self.frac), 4), 2, 2)
-        st = self.status + (f"   ·   Version {self.version}" if self.version else "")
-        c = QColor(SNOW)
-        c.setAlphaF(0.8)
-        p.setFont(self.font("up", 14, 400))
-        p.setPen(c)
-        p.drawText(QRectF(0, 352, W, 24), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, st)
+        p.setBrush(QColor(SHADOW))
+        p.drawRoundedRect(QRectF(lx + 5, ly + 5, lw, lw), lw * 48 / 256, lw * 48 / 256)
+        self.logo.render(p, QRectF(lx, ly, lw, lw))
+        # the name: Open (bold) + Para (italic, light blue), each with a hard shadow
+        f1, f2 = self.font("up", 82, 700, spacing=1.0), self.font("it", 82, 400, italic=True, spacing=1.0)
+        m1 = QFontMetricsF(f1)
+        w1 = m1.horizontalAdvance(NAME[0])
+        x0, base = 262.0, 136.0
+        for dx, dy, c1, c2 in ((4.0, 4.0, SHADOW, SHADOW), (0.0, 0.0, "#ffffff", SKY)):
+            p.setPen(QColor(c1))
+            p.setFont(f1)
+            p.drawText(QPointF(x0 + dx, base + dy), NAME[0])
+            p.setPen(QColor(c2))
+            p.setFont(f2)
+            p.drawText(QPointF(x0 + w1 + dx, base + dy), NAME[1])
+        # tag lines
+        tag1 = (TAG1_PLAYGROUND + " (" + self.mode_text + ")") if self.playground else TAG1
+        for text, ital, y, col in ((tag1, False, 181.0, "#f08a24" if self.playground else "#ffffff"), (TAG2, True, 212.0, SKY)):
+            p.setFont(self.font("it" if ital else "up", 19 if not ital else 17, 400, italic=ital))
+            p.setPen(QColor(SHADOW))
+            p.drawText(QPointF(266.0 + 1, y + 1), text)
+            p.setPen(QColor(col))
+            p.drawText(QPointF(266.0, y), text)
+        # the strip: what is loading now, the version, and the block bar
+        sans = QFont(QApplication.font())
+        sans.setPixelSize(12)
+        p.setFont(sans)
+        p.setPen(QColor(INK))
+        p.drawText(QRectF(40, SPLIT + 12, 640, 22), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.status)
+        if self.version:
+            p.drawText(QRectF(560, SPLIT + 12, 280, 22), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"Version {self.version}")
+        box = QRectF(40, SPLIT + 48, 800, 26)
+        self.sunken(p, box)
+        n = int((box.width() - 8) // 17)                                   # blocks 14 wide with a gap of 3
+        lit = 0 if self.frac <= 0 else max(1, int(round(n * self.frac)))
+        for k in range(lit):
+            bx, by = box.x() + 4 + k * 17, box.y() + 5
+            p.fillRect(QRectF(bx, by, 14, 16), QColor(BLUE))
+            p.fillRect(QRectF(bx, by, 14, 1), QColor(255, 255, 255, 90))
+            p.fillRect(QRectF(bx, by + 14, 14, 2), QColor(10, 24, 70, 90))
         p.end()
 
 
