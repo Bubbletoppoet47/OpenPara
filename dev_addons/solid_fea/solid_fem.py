@@ -1,8 +1,10 @@
 """
 solid_fem.py - meshing and the linear elastic solver of the 3D FEA add-on (no window).
 
-  mesh_solid(geom, h, cancel)       gmsh fills the part (a STEP of it) with tetrahedra -> {"nodes", "tets", "faces": {face id: triangles}, "verts": {vertex id: node}}
+  mesh_solid(geom, h, cancel, progress, opts)   gmsh fills the part (a STEP of it) with tetrahedra -> {"nodes", "tets", "faces": {face id: triangles}, "verts": {vertex id: node}}
+                                    opts (see solid_mesh): minimum size, growth rate, refinement at curved surfaces, a smaller size on single faces
   quadratic(mesh)                   10-node tetrahedra with straight edges (VTK node order); the triangles of every face get their mid-edge nodes
+  linear(mesh)                      4-node tetrahedra (the same mesh without the mid-edge nodes)
   Problem(...).solve()              K u = f for a linear elastic isotropic material; supports and loads from the faces of the part
 
 Units: mm, N, MPa (so a density of 7850 kg/m3 is 7.85e-9 t/mm3 and gravity 9810 mm/s2).
@@ -30,8 +32,11 @@ class Cancelled(Exception):
 
 
 # ------------------------------------------------------------------------------------------------------------------------ mesh
-def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None):
+def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None, opts=None):
+    """`opts`: None (the plain automatic mesh) or {"hmin": mm | 0, "growth", "curv": elements per full circle | 0,
+    "face_sizes": [{"fids": [face ids], "h": mm}]} - see solid_mesh.resolve."""
     import gmsh
+    opts = opts or {}
     if cancel():
         raise Cancelled()
     fd, path = tempfile.mkstemp(suffix=".step")
@@ -53,9 +58,10 @@ def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None):
             raise FemError("gmsh found no solid in the part.")
         fmap = _match_surfaces(gmsh, geom)
         gmsh.option.setNumber("Mesh.MeshSizeMax", float(h))
-        gmsh.option.setNumber("Mesh.MeshSizeMin", float(h) / 6.0)
-        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 10)
+        gmsh.option.setNumber("Mesh.MeshSizeMin", float(opts.get("hmin") or 0.0) or float(h) / 6.0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", float(opts.get("curv", 10)))
         gmsh.option.setNumber("Mesh.Optimize", 1)
+        _local_sizes(gmsh, fmap, opts.get("face_sizes") or [], float(h), float(opts.get("growth") or 1.3))
         progress("meshing")
         err = []
         done = False
@@ -121,6 +127,36 @@ def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None):
     return {"nodes": xyz, "tets": tets.astype(np.int64), "faces": faces, "verts": verts}
 
 
+def _local_sizes(gmsh, fmap, face_sizes, h, growth):
+    """A smaller element size on single faces: near such a face the size is `size`, and it grows to the global size `h` over the distance at which
+    layers of elements, each `growth` times longer than the one before, have grown that far: (h - size) / (growth - 1)."""
+    if not face_sizes:
+        return
+    tag_of = {fid: tag for tag, fid in fmap.items()}
+    fld = gmsh.model.mesh.field
+    parts = []
+    for item in face_sizes:
+        tags = [tag_of[f] for f in item["fids"] if f in tag_of]
+        hf = float(item["h"])
+        if not tags or not hf < h:
+            continue
+        dist = fld.add("Distance")
+        fld.setNumbers(dist, "SurfacesList", tags)
+        fld.setNumber(dist, "Sampling", 40)
+        thr = fld.add("Threshold")
+        fld.setNumber(thr, "InField", dist)
+        fld.setNumber(thr, "SizeMin", hf)
+        fld.setNumber(thr, "SizeMax", h)
+        fld.setNumber(thr, "DistMin", 0.0)
+        fld.setNumber(thr, "DistMax", (h - hf) / max(growth - 1.0, 1e-6))
+        parts.append(thr)
+    if not parts:
+        return
+    low = fld.add("Min")
+    fld.setNumbers(low, "FieldsList", parts)
+    fld.setAsBackgroundMesh(low)
+
+
 def _match_surfaces(gmsh, geom):
     """{gmsh surface tag: face id of the part}: the nearest face by centre of mass and area."""
     fm = {}
@@ -167,7 +203,14 @@ def quadratic(mesh):
             ms.append(nn + pos)
         tri6[fid] = np.stack([tr[:, 0], tr[:, 1], tr[:, 2], ms[0], ms[1], ms[2]], axis=1)
     out = dict(mesh)
-    out.update({"nodes": np.vstack([nodes, mid]), "conn": conn, "tri6": tri6})
+    out.update({"nodes": np.vstack([nodes, mid]), "conn": conn, "tri6": tri6, "ftri": tri6, "order": 2})
+    return out
+
+
+def linear(mesh):
+    """4-node tetrahedra: the corner nodes only.  "ftri" holds the corner nodes of the triangles of every face."""
+    out = dict(mesh)
+    out.update({"conn": mesh["tets"].copy(), "ftri": {fid: np.asarray(tr).copy() for fid, tr in mesh["faces"].items()}, "order": 1})
     return out
 
 
@@ -238,11 +281,19 @@ def _grad_L(nodes, conn, s, e):
     return np.transpose(inv[:, 1:, :], (0, 2, 1)), np.abs(_signed_vol(c))
 
 
+def _rule(nne):
+    """(derivatives of the shape functions at the integration points, weights, shape functions there) for 4-node (one point: constant strain, exact)
+    and 10-node (four points) tetrahedra."""
+    if nne == 4:
+        return [np.eye(4)], np.array([1.0]), [np.full(4, 0.25)]
+    return [_dNdL(L) for L in GAUSS], GW, [_N(L) for L in GAUSS]
+
+
 def _bmat(g):
-    """g (ne, 10, 3) physical gradients of the shape functions -> B (ne, 6, 30)."""
-    ne = g.shape[0]
-    B = np.zeros((ne, 6, 30))
-    for i in range(10):
+    """g (ne, nne, 3) physical gradients of the shape functions -> B (ne, 6, 3 nne)."""
+    ne, nne = g.shape[0], g.shape[1]
+    B = np.zeros((ne, 6, 3 * nne))
+    for i in range(nne):
         gx, gy, gz = g[:, i, 0], g[:, i, 1], g[:, i, 2]
         B[:, 0, 3 * i] = gx
         B[:, 1, 3 * i + 1] = gy
@@ -255,9 +306,10 @@ def _bmat(g):
 
 def assemble(nodes, conn, E, nu, cancel=lambda: False):
     nn, ne = len(nodes), len(conn)
+    nne = conn.shape[1]
+    ndof = 3 * nne
     D = material_matrix(E, nu)
-    dN = [_dNdL(L) for L in GAUSS]
-    rows, cols, vals = [], [], []
+    dN, gw, _ns = _rule(nne)
     chunk = 4000
     K = None
     for s in range(0, ne, chunk):
@@ -265,12 +317,12 @@ def assemble(nodes, conn, E, nu, cancel=lambda: False):
             raise Cancelled()
         e = min(s + chunk, ne)
         gL, V = _grad_L(nodes, conn, s, e)
-        Ke = np.zeros((e - s, 30, 30))
-        for d, w in zip(dN, GW):
+        Ke = np.zeros((e - s, ndof, ndof))
+        for d, w in zip(dN, gw):
             B = _bmat(np.einsum("ik,ekx->eix", d, gL))
             Ke += (w * V)[:, None, None] * (B.transpose(0, 2, 1) @ (D @ B))
-        ed = (3 * conn[s:e, :, None] + np.arange(3)[None, None, :]).reshape(e - s, 30)
-        part = sp.coo_matrix((Ke.ravel(), (np.repeat(ed, 30, axis=1).ravel(), np.tile(ed, (1, 30)).ravel())), shape=(3 * nn, 3 * nn)).tocsr()
+        ed = (3 * conn[s:e, :, None] + np.arange(3)[None, None, :]).reshape(e - s, ndof)
+        part = sp.coo_matrix((Ke.ravel(), (np.repeat(ed, ndof, axis=1).ravel(), np.tile(ed, (1, ndof)).ravel())), shape=(3 * nn, 3 * nn)).tocsr()
         K = part if K is None else K + part
     return K, D
 
@@ -278,23 +330,24 @@ def assemble(nodes, conn, E, nu, cancel=lambda: False):
 def stresses(nodes, conn, D, u):
     """Per element: von Mises at the 4 Gauss points (max), the mean stress tensor, and the element volume."""
     ne = len(conn)
+    nne = conn.shape[1]
     vm = np.zeros(ne)
     sig_mean = np.zeros((ne, 6))
     vol = np.zeros(ne)
-    dN = [_dNdL(L) for L in GAUSS]
+    dN, _gw, _ns = _rule(nne)
     chunk = 8000
     for s in range(0, ne, chunk):
         e = min(s + chunk, ne)
         gL, V = _grad_L(nodes, conn, s, e)
         vol[s:e] = V
-        ed = (3 * conn[s:e, :, None] + np.arange(3)[None, None, :]).reshape(e - s, 30)
+        ed = (3 * conn[s:e, :, None] + np.arange(3)[None, None, :]).reshape(e - s, 3 * nne)
         ue = u[ed]
         vmax = np.zeros(e - s)
         for d in dN:
             B = _bmat(np.einsum("ik,ekx->eix", d, gL))
             sg = np.einsum("eri,ei->er", B, ue) @ D.T
             vmax = np.maximum(vmax, _vm(sg))
-            sig_mean[s:e] += sg / 4.0
+            sig_mean[s:e] += sg / len(dN)
         vm[s:e] = vmax
     return vm, sig_mean, vol
 
@@ -316,13 +369,14 @@ def principal(sig):
 def body_load(nodes, conn, b):
     """Consistent nodal forces of a uniform body force vector b (N/mm3)."""
     f = np.zeros(3 * len(nodes))
-    Ns = [_N(L) for L in GAUSS]
+    nne = conn.shape[1]
+    _dn, gw, Ns = _rule(nne)
     ne = len(conn)
     for s in range(0, ne, 8000):
         e = min(s + 8000, ne)
         V = np.abs(_signed_vol(nodes[conn[s:e, :4]]))
-        for n, w in zip(Ns, GW):
-            for i in range(10):
+        for n, w in zip(Ns, gw):
+            for i in range(nne):
                 for c in range(3):
                     np.add.at(f, 3 * conn[s:e, i] + c, w * V * n[i] * b[c])
     return f

@@ -32,6 +32,7 @@ import sim_ui
 import sim_source
 import solid_fem as fem
 import solid_geom as sg
+import solid_mesh as smesh
 import solid_model as sm
 import solid_view as sv
 import unitctl
@@ -305,7 +306,7 @@ class SolidWindow(QWidget):
             f.addRow(lab, e)
             e.editingFinished.connect(self.inputs_changed)
         v.addLayout(f)
-        v.addWidget(sim_ui.wrapped("Analysis: linear elastic, small displacements, quadratic tetrahedra."))
+        v.addWidget(sim_ui.wrapped("Analysis: linear elastic, small displacements, tetrahedra (quadratic unless you choose linear in the advanced mesh options)."))
         v.addWidget(self.mat_note)
         self.fill_materials()
         self.put_material(self.setup["material"])
@@ -357,7 +358,10 @@ class SolidWindow(QWidget):
         row.addWidget(b)
         v.addLayout(row)
         # --- 5 mesh
-        v = self.sec(5, "Mesh", True, summary=lambda: self.mesh_lbl.text() or "not meshed")
+        v = self.sec(5, "Mesh", True, summary=lambda: self.mesh_lbl.text() or "not meshed",
+                     help_text="The part is filled with tetrahedra. Element size: the length of an element edge (blank = automatic, a fourteenth of "
+                               "the part's size). Smaller elements are more accurate and slower. Advanced mesh options: choose linear or quadratic "
+                               "elements, make the mesh finer at curved surfaces or on single faces, and read how good the elements are.")
         f = QFormLayout()
         self.e_h = QLineEdit()
         self.e_h.setPlaceholderText("auto")
@@ -365,15 +369,27 @@ class SolidWindow(QWidget):
         self.h_label = QLabel()
         f.addRow(self.h_label, self.e_h)
         v.addLayout(f)
+        self.build_advanced_mesh(v)
         self.b_mesh = QPushButton("Mesh")
         self.b_mesh.clicked.connect(self.run_mesh)
         v.addWidget(self.b_mesh)
         self.mesh_lbl = QLabel("")
         self.mesh_lbl.setWordWrap(True)
         v.addWidget(self.mesh_lbl)
+        self.quality_box = QWidget()                                    # the quality of the mesh just made (only with the advanced options)
+        ql = QVBoxLayout(self.quality_box)
+        ql.setContentsMargins(0, 0, 0, 0)
+        ql.addWidget(QLabel("<b>Mesh quality</b>"))
+        self.quality_lbl = QLabel("")
+        self.quality_lbl.setWordWrap(True)
+        self.quality_lbl.setTextFormat(Qt.TextFormat.RichText)
+        self.quality_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        ql.addWidget(self.quality_lbl)
+        self.quality_box.setVisible(False)
+        v.addWidget(self.quality_box)
         # --- 6 results (laid out like the Results of 1D FEA: result, colours, deformed shape, scale, animation; the probe is part of it)
         v = self.sec(6, "Results", True, summary=lambda: self.cb_field.currentText(),
-                     help_text="Linear elastic, small displacements, quadratic tetrahedra. Stresses are values at the nodes (the average of the elements "
+                     help_text="Linear elastic, small displacements, tetrahedra (quadratic by default). Stresses are values at the nodes (the average of the elements "
                                "around each node). The safety factor is the yield strength divided by the von Mises stress (red at 0.5 or less, "
                                "blue at 3 or more; grey = no yield strength typed). The X, Y and Z of the results and loads are the axes of the part "
                                "- the triad in the bottom-left corner of the view shows them.")
@@ -494,6 +510,264 @@ class SolidWindow(QWidget):
         self.refresh_labels()
         self.enable_buttons()
 
+    # ------------------------------------------------------------------ advanced mesh options
+    def build_advanced_mesh(self, v):
+        """The 'Advanced mesh options' tick box and what it reveals (see solid_mesh for what each option does)."""
+        self.cb_adv = QCheckBox("Advanced mesh options")
+        self.cb_adv.setToolTip("Element order, a minimum size and a growth rate, refinement at curved surfaces and on single faces, and a quality report. "
+                               "Off = the plain automatic mesh (quadratic tetrahedra).")
+        v.addWidget(self.cb_adv)
+        self.adv_box = QWidget()
+        al = QVBoxLayout(self.adv_box)
+        al.setContentsMargins(14, 0, 0, 0)
+        al.setSpacing(3)
+        f = QFormLayout()
+        self.order_combo = QComboBox()
+        for k, text in smesh.ORDERS.items():
+            self.order_combo.addItem(text, k)
+        self.order_combo.setToolTip("Quadratic tetrahedra (10 nodes) bend and carry stress gradients much better, so they are the right choice almost always. "
+                                    "Linear tetrahedra (4 nodes) are quicker but stiff in bending: they need a much finer mesh for the same accuracy.")
+        sim_ui.tame(self.order_combo, 24)
+        f.addRow("Element order", self.order_combo)
+        self.e_hmin = QLineEdit()
+        self.e_hmin.setPlaceholderText("auto")
+        self.e_hmin.setToolTip("The smallest element edge the mesher may make (blank = a sixth of the element size).")
+        self.hmin_label = QLabel("Minimum size")
+        f.addRow(self.hmin_label, self.e_hmin)
+        self.e_growth = QLineEdit("1.3")
+        self.e_growth.setToolTip(f"How fast elements grow away from a refined face: 1.3 = every layer of elements is 30 % longer than the one before. "
+                                 f"{smesh.GROWTH_RANGE[0]:g} to {smesh.GROWTH_RANGE[1]:g}. Smaller = a smoother mesh with more elements.")
+        f.addRow("Growth rate", self.e_growth)
+        al.addLayout(f)
+        row = QHBoxLayout()
+        self.cb_curv = QCheckBox("Refine at curved surfaces")
+        self.cb_curv.setChecked(True)
+        self.cb_curv.setToolTip("Makes the elements smaller where a surface is curved (holes, fillets), so the curve is followed.")
+        row.addWidget(self.cb_curv)
+        self.sp_curv = QSpinBox()
+        self.sp_curv.setRange(*smesh.CURV_RANGE)
+        self.sp_curv.setValue(10)
+        self.sp_curv.setToolTip("Elements around a full circle (a hole, a round edge). 10 is the automatic choice; more gives a rounder, finer mesh.")
+        self.sp_curv.setSuffix(" per circle")
+        row.addWidget(self.sp_curv)
+        al.addLayout(row)
+        self.local_hdr = QLabel("Smaller elements on single faces: select the face(s) in the view (or the Faces list), type a size, press the button.")
+        self.local_hdr.setWordWrap(True)
+        self.local_hdr.setStyleSheet("color:#555555; font-size:11px;")
+        al.addWidget(self.local_hdr)
+        row = QHBoxLayout()
+        self.e_face_h = QLineEdit()
+        self.e_face_h.setPlaceholderText("size")
+        row.addWidget(self.e_face_h, 1)
+        self.b_face_size = QPushButton("Set on selected faces")
+        self.b_face_size.setToolTip("Gives the selected faces (or patches of a split face) a smaller element size than the global one. The elements grow "
+                                    "back to the global size away from them, at the growth rate above.")
+        self.b_face_size.clicked.connect(self.set_face_size)
+        row.addWidget(self.b_face_size)
+        al.addLayout(row)
+        self.face_table = QTableWidget(0, 2)
+        self.face_table.setHorizontalHeaderLabels(["Face", "Size"])
+        self.face_table.verticalHeader().hide()
+        self.face_table.setMinimumHeight(70)
+        self.face_table.setMaximumHeight(130)
+        self.face_table.horizontalHeader().setStretchLastSection(True)
+        self.face_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.face_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.face_table.setToolTip("Double-click a size to change it.")
+        self.face_table.itemChanged.connect(self.face_item_changed)
+        al.addWidget(self.face_table)
+        self.b_face_size_del = QPushButton("Remove selected size")
+        self.b_face_size_del.clicked.connect(self.remove_face_size)
+        al.addWidget(self.b_face_size_del)
+        f = QFormLayout()
+        self.follows_combo = QComboBox()
+        for k, text in smesh.FOLLOWS.items():
+            self.follows_combo.addItem(text, k)
+        self.follows_combo.setToolTip("What the mesh follows: the borders of the patches of a split face lie on mesh edges, so a load or support on a patch "
+                                      "covers exactly the patch.")
+        f.addRow("Mesh follows", self.follows_combo)
+        al.addLayout(f)
+        self.adv_box.setVisible(False)
+        v.addWidget(self.adv_box)
+        self.cb_adv.toggled.connect(self.adv_toggled)
+        self.order_combo.activated.connect(lambda _i: self.inputs_changed())
+        self.follows_combo.activated.connect(lambda _i: self.inputs_changed())
+        self.e_hmin.editingFinished.connect(self.inputs_changed)
+        self.e_growth.editingFinished.connect(self.inputs_changed)
+        self.cb_curv.toggled.connect(self.curv_toggled)
+        self.sp_curv.valueChanged.connect(lambda _v: self.inputs_changed())
+
+    def adv_toggled(self, on):
+        self.adv_box.setVisible(bool(on))
+        self.show_quality(self.mesh_q["quality"] if self.mesh_q is not None else None)
+        self.inputs_changed()
+        for s_ in self.sections:
+            s_.refresh_summary()
+
+    def curv_toggled(self, on):
+        self.sp_curv.setEnabled(bool(on))
+        self.inputs_changed()
+
+    def read_mesh_options(self, h):
+        """The mesh options from the boxes into the setup.  `h` = the element size typed (mm, 0 = automatic).  Raises ValueError for a bad number."""
+        mo = smesh.complete(self.setup.get("mesh"))                      # the local sizes stay as they are
+        mo["advanced"] = self.cb_adv.isChecked()
+        mo["order"] = self.order_combo.currentData()
+        mo["follows"] = self.follows_combo.currentData() or "patches"
+        mo["curv"] = self.sp_curv.value() if self.cb_curv.isChecked() else 0
+        self.setup["mesh"] = mo
+        if not mo["advanced"]:
+            return
+        t = self.e_hmin.text().strip()
+        mo["hmin"] = l_in(num(self.e_hmin, "Minimum size")) if t else 0.0
+        mo["growth"] = num(self.e_growth, "Growth rate")
+        why = smesh.validate(mo, h or (sm.auto_h(self.geom) if self.geom is not None else 0.0))
+        if why:
+            raise ValueError(why)
+
+    def put_mesh_options(self):
+        """The boxes from the setup's mesh options (after opening a project, importing a state ...)."""
+        mo = smesh.complete(self.setup.get("mesh"))
+        self.setup["mesh"] = mo
+        for wd in (self.cb_adv, self.cb_curv, self.sp_curv, self.order_combo, self.follows_combo):
+            wd.blockSignals(True)
+        self.cb_adv.setChecked(bool(mo["advanced"]))
+        self.order_combo.setCurrentIndex(max(0, self.order_combo.findData(mo["order"])))
+        self.follows_combo.setCurrentIndex(max(0, self.follows_combo.findData(mo["follows"])))
+        self.cb_curv.setChecked(mo["curv"] > 0)
+        self.sp_curv.setValue(mo["curv"] or 10)
+        self.sp_curv.setEnabled(mo["curv"] > 0)
+        for wd in (self.cb_adv, self.cb_curv, self.sp_curv, self.order_combo, self.follows_combo):
+            wd.blockSignals(False)
+        self.e_hmin.setText(format(l_out(mo["hmin"]), ".8g") if mo["hmin"] else "")
+        self.e_growth.setText(format(mo["growth"], ".8g"))
+        self.adv_box.setVisible(bool(mo["advanced"]))
+        self.fill_face_table()
+
+    def face_group_label(self, sig):
+        ids = sg.match_faces(self.geom, sig) if self.geom is not None else None
+        if not ids:
+            return "(face not found)"
+        if len(ids) == 1:
+            return self.face_label(ids[0])
+        p = self.geom["faces"][ids[0]].get("parent")
+        return f"Face {(p if p is not None else ids[0]) + 1}, all {len(ids)} patches"
+
+    def fill_face_table(self):
+        t = self.face_table
+        t.blockSignals(True)
+        t.setRowCount(0)
+        ro = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        for r, x in enumerate(smesh.complete(self.setup.get("mesh"))["face_sizes"]):
+            t.insertRow(r)
+            a = QTableWidgetItem(self.face_group_label(x["face"]))
+            a.setFlags(ro)
+            b = QTableWidgetItem(format(l_out(x["h"]), ".8g"))
+            b.setFlags(ro | Qt.ItemFlag.ItemIsEditable)
+            t.setItem(r, 0, a)
+            t.setItem(r, 1, b)
+        t.blockSignals(False)
+        self.hmin_label.setText(f"Minimum size ({UD()['L']})")
+
+    def face_sizes_changed(self):
+        self.fill_face_table()
+        self.invalidate(mesh=True)
+
+    def effective_h(self):
+        """The element size (mm) the next mesh gets: the typed one, or the automatic one."""
+        try:
+            t = self.e_h.text().strip()
+            h = l_in(float(t.replace(",", "."))) if t else 0.0
+        except ValueError:
+            h = 0.0
+        return h or (sm.auto_h(self.geom) if self.geom is not None else 0.0)
+
+    def try_face_sizes(self, sizes):
+        """Takes a new list of local sizes when the options stay valid with it; else says why not."""
+        mo = smesh.complete(self.setup.get("mesh"))
+        mo["face_sizes"] = sizes
+        why = smesh.validate(dict(mo, advanced=True), self.effective_h())
+        if why:
+            self.say(why)
+            return False
+        self.setup["mesh"] = mo
+        self.face_sizes_changed()
+        return True
+
+    def set_face_size(self):
+        if self.geom is None:
+            self.say("Import a part first.")
+            return False
+        if not self.sel_faces:
+            self.say("Select the face(s) first (click them in the view, or in the Faces list), then set the size.")
+            return False
+        try:
+            hf = l_in(float(self.e_face_h.text().strip().replace(",", ".")))
+        except ValueError:
+            self.say("Type the element size for the selected faces (a number).")
+            return False
+        sizes = [dict(x) for x in smesh.complete(self.setup.get("mesh"))["face_sizes"]]
+        for fid in self.sel_faces:
+            sig = sg.face_sig(self.geom, fid)
+            old = next((x for x in sizes if x["face"] == sig), None)
+            if old is not None:
+                old["h"] = hf
+            else:
+                sizes.append({"face": sig, "h": hf})
+        if self.try_face_sizes(sizes):
+            self.say(f"Element size {format(l_out(hf), '.4g')} {UD()['L']} on {len(self.sel_faces)} face(s).")
+            return True
+        return False
+
+    def remove_face_size(self):
+        r = self.face_table.currentRow()
+        sizes = [dict(x) for x in smesh.complete(self.setup.get("mesh"))["face_sizes"]]
+        if not 0 <= r < len(sizes):
+            self.say("Select a row of the list first.")
+            return False
+        del sizes[r]
+        return self.try_face_sizes(sizes)
+
+    def face_item_changed(self, it):
+        if it.column() != 1:
+            return
+        sizes = [dict(x) for x in smesh.complete(self.setup.get("mesh"))["face_sizes"]]
+        r = it.row()
+        try:
+            hf = l_in(float(it.text().strip().replace(",", ".")))
+        except ValueError:
+            self.say("The size must be a number.")
+            QTimer.singleShot(0, self.fill_face_table)
+            return
+        if 0 <= r < len(sizes):
+            sizes[r]["h"] = hf
+            if not self.try_face_sizes(sizes):
+                QTimer.singleShot(0, self.fill_face_table)
+
+    def show_quality(self, qr):
+        """The quality report of a mesh (solid_mesh.quality) under the Mesh button - only with the advanced options on."""
+        if qr is None or not self.cb_adv.isChecked():
+            self.quality_lbl.setText("")
+            self.quality_box.setVisible(False)
+            return
+        L = UD()["L"]
+        n = qr["elements"]
+        verdict = smesh.verdict(qr)
+        colour = {"good": "#1b7f3b", "acceptable": "#a86a00", "poor": "#b3261e"}[verdict]
+        self.quality_lbl.setText(
+            f"{n:,} elements, {qr['nodes']:,} nodes ({'quadratic' if qr['order'] == 2 else 'linear'})<br>"
+            f"Edge length: smallest {l_out(qr['edge_min']):.4g}, average {l_out(qr['edge_mean']):.4g}, largest {l_out(qr['edge_max']):.4g} {L}<br>"
+            f"Worst element, radius ratio: {qr['ratio_min']:.3f} (1 = perfect; below 0.1 is poor)<br>"
+            f"Angles between faces: smallest {qr['dihedral_min']:.0f}&deg;, largest {qr['dihedral_max']:.0f}&deg;<br>"
+            f"Elements below 0.2: {qr['below_02']:,} ({100.0 * qr['below_02'] / max(n, 1):.1f} %)<br>"
+            f"Overall: <b style='color:{colour}'>{verdict}</b>")
+        self.quality_box.setVisible(True)
+
+    @staticmethod
+    def mesh_text(n_tets, n_nodes, order, h):
+        return (f"{n_tets:,} tetrahedra, {n_nodes:,} nodes ({'quadratic' if order == 2 else 'linear'}), "
+                f"element size {l_out(h):.4g} {UD()['L']}")
+
     def refresh_labels(self):
         """Every label that carries a unit, in the program's current units."""
         D = UD()
@@ -501,6 +775,7 @@ class SolidWindow(QWidget):
                           ("sy", f"Yield strength ({D['S']})"), ("su", f"Ultimate strength ({D['S']})")):
             self.mat_labels[key].setText(text)
         self.h_label.setText(f"Element size ({D['L']}, blank = auto)")
+        self.hmin_label.setText(f"Minimum size ({D['L']})")
         self.e_probe.setPlaceholderText(f"x, y, z  ({D['L']})")
         for i, (key, name) in enumerate(FIELDS):
             unit = D["S"] if key == "vm" else (D["L"] if key.startswith("u") else None)
@@ -512,6 +787,7 @@ class SolidWindow(QWidget):
             self.refresh_labels()
             self.put_material(self.setup["material"])
             self.e_h.setText(format(l_out(self.setup["h"]), ".8g") if self.setup.get("h") else "")
+            self.put_mesh_options()
             if self.geom is not None:
                 self.fill_faces()
                 self.fill_splits()
@@ -607,6 +883,7 @@ class SolidWindow(QWidget):
         h = self.e_h.text().strip()
         self.setup["material"] = m
         self.setup["h"] = l_in(num(self.e_h, "Element size")) if h else 0.0
+        self.read_mesh_options(self.setup["h"])
         return self.setup
 
     def inputs_changed(self):
@@ -623,6 +900,7 @@ class SolidWindow(QWidget):
         self.result = None
         if mesh:
             self.mesh_q = None
+            self.show_quality(None)
         self.res_lbl.setText("The setup changed since the last solve: press Solve." if had else "No result yet.")
         self.view.clear_result()
         self.enable_buttons()
@@ -1326,6 +1604,7 @@ class SolidWindow(QWidget):
                 it.setFlags(ro | Qt.ItemFlag.ItemIsEditable if c == 0 else ro)
                 t.setItem(r, c, it)
         t.blockSignals(False)
+        self.fill_face_table()
 
     @staticmethod
     def load_cells(l):
@@ -1576,13 +1855,19 @@ class SolidWindow(QWidget):
             self.say(why or "Import a part first.")
             return False
         g, h = self.geom, self.setup["h"] or sm.auto_h(self.geom)
+        try:
+            opts = smesh.resolve(g, self.setup, h)
+        except fem.FemError as ex:
+            self.say(str(ex))
+            return False
 
         def work(progress, cancel):
-            return sm.get_mesh(g, h, self.cache, cancel, progress)
+            return sm.get_mesh(g, h, self.cache, cancel, progress, opts)
 
         def done(q):
             self.mesh_q = q
-            self.mesh_lbl.setText(f"{len(q['tets']):,} tetrahedra, {len(q['nodes']):,} nodes (quadratic), element size {l_out(h):.4g} {UD()['L']}")
+            self.mesh_lbl.setText(self.mesh_text(len(q["tets"]), len(q["nodes"]), q["order"], h))
+            self.show_quality(q.get("quality"))
             self.say("Meshed.")
             self.show_field(mesh_only=True)
         return self.run_job(work, done, "Meshing")
@@ -1604,8 +1889,9 @@ class SolidWindow(QWidget):
 
         def done(res):
             self.result = res
-            self.mesh_q = self.cache.get(sm.mesh_key(g, res["h"]), self.mesh_q)
-            self.mesh_lbl.setText(f"{res['n_tets']:,} tetrahedra, {res['n_nodes']:,} nodes (quadratic), element size {l_out(res['h']):.4g} {UD()['L']}")
+            self.mesh_q = self.cache.get(sm.mesh_key(g, res["h"], res.get("mesh_opts")), self.mesh_q)
+            self.mesh_lbl.setText(self.mesh_text(res["n_tets"], res["n_nodes"], res["order"], res["h"]))
+            self.show_quality(res.get("quality"))
             self.describe()
             self.show_field()
             self.enable_buttons()
@@ -1624,7 +1910,7 @@ class SolidWindow(QWidget):
         if r.get("support_reactions"):
             html += R.heading("Reactions", D["F"])
             html += R.grid(["", "Fx", "Fy", "Fz"], [[n, *(R.num(f_out(x)) for x in v)] for n, v in r["support_reactions"]])
-        html += R.heading("Mesh") + R.kv([("Tetrahedra (quadratic)", f"{r['n_tets']:,}", None), ("Nodes", f"{r['n_nodes']:,}", None),
+        html += R.heading("Mesh") + R.kv([(f"Tetrahedra ({'quadratic' if r.get('order', 2) == 2 else 'linear'})", f"{r['n_tets']:,}", None), ("Nodes", f"{r['n_nodes']:,}", None),
                                            ("Element size", R.num(l_out(r["h"]), 4), D["L"])])
         html += R.note("This window does not refine the mesh by itself: check by meshing finer and comparing, or run a parametric study "
                        "over the element size.")
@@ -1870,12 +2156,14 @@ class SolidWindow(QWidget):
         s = st.get("setup") or sm.default_setup()
         s.setdefault("dims", {})
         s.setdefault("splits", [])
+        s["mesh"] = smesh.complete(s.get("mesh"))
         dims_changed = (s["dims"] != self.setup.get("dims") or s["splits"] != (self.setup.get("splits") or []) or getattr(self, "geom_case", False))
         self.geom_case = False
         self.setup = json.loads(json.dumps(s))
         self.put_material(self.setup["material"])
         self.select_material_name(self.setup.get("mat_name"))
         self.e_h.setText(format(l_out(self.setup["h"]), ".8g") if self.setup.get("h") else "")
+        self.put_mesh_options()
         if dims_changed and self.source is not None:
             self.load_geometry()
         self.result = st.get("result")
@@ -1940,12 +2228,14 @@ class SolidWindow(QWidget):
                 if st:
                     st.setdefault("dims", {})
                     st.setdefault("splits", [])
+                    st["mesh"] = smesh.complete(st.get("mesh"))
                     w.setup = st
             except Exception:
                 pass
         w.put_material(w.setup["material"])
         w.select_material_name(w.setup.get("mat_name"))
         w.e_h.setText(format(l_out(w.setup["h"]), ".8g") if w.setup.get("h") else "")
+        w.put_mesh_options()
         sf = sim_project.source_file(folder, m)
         if sf:
             try:

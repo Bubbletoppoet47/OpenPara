@@ -10,6 +10,7 @@ setup = {
               | {"kind": "point", "vertex": vertex signature, "f": [Fx, Fy, Fz]}
               | {"kind": "gravity", "g": m/s2, "dir": [x, y, z]}],
   "probe": [x, y, z] or None,
+  "mesh": {"advanced", "order", "hmin", "growth", "curv", "face_sizes", "follows"}     the advanced mesh options (see solid_mesh); off = the plain automatic mesh
   "splits": [{"face": face signature, "cols": n, "rows": m, "u": [x, y, z], "col_sizes": [mm | None, ...], "row_sizes": [...]}]
                                       flat faces cut into patches (see solid_geom.analyze); a size that is None is free (the free ones share the rest equally)
 }
@@ -25,13 +26,15 @@ import numpy as np
 
 import solid_fem as fem
 import solid_geom as sg
+import solid_mesh as smesh
 
 MODES = {"fixed": "Fixed (all directions)", "slide": "One direction (normal to the face)", "bolt": "Bolt / pin hole (fixed on the hole surface)"}
 KINDS = {"force": "Force on faces", "pressure": "Pressure on faces", "point": "Force at a vertex", "gravity": "Gravity"}
 
 
 def default_setup():
-    return {"material": {"E": 200000.0, "nu": 0.3, "rho": 7850.0, "sy": 250.0, "su": 400.0}, "h": 0.0, "supports": [], "loads": [], "probe": None, "splits": []}
+    return {"material": {"E": 200000.0, "nu": 0.3, "rho": 7850.0, "sy": 250.0, "su": 400.0}, "h": 0.0, "supports": [], "loads": [], "probe": None, "splits": [],
+            "mesh": smesh.default_mesh()}
 
 
 def name_of(kind, i, item=None):
@@ -51,7 +54,8 @@ def _fids(geom, sigs, nm):
 
 def resolve(geom, setup):
     """-> {"supports": [{mode, fids, name}], "loads": [...], ...}; fem.FemError for a face that is gone."""
-    r = {"material": dict(setup["material"]), "h": float(setup.get("h") or 0.0), "supports": [], "loads": [], "probe": setup.get("probe")}
+    r = {"material": dict(setup["material"]), "h": float(setup.get("h") or 0.0), "supports": [], "loads": [], "probe": setup.get("probe"),
+         "mesh": smesh.resolve(geom, setup, float(setup.get("h") or 0.0) or auto_h(geom))}
     for i, s in enumerate(setup["supports"]):
         nm = name_of("Support", i, s)
         fids = _fids(geom, s["faces"], nm)
@@ -153,16 +157,20 @@ def auto_h(geom):
     return round(geom["diag"] / 14.0, 4)
 
 
-def mesh_key(geom, h):
-    return hashlib.md5(geom["step"]).hexdigest() + f":{h:.8g}"
+def mesh_key(geom, h, opts=None):
+    """The cache key of a mesh: the part, the element size and (for the advanced options, see solid_mesh.resolve) the options.  The plain automatic mesh
+    has the key it always had."""
+    return hashlib.md5(geom["step"]).hexdigest() + f":{h:.8g}" + smesh.key_text(opts)
 
 
-def get_mesh(geom, h, cache, cancel, progress):
-    key = mesh_key(geom, h)
+def get_mesh(geom, h, cache, cancel, progress, opts=None):
+    """The mesh (cached): quadratic tetrahedra, or linear ones when opts["order"] == 1.  It carries its quality report: q["quality"]."""
+    key = mesh_key(geom, h, opts)
     q = cache.get(key) if cache is not None else None
     if q is None:
-        raw = fem.mesh_solid(geom, h, cancel, progress)
-        q = fem.quadratic(raw)
+        raw = fem.mesh_solid(geom, h, cancel, progress, opts)
+        q = fem.linear(raw) if opts and opts["order"] == 1 else fem.quadratic(raw)
+        q["quality"] = smesh.quality(q)
         if cache is not None:
             cache[key] = q
     return q
@@ -180,16 +188,18 @@ def face_normal(q, geom, fid):
 def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
     mat = r["material"]
     h = r["h"] or auto_h(geom)
-    q = get_mesh(geom, h, cache, cancel, progress)
+    q = get_mesh(geom, h, cache, cancel, progress, r.get("mesh"))
     nodes, conn = q["nodes"], q["conn"]
     nn = len(nodes)
+    ftri = q["ftri"]                                                           # the nodes of the triangles of every face: 6 per triangle (quadratic) or 3
+    load_cols = (3, 4, 5) if q["order"] == 2 else (0, 1, 2)                    # the nodes that carry a share of a face load: the mid-edge nodes, or the corners
     cons = []
     names = []
     for s in r["supports"]:
         for fid in s["fids"]:
-            if fid not in q["tri6"]:
+            if fid not in ftri:
                 raise fem.FemError(f"{s['name']}: the mesh has no elements on that face.")
-            nd = np.unique(q["tri6"][fid])
+            nd = np.unique(ftri[fid])
             cons.append((nd, face_normal(q, geom, fid) if s["mode"] == "slide" else None))
             names.append(s["name"])
     force = np.zeros(3 * nn)
@@ -197,7 +207,7 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
     for l in r["loads"]:
         k = l["kind"]
         if k in ("force", "pressure"):
-            tris = [(fid, q["tri6"][fid], q["faces"][fid]) for fid in l["fids"] if fid in q["tri6"]]
+            tris = [(fid, ftri[fid], q["faces"][fid]) for fid in l["fids"] if fid in ftri]
             if not tris:
                 raise fem.FemError(f"{l['name']}: the mesh has no elements on that face.")
             parts = []
@@ -211,7 +221,7 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
                 else:
                     trac = np.tile(np.asarray(l["f"], float) / total, (len(area), 1))
                 fe = trac * (area / 3.0)[:, None]
-                for j in (3, 4, 5):                                               # the three mid-edge nodes each carry A/3
+                for j in load_cols:                                               # the three mid-edge nodes (corners of a linear mesh) each carry A/3
                     for c in range(3):
                         np.add.at(force, 3 * t6[:, j] + c, fe[:, c])
                 applied += fe.sum(axis=0) * 3
@@ -236,7 +246,7 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
     vm_el, sig, vol = fem.stresses(nodes, conn, D, u.ravel())
     w = np.zeros(nn)
     acc = np.zeros(nn)
-    for j in range(10):
+    for j in range(conn.shape[1]):
         np.add.at(acc, conn[:, j], vm_el * vol)
         np.add.at(w, conn[:, j], vol)
     vm_node = acc / np.maximum(w, 1e-300)
@@ -250,6 +260,7 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
            "fos_y": (mat["sy"] / vmax) if vmax > 0 and mat.get("sy") else None, "fos_u": (mat["su"] / vmax) if vmax > 0 and mat.get("su") else None,
            "energy": energy, "reaction": total_reac.tolist(), "applied": applied.tolist(), "support_reactions": _by_support(names, reac),
            "volume": float(vol.sum()), "mass": float(vol.sum()) * float(mat["rho"]) * 1e-9, "n_nodes": nn, "n_tets": len(conn), "h": h,
+           "order": int(q["order"]), "quality": q.get("quality"), "mesh_opts": r.get("mesh"),
            "equilibrium": float(np.linalg.norm(total_reac + applied) / max(np.linalg.norm(applied), 1e-12)), "info": info,
            "material": dict(mat)}
     return res
