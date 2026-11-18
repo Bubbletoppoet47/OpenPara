@@ -1,0 +1,23 @@
+{
+ "name": "Sheets",
+ "order": 7,
+ "status": "workshopping",
+ "description": "A spreadsheet tab with Excel-style formulas, several sheets per file, charts, .xlsx import and export, and engineering standards as cell formulas (AISI S100-16 connections first). Finished parametric studies come in with one button and refresh with their formulas intact.",
+ "tabs": [
+  {
+   "kind": "sheets",
+   "label": "Sheets",
+   "short": "Sheets",
+   "module": "sh_tab",
+   "factory": "make_tab",
+   "args": [
+    "path"
+   ],
+   "set_host": true,
+   "file_types": [
+    ".opsheet",
+    ".xlsx"
+   ]
+  }
+ ]
+}
