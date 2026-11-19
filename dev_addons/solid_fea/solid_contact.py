@@ -297,7 +297,7 @@ def solve_contact(K, free, fixed, force, contact, cancel, progress):
         Kt = K + _penalty(na[active], nb[active], nrm[active], k[active], nn) if active.any() else K
         Kff = Kt[free][:, free].tocsc()
         progress(f"solving the contact (round {it}, {int(active.sum()):,} of {m:,} node pairs closed)")
-        uf, how = fem.solve_system(Kff, force[free], symmetric=True)
+        uf, how = fem.solve_system(Kff, force[free], symmetric=True, progress=progress, cancel=cancel, extent=contact.get("extent"))
         u = np.zeros(3 * nn)
         u[free] = uf
         if not m:

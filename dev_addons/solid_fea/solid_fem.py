@@ -14,6 +14,7 @@ A mesh is a list of element GROUPS: q["groups"] = [{"kind": "tet" | "hex" | "pyr
 Units: mm, N, MPa (so a density of 7850 kg/m3 is 7.85e-9 t/mm3 and gravity 9810 mm/s2).
 """
 import contextlib
+import math
 import os
 import tempfile
 import time
@@ -36,6 +37,28 @@ class FemError(Exception):
 
 class Cancelled(Exception):
     pass
+
+
+DIRECT_LIMIT = 80000                 # the largest system that is solved directly (a factorisation); a larger one by preconditioned conjugate gradients
+
+
+def _stage(progress, key, size=0.0):
+    """Tell the progress bar (solid_progress.Tracker) that a stage of this kind begins.  `progress` may be any function of one text: then nothing happens."""
+    fn = getattr(progress, "stage", None)
+    if fn is not None:
+        try:
+            fn(key, size)
+        except Exception:
+            pass
+
+
+def _part(progress, fraction):
+    fn = getattr(progress, "part", None)
+    if fn is not None:
+        try:
+            fn(fraction)
+        except Exception:
+            pass
 
 
 # ------------------------------------------------------------------------------------------------------------------------ mesh
@@ -102,6 +125,11 @@ def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None, opts=None
     opts = opts or {}
     if cancel():
         raise Cancelled()
+    try:
+        import solid_progress as spg
+        _stage(progress, "meshhex" if opts.get("type") == "hexdom" else "mesh", spg.estimate_elements(geom.get("volume"), h))
+    except Exception:
+        pass
     if opts.get("type") == "hexdom" and geom.get("solids"):
         m = _mesh_tets(geom, h, cancel, progress, opts)
         m["hexdom_note"] = "An assembly is meshed with tetrahedra (hex-dominant meshing is for a single part)."
@@ -469,14 +497,16 @@ def _coo(Ke, ed, n):
     return sp.coo_matrix((Ke.ravel(), (np.repeat(ed, nd, axis=1).ravel(), np.tile(ed, (1, nd)).ravel())), shape=(n, n)).tocsr()
 
 
-def assemble(nodes, groups, E, nu, cancel=lambda: False, per_body=None):
+def assemble(nodes, groups, E, nu, cancel=lambda: False, per_body=None, on_part=None):
     """The stiffness matrix of all the elements (`groups`: see the top of the file; or just the connectivity of tetrahedra) and the material matrix.
     per_body: a dict that gets {body: the stiffness matrix of that body's elements} (an assembly with contact: the forces a body passes on through a
-    screw are read from it)."""
+    screw are read from it).  on_part(fraction of the elements done) is called after every chunk of elements."""
     nn = len(nodes)
     D0 = D = material_matrix(E, nu)
     K = None
-    for g in _as_groups(groups):
+    groups = list(_as_groups(groups))
+    total, done = max(sum(len(g["conn"]) for g in groups), 1), 0
+    for g in groups:
         kind, conn = g["kind"], g["conn"]
         D = _group_D(g, D0)
         if kind == "tet":
@@ -508,6 +538,9 @@ def assemble(nodes, groups, E, nu, cancel=lambda: False, per_body=None):
             K = part if K is None else K + part
             if per_body is not None and g.get("body") is not None:
                 per_body[g["body"]] = part if g["body"] not in per_body else per_body[g["body"]] + part
+            done += e - s
+            if on_part is not None:
+                on_part(done / total)
     return K, D0
 
 
@@ -622,11 +655,18 @@ def _rigid_check(nodes, rows):
         raise FemError("The supports leave the part free to move or turn (a rigid-body motion is not stopped). Add or enlarge a support.")
 
 
-def solve_system(Kff, ff, symmetric=False):
-    """Solves Kff x = ff: a direct solution up to 80 000 unknowns, else an incomplete-LU preconditioned CG.  Returns (x, 'direct' | 'iterative').
+def solve_system(Kff, ff, symmetric=False, progress=None, cancel=None, extent=None):
+    """Solves Kff x = ff: a direct solution up to DIRECT_LIMIT unknowns, else an incomplete-LU preconditioned CG.  Returns (x, 'direct' | 'iterative').
     symmetric=True says the matrix is symmetric positive definite (the contact solution uses it): the factorisation then keeps the symmetric pattern, which
-    is about three times quicker for the matrices that the contact springs make."""
-    if len(ff) <= 80000:
+    is about three times quicker for the matrices that the contact springs make.
+    progress / cancel / extent (the three sides of the bounding box of the part) only serve the progress bar: the stage that begins is announced, the
+    iterative solver reports how far its residual has fallen, and a Cancel is noticed between iterations."""
+    if len(ff) <= DIRECT_LIMIT:
+        try:
+            import solid_progress as spg
+            _stage(progress, "factor_sym" if symmetric else "factor", spg.factor_cost(len(ff), extent))
+        except Exception:
+            pass
         try:
             if symmetric:
                 lu = spl.splu(Kff, permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=0.0, options={"SymmetricMode": True})
@@ -635,8 +675,20 @@ def solve_system(Kff, ff, symmetric=False):
             return lu.solve(ff), "direct"
         except RuntimeError as ex:
             raise FemError(f"The system is singular ({ex}). Check the supports.")
+    _stage(progress, "ilu", float(Kff.nnz))
     ilu = spl.spilu(Kff, drop_tol=1e-4, fill_factor=15)
-    uf, info = spl.cg(Kff, ff, rtol=1e-9, maxiter=3000, M=spl.LinearOperator(Kff.shape, ilu.solve))
+    _stage(progress, "cg", float(len(ff)))
+    b_norm = max(float(np.linalg.norm(ff)), 1e-300)
+    seen = [0]
+
+    def after_iteration(xk):                                  # the residual falls from |b| to 1e-9 |b|: the progress is how many of those nine decades are done
+        seen[0] += 1
+        if cancel is not None and cancel():
+            raise Cancelled()
+        if progress is not None and seen[0] % 3 == 0:
+            r = float(np.linalg.norm(Kff @ xk - ff)) / b_norm
+            _part(progress, math.log10(1.0 / max(r, 1e-300)) / 9.0 if r < 1.0 else 0.0)
+    uf, info = spl.cg(Kff, ff, rtol=1e-9, maxiter=3000, M=spl.LinearOperator(Kff.shape, ilu.solve), callback=after_iteration)
     if info != 0:
         raise FemError("The iterative solver did not converge. Use a larger element size.")
     return uf, "iterative"
@@ -650,8 +702,9 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     nodes = q["nodes"]
     nn = len(nodes)
     progress("assembling")
+    _stage(progress, "assemble", float(sum(len(g["conn"]) for g in _as_groups(q.get("groups") or q["conn"]))))
     Kb = {} if contact is not None else None
-    K, D = assemble(nodes, q.get("groups") or q["conn"], E, nu, cancel, Kb)
+    K, D = assemble(nodes, q.get("groups") or q["conn"], E, nu, cancel, Kb, on_part=(lambda f: _part(progress, f)) if hasattr(progress, "part") else None)
     fixed = np.zeros(3 * nn, bool)
     pen = []
     rows = []                                                # (node, direction) pairs for the rigid-body check
@@ -689,16 +742,18 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     free = np.where(~fixed)[0]
     progress(f"solving {len(free):,} unknowns")
     t0 = time.time()
+    extent = np.ptp(np.asarray(nodes, float), axis=0).tolist()                 # the sides of the bounding box: what the progress bar's time estimate looks at
     if contact is None:
         Kff = K[free][:, free].tocsc()
         ff = force[free]
         if cancel():
             raise Cancelled()
-        uf, how = solve_system(Kff, ff)
+        uf, how = solve_system(Kff, ff, progress=progress, cancel=cancel, extent=extent)
         u = np.zeros(3 * nn)
         u[free] = uf
     else:
         contact["K_body"] = Kb
+        contact["extent"] = extent
         u, K, how = sc.solve_contact(K, free, fixed, force, contact, cancel, progress)
         Kff = K[free][:, free].tocsc()
         uf, ff = u[free], force[free]

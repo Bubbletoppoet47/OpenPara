@@ -344,6 +344,7 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
         raise fem.FemError("The loads are all zero.")
     u, reac, info, K, D = fem.solve(q, mat["E"], mat["nu"], cons, force, cancel, progress, contact=contact)
     progress("stresses")
+    fem._stage(progress, "stress", float(sum(len(g["conn"]) for g in groups)))
     vm_el, sig, vol = fem.stresses(nodes, groups, D, u.ravel())
     w = np.zeros(nn)
     acc = np.zeros(nn)

@@ -38,6 +38,7 @@ import solid_fem as fem
 import solid_geom as sg
 import solid_mesh as smesh
 import solid_model as sm
+import solid_progress
 import solid_screw as screw
 import solid_view as sv
 import unitctl
@@ -91,14 +92,17 @@ class Job(QThread):
     failed = pyqtSignal(str, bool)
     note = pyqtSignal(str)
 
-    def __init__(self, fn):
+    def __init__(self, fn, tracker=None):
         super().__init__()
         self.fn = fn
         self.stop = False
+        self.tracker = tracker                        # solid_progress.Tracker: what the solver is given as `progress` (a function of one text that also knows the stages)
 
     def run(self):
         try:
-            self.done.emit(self.fn(lambda t: self.note.emit(str(t)), lambda: self.stop))
+            if self.tracker is not None:
+                self.tracker.attach(self.note.emit)
+            self.done.emit(self.fn(self.tracker if self.tracker is not None else (lambda t: self.note.emit(str(t))), lambda: self.stop))
         except fem.Cancelled:
             self.failed.emit("Cancelled.", True)
         except fem.FemError as ex:
@@ -612,6 +616,8 @@ class SolidWindow(QWidget):
         for s_ in sorted(self.sections, key=lambda x: x.number):
             if s_.number == 6:
                 self.col.addLayout(row)
+                self.prog = solid_progress.make_row()                # the progress bar: under the Solve button, shown while a mesh or a solve runs
+                self.col.addWidget(self.prog)
                 self.col.addWidget(self.study_box)
             self.col.addWidget(s_)
         self.study_box.setVisible(False)
@@ -2472,30 +2478,44 @@ class SolidWindow(QWidget):
             return str(ex)
         return sm.check_ready(self.setup, self.geom)
 
-    def run_job(self, fn, done, title):
+    def run_job(self, fn, done, title, plan=None):
+        """Runs fn(progress, cancel) on a worker thread, then done(result) here.  `plan`: [(stage, size)] the stages it is expected to go through (for the
+        progress bar's time estimate; see solid_progress.plan_for)."""
         if self.job is not None:
             return False
         self.say(title + "...")
+        trk = solid_progress.Tracker()
+        if plan:
+            trk.expect(plan)
         if not self.threaded:
             try:
-                done(fn(lambda t: None, lambda: False))
+                res = fn(trk, lambda: False)
+                trk.finish(True)
+                done(res)
             except fem.FemError as ex:
+                trk.finish(False)
                 self.failed(str(ex), False)
             except Exception:
+                trk.finish(False)
                 self.failed(traceback.format_exc(), False)
             return True
-        j = Job(fn)
+        j = Job(fn, trk)
         self.job = j
         j.note.connect(self.say)
         j.done.connect(lambda r: self.finished(j, done, r))
         j.failed.connect(lambda m, c: self.finished(j, None, None, m, c))
         self.enable_buttons()
+        self.prog.begin(trk)
         j.start()
         return True
 
     def finished(self, j, done, r, msg=None, cancelled=False):
         j.wait()
         self.job = None
+        ok = done is not None
+        if j.tracker is not None:
+            j.tracker.finish(ok)
+        self.prog.end(ok)
         self.enable_buttons()
         if done is not None:
             done(r)
@@ -2511,6 +2531,7 @@ class SolidWindow(QWidget):
         if self.job is not None:
             self.job.stop = True
             self.say("Cancelling...")
+            self.prog.cancelling()
 
     def run_mesh(self):
         why = None
@@ -2530,6 +2551,7 @@ class SolidWindow(QWidget):
 
         def work(progress, cancel):
             return sm.get_mesh(g, h, self.cache, cancel, progress, opts)
+        plan = self.job_plan(g, {"h": h, "mesh": opts}, solving=False)
 
         def done(q):
             self.mesh_q = q
@@ -2538,7 +2560,7 @@ class SolidWindow(QWidget):
             self.show_quality(q.get("quality"), q.get("hexdom_note"))
             self.say("Meshed.")
             self.show_field(mesh_only=True)
-        return self.run_job(work, done, "Meshing")
+        return self.run_job(work, done, "Meshing", plan)
 
     def run_solve(self):
         why = self.ready()
@@ -2554,6 +2576,7 @@ class SolidWindow(QWidget):
 
         def work(progress, cancel):
             return sm.run(g, r, self.cache, cancel, progress)
+        plan = self.job_plan(g, r)
 
         def done(res):
             self.result = res
@@ -2565,7 +2588,16 @@ class SolidWindow(QWidget):
             self.fill_screws()
             self.colour()
             self.enable_buttons()
-        return self.run_job(work, done, "Solving")
+        return self.run_job(work, done, "Solving", plan)
+
+    def job_plan(self, g, r, solving=True):
+        """The stages that a mesh or a solve of this setup is expected to go through (the progress bar's estimate); None when that cannot be told."""
+        try:
+            h = r.get("h") or sm.auto_h(g)
+            cached = self.cache.get(sm.mesh_key(g, h, r.get("mesh"))) if self.cache is not None else None
+            return solid_progress.plan_for(g, dict(r, h=h), mesh=cached, solving=solving)
+        except Exception:
+            return None
 
     def describe(self):
         r = self.result
