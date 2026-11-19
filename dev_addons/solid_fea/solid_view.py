@@ -38,10 +38,16 @@ def _cells(conn):
     return np.hstack([np.full((len(conn), 1), 4), conn[:, :4]]).ravel().astype(np.int64)
 
 
+def _grid(nodes, conn):
+    """The mesh as a VTK grid.  `conn` is the connectivity of tetrahedra, or {"cells", "types"} for a mesh with hexahedra and pyramids too (corner nodes)."""
+    if isinstance(conn, dict):
+        return pv.UnstructuredGrid(conn["cells"], conn["types"], np.asarray(nodes, float))
+    return pv.UnstructuredGrid(_cells(conn), np.full(len(conn), pv.CellType.TETRA, np.uint8), np.asarray(nodes, float))
+
+
 def _result_surface(nodes, conn):
     """The outside of the mesh as a surface, and for every surface point the node of the mesh it came from."""
-    g = pv.UnstructuredGrid(_cells(conn), np.full(len(conn), pv.CellType.TETRA, np.uint8), np.asarray(nodes, float))
-    surf = _surface(g)
+    surf = _surface(_grid(nodes, conn))
     return surf, np.asarray(surf.point_data["vtkOriginalPointIds"]).astype(np.int64)
 
 
@@ -403,7 +409,7 @@ class SolidView:
         if self.plotter is None:
             return False
         self.clear_result()
-        g = pv.UnstructuredGrid(_cells(conn), np.full(len(conn), pv.CellType.TETRA, np.uint8), nodes)
+        g = _grid(nodes, conn)
         self.mesh_actor = self.plotter.add_mesh(_surface(g), color=GREY, show_edges=True, edge_color=(0.35, 0.38, 0.42), reset_camera=False)
         if self.actor is not None:
             self.actor.SetVisibility(False)

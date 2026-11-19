@@ -10,7 +10,7 @@ setup = {
               | {"kind": "point", "vertex": vertex signature, "f": [Fx, Fy, Fz]}
               | {"kind": "gravity", "g": m/s2, "dir": [x, y, z]}],
   "probe": [x, y, z] or None,
-  "mesh": {"advanced", "order", "hmin", "growth", "curv", "face_sizes", "follows"}     the advanced mesh options (see solid_mesh); off = the plain automatic mesh
+  "mesh": {"advanced", "type", "order", "hmin", "growth", "curv", "face_sizes", "follows"}     the advanced mesh options (see solid_mesh); off = the plain automatic mesh
   "splits": [{"face": face signature, "cols": n, "rows": m, "u": [x, y, z], "col_sizes": [mm | None, ...], "row_sizes": [...]}]
                                       flat faces cut into patches (see solid_geom.analyze); a size that is None is free (the free ones share the rest equally)
 }
@@ -164,7 +164,9 @@ def mesh_key(geom, h, opts=None):
 
 
 def get_mesh(geom, h, cache, cancel, progress, opts=None):
-    """The mesh (cached): quadratic tetrahedra, or linear ones when opts["order"] == 1.  It carries its quality report: q["quality"]."""
+    """The mesh (cached): quadratic tetrahedra, or linear ones when opts["order"] == 1; with opts["type"] == "hexdom" a hex-dominant mesh (hexahedra and
+    pyramids besides the tetrahedra; where that is not possible q["hexdom_note"] says why and the mesh is tetrahedra).  It carries its quality report:
+    q["quality"]."""
     key = mesh_key(geom, h, opts)
     q = cache.get(key) if cache is not None else None
     if q is None:
@@ -189,7 +191,7 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
     mat = r["material"]
     h = r["h"] or auto_h(geom)
     q = get_mesh(geom, h, cache, cancel, progress, r.get("mesh"))
-    nodes, conn = q["nodes"], q["conn"]
+    nodes, conn, groups = q["nodes"], q["conn"], q["groups"]
     nn = len(nodes)
     ftri = q["ftri"]                                                           # the nodes of the triangles of every face: 6 per triangle (quadratic) or 3
     load_cols = (3, 4, 5) if q["order"] == 2 else (0, 1, 2)                    # the nodes that carry a share of a face load: the mid-edge nodes, or the corners
@@ -236,19 +238,24 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
             d = np.asarray(l["dir"], float)
             d = d / max(np.linalg.norm(d), 1e-12)
             b = d * float(mat["rho"]) * float(l["g"]) * 1e-9
-            fb = fem.body_load(nodes, conn, b)
+            fb = fem.body_load(nodes, groups, b)
             force += fb
             applied += fb.reshape(-1, 3).sum(axis=0)
     if not np.any(force):
         raise fem.FemError("The loads are all zero.")
     u, reac, info, K, D = fem.solve(q, mat["E"], mat["nu"], cons, force, cancel, progress)
     progress("stresses")
-    vm_el, sig, vol = fem.stresses(nodes, conn, D, u.ravel())
+    vm_el, sig, vol = fem.stresses(nodes, groups, D, u.ravel())
     w = np.zeros(nn)
     acc = np.zeros(nn)
-    for j in range(conn.shape[1]):
-        np.add.at(acc, conn[:, j], vm_el * vol)
-        np.add.at(w, conn[:, j], vol)
+    base = 0
+    for g in groups:
+        gc = g["conn"]
+        sl = slice(base, base + len(gc))
+        for j in range(gc.shape[1]):
+            np.add.at(acc, gc[:, j], (vm_el * vol)[sl])
+            np.add.at(w, gc[:, j], vol[sl])
+        base += len(gc)
     vm_node = acc / np.maximum(w, 1e-300)
     s1, s3 = fem.principal(sig)
     total_reac = np.asarray(info["total_reaction"])
@@ -259,7 +266,9 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
            "umax": float(un.max()), "vm_max": vmax, "s1_max": float(s1.max()), "s3_min": float(s3.min()),
            "fos_y": (mat["sy"] / vmax) if vmax > 0 and mat.get("sy") else None, "fos_u": (mat["su"] / vmax) if vmax > 0 and mat.get("su") else None,
            "energy": energy, "reaction": total_reac.tolist(), "applied": applied.tolist(), "support_reactions": _by_support(names, reac),
-           "volume": float(vol.sum()), "mass": float(vol.sum()) * float(mat["rho"]) * 1e-9, "n_nodes": nn, "n_tets": len(conn), "h": h,
+           "volume": float(vol.sum()), "mass": float(vol.sum()) * float(mat["rho"]) * 1e-9, "n_nodes": nn, "n_tets": len(conn), "n_elements": int(len(vm_el)), "h": h,
+           "counts": {"tets": len(conn), "hexes": int(len(q.get("hexes", ()))), "pyramids": int(len(q.get("pyrs", ())))}, "viewcells": q.get("viewcells"),
+           "hexdom_note": q.get("hexdom_note"),
            "order": int(q["order"]), "quality": q.get("quality"), "mesh_opts": r.get("mesh"),
            "equilibrium": float(np.linalg.norm(total_reac + applied) / max(np.linalg.norm(applied), 1e-12)), "info": info,
            "material": dict(mat)}

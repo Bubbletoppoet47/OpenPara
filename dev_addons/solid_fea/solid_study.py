@@ -43,7 +43,7 @@ class SolidStudy(StudyAdapter):
                 ("sf.s1", "Largest principal stress (MPa)", True), ("sf.s3", "Smallest principal stress (MPa)", True),
                 ("sf.fos_y", "Factor of safety, yield (on the largest von Mises)", True), ("sf.fos_u", "Factor of safety, ultimate", True),
                 ("sf.energy", "Strain energy (N mm)", True), ("sf.rx", "Reaction x (N)", True), ("sf.ry", "Reaction y (N)", True), ("sf.rz", "Reaction z (N)", True),
-                ("sf.mass", "Mass (kg)", True), ("sf.volume", "Volume (mm3)", True), ("sf.tets", "Tetrahedra", True), ("sf.nodes", "Nodes", True)]
+                ("sf.mass", "Mass (kg)", True), ("sf.volume", "Volume (mm3)", True), ("sf.tets", "Elements", True), ("sf.nodes", "Nodes", True)]
         return [{"id": k, "group": "3D FEA", "label": lab, "numeric": n} for k, lab, n in rows]
 
     def mesh_refinement(self):
@@ -129,7 +129,7 @@ class SolidStudy(StudyAdapter):
                 elif r is not None:
                     v = {"sf.umax": r["umax"], "sf.vm": r["vm_max"], "sf.s1": r["s1_max"], "sf.s3": r["s3_min"], "sf.fos_y": r["fos_y"],
                          "sf.fos_u": r["fos_u"], "sf.energy": r["energy"], "sf.rx": r["reaction"][0], "sf.ry": r["reaction"][1],
-                         "sf.rz": r["reaction"][2], "sf.mass": r["mass"], "sf.volume": r["volume"], "sf.tets": r["n_tets"],
+                         "sf.rz": r["reaction"][2], "sf.mass": r["mass"], "sf.volume": r["volume"], "sf.tets": r.get("n_elements", r["n_tets"]),
                          "sf.nodes": r["n_nodes"]}.get(k)
             except Exception:
                 v = None

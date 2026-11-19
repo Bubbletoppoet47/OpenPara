@@ -26,7 +26,7 @@ rf = smesh.quality({"nodes": flat, "tets": np.array([[0, 1, 2, 3]])})
 assert rf["ratio_min"] < 0.01 and smesh.verdict(rf) == "poor"
 # options: defaults, validation
 d = smesh.default_mesh()
-assert d == {"advanced": False, "order": 2, "hmin": 0.0, "growth": 1.3, "curv": 10, "face_sizes": [], "follows": "patches"}
+assert d == {"advanced": False, "type": "tets", "order": 2, "hmin": 0.0, "growth": 1.3, "curv": 10, "face_sizes": [], "follows": "patches"}
 assert smesh.complete(None) == d and smesh.complete({"order": 1})["growth"] == 1.3
 assert smesh.validate(dict(d, growth=1.0), 5.0) and smesh.validate(dict(d, order=3), 5.0) and smesh.validate(dict(d, curv=2), 5.0)
 assert smesh.validate(dict(d, hmin=6.0), 5.0) and smesh.validate(d, 5.0) is None

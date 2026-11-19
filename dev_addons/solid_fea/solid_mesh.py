@@ -3,7 +3,9 @@ solid_mesh.py - the mesh OPTIONS of the 3D FEA (what "Advanced mesh options" of 
 
 setup["mesh"] = {
   "advanced": bool,        the options below are used only when this is True (off = the plain automatic mesh: quadratic, minimum size h/6, curvature 10)
-  "order":    2 | 1,       2 = quadratic (10-node) tetrahedra, 1 = linear (4-node) tetrahedra
+  "type":     "tets" | "hexdom",   tetrahedra only, or hex-dominant: a block of hexahedra inside the part, tetrahedra (and the pyramids that join them)
+                           between it and the surface.  The surface is meshed patch by patch either way.  A part with no room for hexahedra gets tetrahedra.
+  "order":    2 | 1,       2 = quadratic (10-node tetrahedra, 20-node hexahedra), 1 = linear (4-node tetrahedra, 8-node hexahedra)
   "hmin":     mm | 0,      the smallest element edge gmsh may make; 0 = automatic (a sixth of the element size)
   "growth":   > 1,         how fast the elements grow away from a locally refined face (1.3 = each layer of elements 30 % longer than the one before)
   "curv":     0 | 3..100,  refine at curved surfaces: the number of elements around a full circle; 0 = off
@@ -20,8 +22,9 @@ import numpy as np
 import solid_fem as fem
 import solid_geom as sg
 
-DEFAULTS = {"advanced": False, "order": 2, "hmin": 0.0, "growth": 1.3, "curv": 10, "face_sizes": [], "follows": "patches"}
-ORDERS = {2: "Quadratic (10-node tetrahedra)", 1: "Linear (4-node tetrahedra)"}
+DEFAULTS = {"advanced": False, "type": "tets", "order": 2, "hmin": 0.0, "growth": 1.3, "curv": 10, "face_sizes": [], "follows": "patches"}
+ORDERS = {2: "Quadratic (mid-edge nodes)", 1: "Linear (corner nodes only)"}
+TYPES = {"tets": "Tetrahedra", "hexdom": "Hex-dominant"}
 FOLLOWS = {"patches": "The split patches"}
 GROWTH_RANGE = (1.05, 3.0)
 CURV_RANGE = (3, 100)
@@ -44,6 +47,8 @@ def validate(mesh, h):
     m = complete(mesh)
     if m["order"] not in (1, 2):
         return "The element order must be linear or quadratic."
+    if m["type"] not in TYPES:
+        return "The mesh type must be tetrahedra or hex-dominant."
     if m["hmin"] < 0:
         return "The minimum size must be positive (or blank for automatic)."
     if m["hmin"] and h and m["hmin"] >= h:
@@ -82,7 +87,7 @@ def resolve(geom, setup, h):
     why = validate(m, h)
     if why:
         raise fem.FemError(why)
-    out = {"order": int(m["order"]), "hmin": float(m["hmin"]), "growth": float(m["growth"]), "curv": int(m["curv"]), "face_sizes": []}
+    out = {"type": m["type"], "order": int(m["order"]), "hmin": float(m["hmin"]), "growth": float(m["growth"]), "curv": int(m["curv"]), "face_sizes": []}
     for i, x in enumerate(m["face_sizes"]):
         ids = sg.match_faces(geom, x["face"])
         if ids is None:
@@ -94,22 +99,18 @@ def resolve(geom, setup, h):
 
 def key_text(opts):
     """A short text for the mesh cache key; the plain automatic options give an empty text (so the key stays what it always was)."""
-    if not opts or (opts["order"] == 2 and not opts["hmin"] and opts["curv"] == 10 and not opts["face_sizes"]):
+    if not opts or (opts["order"] == 2 and not opts["hmin"] and opts["curv"] == 10 and not opts["face_sizes"] and opts.get("type", "tets") == "tets"):
         return ""                                                          # the same mesh as the plain automatic one (the growth rate only matters near local sizes)
     fs = ";".join(f"{','.join(str(f) for f in sorted(x['fids']))}={x['h']:.8g}" for x in sorted(opts["face_sizes"], key=lambda x: sorted(x["fids"])))
-    g = f"{opts['growth']:.8g}" if opts["face_sizes"] else "-"
-    return f"|o{opts['order']}|m{opts['hmin']:.8g}|g{g}|c{opts['curv']}|f{fs}"
+    hexdom = opts.get("type", "tets") == "hexdom"
+    g = f"{opts['growth']:.8g}" if (opts["face_sizes"] or hexdom) else "-"
+    return f"{'|hx2' if hexdom else ''}|o{opts['order']}|m{opts['hmin']:.8g}|g{g}|c{opts['curv']}|f{fs}"
 
 
 # ------------------------------------------------------------------------------------------------------------------------ quality
-def quality(q):
-    """Measures the tetrahedra of a mesh (the corner nodes: the elements have straight edges).  Returns
-    {"order", "elements", "nodes", "edge_min", "edge_mean", "edge_max" (mm), "ratio_min", "ratio_mean", "ratio_worst" (element index),
-     "below_02", "below_01" (counts), "dihedral_min", "dihedral_max" (degrees), "vol_min", "vol_max" (mm3), "volume" (mm3), "inverted": 0}
-    The radius ratio 3 r_inscribed / R_circumscribed is 1 for a regular tetrahedron and 0 for a flat one."""
-    nodes, tets = np.asarray(q["nodes"], float), np.asarray(q["tets"])
+def _tet_measures(nodes, tets):
+    """Edge lengths (ne, 6), radius ratios (ne,), dihedral angles (ne, 6) in degrees, absolute volumes and signed volumes of tetrahedra."""
     c = nodes[tets]                                                         # (ne, 4, 3)
-    ne = len(tets)
     edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
     L = np.stack([np.linalg.norm(c[:, a] - c[:, b], axis=1) for a, b in edges], axis=1)           # (ne, 6)
     sv = np.einsum("ij,ij->i", c[:, 1] - c[:, 0], np.cross(c[:, 2] - c[:, 0], c[:, 3] - c[:, 0])) / 6.0
@@ -134,13 +135,76 @@ def quality(q):
     for i in range(4):
         for j in range(i + 1, 4):
             dih.append(np.degrees(np.arccos(np.clip(-np.einsum("ij,ij->i", fn[i], fn[j]), -1.0, 1.0))))
-    dih = np.stack(dih, axis=1)
-    return {"order": int(q.get("order", 2)), "elements": int(ne), "nodes": int(len(nodes)),
-            "edge_min": float(L.min()), "edge_mean": float(L.mean()), "edge_max": float(L.max()),
-            "ratio_min": float(ratio.min()), "ratio_mean": float(ratio.mean()), "ratio_worst": int(np.argmin(ratio)),
-            "below_02": int((ratio < 0.2).sum()), "below_01": int((ratio < 0.1).sum()),
+    return L, ratio, np.stack(dih, axis=1), V, sv
+
+
+def quality(q):
+    """Measures the elements of a mesh (the corner nodes: the elements have straight edges).  Returns
+    {"order", "elements" (all of them), "tets", "hexes", "pyramids" (counts), "hex_share" (of the elements), "hex_volume_share" (of the volume),
+     "nodes", "edge_min", "edge_mean", "edge_max" (mm), "ratio_min", "ratio_mean", "ratio_worst" (tetrahedron index),
+     "below_02", "below_01" (counts), "dihedral_min", "dihedral_max" (degrees), "vol_min", "vol_max" (mm3), "volume" (mm3), "inverted": 0,
+     "hex_jacobian_min" (1 = a perfect cube, None without hexahedra)}
+    The radius ratio 3 r_inscribed / R_circumscribed is 1 for a regular tetrahedron and 0 for a flat one; a pyramid counts with the worst of its four
+    corner tetrahedra.  In a hex-dominant mesh the ratios, angles and volumes are those of the tetrahedra and pyramids (the hexahedra have their own number)."""
+    nodes, tets = np.asarray(q["nodes"], float), np.asarray(q["tets"])
+    hexes, pyrs = q.get("hexes"), q.get("pyrs")
+    hexes = np.zeros((0, 8), np.int64) if hexes is None else np.asarray(hexes)
+    pyrs = np.zeros((0, 5), np.int64) if pyrs is None else np.asarray(pyrs)
+    L, ratio, dih, V, sv = _tet_measures(nodes, tets)
+    ne_t = len(tets)
+    edge = L.ravel()
+    ratios = ratio
+    vol_t = float(V.sum())
+    vol_p = vol_h = 0.0
+    jac = None
+    if len(pyrs):
+        corner = np.vstack([pyrs[:, [0, 1, 2, 4]], pyrs[:, [0, 2, 3, 4]], pyrs[:, [1, 2, 3, 4]], pyrs[:, [0, 1, 3, 4]]])
+        Lp, rp, _d, Vp, _s = _tet_measures(nodes, corner)
+        ratios = np.concatenate([ratio, rp.reshape(4, -1).min(axis=0)])
+        edge = np.concatenate([edge, np.linalg.norm(nodes[pyrs[:, [0, 1, 2, 3, 0, 1, 2, 3]]] - nodes[pyrs[:, [1, 2, 3, 0, 4, 4, 4, 4]]], axis=2).ravel()])
+        vol_p = float(split_volume(nodes, pyrs))
+    if len(hexes):
+        P = nodes[hexes]
+        he = np.stack([np.linalg.norm(P[:, a] - P[:, b], axis=1) for a, b in ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7))], axis=1)
+        edge = np.concatenate([edge, he.ravel()])
+        jmin = np.ones(len(hexes))
+        for a, b, c, d in ((0, 1, 3, 4), (1, 2, 0, 5), (2, 3, 1, 6), (3, 0, 2, 7), (4, 7, 5, 0), (5, 4, 6, 1), (6, 5, 7, 2), (7, 6, 4, 3)):         # right-handed at every corner
+            e1, e2, e3 = P[:, b] - P[:, a], P[:, c] - P[:, a], P[:, d] - P[:, a]
+            j = np.einsum("ij,ij->i", e1, np.cross(e2, e3)) / np.maximum(np.linalg.norm(e1, axis=1) * np.linalg.norm(e2, axis=1) * np.linalg.norm(e3, axis=1), 1e-300)
+            jmin = np.minimum(jmin, j)
+        jac = float(jmin.min())
+        vol_h = float(_hex_volume(P).sum())
+    total = ne_t + len(hexes) + len(pyrs)
+    vol_all = vol_t + vol_p + vol_h
+    inverted = int((sv < 0).sum()) + (int((jmin <= 0).sum()) if len(hexes) else 0)
+    return {"order": int(q.get("order", 2)), "elements": int(total), "tets": int(ne_t), "hexes": int(len(hexes)), "pyramids": int(len(pyrs)),
+            "hex_share": float(len(hexes) / max(total, 1)), "hex_volume_share": float(vol_h / max(vol_all, 1e-300)), "nodes": int(len(nodes)),
+            "edge_min": float(edge.min()), "edge_mean": float(edge.mean()), "edge_max": float(edge.max()),
+            "ratio_min": float(ratios.min()), "ratio_mean": float(ratios.mean()), "ratio_worst": int(np.argmin(ratio)),
+            "below_02": int((ratios < 0.2).sum()), "below_01": int((ratios < 0.1).sum()),
             "dihedral_min": float(dih.min()), "dihedral_max": float(dih.max()),
-            "vol_min": float(V.min()), "vol_max": float(V.max()), "volume": float(V.sum()), "inverted": int((sv < 0).sum())}
+            "vol_min": float(V.min()), "vol_max": float(V.max()), "volume": float(vol_all), "inverted": inverted, "hex_jacobian_min": jac}
+
+
+def split_volume(nodes, pyr):
+    """The total volume of straight-sided pyramids (each as two tetrahedra)."""
+    P = nodes[pyr[:, :5]]
+    sv = lambda c: np.einsum("ij,ij->i", c[:, 1] - c[:, 0], np.cross(c[:, 2] - c[:, 0], c[:, 3] - c[:, 0])) / 6.0
+    return (sv(P[:, [0, 1, 2, 4]]) + sv(P[:, [0, 2, 3, 4]])).sum()
+
+
+def _hex_volume(P):
+    """Volumes of hexahedra (corner nodes, VTK order) with straight edges: the exact integral of the trilinear map (2 x 2 x 2 Gauss points)."""
+    g = 1.0 / np.sqrt(3.0)
+    v = np.zeros(len(P))
+    for sx in (-g, g):
+        for sy in (-g, g):
+            for sz in (-g, g):
+                dN = 0.125 * np.array([[a * (1 + b * sy) * (1 + c * sz), b * (1 + a * sx) * (1 + c * sz), c * (1 + a * sx) * (1 + b * sy)]
+                                       for a, b, c in ((-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1), (-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1))])
+                J = np.einsum("ia,eib->eab", dN, P)
+                v += np.linalg.det(J)
+    return v
 
 
 def verdict(qr):

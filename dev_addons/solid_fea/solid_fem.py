@@ -2,13 +2,18 @@
 solid_fem.py - meshing and the linear elastic solver of the 3D FEA add-on (no window).
 
   mesh_solid(geom, h, cancel, progress, opts)   gmsh fills the part (a STEP of it) with tetrahedra -> {"nodes", "tets", "faces": {face id: triangles}, "verts": {vertex id: node}}
-                                    opts (see solid_mesh): minimum size, growth rate, refinement at curved surfaces, a smaller size on single faces
-  quadratic(mesh)                   10-node tetrahedra with straight edges (VTK node order); the triangles of every face get their mid-edge nodes
-  linear(mesh)                      4-node tetrahedra (the same mesh without the mid-edge nodes)
-  Problem(...).solve()              K u = f for a linear elastic isotropic material; supports and loads from the faces of the part
+                                    opts (see solid_mesh): minimum size, growth rate, refinement at curved surfaces, a smaller size on single faces, and the
+                                    mesh type: tetrahedra, or hex-dominant (a block of hexahedra inside, tetrahedra and pyramids next to the surface: see
+                                    solid_hexmesh; the mesh then also has "hexes" and "pyrs")
+  quadratic(mesh)                   10-node tetrahedra (20-node hexahedra, 13-node pyramids) with straight edges (VTK node order); the triangles of every face get
+                                    their mid-edge nodes
+  linear(mesh)                      4-node tetrahedra (8-node hexahedra, 5-node pyramids): the same mesh without the mid-edge nodes
+  solve(...)                        K u = f for a linear elastic isotropic material; supports and loads from the faces of the part
+A mesh is a list of element GROUPS: q["groups"] = [{"kind": "tet" | "hex" | "pyr", "conn": (n, nodes per element)}]; q["conn"] is the tetrahedra's.
 
 Units: mm, N, MPa (so a density of 7850 kg/m3 is 7.85e-9 t/mm3 and gravity 9810 mm/s2).
 """
+import contextlib
 import os
 import tempfile
 import time
@@ -16,6 +21,8 @@ import time
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spl
+
+import solid_elem as elem
 
 EDGES = [(0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)]                      # VTK order of the mid-edge nodes of a 10-node tetrahedron
 _A, _B = 0.5854101966249685, 0.1381966011250105
@@ -32,13 +39,10 @@ class Cancelled(Exception):
 
 
 # ------------------------------------------------------------------------------------------------------------------------ mesh
-def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None, opts=None):
-    """`opts`: None (the plain automatic mesh) or {"hmin": mm | 0, "growth", "curv": elements per full circle | 0,
-    "face_sizes": [{"fids": [face ids], "h": mm}]} - see solid_mesh.resolve."""
+@contextlib.contextmanager
+def _session(geom, h, opts):
+    """A gmsh model of the part with the sizes set: yields (gmsh, {surface tag: face id}); everything is cleaned up afterwards."""
     import gmsh
-    opts = opts or {}
-    if cancel():
-        raise Cancelled()
     fd, path = tempfile.mkstemp(suffix=".step")
     os.close(fd)
     with open(path, "wb") as f:
@@ -62,6 +66,52 @@ def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None, opts=None
         gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", float(opts.get("curv", 10)))
         gmsh.option.setNumber("Mesh.Optimize", 1)
         _local_sizes(gmsh, fmap, opts.get("face_sizes") or [], float(h), float(opts.get("growth") or 1.3))
+        yield gmsh, fmap
+    finally:
+        try:
+            gmsh.clear()
+            gmsh.finalize()
+        except Exception:
+            pass
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def _vertex_nodes(gmsh, geom, remap):
+    verts = {}
+    gv = np.asarray(geom["verts"], float)
+    for (_d, tag) in gmsh.model.getEntities(0):
+        nt, nc, _ = gmsh.model.mesh.getNodes(0, tag)
+        if len(nt) and len(gv):
+            p = np.asarray(nc, float).reshape(3)
+            i = int(np.argmin(np.linalg.norm(gv - p, axis=1)))
+            if np.linalg.norm(gv[i] - p) < 1e-6 * max(geom["diag"], 1.0) * 10:
+                verts[i] = int(remap[int(nt[0])])
+    return verts
+
+
+def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None, opts=None):
+    """`opts`: None (the plain automatic mesh) or {"hmin": mm | 0, "growth", "curv": elements per full circle | 0,
+    "face_sizes": [{"fids": [face ids], "h": mm}], "type": "tets" | "hexdom"} - see solid_mesh.resolve.
+    A hex-dominant mesh that cannot be made (the part is too thin ...) is a mesh of tetrahedra with "hexdom_note" saying why."""
+    opts = opts or {}
+    if cancel():
+        raise Cancelled()
+    if opts.get("type") == "hexdom":
+        import solid_hexmesh as hm
+        try:
+            return _mesh_hexdom(geom, h, cancel, progress, opts, hm)
+        except hm.NoHexes as ex:
+            m = _mesh_tets(geom, h, cancel, progress, opts)
+            m["hexdom_note"] = str(ex)
+            return m
+    return _mesh_tets(geom, h, cancel, progress, opts)
+
+
+def _mesh_tets(geom, h, cancel, progress, opts):
+    with _session(geom, h, opts) as (gmsh, fmap):
         progress("meshing")
         err = []
         done = False
@@ -91,25 +141,7 @@ def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None, opts=None
             if 2 in list(et):
                 tri = remap[np.asarray(en[list(et).index(2)], np.int64).reshape(-1, 3)]
                 faces[fid] = np.vstack([faces[fid], tri]) if fid in faces else tri
-        verts = {}
-        gv = np.asarray(geom["verts"], float)
-        for (_d, tag) in gmsh.model.getEntities(0):
-            nt, nc, _ = gmsh.model.mesh.getNodes(0, tag)
-            if len(nt) and len(gv):
-                p = np.asarray(nc, float).reshape(3)
-                i = int(np.argmin(np.linalg.norm(gv - p, axis=1)))
-                if np.linalg.norm(gv[i] - p) < 1e-6 * max(geom["diag"], 1.0) * 10:
-                    verts[i] = int(remap[int(nt[0])])
-    finally:
-        try:
-            gmsh.clear()
-            gmsh.finalize()
-        except Exception:
-            pass
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        verts = _vertex_nodes(gmsh, geom, remap)
     used, inv = np.unique(tets.ravel(), return_inverse=True)           # only nodes that belong to tetrahedra
     new = np.full(len(xyz), -1, np.int64)
     new[used] = np.arange(len(used))
@@ -125,6 +157,48 @@ def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None, opts=None
         keep = np.abs(V) >= 1e-14 * np.abs(V).max()
         tets = tets[keep]
     return {"nodes": xyz, "tets": tets.astype(np.int64), "faces": faces, "verts": verts}
+
+
+def _mesh_hexdom(geom, h, cancel, progress, opts, hm):
+    """The surface (patch by patch, so the patch borders are mesh edges), then solid_hexmesh.build.  hm.NoHexes when it does not work out."""
+    with _session(geom, h, opts) as (gmsh, fmap):
+        progress("meshing the surface")
+        try:
+            gmsh.model.mesh.clear()
+            gmsh.model.mesh.generate(2)
+        except Exception as ex:
+            raise FemError("gmsh could not mesh the surface of the part: " + str(ex))
+        if cancel():
+            raise Cancelled()
+        tags, coords, _ = gmsh.model.mesh.getNodes()
+        tags = np.asarray(tags, np.int64)
+        xyz = np.asarray(coords, float).reshape(-1, 3)
+        remap = np.full(int(tags.max()) + 1, -1, np.int64)
+        remap[tags] = np.arange(len(tags))
+        tri, fid = [], []
+        for (_d, tag) in gmsh.model.getEntities(2):
+            et, _et, en = gmsh.model.mesh.getElements(2, tag)
+            if 2 in list(et):
+                t = remap[np.asarray(en[list(et).index(2)], np.int64).reshape(-1, 3)]
+                tri.append(t)
+                fid += [fmap.get(tag, -1)] * len(t)
+        verts = _vertex_nodes(gmsh, geom, remap)
+    if not tri:
+        raise hm.NoHexes("The surface has no elements.")
+    tri = np.vstack(tri)
+    fid = np.asarray(fid)
+    used = np.unique(tri)
+    new = np.full(len(xyz), -1, np.int64)
+    new[used] = np.arange(len(used))
+    X, tri = xyz[used], new[tri]
+    m = hm.build(X, tri, float(h), opts, cancel, progress)
+    outer = m["outer"]
+    faces = {}
+    for f in np.unique(fid):
+        if f >= 0:
+            faces[int(f)] = outer[tri[fid == f]]
+    verts = {k: int(outer[new[v]]) for k, v in verts.items() if new[v] >= 0}
+    return {"nodes": m["nodes"], "tets": m["tets"], "hexes": m["hexes"], "pyrs": m["pyrs"], "faces": faces, "verts": verts, "hexdom": m["info"]}
 
 
 def _local_sizes(gmsh, fmap, face_sizes, h, growth):
@@ -182,35 +256,71 @@ def _signed_vol(c):
     return np.einsum("ij,ij->i", c[:, 1] - c[:, 0], np.cross(c[:, 2] - c[:, 0], c[:, 3] - c[:, 0])) / 6.0
 
 
+_EDGES = {"tet": EDGES, "hex": elem.HEX_EDGES, "pyr": elem.PYR_EDGES}
+
+
+def _parts(mesh):
+    """[(kind, corner connectivity)] of the elements of a mesh from mesh_solid: the tetrahedra, then the hexahedra, then the pyramids."""
+    out = [("tet", mesh["tets"])]
+    for kind, key in (("hex", "hexes"), ("pyr", "pyrs")):
+        c = mesh.get(key)
+        if c is not None and len(c):
+            out.append((kind, np.asarray(c)))
+    return out
+
+
+def view_cells(mesh):
+    """The elements as VTK cells for the viewer (corner nodes only): {"cells", "types"}, or None for a mesh of tetrahedra only (those are drawn from "tets")."""
+    parts = _parts(mesh)
+    if len(parts) == 1:
+        return None
+    cells, types = [], []
+    vt = {"tet": (4, 10), "hex": (8, 12), "pyr": (5, 14)}
+    for kind, c in parts:
+        k, t = vt[kind]
+        cells.append(np.hstack([np.full((len(c), 1), k), c[:, :k]]).ravel())
+        types.append(np.full(len(c), t, np.uint8))
+    return {"cells": np.concatenate(cells).astype(np.int64), "types": np.concatenate(types)}
+
+
 def quadratic(mesh):
-    """Adds the mid-edge nodes: {"nodes", "conn" (ne, 10), "tri6": {face id: (k, 6)}, "vol", ...}."""
-    nodes, tets = mesh["nodes"], mesh["tets"]
-    nn, ne = len(nodes), len(tets)
+    """Adds the mid-edge nodes: {"nodes", "conn" (the tetrahedra: ne, 10), "groups", "tri6": {face id: (k, 6)}, "vol", ...}."""
+    nodes = mesh["nodes"]
+    nn = len(nodes)
     key = lambda a, b: np.minimum(a, b).astype(np.int64) * nn + np.maximum(a, b)
-    keys = np.stack([key(tets[:, a], tets[:, b]) for a, b in EDGES], axis=1)
-    uniq, inv = np.unique(keys.ravel(), return_inverse=True)
+    parts = _parts(mesh)
+    keys = [np.stack([key(c[:, a], c[:, b]) for a, b in _EDGES[kind]], axis=1) for kind, c in parts]
+    uniq, inv = np.unique(np.concatenate([k.ravel() for k in keys]), return_inverse=True)
     mid = 0.5 * (nodes[uniq // nn] + nodes[uniq % nn])
-    conn = np.concatenate([tets, nn + inv.reshape(ne, 6)], axis=1)
+    groups = []
+    pos = 0
+    for (kind, c), kk in zip(parts, keys):
+        ids = nn + inv[pos:pos + kk.size].reshape(kk.shape)
+        pos += kk.size
+        groups.append({"kind": kind, "conn": np.concatenate([c, ids], axis=1)})
     tri6 = {}
     for fid, tr in mesh["faces"].items():
         ms = []
         for a, b in ((0, 1), (1, 2), (2, 0)):
             k = key(tr[:, a], tr[:, b])
-            pos = np.searchsorted(uniq, k)
-            ok = (pos < len(uniq)) & (uniq[np.minimum(pos, len(uniq) - 1)] == k)
+            p = np.searchsorted(uniq, k)
+            ok = (p < len(uniq)) & (uniq[np.minimum(p, len(uniq) - 1)] == k)
             if not ok.all():
                 raise FemError("A surface triangle is not an element face (the mesh is not conforming).")
-            ms.append(nn + pos)
+            ms.append(nn + p)
         tri6[fid] = np.stack([tr[:, 0], tr[:, 1], tr[:, 2], ms[0], ms[1], ms[2]], axis=1)
     out = dict(mesh)
-    out.update({"nodes": np.vstack([nodes, mid]), "conn": conn, "tri6": tri6, "ftri": tri6, "order": 2})
+    out.update({"nodes": np.vstack([nodes, mid]), "conn": groups[0]["conn"], "groups": groups, "tri6": tri6, "ftri": tri6, "order": 2,
+                "viewcells": view_cells(mesh)})
     return out
 
 
 def linear(mesh):
-    """4-node tetrahedra: the corner nodes only.  "ftri" holds the corner nodes of the triangles of every face."""
+    """4-node tetrahedra (8-node hexahedra, 5-node pyramids): the corner nodes only.  "ftri" holds the corner nodes of the triangles of every face."""
     out = dict(mesh)
-    out.update({"conn": mesh["tets"].copy(), "ftri": {fid: np.asarray(tr).copy() for fid, tr in mesh["faces"].items()}, "order": 1})
+    groups = [{"kind": kind, "conn": np.asarray(c).copy()} for kind, c in _parts(mesh)]
+    out.update({"conn": groups[0]["conn"], "groups": groups, "ftri": {fid: np.asarray(tr).copy() for fid, tr in mesh["faces"].items()}, "order": 1,
+                "viewcells": view_cells(mesh)})
     return out
 
 
@@ -289,66 +399,92 @@ def _rule(nne):
     return [_dNdL(L) for L in GAUSS], GW, [_N(L) for L in GAUSS]
 
 
-def _bmat(g):
-    """g (ne, nne, 3) physical gradients of the shape functions -> B (ne, 6, 3 nne)."""
-    ne, nne = g.shape[0], g.shape[1]
-    B = np.zeros((ne, 6, 3 * nne))
-    for i in range(nne):
-        gx, gy, gz = g[:, i, 0], g[:, i, 1], g[:, i, 2]
-        B[:, 0, 3 * i] = gx
-        B[:, 1, 3 * i + 1] = gy
-        B[:, 2, 3 * i + 2] = gz
-        B[:, 3, 3 * i], B[:, 3, 3 * i + 1] = gy, gx
-        B[:, 4, 3 * i + 1], B[:, 4, 3 * i + 2] = gz, gy
-        B[:, 5, 3 * i], B[:, 5, 3 * i + 2] = gz, gx
-    return B
+_bmat = elem.bmat
 
 
-def assemble(nodes, conn, E, nu, cancel=lambda: False):
-    nn, ne = len(nodes), len(conn)
-    nne = conn.shape[1]
-    ndof = 3 * nne
+def _as_groups(conn):
+    """A list of groups from a list of groups or from the connectivity of tetrahedra."""
+    return conn if isinstance(conn, (list, tuple)) else [{"kind": "tet", "conn": conn}]
+
+
+def _edofs(conn):
+    return (3 * conn[:, :, None] + np.arange(3)[None, None, :]).reshape(len(conn), 3 * conn.shape[1])
+
+
+def _coo(Ke, ed, n):
+    nd = ed.shape[1]
+    return sp.coo_matrix((Ke.ravel(), (np.repeat(ed, nd, axis=1).ravel(), np.tile(ed, (1, nd)).ravel())), shape=(n, n)).tocsr()
+
+
+def assemble(nodes, groups, E, nu, cancel=lambda: False):
+    """The stiffness matrix of all the elements (`groups`: see the top of the file; or just the connectivity of tetrahedra) and the material matrix."""
+    nn = len(nodes)
     D = material_matrix(E, nu)
-    dN, gw, _ns = _rule(nne)
-    chunk = 4000
     K = None
-    for s in range(0, ne, chunk):
-        if cancel():
-            raise Cancelled()
-        e = min(s + chunk, ne)
-        gL, V = _grad_L(nodes, conn, s, e)
-        Ke = np.zeros((e - s, ndof, ndof))
-        for d, w in zip(dN, gw):
-            B = _bmat(np.einsum("ik,ekx->eix", d, gL))
-            Ke += (w * V)[:, None, None] * (B.transpose(0, 2, 1) @ (D @ B))
-        ed = (3 * conn[s:e, :, None] + np.arange(3)[None, None, :]).reshape(e - s, ndof)
-        part = sp.coo_matrix((Ke.ravel(), (np.repeat(ed, ndof, axis=1).ravel(), np.tile(ed, (1, ndof)).ravel())), shape=(3 * nn, 3 * nn)).tocsr()
-        K = part if K is None else K + part
+    for g in _as_groups(groups):
+        kind, conn = g["kind"], g["conn"]
+        if kind == "tet":
+            nne = conn.shape[1]
+            dN, gw, _ns = _rule(nne)
+            chunk = 4000
+        else:
+            chunk = 1500
+        for s in range(0, len(conn), chunk):
+            if cancel():
+                raise Cancelled()
+            e = min(s + chunk, len(conn))
+            if kind == "tet":
+                ndof = 3 * nne
+                gL, V = _grad_L(nodes, conn, s, e)
+                Ke = np.zeros((e - s, ndof, ndof))
+                for d, w in zip(dN, gw):
+                    B = _bmat(np.einsum("ik,ekx->eix", d, gL))
+                    Ke += (w * V)[:, None, None] * (B.transpose(0, 2, 1) @ (D @ B))
+                ed = _edofs(conn[s:e])
+            else:
+                hx = elem.as_hex(kind, conn[s:e])                                  # a pyramid as the collapsed hexahedron: the apex repeated
+                try:
+                    Ke = elem.stiffness(kind, nodes[hx], D)
+                except elem.ElementError as ex:
+                    raise FemError(str(ex))
+                ed = _edofs(hx)
+            part = _coo(Ke, ed, 3 * nn)
+            K = part if K is None else K + part
     return K, D
 
 
-def stresses(nodes, conn, D, u):
-    """Per element: von Mises at the 4 Gauss points (max), the mean stress tensor, and the element volume."""
-    ne = len(conn)
-    nne = conn.shape[1]
+def stresses(nodes, groups, D, u):
+    """Per element (the groups one after the other): von Mises at the integration points (max), the mean stress tensor, and the element volume."""
+    groups = _as_groups(groups)
+    ne = sum(len(g["conn"]) for g in groups)
     vm = np.zeros(ne)
     sig_mean = np.zeros((ne, 6))
     vol = np.zeros(ne)
-    dN, _gw, _ns = _rule(nne)
-    chunk = 8000
-    for s in range(0, ne, chunk):
-        e = min(s + chunk, ne)
-        gL, V = _grad_L(nodes, conn, s, e)
-        vol[s:e] = V
-        ed = (3 * conn[s:e, :, None] + np.arange(3)[None, None, :]).reshape(e - s, 3 * nne)
-        ue = u[ed]
-        vmax = np.zeros(e - s)
-        for d in dN:
-            B = _bmat(np.einsum("ik,ekx->eix", d, gL))
-            sg = np.einsum("eri,ei->er", B, ue) @ D.T
-            vmax = np.maximum(vmax, _vm(sg))
-            sig_mean[s:e] += sg / len(dN)
-        vm[s:e] = vmax
+    base = 0
+    for g in groups:
+        kind, conn = g["kind"], g["conn"]
+        if kind == "tet":
+            nne = conn.shape[1]
+            dN, _gw, _ns = _rule(nne)
+            for s in range(0, len(conn), 8000):
+                e = min(s + 8000, len(conn))
+                gL, V = _grad_L(nodes, conn, s, e)
+                vol[base + s:base + e] = V
+                ue = u[_edofs(conn[s:e])]
+                vmax = np.zeros(e - s)
+                for d in dN:
+                    B = _bmat(np.einsum("ik,ekx->eix", d, gL))
+                    sg = np.einsum("eri,ei->er", B, ue) @ D.T
+                    vmax = np.maximum(vmax, _vm(sg))
+                    sig_mean[base + s:base + e] += sg / len(dN)
+                vm[base + s:base + e] = vmax
+        else:
+            for s in range(0, len(conn), 3000):
+                e = min(s + 3000, len(conn))
+                hx = elem.as_hex(kind, conn[s:e])
+                vmx, mean, vv = elem.recover(kind, nodes[hx], D, u[_edofs(hx)])
+                vm[base + s:base + e], sig_mean[base + s:base + e], vol[base + s:base + e] = vmx, mean, vv
+        base += len(conn)
     return vm, sig_mean, vol
 
 
@@ -366,19 +502,27 @@ def principal(sig):
     return w[:, 2], w[:, 0]
 
 
-def body_load(nodes, conn, b):
+def body_load(nodes, groups, b):
     """Consistent nodal forces of a uniform body force vector b (N/mm3)."""
     f = np.zeros(3 * len(nodes))
-    nne = conn.shape[1]
-    _dn, gw, Ns = _rule(nne)
-    ne = len(conn)
-    for s in range(0, ne, 8000):
-        e = min(s + 8000, ne)
-        V = np.abs(_signed_vol(nodes[conn[s:e, :4]]))
-        for n, w in zip(Ns, gw):
-            for i in range(nne):
-                for c in range(3):
-                    np.add.at(f, 3 * conn[s:e, i] + c, w * V * n[i] * b[c])
+    for g in _as_groups(groups):
+        kind, conn = g["kind"], g["conn"]
+        if kind == "tet":
+            nne = conn.shape[1]
+            _dn, gw, Ns = _rule(nne)
+            for s in range(0, len(conn), 8000):
+                e = min(s + 8000, len(conn))
+                V = np.abs(_signed_vol(nodes[conn[s:e, :4]]))
+                for n, w in zip(Ns, gw):
+                    for i in range(nne):
+                        for c in range(3):
+                            np.add.at(f, 3 * conn[s:e, i] + c, w * V * n[i] * b[c])
+        else:
+            for s in range(0, len(conn), 3000):
+                e = min(s + 3000, len(conn))
+                hx = elem.as_hex(kind, conn[s:e])
+                fe = elem.body_forces(kind, nodes[hx], b)
+                f += np.bincount(_edofs(hx).ravel(), weights=fe.reshape(len(hx), -1).ravel(), minlength=len(f))
     return f
 
 
@@ -399,10 +543,10 @@ def rigid_modes(xyz):
 def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t: None):
     """q = quadratic mesh.  constraints: [(node array, direction (3,) or None for all three)]; force: (3 nn,) vector.
     Returns u (nn, 3), reactions per constraint, info."""
-    nodes, conn = q["nodes"], q["conn"]
+    nodes = q["nodes"]
     nn = len(nodes)
     progress("assembling")
-    K, D = assemble(nodes, conn, E, nu, cancel)
+    K, D = assemble(nodes, q.get("groups") or q["conn"], E, nu, cancel)
     fixed = np.zeros(3 * nn, bool)
     pen = []
     rows = []                                                # (node, direction) pairs for the rigid-body check

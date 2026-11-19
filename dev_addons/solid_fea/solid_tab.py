@@ -1,5 +1,5 @@
 """
-solid_tab.py - the 3D FEA window (project folder .gpv): a SINGLE parametric part, linear elastic, quadratic tetrahedra.
+solid_tab.py - the 3D FEA window (project folder .gpv): a SINGLE parametric part, linear elastic, quadratic tetrahedra (or a hex-dominant mesh).
 
 Project bar:  New project / Import source / Update from original / Save   (the same project folder machinery as the 1D / 2D simulations:
               the part is COPIED into  source/  and the simulation only uses the copy)
@@ -306,7 +306,7 @@ class SolidWindow(QWidget):
             f.addRow(lab, e)
             e.editingFinished.connect(self.inputs_changed)
         v.addLayout(f)
-        v.addWidget(sim_ui.wrapped("Analysis: linear elastic, small displacements, tetrahedra (quadratic unless you choose linear in the advanced mesh options)."))
+        v.addWidget(sim_ui.wrapped("Analysis: linear elastic, small displacements, tetrahedra (quadratic unless you choose linear in the advanced mesh options; hex-dominant is there too)."))
         v.addWidget(self.mat_note)
         self.fill_materials()
         self.put_material(self.setup["material"])
@@ -514,19 +514,29 @@ class SolidWindow(QWidget):
     def build_advanced_mesh(self, v):
         """The 'Advanced mesh options' tick box and what it reveals (see solid_mesh for what each option does)."""
         self.cb_adv = QCheckBox("Advanced mesh options")
-        self.cb_adv.setToolTip("Element order, a minimum size and a growth rate, refinement at curved surfaces and on single faces, and a quality report. "
-                               "Off = the plain automatic mesh (quadratic tetrahedra).")
+        self.cb_adv.setToolTip("Mesh type (tetrahedra or hex-dominant), element order, a minimum size and a growth rate, refinement at curved surfaces and on "
+                               "single faces, and a quality report. Off = the plain automatic mesh (quadratic tetrahedra).")
         v.addWidget(self.cb_adv)
         self.adv_box = QWidget()
         al = QVBoxLayout(self.adv_box)
         al.setContentsMargins(14, 0, 0, 0)
         al.setSpacing(3)
         f = QFormLayout()
+        self.type_combo = QComboBox()
+        for k, text in smesh.TYPES.items():
+            self.type_combo.addItem(text, k)
+        self.type_combo.setToolTip("Tetrahedra: the whole part is filled with them. Hex-dominant: a block of brick elements (hexahedra) inside the part, and "
+                                   "tetrahedra, joined to the bricks by pyramids, between it and the surface. The surface mesh is the same either way, so the "
+                                   "borders of split patches stay mesh edges. A part with no room for bricks (thin, small, or a fine element size) gets "
+                                   "tetrahedra, and the mesh quality box says so. The share of bricks grows as the elements get small compared to the part.")
+        sim_ui.tame(self.type_combo, 24)
+        f.addRow("Mesh type", self.type_combo)
         self.order_combo = QComboBox()
         for k, text in smesh.ORDERS.items():
             self.order_combo.addItem(text, k)
-        self.order_combo.setToolTip("Quadratic tetrahedra (10 nodes) bend and carry stress gradients much better, so they are the right choice almost always. "
-                                    "Linear tetrahedra (4 nodes) are quicker but stiff in bending: they need a much finer mesh for the same accuracy.")
+        self.order_combo.setToolTip("Quadratic elements (mid-edge nodes: 10-node tetrahedra, 20-node bricks) bend and carry stress gradients much better, so they "
+                                    "are the right choice almost always. Linear elements (corner nodes only) are quicker but stiffer in bending: they need a "
+                                    "much finer mesh for the same accuracy.")
         sim_ui.tame(self.order_combo, 24)
         f.addRow("Element order", self.order_combo)
         self.e_hmin = QLineEdit()
@@ -591,6 +601,7 @@ class SolidWindow(QWidget):
         v.addWidget(self.adv_box)
         self.cb_adv.toggled.connect(self.adv_toggled)
         self.order_combo.activated.connect(lambda _i: self.inputs_changed())
+        self.type_combo.activated.connect(lambda _i: self.inputs_changed())
         self.follows_combo.activated.connect(lambda _i: self.inputs_changed())
         self.e_hmin.editingFinished.connect(self.inputs_changed)
         self.e_growth.editingFinished.connect(self.inputs_changed)
@@ -613,6 +624,7 @@ class SolidWindow(QWidget):
         mo = smesh.complete(self.setup.get("mesh"))                      # the local sizes stay as they are
         mo["advanced"] = self.cb_adv.isChecked()
         mo["order"] = self.order_combo.currentData()
+        mo["type"] = self.type_combo.currentData() or "tets"
         mo["follows"] = self.follows_combo.currentData() or "patches"
         mo["curv"] = self.sp_curv.value() if self.cb_curv.isChecked() else 0
         self.setup["mesh"] = mo
@@ -629,15 +641,16 @@ class SolidWindow(QWidget):
         """The boxes from the setup's mesh options (after opening a project, importing a state ...)."""
         mo = smesh.complete(self.setup.get("mesh"))
         self.setup["mesh"] = mo
-        for wd in (self.cb_adv, self.cb_curv, self.sp_curv, self.order_combo, self.follows_combo):
+        for wd in (self.cb_adv, self.cb_curv, self.sp_curv, self.order_combo, self.type_combo, self.follows_combo):
             wd.blockSignals(True)
         self.cb_adv.setChecked(bool(mo["advanced"]))
         self.order_combo.setCurrentIndex(max(0, self.order_combo.findData(mo["order"])))
+        self.type_combo.setCurrentIndex(max(0, self.type_combo.findData(mo["type"])))
         self.follows_combo.setCurrentIndex(max(0, self.follows_combo.findData(mo["follows"])))
         self.cb_curv.setChecked(mo["curv"] > 0)
         self.sp_curv.setValue(mo["curv"] or 10)
         self.sp_curv.setEnabled(mo["curv"] > 0)
-        for wd in (self.cb_adv, self.cb_curv, self.sp_curv, self.order_combo, self.follows_combo):
+        for wd in (self.cb_adv, self.cb_curv, self.sp_curv, self.order_combo, self.type_combo, self.follows_combo):
             wd.blockSignals(False)
         self.e_hmin.setText(format(l_out(mo["hmin"]), ".8g") if mo["hmin"] else "")
         self.e_growth.setText(format(mo["growth"], ".8g"))
@@ -744,8 +757,9 @@ class SolidWindow(QWidget):
             if not self.try_face_sizes(sizes):
                 QTimer.singleShot(0, self.fill_face_table)
 
-    def show_quality(self, qr):
-        """The quality report of a mesh (solid_mesh.quality) under the Mesh button - only with the advanced options on."""
+    def show_quality(self, qr, note=None):
+        """The quality report of a mesh (solid_mesh.quality) under the Mesh button - only with the advanced options on.  `note`: why a hex-dominant mesh
+        is tetrahedra only (or None)."""
         if qr is None or not self.cb_adv.isChecked():
             self.quality_lbl.setText("")
             self.quality_box.setVisible(False)
@@ -754,19 +768,32 @@ class SolidWindow(QWidget):
         n = qr["elements"]
         verdict = smesh.verdict(qr)
         colour = {"good": "#1b7f3b", "acceptable": "#a86a00", "poor": "#b3261e"}[verdict]
+        mixed = qr.get("hexes", 0) > 0 or qr.get("pyramids", 0) > 0
+        head = f"{n:,} elements, {qr['nodes']:,} nodes ({'quadratic' if qr['order'] == 2 else 'linear'})<br>"
+        if mixed:
+            head += (f"Hexahedra {qr['hexes']:,} ({100.0 * qr['hex_share']:.0f} % of the elements, {100.0 * qr['hex_volume_share']:.0f} % of the volume), "
+                     f"tetrahedra {qr['tets']:,}, pyramids {qr['pyramids']:,}<br>")
+        elif note:
+            head += "Tetrahedra only: " + note + "<br>"
+        tail = "Worst tetrahedron or pyramid" if mixed else "Worst element"
         self.quality_lbl.setText(
-            f"{n:,} elements, {qr['nodes']:,} nodes ({'quadratic' if qr['order'] == 2 else 'linear'})<br>"
+            head +
             f"Edge length: smallest {l_out(qr['edge_min']):.4g}, average {l_out(qr['edge_mean']):.4g}, largest {l_out(qr['edge_max']):.4g} {L}<br>"
-            f"Worst element, radius ratio: {qr['ratio_min']:.3f} (1 = perfect; below 0.1 is poor)<br>"
+            f"{tail}, radius ratio: {qr['ratio_min']:.3f} (1 = perfect; below 0.1 is poor)<br>"
             f"Angles between faces: smallest {qr['dihedral_min']:.0f}&deg;, largest {qr['dihedral_max']:.0f}&deg;<br>"
             f"Elements below 0.2: {qr['below_02']:,} ({100.0 * qr['below_02'] / max(n, 1):.1f} %)<br>"
             f"Overall: <b style='color:{colour}'>{verdict}</b>")
         self.quality_box.setVisible(True)
 
     @staticmethod
-    def mesh_text(n_tets, n_nodes, order, h):
-        return (f"{n_tets:,} tetrahedra, {n_nodes:,} nodes ({'quadratic' if order == 2 else 'linear'}), "
-                f"element size {l_out(h):.4g} {UD()['L']}")
+    def mesh_text(n_elements, n_nodes, order, h, counts=None):
+        """One line about the mesh; `counts` = {"tets", "hexes", "pyramids"} when it has bricks."""
+        kind = "quadratic" if order == 2 else "linear"
+        if counts and (counts.get("hexes") or counts.get("pyramids")):
+            what = (f"{n_elements:,} elements ({counts['hexes']:,} hexahedra, {counts['tets']:,} tetrahedra, {counts['pyramids']:,} pyramids)")
+        else:
+            what = f"{n_elements:,} tetrahedra"
+        return f"{what}, {n_nodes:,} nodes ({kind}), element size {l_out(h):.4g} {UD()['L']}"
 
     def refresh_labels(self):
         """Every label that carries a unit, in the program's current units."""
@@ -1866,8 +1893,9 @@ class SolidWindow(QWidget):
 
         def done(q):
             self.mesh_q = q
-            self.mesh_lbl.setText(self.mesh_text(len(q["tets"]), len(q["nodes"]), q["order"], h))
-            self.show_quality(q.get("quality"))
+            ql = q.get("quality") or {}
+            self.mesh_lbl.setText(self.mesh_text(ql.get("elements", len(q["tets"])), len(q["nodes"]), q["order"], h, ql))
+            self.show_quality(q.get("quality"), q.get("hexdom_note"))
             self.say("Meshed.")
             self.show_field(mesh_only=True)
         return self.run_job(work, done, "Meshing")
@@ -1890,8 +1918,8 @@ class SolidWindow(QWidget):
         def done(res):
             self.result = res
             self.mesh_q = self.cache.get(sm.mesh_key(g, res["h"], res.get("mesh_opts")), self.mesh_q)
-            self.mesh_lbl.setText(self.mesh_text(res["n_tets"], res["n_nodes"], res["order"], res["h"]))
-            self.show_quality(res.get("quality"))
+            self.mesh_lbl.setText(self.mesh_text(res.get("n_elements", res["n_tets"]), res["n_nodes"], res["order"], res["h"], res.get("counts")))
+            self.show_quality(res.get("quality"), res.get("hexdom_note"))
             self.describe()
             self.show_field()
             self.enable_buttons()
@@ -1910,8 +1938,16 @@ class SolidWindow(QWidget):
         if r.get("support_reactions"):
             html += R.heading("Reactions", D["F"])
             html += R.grid(["", "Fx", "Fy", "Fz"], [[n, *(R.num(f_out(x)) for x in v)] for n, v in r["support_reactions"]])
-        html += R.heading("Mesh") + R.kv([(f"Tetrahedra ({'quadratic' if r.get('order', 2) == 2 else 'linear'})", f"{r['n_tets']:,}", None), ("Nodes", f"{r['n_nodes']:,}", None),
-                                           ("Element size", R.num(l_out(r["h"]), 4), D["L"])])
+        kind = 'quadratic' if r.get('order', 2) == 2 else 'linear'
+        cn = r.get("counts") or {}
+        if cn.get("hexes") or cn.get("pyramids"):
+            mesh_rows = [(f"Elements ({kind})", f"{r['n_elements']:,}", None), ("Hexahedra", f"{cn['hexes']:,} ({100.0 * cn['hexes'] / max(r['n_elements'], 1):.0f} %)", None),
+                         ("Tetrahedra", f"{cn['tets']:,}", None), ("Pyramids", f"{cn['pyramids']:,}", None)]
+        else:
+            mesh_rows = [(f"Tetrahedra ({kind})", f"{r['n_tets']:,}", None)]
+        html += R.heading("Mesh") + R.kv(mesh_rows + [("Nodes", f"{r['n_nodes']:,}", None), ("Element size", R.num(l_out(r["h"]), 4), D["L"])])
+        if r.get("hexdom_note"):
+            html += R.note("Hex-dominant was asked for, but this mesh is tetrahedra only: " + r["hexdom_note"])
         html += R.note("This window does not refine the mesh by itself: check by meshing finer and comparing, or run a parametric study "
                        "over the element size.")
         info = r.get("info") or {}
@@ -1971,11 +2007,11 @@ class SolidWindow(QWidget):
         if self.result is None:
             if self.mesh_q is not None:
                 q = self.mesh_q
-                self.view.show_mesh(q["nodes"], q["tets"])          # grey surface with the mesh edges: no result colours before Solve
+                self.view.show_mesh(q["nodes"], q.get("viewcells") or q["tets"])          # grey surface with the mesh edges: no result colours before Solve
             return
         r = self.result
         vals, leg = self.field_values()
-        self.view.show_result(r["nodes"], r["conn"], r["u"], vals, self.scale_value(), self.cb_edges.isChecked(), leg["lo"], leg["hi"], leg["flip"],
+        self.view.show_result(r["nodes"], r.get("viewcells") or r["conn"], r["u"], vals, self.scale_value(), self.cb_edges.isChecked(), leg["lo"], leg["hi"], leg["flip"],
                               legend={"title": leg["title"], "labels": leg["labels"], "subtitle": leg["subtitle"]})
 
     def colours_changed(self, *_a):
