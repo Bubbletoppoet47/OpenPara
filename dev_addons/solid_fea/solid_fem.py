@@ -58,6 +58,9 @@ def _session(geom, h, opts):
         gmsh.model.add("solid")
         gmsh.model.occ.importShapes(path)
         gmsh.model.occ.synchronize()
+        if geom.get("solids"):                                         # an assembly: the faces the bodies share must be ONE surface (shared nodes)
+            gmsh.model.occ.removeAllDuplicates()
+            gmsh.model.occ.synchronize()
         if not gmsh.model.getEntities(3):
             raise FemError("gmsh found no solid in the part.")
         fmap = _match_surfaces(gmsh, geom)
@@ -99,6 +102,10 @@ def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None, opts=None
     opts = opts or {}
     if cancel():
         raise Cancelled()
+    if opts.get("type") == "hexdom" and geom.get("solids"):
+        m = _mesh_tets(geom, h, cancel, progress, opts)
+        m["hexdom_note"] = "An assembly is meshed with tetrahedra (hex-dominant meshing is for a single part)."
+        return m
     if opts.get("type") == "hexdom":
         import solid_hexmesh as hm
         try:
@@ -133,8 +140,12 @@ def _mesh_tets(geom, h, cancel, progress, opts):
         xyz = np.asarray(coords, float).reshape(-1, 3)
         remap = np.full(int(tags.max()) + 1, -1, np.int64)
         remap[tags] = np.arange(len(tags))
-        _t, ent = gmsh.model.mesh.getElementsByType(4)
-        tets = remap[np.asarray(ent, np.int64).reshape(-1, 4)]
+        tet_body = None
+        if geom.get("solids"):
+            tets, tet_body = _volume_tets(gmsh, geom, remap)
+        else:
+            _t, ent = gmsh.model.mesh.getElementsByType(4)
+            tets = remap[np.asarray(ent, np.int64).reshape(-1, 4)]
         faces = {}
         for tag, fid in fmap.items():
             et, _et, en = gmsh.model.mesh.getElements(2, tag)
@@ -156,7 +167,32 @@ def _mesh_tets(geom, h, cancel, progress, opts):
     if (np.abs(V) < 1e-14 * max(np.abs(V).max(), 1e-300)).any():
         keep = np.abs(V) >= 1e-14 * np.abs(V).max()
         tets = tets[keep]
-    return {"nodes": xyz, "tets": tets.astype(np.int64), "faces": faces, "verts": verts}
+        if tet_body is not None:
+            tet_body = tet_body[keep]
+    out = {"nodes": xyz, "tets": tets.astype(np.int64), "faces": faces, "verts": verts}
+    if tet_body is not None:
+        out["tet_body"] = tet_body.astype(np.int64)                    # the body of every tetrahedron; the tetrahedra are in the order of the bodies
+    return out
+
+
+def _volume_tets(gmsh, geom, remap):
+    """(tetrahedra, body of each) of an assembly: the volumes of gmsh are matched to the pieces of the fused geometry (centre of mass and volume);
+    the tetrahedra come out sorted by body."""
+    pieces = geom["solids"]
+    scale = max(geom["diag"], 1e-12)
+    parts = []
+    for (_d, tag) in gmsh.model.getEntities(3):
+        c = np.array(gmsh.model.occ.getCenterOfMass(3, tag))
+        v = gmsh.model.occ.getMass(3, tag)
+        best = min(range(len(pieces)), key=lambda k: np.linalg.norm(c - pieces[k]["center"]) / scale + abs(v - pieces[k]["volume"]) / max(pieces[k]["volume"], 1e-12))
+        et, _et, en = gmsh.model.mesh.getElements(3, tag)
+        if 4 in list(et):
+            t = remap[np.asarray(en[list(et).index(4)], np.int64).reshape(-1, 4)]
+            parts.append((pieces[best]["body"], t))
+    if not parts:
+        raise FemError("gmsh made no tetrahedra for the assembly.")
+    parts.sort(key=lambda x: x[0])
+    return np.vstack([t for _b, t in parts]), np.concatenate([np.full(len(t), b) for b, t in parts])
 
 
 def _mesh_hexdom(geom, h, cancel, progress, opts, hm):
@@ -269,6 +305,19 @@ def _parts(mesh):
     return out
 
 
+def _by_body(groups, mesh):
+    """The tetrahedra of an assembly in one group per body (they are in the order of the bodies, so the groups put together are the same list)."""
+    tb = mesh.get("tet_body")
+    if tb is None or not groups or groups[0]["kind"] != "tet":
+        return groups
+    conn = groups[0]["conn"]
+    out = []
+    for b in np.unique(tb):
+        idx = np.where(tb == b)[0]
+        out.append({"kind": "tet", "conn": conn[idx[0]:idx[-1] + 1], "body": int(b)})
+    return out + groups[1:]
+
+
 def view_cells(mesh):
     """The elements as VTK cells for the viewer (corner nodes only): {"cells", "types"}, or None for a mesh of tetrahedra only (those are drawn from "tets")."""
     parts = _parts(mesh)
@@ -298,6 +347,8 @@ def quadratic(mesh):
         ids = nn + inv[pos:pos + kk.size].reshape(kk.shape)
         pos += kk.size
         groups.append({"kind": kind, "conn": np.concatenate([c, ids], axis=1)})
+    tetconn = groups[0]["conn"]
+    groups = _by_body(groups, mesh)
     tri6 = {}
     for fid, tr in mesh["faces"].items():
         ms = []
@@ -310,7 +361,7 @@ def quadratic(mesh):
             ms.append(nn + p)
         tri6[fid] = np.stack([tr[:, 0], tr[:, 1], tr[:, 2], ms[0], ms[1], ms[2]], axis=1)
     out = dict(mesh)
-    out.update({"nodes": np.vstack([nodes, mid]), "conn": groups[0]["conn"], "groups": groups, "tri6": tri6, "ftri": tri6, "order": 2,
+    out.update({"nodes": np.vstack([nodes, mid]), "conn": tetconn, "groups": groups, "tri6": tri6, "ftri": tri6, "order": 2,
                 "viewcells": view_cells(mesh)})
     return out
 
@@ -319,7 +370,9 @@ def linear(mesh):
     """4-node tetrahedra (8-node hexahedra, 5-node pyramids): the corner nodes only.  "ftri" holds the corner nodes of the triangles of every face."""
     out = dict(mesh)
     groups = [{"kind": kind, "conn": np.asarray(c).copy()} for kind, c in _parts(mesh)]
-    out.update({"conn": groups[0]["conn"], "groups": groups, "ftri": {fid: np.asarray(tr).copy() for fid, tr in mesh["faces"].items()}, "order": 1,
+    tetconn = groups[0]["conn"]
+    groups = _by_body(groups, mesh)
+    out.update({"conn": tetconn, "groups": groups, "ftri": {fid: np.asarray(tr).copy() for fid, tr in mesh["faces"].items()}, "order": 1,
                 "viewcells": view_cells(mesh)})
     return out
 
@@ -419,10 +472,11 @@ def _coo(Ke, ed, n):
 def assemble(nodes, groups, E, nu, cancel=lambda: False):
     """The stiffness matrix of all the elements (`groups`: see the top of the file; or just the connectivity of tetrahedra) and the material matrix."""
     nn = len(nodes)
-    D = material_matrix(E, nu)
+    D0 = D = material_matrix(E, nu)
     K = None
     for g in _as_groups(groups):
         kind, conn = g["kind"], g["conn"]
+        D = _group_D(g, D0)
         if kind == "tet":
             nne = conn.shape[1]
             dN, gw, _ns = _rule(nne)
@@ -450,7 +504,13 @@ def assemble(nodes, groups, E, nu, cancel=lambda: False):
                 ed = _edofs(hx)
             part = _coo(Ke, ed, 3 * nn)
             K = part if K is None else K + part
-    return K, D
+    return K, D0
+
+
+def _group_D(g, D):
+    """The material matrix of a group of elements: its own material g["mat"] = (E, nu) when it has one (a body of an assembly), else D."""
+    m = g.get("mat")
+    return material_matrix(float(m[0]), float(m[1])) if m else D
 
 
 def stresses(nodes, groups, D, u):
@@ -461,8 +521,10 @@ def stresses(nodes, groups, D, u):
     sig_mean = np.zeros((ne, 6))
     vol = np.zeros(ne)
     base = 0
+    D0 = D
     for g in groups:
         kind, conn = g["kind"], g["conn"]
+        D = _group_D(g, D0)
         if kind == "tet":
             nne = conn.shape[1]
             dN, _gw, _ns = _rule(nne)
@@ -503,10 +565,12 @@ def principal(sig):
 
 
 def body_load(nodes, groups, b):
-    """Consistent nodal forces of a uniform body force vector b (N/mm3)."""
+    """Consistent nodal forces of a uniform body force vector b (N/mm3); b may be a function of the group (a body of an assembly has its own density)."""
     f = np.zeros(3 * len(nodes))
+    b0 = b
     for g in _as_groups(groups):
         kind, conn = g["kind"], g["conn"]
+        b = b0(g) if callable(b0) else b0
         if kind == "tet":
             nne = conn.shape[1]
             _dn, gw, Ns = _rule(nne)

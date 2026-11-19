@@ -1,5 +1,6 @@
 """
-solid_tab.py - the 3D FEA window (project folder .gpv): a SINGLE parametric part, linear elastic, quadratic tetrahedra (or a hex-dominant mesh).
+solid_tab.py - the 3D FEA window (project folder .gpv): a parametric part, or an ASSEMBLY treated as fully bonded (faces within the bond distance are
+joined, every body keeps its own material), linear elastic, quadratic tetrahedra (or a hex-dominant mesh for a single part).
 
 Project bar:  New project / Import source / Update from original / Save   (the same project folder machinery as the 1D / 2D simulations:
               the part is COPIED into  source/  and the simulation only uses the copy)
@@ -17,6 +18,7 @@ import traceback
 
 import numpy as np
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
                              QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter,
                              QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
@@ -30,6 +32,7 @@ import sim_project
 import sim_report as R
 import sim_ui
 import sim_source
+import solid_asm as sasm
 import solid_fem as fem
 import solid_geom as sg
 import solid_mesh as smesh
@@ -127,6 +130,7 @@ class SolidWindow(QWidget):
         self.meta = {"sid": "__solid__", "slice": None}
         self.src = {"type": "part", "path": None, "name": ""}
         self.source = None
+        self.cur_body = None
         self.geom = None
         self.setup = sm.default_setup()
         self.setup["dims"] = {}
@@ -211,6 +215,26 @@ class SolidWindow(QWidget):
         self.geo_lbl = QLabel("No part yet: press Import source...")
         self.geo_lbl.setWordWrap(True)
         v.addWidget(self.geo_lbl)
+        self.asm_box = QWidget()                                     # an assembly: what is bonded to what, what is wrong, the bond distance
+        al = QVBoxLayout(self.asm_box)
+        al.setContentsMargins(0, 0, 0, 0)
+        self.asm_lbl = QLabel("")
+        self.asm_lbl.setWordWrap(True)
+        self.asm_lbl.setTextFormat(Qt.TextFormat.RichText)
+        al.addWidget(self.asm_lbl)
+        brow = QHBoxLayout()
+        brow.addWidget(QLabel("Bond distance"))
+        self.e_bond = QLineEdit()
+        self.e_bond.setPlaceholderText("automatic")
+        self.e_bond.setToolTip("Faces of different parts that are closer than this are treated as one face: the parts are fully bonded there (no slip, no gap, "
+                               "no separation). Empty = automatic (about a ten-thousandth of the size of the assembly). Raise it to bond parts that sit a little apart.")
+        self.e_bond.editingFinished.connect(self.bond_changed)
+        brow.addWidget(self.e_bond, 1)
+        self.bond_unit = QLabel("mm")
+        brow.addWidget(self.bond_unit)
+        al.addLayout(brow)
+        v.addWidget(self.asm_box)
+        self.asm_box.hide()
         self.dims = QTableWidget(0, 2)
         self.dims.setHorizontalHeaderLabels(["Part dimension", "Value (as stored)"])
         self.dims.horizontalHeader().setStretchLastSection(True)
@@ -230,6 +254,7 @@ class SolidWindow(QWidget):
         self.split_lbl.setWordWrap(True)
         self.split_lbl.setStyleSheet("color:#707070;")
         v.addWidget(self.split_lbl)
+        self.split_words = []
         row = QHBoxLayout()
         self.sp_cols = QSpinBox()
         self.sp_rows = QSpinBox()
@@ -239,7 +264,9 @@ class SolidWindow(QWidget):
             sbx.setToolTip(f"How many equal strips. The grid is shown on the selected face before you press Split; there is no limit, but above {sg.WARN_PATCHES} patches it asks first.")
             sbx.valueChanged.connect(self.preview_grid)
             row.addWidget(sbx)
-            row.addWidget(QLabel(word + ("  x" if word == "columns" else "")))
+            wl = QLabel(word + ("  x" if word == "columns" else ""))
+            self.split_words.append(wl)
+            row.addWidget(wl)
         row.addStretch(1)
         self.b_split = QPushButton("Split")
         self.b_split.setToolTip("Cuts the selected flat face into equal columns x rows patches. Supports and loads on the whole face stay and apply to every patch.")
@@ -278,8 +305,25 @@ class SolidWindow(QWidget):
         row.addStretch(1)
         v.addLayout(row)
         self.cur_split = None
+        self.part_only = [self.dims, self.split_lbl, self.sp_cols, self.sp_rows, self.b_split, self.b_unsplit, self.split_hdr, self.split_list,
+                          self.sz_table, self.b_setsize, self.b_even] + self.split_words            # what only a single part has: dimensions and face splits
         # --- 2 material and analysis
         v = self.sec(2, "Material and analysis", True, summary=lambda: self.mat_combo.currentText().strip() or "custom material")
+        self.body_lbl = QLabel("Bodies of the assembly: select one to see and change its material (it starts as the material of the part).")
+        self.body_lbl.setWordWrap(True)
+        v.addWidget(self.body_lbl)
+        self.body_table = QTableWidget(0, 2)
+        self.body_table.setHorizontalHeaderLabels(["Body", "Material"])
+        self.body_table.verticalHeader().setVisible(False)
+        self.body_table.horizontalHeader().setStretchLastSection(True)
+        self.body_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.body_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.body_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.body_table.setMaximumHeight(160)
+        self.body_table.itemSelectionChanged.connect(self.body_selected)
+        v.addWidget(self.body_table)
+        self.body_lbl.hide()
+        self.body_table.hide()
         self.mat_combo = QComboBox()
         self.mat_combo.activated.connect(self.material_picked)
         row = QHBoxLayout()
@@ -909,6 +953,7 @@ class SolidWindow(QWidget):
              "sy": s_in(num(self.e_sy, "Yield strength")), "su": s_in(num(self.e_su, "Ultimate strength"))}
         h = self.e_h.text().strip()
         self.setup["material"] = m
+        self.store_body_material(m)
         self.setup["h"] = l_in(num(self.e_h, "Element size")) if h else 0.0
         self.read_mesh_options(self.setup["h"])
         return self.setup
@@ -956,12 +1001,13 @@ class SolidWindow(QWidget):
 
     def show_source(self):
         if not self.project_ok():
-            self.src_lbl.setText("<b>3D FEA</b> - press <b>New project...</b>: the project is a folder (.gpv) with its own copy of the part.")
+            self.src_lbl.setText("<b>3D FEA</b> - press <b>New project...</b>: the project is a folder (.gpv) with its own copy of the part or assembly.")
             return
         if self.source is None:
-            self.src_lbl.setText(f"<b>3D FEA</b> project <b>{self.title()}</b> - press <b>Import source...</b> to copy a part into it.")
+            self.src_lbl.setText(f"<b>3D FEA</b> project <b>{self.title()}</b> - press <b>Import source...</b> to copy a part or an assembly into it.")
             return
-        self.src_lbl.setText(f"<b>3D FEA</b> of the part <b>{self.src.get('name') or '?'}</b> (the copy in the project)")
+        what = "assembly" if self.src.get("type") == "asm" else "part"
+        self.src_lbl.setText(f"<b>3D FEA</b> of the {what} <b>{self.src.get('name') or '?'}</b> (the copy in the project)")
 
     def new_project(self):
         start = sim_project.default_name("solid", self.src.get("name") or "3D FEA", os.path.dirname(self.src.get("path") or "") or os.getcwd())
@@ -995,7 +1041,9 @@ class SolidWindow(QWidget):
             return out
         for i in range(self.shell.tabs.count()):
             w = self.shell.tabs.widget(i)
-            if not hasattr(w, "asm") and getattr(w, "doc", None) is not None and hasattr(w.doc, "features"):
+            if hasattr(w, "asm"):
+                out.append(("assembly - " + w.title(), w))
+            elif getattr(w, "doc", None) is not None and hasattr(w.doc, "features"):
                 out.append(("part - " + w.title(), w))
         return out
 
@@ -1008,7 +1056,7 @@ class SolidWindow(QWidget):
         dlg = QDialog(self)
         dlg.setWindowTitle("Import source")
         lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel("Copy this part into the project (3D FEA works on a single part, not an assembly):"))
+        lay.addWidget(QLabel("Copy this part or assembly into the project (an assembly is solved as fully bonded parts):"))
         lst = QListWidget()
         tabs = self.open_tabs()
         for text, _w in tabs:
@@ -1017,7 +1065,7 @@ class SolidWindow(QWidget):
             lst.setCurrentRow(0)
         lay.addWidget(lst)
         pick = {"file": None}
-        b_file = QPushButton("Browse for a .gpd file...")
+        b_file = QPushButton("Browse for a .gpd or .gpa file...")
         lay.addWidget(b_file)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         lay.addWidget(bb)
@@ -1025,7 +1073,7 @@ class SolidWindow(QWidget):
         bb.rejected.connect(dlg.reject)
 
         def browse():
-            f, _ = QFileDialog.getOpenFileName(dlg, "Part to copy", os.path.dirname(self.src.get("path") or ""), "Part (*.gpd)")
+            f, _ = QFileDialog.getOpenFileName(dlg, "Part or assembly to copy", os.path.dirname(self.src.get("path") or ""), "Part or assembly (*.gpd *.gpa)")
             if f:
                 pick["file"] = f
                 dlg.accept()
@@ -1039,6 +1087,11 @@ class SolidWindow(QWidget):
 
     def import_tab(self, w):
         p = getattr(w, "path", None)
+        if hasattr(w, "asm"):
+            if not p:
+                QMessageBox.information(self, "Import source", "Save the assembly once first: its parts are found from its file.")
+                return False
+            return self.do_import(p, w.asm.to_json(), name=os.path.splitext(os.path.basename(p))[0])
         return self.do_import(p, w.doc.to_json(), name=(os.path.splitext(os.path.basename(p))[0] if p else w.title()))
 
     def import_file(self, path):
@@ -1051,27 +1104,26 @@ class SolidWindow(QWidget):
             if QMessageBox.question(self, "Import source", "Importing a source replaces the copy in the project. Supports and loads are kept when "
                                     "their faces are found in the new part; the mesh and result are cleared. Continue?") != QMessageBox.StandardButton.Yes:
                 return False
-        if orig and orig.lower().endswith(".gpa"):
-            QMessageBox.information(self, "Import source", "3D FEA works on a single part, not on an assembly.")
-            return False
         try:
             fake = orig if orig else os.path.join(self.path, (name or "source") + ".gpd")
-            m, _missing = sim_project.import_source(self.path, orig_path=fake, text=text, name=name)
+            m, missing_parts = sim_project.import_source(self.path, orig_path=fake, text=text, name=name)
             src = sim_source.open_source(sim_project.source_file(self.path, m))
         except (sim_project.ProjectError, sim_source.SourceError) as ex:
             QMessageBox.warning(self, "Import source", str(ex))
             return False
-        if src.type != "part":
-            QMessageBox.information(self, "Import source", "3D FEA works on a single part, not on an assembly.")
-            return False
         self.source = src
-        self.src = {"type": "part", "path": orig, "name": m["source"]["name"]}
+        self.src = {"type": src.type, "path": orig, "name": m["source"]["name"]}
         self.setup["dims"] = {}
+        self.setup["body_mats"] = {}
+        self.cur_body = None
         ok = self.load_geometry(first=True)
         self.show_source()
+        miss = ("  Not found, so left out: " + ", ".join(os.path.basename(x.replace("\\", "/")) for x in missing_parts) + ".") if missing_parts else ""
         if ok:
-            self.say(f"Copied {m['source']['name']} into the project ({m['source']['file']}).")
+            self.say(f"Copied {m['source']['name']} into the project ({m['source']['file']})." + miss)
             self.save()
+        elif miss:
+            self.say("The assembly has no part with a solid." + miss)
         return ok
 
     def original_text(self):
@@ -1082,6 +1134,8 @@ class SolidWindow(QWidget):
             i = self.shell.find_tab(p)
             if i is not None:
                 w = self.shell.tabs.widget(i)
+                if hasattr(w, "asm"):
+                    return p, w.asm.to_json()
                 if getattr(w, "doc", None) is not None:
                     return p, w.doc.to_json()
         return p, None
@@ -1101,7 +1155,7 @@ class SolidWindow(QWidget):
             QMessageBox.warning(self, "Update from original", str(ex))
             return False
         ok = self.load_geometry()
-        self.say("Copied the original again." + ("" if ok else " (The part has no solid.)"))
+        self.say("Copied the original again." + ("" if ok else " (There is no solid.)"))
         self.save()
         return ok
 
@@ -1116,23 +1170,27 @@ class SolidWindow(QWidget):
 
     def load_geometry(self, first=False, keep_view=False):
         """(Re)analyses the solid of the source (with the dimension edits) and rematches the faces of the supports and loads."""
+        asm = self.source.type == "asm"
         try:
-            if not first:
-                self.apply_dims()
-            elif self.setup["dims"]:
-                self.source.set_values(self.setup["dims"])
-            g = sg.analyze(self.source.doc.solid, self.setup.get("splits"))
-        except sg.GeomError as ex:
+            if asm:
+                g = sasm.analyze_assembly(sasm.bodies_of_source(self.source), self.setup.get("bond_tol") or 0.0)
+            else:
+                if not first:
+                    self.apply_dims()
+                elif self.setup["dims"]:
+                    self.source.set_values(self.setup["dims"])
+                g = sg.analyze(self.source.doc.solid, self.setup.get("splits"))
+        except (sg.GeomError, sasm.AsmError) as ex:
             self.say(str(ex))
             return False
         except Exception as ex:
-            self.say(f"The part could not be read: {ex}")
+            self.say(f"The {'assembly' if asm else 'part'} could not be read: {ex}")
             return False
         self.geom = g
         self.sel_faces, self.sel_vertex = [], None
         self.mesh_q = None
         self.result = None
-        mat = self.source.doc.material
+        mat = None if asm else self.source.doc.material
         if first and mat:
             e = mat.get("E_MPa")
             if e:
@@ -1143,13 +1201,14 @@ class SolidWindow(QWidget):
                 self.read_inputs()
                 if self.mat_combo.currentData() is not None:
                     self.setup["mat_name"] = self.mat_combo.currentData()
-        for sp in self.setup.get("splits") or []:                       # remember the column direction that was used, so a rebuild keeps it
+        for sp in ([] if asm else self.setup.get("splits") or []):      # remember the column direction that was used, so a rebuild keeps it
             pid = sg.match_face(g.get("orig") or g, sp["face"])
             if pid in g["split_of"] and not sp.get("u"):
                 sp["u"] = list(g["split_of"][pid]["u"])
         self.fill_faces()
         self.fill_dims()
         self.fill_splits()
+        self.show_asm()
         P, T, F = sg.display_mesh(g)
         self.view.set_geometry(P, T, F, keep_camera=keep_view)
         self.view.set_lines("grid", sg.patch_outlines(g))
@@ -1157,11 +1216,117 @@ class SolidWindow(QWidget):
         self.set_geo_text()
         if g["notes"]:
             self.say(" ".join(g["notes"]))
+        if asm and g["hints"]:
+            self.say(g["hints"][0])
         self.refresh_lists()
         self.colour()
         self.enable_buttons()
         self.refresh_study_button()
         return True
+
+    # ------------------------------------------------------------------ an assembly
+    def is_asm(self):
+        return self.geom is not None and bool(self.geom.get("bodies"))
+
+    def show_asm(self):
+        """Shows what only an assembly has (the bodies, the bond distance, what is bonded) and hides what only a part has (dimensions, face splits)."""
+        on = self.is_asm()
+        for w in self.part_only:
+            w.setVisible(not on)
+        for w in (self.asm_box, self.body_lbl, self.body_table):
+            w.setVisible(on)
+        if not on:
+            self.cur_body = None
+            return
+        import html
+        g = self.geom
+        names = [b["name"] for b in g["bodies"]]
+        k = l_out(1.0)
+        lines = [f"Fully bonded where faces are within {l_out(g['tol']):.4g} {UD()['L']} of each other."]
+        lines += [f"{html.escape(names[r['a']])} - {html.escape(names[r['b']])}: bonded, area {r['area'] * k ** 2:.4g} {UD()['L']}2" for r in g["bonds"]]
+        txt = "<br>".join(lines)
+        bad = [html.escape(x) for x in g["hints"] + g["notes"]]
+        if bad:
+            txt += "<br>" + "<br>".join(f"<span style='color:#b05a00'>{x}</span>" for x in bad)
+        self.asm_lbl.setText(txt)
+        self.bond_unit.setText(UD()["L"])
+        self.e_bond.setPlaceholderText(f"automatic ({l_out(g['tol']):.3g})")
+        bt = self.setup.get("bond_tol") or 0.0
+        self.e_bond.setText(format(l_out(bt), ".8g") if bt else "")
+        self.fill_bodies()
+
+    def bond_changed(self):
+        t = self.e_bond.text().strip()
+        try:
+            v = l_in(float(t.replace(",", "."))) if t else 0.0
+        except ValueError:
+            self.say(f"Bond distance: '{t}' is not a number.")
+            return
+        if v < 0:
+            self.say("The bond distance cannot be negative.")
+            return
+        if abs(v - float(self.setup.get("bond_tol") or 0.0)) < 1e-12 or not self.is_asm():
+            return
+        self.setup["bond_tol"] = v
+        self.load_geometry(keep_view=True)
+
+    def body_colour(self, i):
+        return sv.BODY_COLOURS[i % len(sv.BODY_COLOURS)]
+
+    def fill_bodies(self):
+        t = self.body_table
+        t.blockSignals(True)
+        t.setRowCount(0)
+        for i, b in enumerate(self.geom["bodies"]):
+            t.insertRow(i)
+            it = QTableWidgetItem(b["name"])
+            c = self.body_colour(i)
+            it.setBackground(QColor(int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)))
+            it.setForeground(QColor(20, 20, 20))
+            t.setItem(i, 0, it)
+            t.setItem(i, 1, QTableWidgetItem(""))
+        self.fill_body_materials()
+        t.blockSignals(False)
+        keep = self.cur_body if self.cur_body is not None and self.cur_body < t.rowCount() else 0
+        self.cur_body = None
+        t.selectRow(keep)
+        self.body_selected()
+
+    def fill_body_materials(self):
+        D = UD()
+        for i, m in enumerate(sm.body_materials(self.geom, self.setup)):
+            it = self.body_table.item(i, 1)
+            if it is not None:
+                it.setText(m.get("name") or f"E = {s_out(m['E']):.5g} {D['S']}, density {r_out(m['rho']):.5g}")
+
+    def body_selected(self):
+        if not self.is_asm():
+            return
+        rows = self.body_table.selectionModel().selectedRows() if self.body_table.selectionModel() is not None else []
+        if not rows:
+            return
+        i = rows[0].row()
+        self.cur_body = i
+        m = sm.body_materials(self.geom, self.setup)[i]
+        self.put_material(m)
+        nm = m.get("name")
+        self.select_material_name(nm if nm and self.library_entry(nm) else None)
+        self.mat_note.setText(f"Material of {self.geom['bodies'][i]['name']}. " + self.mat_note.text())
+
+    def store_body_material(self, m):
+        """The numbers on the screen belong to the selected body of an assembly: keep them for it when they differ from the part's own."""
+        if not self.is_asm() or self.cur_body is None or self.cur_body >= len(self.geom["bodies"]):
+            return
+        b = self.geom["bodies"][self.cur_body]
+        base = b["material"]
+        own = {k: float(m[k]) for k in ("E", "nu", "rho", "sy", "su")}
+        mine = self.setup.setdefault("body_mats", {})
+        if all(abs(own[k] - float(base[k])) <= 1e-9 * max(1.0, abs(float(base[k]))) for k in own):
+            mine.pop(b["name"], None)
+        else:
+            own["name"] = self.mat_combo.currentData() or ""
+            mine[b["name"]] = own
+        self.fill_body_materials()
 
     def set_geo_text(self):
         g = self.geom
@@ -1172,6 +1337,9 @@ class SolidWindow(QWidget):
         k = l_out(1.0)
         nf = len((g.get("orig") or g)["faces"])
         extra = f" ({len(g['faces'])} with the patches)" if g.get("orig") else ""
+        if g.get("bodies"):
+            nf = sum(1 for f in g["faces"] if not f["interface"])
+            extra = f", {len(g['bodies'])} bodies"
         self.geo_lbl.setText(f"{self.src.get('name') or 'part'}: {nf} faces{extra}, volume {g['volume'] * k ** 3:.5g} {L}3, size "
                              f"{(bb[1][0] - bb[0][0]) * k:.4g} x {(bb[1][1] - bb[0][1]) * k:.4g} x {(bb[1][2] - bb[0][2]) * k:.4g} {L}")
 
@@ -1182,6 +1350,8 @@ class SolidWindow(QWidget):
             n = f["normal"]
             self.faces.addItem(f"{self.face_label(f['id'])}: {f['kind']}, area {f['area'] * l_out(1.0) ** 2:.4g} {UD()['L']}2, "
                                f"normal ({n[0]:.2f}, {n[1]:.2f}, {n[2]:.2f})")
+            if f.get("interface"):                                      # a face between two bodies is inside the assembly: nothing to pick there
+                self.faces.item(f["id"]).setHidden(True)
         self.faces.blockSignals(False)
 
     def face_label(self, fid):
@@ -1189,6 +1359,8 @@ class SolidWindow(QWidget):
         f = self.geom["faces"][fid]
         p = f.get("parent")
         n = (p if p is not None else fid) + 1
+        if self.geom.get("bodies"):
+            return f"{self.geom['bodies'][f['body']]['name']}, face {n}"
         if f.get("cell") is not None:
             return f"Face {n}, column {f['cell'][0] + 1} row {f['cell'][1] + 1}"
         return f"Face {n}"
@@ -1197,7 +1369,7 @@ class SolidWindow(QWidget):
         self.dims.blockSignals(True)
         self.dims.setRowCount(0)
         self.dim_keys = []
-        for key, label, now in self.source.doc.cfg_candidates():
+        for key, label, now in ([] if self.source.type == "asm" else self.source.doc.cfg_candidates()):
             if key.startswith("s:"):
                 continue
             r = self.dims.rowCount()
@@ -1595,6 +1767,8 @@ class SolidWindow(QWidget):
         if self.geom is None:
             return
         cols = {}
+        if self.is_asm():
+            cols = {f["id"]: self.body_colour(f["body"]) for f in self.geom["faces"] if not f["interface"]}
         try:
             r = sm.resolve(self.geom, self.setup)
         except fem.FemError:
@@ -1830,7 +2004,7 @@ class SolidWindow(QWidget):
             self.read_inputs()
         except ValueError as ex:
             return str(ex)
-        return sm.check_ready(self.setup)
+        return sm.check_ready(self.setup, self.geom)
 
     def run_job(self, fn, done, title):
         if self.job is not None:
@@ -1938,6 +2112,14 @@ class SolidWindow(QWidget):
         if r.get("support_reactions"):
             html += R.heading("Reactions", D["F"])
             html += R.grid(["", "Fx", "Fy", "Fz"], [[n, *(R.num(f_out(x)) for x in v)] for n, v in r["support_reactions"]])
+        if r.get("bodies"):
+            html += R.heading("Bodies (fully bonded)")
+            html += R.grid(["Body", "Material", f"von Mises max ({D['S']})", "Safety factor", f"Mass ({mu[1]})"],
+                           [[b["name"], b["material"].get("name") or "custom", R.num(s_out(b["vm_max"])), R.num(b["fos_y"], 3) if b.get("fos_y") else "-",
+                             R.num(b["mass"] * mu[3])] for b in r["bodies"]])
+            html += R.note("The parts are bonded where their faces touch: no slip, no gap, no separation. A bolted or sliding joint is stiffer here than in "
+                           "reality, and the stress right at the edge of a bonded face is not reliable. The coloured stress is averaged at the nodes of a shared "
+                           "face, so it blends the two bodies there; the table above is per body.")
         kind = 'quadratic' if r.get('order', 2) == 2 else 'linear'
         cn = r.get("counts") or {}
         if cn.get("hexes") or cn.get("pyramids"):
@@ -1981,8 +2163,12 @@ class SolidWindow(QWidget):
         key = self.field_key()
         D = UD()
         if key == "fos":
-            sy = float(r["material"].get("sy") or 0.0)
-            if sy > 0:
+            syn = r.get("sy_node")                                  # an assembly: the yield strength of the body at every node
+            sy = float(r["material"].get("sy") or 0.0) if syn is None else float(np.max(syn))
+            if syn is not None and sy > 0:
+                syn = np.asarray(syn, float)
+                vals = np.where(syn > 0, syn / np.maximum(np.asarray(r["vm_node"], float) * ramp, 1e-12), np.nan).clip(0, 100)
+            elif sy > 0:
                 vals = (sy / np.maximum(np.asarray(r["vm_node"], float) * ramp, 1e-12)).clip(0, 100)
             else:
                 vals = np.full(len(r["vm_node"]), np.nan)
@@ -2128,7 +2314,7 @@ class SolidWindow(QWidget):
         x = r["nodes"][i]
         u = r["u"][i]
         vm = float(r["vm_node"][i])
-        sy = r["material"].get("sy") or 0.0
+        sy = (float(r["sy_node"][i]) if r.get("sy_node") is not None else r["material"].get("sy")) or 0.0
         fos = (sy / vm) if vm > 1e-12 and sy else None
         d = [("ux", R.num(l_out(u[0])), None), ("uy", R.num(l_out(u[1])), None), ("uz", R.num(l_out(u[2])), None),
              ("Total |u|", R.num(l_out(float(r["un"][i]))), None)]
@@ -2192,8 +2378,11 @@ class SolidWindow(QWidget):
         s = st.get("setup") or sm.default_setup()
         s.setdefault("dims", {})
         s.setdefault("splits", [])
+        s.setdefault("bond_tol", 0.0)
+        s.setdefault("body_mats", {})
         s["mesh"] = smesh.complete(s.get("mesh"))
-        dims_changed = (s["dims"] != self.setup.get("dims") or s["splits"] != (self.setup.get("splits") or []) or getattr(self, "geom_case", False))
+        dims_changed = (s["dims"] != self.setup.get("dims") or s["splits"] != (self.setup.get("splits") or []) or getattr(self, "geom_case", False)
+                        or s["bond_tol"] != self.setup.get("bond_tol") or s["body_mats"] != self.setup.get("body_mats"))
         self.geom_case = False
         self.setup = json.loads(json.dumps(s))
         self.put_material(self.setup["material"])
@@ -2255,7 +2444,7 @@ class SolidWindow(QWidget):
         m = sim_project.read(folder)
         w = cls(shell=shell, path=folder, threaded=threaded)
         s = m.get("source") or {}
-        w.src = {"type": "part", "path": s.get("orig"), "name": s.get("name", "")}
+        w.src = {"type": s.get("type") or "part", "path": s.get("orig"), "name": s.get("name", "")}
         sp = sim_project.state_path(folder)
         if os.path.isfile(sp):
             try:
@@ -2264,6 +2453,8 @@ class SolidWindow(QWidget):
                 if st:
                     st.setdefault("dims", {})
                     st.setdefault("splits", [])
+                    st.setdefault("bond_tol", 0.0)
+                    st.setdefault("body_mats", {})
                     st["mesh"] = smesh.complete(st.get("mesh"))
                     w.setup = st
             except Exception:
@@ -2298,9 +2489,13 @@ class SolidWindow(QWidget):
             return
         have = bool(self.path) and os.path.isfile(os.path.join(self.path, sim_project.STUDY_DIR, "study.json"))
         self.b_study.setText("Open parametric study" if have else "Create parametric study")
-        self.b_study.setEnabled(self.job is None)
+        self.b_study.setEnabled(self.job is None and not self.is_asm())
+        self.b_study.setToolTip("Parametric studies work on a single part for now, not on an assembly." if self.is_asm() else "")
 
     def open_study(self):
+        if self.is_asm():
+            QMessageBox.information(self, "Parametric study", "Parametric studies work on a single part for now, not on an assembly.")
+            return None
         fns = ext.hooks("sim_study")
         if not fns:
             QMessageBox.information(self, "Parametric study", "The Parametric Studies add-on is not loaded. Install or enable it, then restart.")

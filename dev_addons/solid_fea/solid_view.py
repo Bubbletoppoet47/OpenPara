@@ -29,6 +29,8 @@ GREY = (0.78, 0.80, 0.84)
 PICK = (1.0, 0.62, 0.1)
 SUPPORT = (0.25, 0.5, 0.95)
 LOAD = (0.9, 0.25, 0.25)
+BODY_COLOURS = [(0.78, 0.80, 0.84), (0.84, 0.78, 0.62), (0.66, 0.80, 0.72), (0.76, 0.70, 0.84), (0.86, 0.74, 0.76), (0.66, 0.78, 0.86),
+                (0.80, 0.82, 0.62), (0.70, 0.74, 0.62)]      # the bodies of an assembly, in soft colours that do not look like a support, a load or a pick
 NO_DATA = (153, 153, 153)                           # a value that does not exist (no yield strength for a safety factor)
 LEGEND_W = 240                                      # the legend is drawn in a picture this wide (its text wraps inside it) and put top right
 AXES_BOX = (0.0, 0.0, 0.2, 0.2)                     # the axes triad: bottom-left corner, as a fraction of the view

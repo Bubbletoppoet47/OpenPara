@@ -20,7 +20,7 @@ class SolidStudy(StudyAdapter):
     label = "3D FEA"
 
     def ready(self):
-        return sm.check_ready(self.tab.setup) if self.tab.geom is not None else "Import a part first."
+        return sm.check_ready(self.tab.setup, self.tab.geom) if self.tab.geom is not None else "Import a part first."
 
     def params(self):
         t = self.tab
@@ -92,10 +92,10 @@ class SolidStudy(StudyAdapter):
         try:
             setup = copy.deepcopy(self.tab.setup)
             self.apply(setup, values)
-            why = sm.check_ready(setup)
+            g = state["geom"] if state else self.tab.geom
+            why = sm.check_ready(setup, g)
             if why:
                 raise ValueError(why)
-            g = state["geom"] if state else self.tab.geom
             r = sm.resolve(g, setup)
             cache = ctx.setdefault("cache", {})
         except (fem.FemError, sg.GeomError, ValueError) as ex:

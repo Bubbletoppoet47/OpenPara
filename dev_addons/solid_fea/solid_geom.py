@@ -432,7 +432,7 @@ def display_mesh(g):
     P, T, F = [], [], []
     off = 0
     for i, (v, t) in enumerate(g["tess"]):
-        if not len(t):
+        if not len(t) or g["faces"][i].get("interface"):               # a face between two bodies of an assembly is inside: not drawn, not picked
             continue
         P.append(v)
         T.append(t + off)
