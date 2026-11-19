@@ -1,10 +1,23 @@
 """lab_engine.py - the EXPERIMENTAL mate engine of the Constraint Lab (dev_addons/constraint_lab).
 
-It starts as an exact copy of core/asm_model.py (the engine the real assembly uses), so the lab's "Experimental" engine behaves the same until it
-is changed.  Change it freely: nothing outside this add-on imports it, and the real assembly keeps using asm_model.  The lab swaps a window's
-assembly onto this class with  a.__class__ = lab_engine.Assembly  (see lab_tab.py); if a new version needs extra attributes, give the class a
-lab_adopt(self) method and the lab calls it right after the swap.  MateError is the real one, so the window's  except am.MateError  still catches it.
+It started as an exact copy of core/asm_model.py (the engine the real assembly uses) and is where mate robustness is worked out: nothing outside this
+add-on imports it, and the real assembly keeps using asm_model.  The lab swaps a window's assembly onto this class with
+a.__class__ = lab_engine.Assembly  (see lab_tab.py); if a version needs extra attributes, give the class a lab_adopt(self) method and the lab calls it right
+after the swap.  MateError is the real one, so the window's  except am.MateError  still catches it.
 
+What differs from asm_model.py (each one measured with the Mate Matrix; test_lab_engine.py keeps them true):
+  _lm        the fit works on small moves ON TOP of the pose (a shift in mm, a turn about the world axes counted as arm-length mm) instead of on the raw
+             position and rotation vector, with damping relative to the size of the Jacobian: the smallest MOVE is taken, not the smallest number, so a point
+             on a face slides instead of spinning the part, and no angle wraps near half a turn.
+  _run       turn first, then slide: the residual rows that do not change when parts are moved apart (parallel, perpendicular, angle, 'normals agree') are
+             fitted alone, then everything with the turns held, then everything together.  Two edges 1.5 m away no longer end up crossing at 68 degrees.
+  _restarts  when the fit still ends off the mates, other starting poses for the parts of the unmet mates (small nudges, half turns, larger random ones; the
+             same sequence every time).  Not while dragging.
+  solve      puts every pose back if anything goes wrong inside (a Python error becomes a MateError), and refuses a pose that is not a number.
+  prepare    an angle on a point or sphere is a MateError, not a crash.
+  local_entity / _nearest   a part edited after the mate was made is still found when the face / edge / point it meant is clearly the only candidate
+             (within a quarter of the part, the next one at least twice as far); two equally likely ones are refused, saying so.
+  _snap      never applies a move that is not finite.
 The original header of asm_model.py follows.
 
 asm_model.py - the assembly document (.gpa) and its mate solver.  No GUI in here.
@@ -115,6 +128,32 @@ def vertex_ref(vertex):
     return {"p": list(_v(vertex.center()))}
 
 
+def _diag(solid):
+    try:
+        bb = solid.bounding_box()
+        return max(1.0, float(np.linalg.norm([bb.max.X - bb.min.X, bb.max.Y - bb.min.Y, bb.max.Z - bb.min.Z])))
+    except Exception:
+        return 100.0
+
+
+def _nearest(cands, tol, solid, noun):
+    """The thing a mate reference points at.  cands = [(distance from where the reference remembers it, thing)] of the right kind.  Within `tol` mm the
+    nearest wins, as always.  Beyond that the part has been edited since the mate was made: the nearest is still taken when it is within a quarter of
+    the part and clearly the only candidate (the next one is at least twice as far), so a changed dimension does not break the mate; with two equally
+    likely candidates it refuses, saying so, instead of picking one at random."""
+    if not cands:
+        raise MateError(f"the {noun} it refers to no longer exists")
+    cands = sorted(cands, key=lambda c: c[0])
+    d0, best = cands[0]
+    if d0 <= tol:
+        return best
+    if d0 > 0.25 * _diag(solid):
+        raise MateError(f"the {noun} it refers to no longer exists")
+    if len(cands) > 1 and cands[1][0] < 2 * d0:
+        raise MateError(f"the {noun} it refers to has moved and more than one {noun} could be it - pick it again")
+    return best
+
+
 def local_entity(ref, solid):
     """The geometry (in the part's own coordinates) that a mate reference points at."""
     k, r = ref["k"], ref.get("r")
@@ -125,41 +164,22 @@ def local_entity(ref, solid):
     if solid is None:
         raise MateError("its part has no solid")
     if k == "vertex":
-        pts = [_v(v.center()) for v in solid.vertices()]
-        if not pts:
-            raise MateError("the point it refers to no longer exists")
         q = np.array(r["p"])
-        d = [float(np.linalg.norm(p - q)) for p in pts]
-        i = int(np.argmin(d))
-        if d[i] > 1.0:
-            raise MateError("the point it refers to has moved away")
-        return {"t": "point", "p": pts[i]}
+        return {"t": "point", "p": _nearest([(float(np.linalg.norm(_v(v.center()) - q)), _v(v.center())) for v in solid.vertices()], 1.0, solid, "point")}
     if k == "face":
-        best, sc = None, 1e18
         c0 = np.array(r["c"])
+        cands = []
         for f in solid.faces():
             if f.geom_type.name != r["g"]:
                 continue
             if r.get("n") is not None and float(_v(f.normal_at()) @ np.array(r["n"])) < 0.98:
                 continue
-            s = float(np.linalg.norm(_v(f.center()) - c0))
-            if s < sc:
-                best, sc = f, s
-        if best is None or sc > 2.0:
-            raise MateError("the face it refers to no longer exists")
-        return face_entity(best)
+            cands.append((float(np.linalg.norm(_v(f.center()) - c0)), f))
+        return face_entity(_nearest(cands, 2.0, solid, "face"))
     if k == "edge":
-        best, sc = None, 1e18
         m0 = np.array(r["m"])
-        for e in solid.edges():
-            if e.geom_type.name != r["g"]:
-                continue
-            s = float(np.linalg.norm(_v(e.position_at(0.5)) - m0))
-            if s < sc:
-                best, sc = e, s
-        if best is None or sc > 2.0:
-            raise MateError("the edge it refers to no longer exists")
-        return edge_entity(best)
+        cands = [(float(np.linalg.norm(_v(e.position_at(0.5)) - m0)), e) for e in solid.edges() if e.geom_type.name == r["g"]]
+        return edge_entity(_nearest(cands, 2.0, solid, "edge"))
     raise MateError("unknown reference")
 
 
@@ -693,7 +713,16 @@ class Assembly:
 
     # ------------------------------------------------------------------ creating a mate with sensible defaults
     def prepare(self, mate):
-        """Fill in the options of a new mate from how the two items lie right now (aligned or opposed, which side, value)."""
+        """Fill in the options of a new mate from how the two items lie right now (aligned or opposed, which side, value).  Anything that goes wrong on
+        the way is a MateError with a plain message (the window shows those), never a Python error."""
+        try:
+            return self._prepare_core(mate)
+        except MateError:
+            raise
+        except Exception as ex:
+            raise MateError(f"{mate.get('type')} cannot be set up for these items ({type(ex).__name__}: {str(ex)[:80]})")
+
+    def _prepare_core(self, mate):
         ty = mate["type"]
         if ty == "lock":
             if any(r["c"] == "@" for r in mate["refs"]):
@@ -727,6 +756,8 @@ class Assembly:
         if ty == "angle":
             ua = a["n"] if a["t"] == "plane" else a.get("d")
             ub = b["n"] if b["t"] == "plane" else b.get("d")
+            if ua is None or ub is None:
+                raise MateError(f"angle cannot mate a {a['t']} with a {b['t']}: it needs flat faces, straight edges, circles or cylinders")
             mate.setdefault("value", round(math.degrees(math.acos(max(-1, min(1, float(ua @ ub))))), 3))
         if ty == "tangent":
             for x, y in ((a, b), (b, a)):
@@ -761,6 +792,23 @@ class Assembly:
         return seen & (fl | {cid})
 
     def solve(self, drag=None, weight=0.02, extra=None, iters=80, limit=None, grab=None):
+        """Move the floating components so that all mates hold (see _solve_core).  Either it returns, or it raises a MateError - and in that case no
+        component has been left half way: every pose is put back as it was, whatever went wrong inside (a Python error becomes a MateError too)."""
+        before = {c["id"]: (list(c["pos"]), list(c["rv"])) for c in self.components if "pos" in c and "rv" in c}
+        for cid, (pos, rv) in before.items():
+            if not (np.all(np.isfinite(pos)) and np.all(np.isfinite(rv))):
+                raise MateError(f"{(self.comp(cid) or {}).get('name', cid)} has a position or rotation that is not a number")
+        try:
+            return self._solve_core(drag, weight, extra, iters, limit, grab)
+        except Exception as ex:
+            for c in self.components:
+                if c["id"] in before:
+                    c["pos"], c["rv"] = list(before[c["id"]][0]), list(before[c["id"]][1])
+            if isinstance(ex, MateError):
+                raise
+            raise MateError(f"the solver stopped on an unexpected problem ({type(ex).__name__}: {str(ex)[:80]}); the parts were put back where they were")
+
+    def _solve_core(self, drag=None, weight=0.02, extra=None, iters=80, limit=None, grab=None):
         """Move the floating components so that all mates hold.  drag = {component id: (R, t)} pulls those gently to a target pose.
         Returns True when every mate is satisfied.  Fills self.status and self.dof."""
         if drag is None and (self.params or self.exprs):
@@ -868,57 +916,157 @@ class Assembly:
             if out is None:
                 continue
             Rd, pivot, shift = out
+            if not (np.all(np.isfinite(Rd)) and np.all(np.isfinite(pivot)) and np.all(np.isfinite(shift))):
+                continue
             c = self.comp(m["refs"][mover]["c"])
             R, t = self.pose(c)
             c["pos"] = list(map(float, Rd @ (t - pivot) + pivot + shift))
             c["rv"] = list(map(float, rotvec(Rd @ R)))
 
-    def _fit(self, fl, mates, iters=80):
-        """Least squares on the poses of the components fl so that all the mates hold; writes the poses back.  True when every mate is met."""
-        self._snap(fl, mates)
-        idx = {c["id"]: i for i, c in enumerate(fl)}
-        x = np.concatenate([np.concatenate([c["pos"], c["rv"]]) for c in fl]) if fl else np.zeros(0)
+    RESTARTS = 8                    # how many other starting poses _fit may try when the first one does not end on the mates (not while dragging)
+    _in_drag = False
 
-        def res(x):
-            P = {c["id"]: (rodrigues(x[6 * i + 3:6 * i + 6]), x[6 * i:6 * i + 3]) for i, c in enumerate(fl)}
+    def _fit(self, fl, mates, iters=80, restarts=None):
+        """Least squares on the poses of the components fl so that all the mates hold; writes the poses back.  True when every mate is met.
+        Local search first (_lm); when that stalls off the mates, other starting poses (_restarts) - never while dragging, which must stay quick."""
+        self._snap(fl, mates)
+        L = np.array([self._comp_scale(c) for c in fl], float)
+        R0 = [rodrigues(c["rv"]) for c in fl]
+        t0 = [np.array(c["pos"], float) for c in fl]
+        R, t, r = self._run(fl, mates, iters, L, R0, t0)
+        ok = bool(r.size == 0 or float(np.max(np.abs(r))) <= 1e-4)
+        if not ok:
+            n = self.RESTARTS if (restarts is None and not self._in_drag) else (restarts or 0)
+            if n:
+                got = self._restarts(fl, mates, iters, L, R0, t0, R, t, r, n)
+                if got is not None:
+                    R, t, r, ok = got
+        for i, c in enumerate(fl):
+            c["pos"], c["rv"] = list(map(float, t[i])), list(map(float, rotvec(R[i])))
+        return ok
+
+    def _run(self, fl, mates, iters, L, R, t):
+        """Turn first, then slide.  The rows of the residual that do not change when the components are moved far apart (parallel, perpendicular, angle,
+        the 'normals agree' part of a face on a face ...) depend on the turns alone; those are solved first, on their own, so the part is facing the right
+        way before the distances are asked for.  Fitting everything at once can stall where a distance is met by a wrong tilt (two edges ended up
+        crossing at 68 degrees exactly 7 mm apart, with the part 1.5 m away).  Then the whole fit runs from there.  -> (R, t, residual)."""
+        ids = [c["id"] for c in fl]
+
+        def res(R_, t_):
+            P = {ids[i]: (R_[i], t_[i]) for i in range(len(fl))}
             out = []
             for m in mates:
                 out += self.mate_residual(m, P)
             return np.array(out, float)
 
-        lam = 1e-3
-        r = res(x)
+        r0 = res(R, t)
+        if r0.size and float(np.max(np.abs(r0))) > 1e-4:
+            far = [np.array([371.0, -253.0, 417.0]) * (1 + 0.7 * i) * L[i] * 0.01 + 100 * L[i] * np.array([1.0, 0.6, -0.8]) * (i + 1) for i in range(len(fl))]
+            r1 = res(R, [t[i] + far[i] for i in range(len(fl))])
+            rows = np.abs(r1 - r0) < 1e-9 * (1 + np.abs(r0))
+            if rows.any() and not rows.all() and float(np.max(np.abs(r0[rows]))) > 1e-4:
+                R, t, _ = self._lm(fl, mates, iters, L, R, t, rows)                                   # 1. turn
+                slide = np.tile([True, True, True, False, False, False], len(fl))
+                R, t, r2 = self._lm(fl, mates, iters, L, R, t, None, slide)                            # 2. slide, keeping that facing
+                if r2.size == 0 or float(np.max(np.abs(r2))) <= 1e-4:
+                    return R, t, r2
+        return self._lm(fl, mates, iters, L, R, t)                                                    # 3. everything together, from where that left it
+
+    def _lm(self, fl, mates, iters, L, R, t, rows=None, free=None):
+        """Levenberg-Marquardt from the poses (R, t).  The unknowns are small moves made ON TOP of the current pose - a shift in mm and a turn about the
+        world axes - with the turn counted as arm-length mm (radians x the part's size L), so a step of one unit is the same distance whether it slides
+        or turns and the damped step is the smallest MOVE, not the smallest number (before, 1 rad cost as much as 1 mm, so a one-number mate such as a
+        point on a face was met by spinning the part).  Updating by composition means no angle ever wraps or flips near half a turn.
+        rows = which rows of the residual to fit (None: all of them), free = which of the 6n unknowns may move (None: all of them), so a stage can fit
+        only the facing, or only the sliding.  Returns (R, t, residual)."""
+        n = len(fl)
+        ids = [c["id"] for c in fl]
+        R, t = [np.array(x, float) for x in R], [np.array(x, float) for x in t]
+
+        def res(R_, t_):
+            P = {ids[i]: (R_[i], t_[i]) for i in range(n)}
+            out = []
+            for m in mates:
+                out += self.mate_residual(m, P)
+            out = np.array(out, float)
+            return out if rows is None else out[rows]
+
+        def moved(y):
+            return ([rodrigues(y[6 * i + 3:6 * i + 6] / L[i]) @ R[i] for i in range(n)], [t[i] + y[6 * i:6 * i + 3] for i in range(n)])
+
+        r = res(R, t)
+        lam, h = 1e-3, 1e-6
         for _ in range(iters):
-            if float(r @ r) < 1e-22:
+            if r.size == 0 or float(np.max(np.abs(r))) < 1e-10 or not np.all(np.isfinite(r)):
                 break
-            n = len(x)
-            J = np.zeros((len(r), n))
-            for j in range(n):
-                h = 1e-6 if j % 6 < 3 else 1e-7
-                xp = x.copy()
-                xp[j] += h
-                J[:, j] = (res(xp) - r) / h
+            J = np.zeros((len(r), 6 * n))
+            for j in range(6 * n):
+                if free is not None and not free[j]:                    # a stage that only slides: the turns stay as they are
+                    continue
+                y = np.zeros(6 * n)
+                y[j] = h
+                Rp, tp = moved(y)
+                J[:, j] = (res(Rp, tp) - r) / h
             g = J.T @ r
-            if np.linalg.norm(g, np.inf) < 1e-10:
+            if np.linalg.norm(g, np.inf) < 1e-12:
                 break
+            JTJ = J.T @ J
+            sc = max(float(np.max(np.diag(JTJ))), 1e-12)               # damping relative to the size of the Jacobian, so it means the same on every problem
             improved = False
-            for _k in range(8):
-                A = J.T @ J + lam * np.eye(n)
+            for _k in range(14):
                 try:
-                    dx = -np.linalg.solve(A, g)
+                    dy = -np.linalg.solve(JTJ + lam * sc * np.eye(6 * n), g)
                 except np.linalg.LinAlgError:
                     lam *= 10
                     continue
-                r2 = res(x + dx)
-                if float(r2 @ r2) < float(r @ r):
-                    x, r, lam, improved = x + dx, r2, max(lam / 3, 1e-9), True
+                if not np.all(np.isfinite(dy)):
+                    lam *= 10
+                    continue
+                Rn, tn = moved(dy)
+                r2 = res(Rn, tn)
+                if np.all(np.isfinite(r2)) and float(r2 @ r2) < float(r @ r):
+                    R, t, r, improved = Rn, tn, r2, True
+                    lam = max(lam / 3, 1e-12)
                     break
                 lam *= 4
             if not improved:
                 break
-        for i, c in enumerate(fl):
-            c["pos"], c["rv"] = list(map(float, x[6 * i:6 * i + 3])), list(map(float, x[6 * i + 3:6 * i + 6]))
-        return bool(r.size == 0 or float(np.max(np.abs(r))) <= 1e-4)
+        return R, t, r
+
+    def _restarts(self, fl, mates, iters, L, R0, t0, R, t, r, count):
+        """The first fit ended off the mates (a local minimum, or a start the local search cannot leave).  Try other starting poses for the components
+        of the mates that are still unmet: small nudges first, then half turns about each axis (the other side of an opposed / aligned choice), then
+        large random ones.  Always the same sequence, so a solve is repeatable.  -> (R, t, residual, True) of the first that ends on every mate, else None."""
+        ids = [c["id"] for c in fl]
+        bad = set()
+        P = {ids[i]: (R[i], t[i]) for i in range(len(fl))}
+        for m in mates:
+            try:
+                rr = np.array(self.mate_residual(m, P), float)
+            except MateError:
+                return None
+            if rr.size and float(np.max(np.abs(rr))) > 1e-4:
+                bad |= {x["c"] for x in m["refs"]} & set(ids)
+        if not bad:
+            bad = set(ids)
+        pick = [i for i in range(len(fl)) if ids[i] in bad]
+        rng = np.random.default_rng(20240607)
+        for k in range(count):
+            Rs, ts = [x.copy() for x in R0], [x.copy() for x in t0]
+            for i in pick:
+                if k % 8 in (3, 4, 5) and len(pick) == 1:                      # a half turn about the part's own x, y or z
+                    Rs[i] = Rs[i] @ rodrigues(np.eye(3)[k % 8 - 3] * math.pi)
+                else:
+                    big = 1.0 if k % 8 < 3 else 2.0
+                    ax = rng.normal(size=3)
+                    ax /= max(float(np.linalg.norm(ax)), 1e-12)
+                    Rs[i] = rodrigues(ax * rng.uniform(0.15, 0.5) * big * (1 + k // 8)) @ Rs[i]
+                    d = rng.normal(size=3)
+                    ts[i] = ts[i] + d / max(float(np.linalg.norm(d)), 1e-12) * rng.uniform(0.05, 0.3) * big * L[i]
+            Rk, tk, rk = self._run(fl, mates, iters, L, Rs, ts)
+            if rk.size == 0 or float(np.max(np.abs(rk))) <= 1e-4:
+                return Rk, tk, rk, True
+        return None
 
     def _solve_in_order(self, fl, mates, iters, limit):
         """The mates in order, each added to the ones already holding: only the components the new mate can move (those tied to it through the
@@ -980,6 +1128,14 @@ class Assembly:
         return v
 
     def _drag_step(self, fl, mates, drag, extra, limit, grab, rounds=8):
+        """Follow the mouse (see _drag_step_core); while it runs, _fit does not try other starting poses (a drag must stay quick)."""
+        was, self._in_drag = self._in_drag, True
+        try:
+            return self._drag_step_core(fl, mates, drag, extra, limit, grab, rounds)
+        finally:
+            self._in_drag = was
+
+    def _drag_step_core(self, fl, mates, drag, extra, limit, grab, rounds=8):
         """Follow the mouse while the mates hold.  The old way pulled the component towards the mouse with a soft spring and then snapped the mates
         back: pull a tube against the face it butts on and the spring won out over a tilt of the face, the snap got stuck in the tilted pose and
         the part sat half through the other.  Now only the part of the wanted move that the mates leave FREE is taken (their null space, from the

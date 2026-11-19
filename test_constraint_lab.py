@@ -97,10 +97,11 @@ assert set(sum(r["cells"].values(), [])) <= set(lab_matrix.OUTCOMES)
 assert r["cells"][("plane", "plane", "coincident")] == ["ok", "ok"], r["cells"][("plane", "plane", "coincident")]
 assert r["cells"][("point", "plane", "parallel")] == ["ERR", "ERR"] and any("cannot mate" in m for s in r["msgs"].values() for m in s)
 r2 = lab_matrix.run(lab_engine, mates=mates, kinds=kinds, n_starts=2)
-assert lab_matrix.diff_text({"Current": r, "Experimental": r2}).startswith("The engines give the same"), "an unchanged copy scores the same"
+assert lab_matrix.diff_text({"Current": r, "Experimental": r}).startswith("The engines give the same")
+assert all(v2.count("ok") >= r["cells"][k].count("ok") for k, v2 in r2["cells"].items()), "the Experimental engine is never worse than the Current one on a pick pair"
 txt = lab_matrix.report({"Current": r, "Experimental": r2})
 assert "coincident" in txt and "Current" in txt and "Experimental" in txt and "Where the engines differ" in txt
-assert "Quick run: only the first 2 of 6 start poses" in txt
+assert "Quick run: only the first 2 of 10 start poses" in txt
 t = lab_matrix.totals(r, "coincident"); assert t["ok"] > 0 and 0 < t["score"] <= 1
 dist = lab_matrix.run(am, mates=["distance", "angle"], kinds=["plane", "point"], n_starts=2)
 assert dist["cells"][("plane", "plane", "distance")] == ["ok", "ok"] and dist["cells"][("plane", "plane", "angle")] == ["ok", "ok"], "distance / angle get a real target, so they are not 'noop'"
@@ -116,7 +117,7 @@ d.which.setCurrentIndex(0); d.quick.setChecked(True)
 d.run()
 assert not d.running and d.run_b.isEnabled() and not d.stop_b.isEnabled()
 assert list(d.results) == ["Current"] and "coincident" in d.text.toPlainText() and "Current" in d.text.toPlainText(), d.text.toPlainText()[:300]
-assert d.bar.value() == 1000
+assert d.bar.value() == 1000 and "Several mates together" in d.text.toPlainText() and "pin in hole" in d.text.toPlainText()
 d.close(); assert d.stop is True
 assert w.matrix_win is d
 

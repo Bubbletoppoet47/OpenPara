@@ -3,8 +3,9 @@
 It is OpenPara's own assembly window (core/assembly.py, unchanged: the same view, picking, dragging, mate panel and file format) with two things added
 on a "Constraint Lab" ribbon tab:
 
-  Engine   which mate engine solves this assembly.  "Current" is core/asm_model.py, the one OpenPara uses.  "Experimental" is lab_engine.py, a copy that
-           lives only in this add-on, so a new solver can be built and tried on real parts here without touching anything else.  The window's assembly is
+  Engine   which mate engine solves this assembly.  "Current" is core/asm_model.py, the one OpenPara uses.  "Experimental" is lab_engine.py, which
+           started as a copy and lives only in this add-on (its header lists what it does differently), so a new solver can be built and tried on real
+           parts here without touching anything else.  The window's assembly is
            moved onto the other engine's class when you switch (the poses stay as they are), and every new, opened or undone assembly follows the choice.
   Mate Matrix   scores an engine on every kind of pick against every kind of pick, for every mate type (lab_matrix.py), and shows where the engines differ.
 
@@ -94,7 +95,8 @@ class MatrixDialog(QDialog):
         self.results, self.running, self.stop = {}, False, False
         lay = QVBoxLayout(self)
         info = QLabel("Tries every kind of pick against every kind of pick for every mate type, from several starting poses, on small built-in parts "
-                      "(a plate with a hole, a block, a pin, two balls).  The first pick moves, the second sits on the fixed part.")
+                      "(a plate with a hole, a block, a pin, two balls).  The first pick moves, the second sits on the fixed part.  Then it builds a few "
+                      "assemblies with several mates (a pin in a hole, a block in a corner, a chain, a redundant mate, a conflict).")
         info.setWordWrap(True)
         lay.addWidget(info)
         top = QHBoxLayout()
@@ -103,7 +105,7 @@ class MatrixDialog(QDialog):
         self.which.addItems(list(ENGINES) + ["Compare both"])
         self.which.setCurrentIndex(len(ENGINES))
         top.addWidget(self.which)
-        self.quick = QCheckBox("Quick (2 start poses)")
+        self.quick = QCheckBox("Quick (2 start poses, easy ones)")
         top.addWidget(self.quick)
         self.run_b = QPushButton("Run")
         self.run_b.clicked.connect(self.run)
@@ -122,7 +124,7 @@ class MatrixDialog(QDialog):
         self.text.setReadOnly(True)
         self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
-        self.text.setPlainText("Press Run.  One engine takes about 15 seconds; Compare both about 30.")
+        self.text.setPlainText("Press Run.  One engine takes about 40 seconds (Quick: about 10); Compare both about twice that.")
         lay.addWidget(self.text, 1)
         bot = QHBoxLayout()
         cp = QPushButton("Copy report")
@@ -160,13 +162,18 @@ class MatrixDialog(QDialog):
         self.stop_b.setEnabled(True)
         results = {}
         try:
+            phases = 2 * len(names)                            # per engine: the pick pairs, then the scenarios with several mates
             for i, n in enumerate(names):
-                def prog(done, total, i=i, n=n):
-                    self.bar.setValue(int(1000 * (i + done / total) / len(names)))
-                    self.bar.setFormat(f"{n}: {done} of {total} pick pairs")
+                def prog(done, total, ph=2 * i, n=n, what="pick pairs"):
+                    self.bar.setValue(int(1000 * (ph + done / total) / phases))
+                    self.bar.setFormat(f"{n}: {done} of {total} {what}")
                     QApplication.processEvents()
                     return self.stop
                 results[n] = lab_matrix.run(ENGINES[n], n_starts=n_starts, progress=prog)
+                if self.stop:
+                    break
+                results[n]["scen"] = lab_matrix.run_scenarios(ENGINES[n], n_starts=n_starts,
+                                                              progress=lambda d, t, ph=2 * i + 1, n=n: prog(d, t, ph, n, "scenario runs"))
                 if self.stop:
                     break
             self.results = results
