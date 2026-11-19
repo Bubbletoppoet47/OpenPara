@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileD
 import asm_model
 import assembly
 import lab_engine
+import lab_highlight
 import lab_matrix
 
 ENGINES = {"Current": asm_model, "Experimental": lab_engine}      # name -> the module that has Assembly, face_ref, MateError ...
@@ -37,7 +38,7 @@ def apply_engine(a, name):
     return a
 
 
-class LabWindow(assembly.AssemblyWindow):
+class LabWindow(lab_highlight.FaceTint, assembly.AssemblyWindow):
     engine_name = "Current"
 
     def __init__(self, path=None, shell=None):
@@ -50,9 +51,16 @@ class LabWindow(assembly.AssemblyWindow):
             ("tool_eng_exp", "◌", "Experimental\nEngine", "Solve with the lab's own copy of the engine (dev_addons/constraint_lab/lab_engine.py)",
              lambda: self.set_engine("Experimental")),
             "|",
+            ("lab_tint", "◧", "Face\nRecolour", "On: a picked or hovered face is shown by recolouring its own triangles (nothing floats).  Off: the old lifted copy "
+             "of the face.  Needs the baked outline drawing (Settings); the classic drawing always uses the old copy.", lambda: self.tint_toggle()),
+            "|",
             ("lab_matrix", "▦", "Mate\nMatrix", "Score an engine on every pick type against every pick type for every mate, from several starting poses",
              lambda: self.matrix_open()),
         ]), "Constraint Lab")
+        b = self.act["lab_tint"]
+        b.setCheckable(True)
+        b.setChecked(self.face_tint)
+        b.setStyleSheet(b.styleSheet() + " QToolButton:checked{background:#cfe3fb; border:1px solid #6aa0e0;}")
         self.show_engine()
         self.say("Constraint Lab: insert parts and mate them as usual.  The engine and the Mate Matrix are on the Constraint Lab tab of the ribbon.")
 
@@ -69,6 +77,14 @@ class LabWindow(assembly.AssemblyWindow):
         apply_engine(self.asm, name)
         self.show_engine()
         self.say(f"Engine: {name}.  New mates, drags and solves use it from now on; the poses stay where they are until you move a part or edit a mate.")
+
+    def tint_toggle(self):
+        on = self.act["lab_tint"].isChecked()
+        self.set_face_tint(on)
+        baked = assembly.settings.get("outline_mode") == "baked"
+        self.say("Face highlight: " + ("recolours the face's own triangles." if on and baked else
+                                       "recolour is on, but this view uses the classic outline drawing (Settings > Outline drawing = baked), so the old lifted copy is drawn." if on
+                                       else "the old lifted copy of the face."))
 
     def show_engine(self):
         self.engine_label.setText(f"  Engine: {self.engine_name}  ")
