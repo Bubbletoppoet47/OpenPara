@@ -11,7 +11,7 @@ import traceback
 
 from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPen, QPolygonF
-from PyQt6.QtWidgets import QAbstractScrollArea, QApplication, QLabel, QMenu, QToolTip, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QAbstractScrollArea, QApplication, QLabel, QMenu, QMessageBox, QToolTip, QVBoxLayout, QWidget
 
 import sh_book as B
 import sh_chart
@@ -23,6 +23,7 @@ import sh_fmt
 MIME = "application/x-openpara-sheets"
 TOKEN = f"{os.getpid()}"
 DEF_W, DEF_H, HDR_H, MIN_W, MIN_H = 72, 22, 22, 14, 10
+MOVE_LIMIT = 200_000            # the biggest block that can be dragged by its border (whole columns and rows are too big)
 
 LINE = QColor("#dfe3ea")
 HEAD_BG, HEAD_SEL, HEAD_INK = QColor("#eef1f6"), QColor("#d3e2fa"), QColor("#4b5870")
@@ -255,6 +256,8 @@ class Grid(QAbstractScrollArea):
         self.frames = {}
         self.sel_chart = None
         self._drag = None
+        self._moved_to = None                 # where a block that is being dragged by its border would land
+        self._copying = False                 # ... and whether Ctrl makes it a copy
         self._timer = QTimer(self)
         self._timer.setInterval(40)
         self._timer.timeout.connect(self._autoscroll)
@@ -606,6 +609,7 @@ class Grid(QAbstractScrollArea):
             for rect in self.copied[1]:
                 cr = self.block_rect(*rect)
                 p.drawRect(cr.adjusted(1, 1, -2, -2))
+        self._paint_drag(p, fm)
         # warnings
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(WARN_INK))
@@ -615,6 +619,57 @@ class Grid(QAbstractScrollArea):
                 p.drawPolygon(QPolygonF([QPointF(rc.right() - 8, rc.top()), QPointF(rc.right(), rc.top()), QPointF(rc.right(), rc.top() + 8)]))
         p.setClipping(False)
         self._paint_headers(p, r_first, r_last, c_first, c_last, sr1, sc1, sr2, sc2)
+
+    def _paint_drag(self, p, fm):
+        """While the fill handle is dragged: a dashed outline round the cells that will be filled, with the values they will get.  While a block is dragged by its
+        border: where it will land."""
+        d = self._drag
+        if d is None or self._last_cursor is None:
+            return
+        if d[0] == "fill":
+            dst = self._fill_target(d[1], self._last_cursor)
+            if dst is None:
+                return
+            src = d[1]
+            whole = (min(src[0], dst[0]), min(src[1], dst[1]), max(src[2], dst[2]), max(src[3], dst[3]))
+            tint = self.block_rect(*dst)
+            p.fillRect(tint, QColor("white"))                           # what is there now is hidden under what will be there
+            p.fillRect(tint, QColor(43, 125, 233, 22))
+            p.setPen(QPen(LINE, 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            for rr in range(dst[0], dst[2] + 1):
+                for cc in range(dst[1], dst[3] + 1):
+                    p.drawRect(self.cell_rect(rr, cc).adjusted(0, 0, -1, -1))
+            p.setFont(self.f_ital)
+            p.setPen(QColor("#6b7a90"))
+            for (r, c), (text, isnum) in self.wb.fill_preview(self.sheet, src, dst).items():
+                rc = self.cell_rect(r, c)
+                if rc.bottom() < self.hh or rc.top() > self.viewport().height() or rc.right() < self.hw or rc.left() > self.viewport().width():
+                    continue
+                flag = Qt.AlignmentFlag.AlignRight if isnum else Qt.AlignmentFlag.AlignLeft
+                p.drawText(QRect(rc.left() + 4, rc.top(), rc.width() - 8, rc.height()), flag | Qt.AlignmentFlag.AlignVCenter,
+                           QFontMetrics(self.f_ital).elidedText(text, Qt.TextElideMode.ElideRight, rc.width() - 8))
+            p.setPen(QPen(QColor("#1f2a3c"), 2, Qt.PenStyle.DashLine))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(self.block_rect(*whole).adjusted(1, 1, -2, -2))
+        elif d[0] == "move" and self._moved_to is not None and self._moved_to != tuple(d[1][:2]):
+            r1, c1, r2, c2 = d[1]
+            r, c = self._moved_to
+            rr = self.block_rect(r, c, r + r2 - r1, c + c2 - c1)
+            p.fillRect(rr, QColor(43, 125, 233, 30))
+            p.setPen(QPen(ACCENT, 2, Qt.PenStyle.DashLine))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(rr.adjusted(1, 1, -2, -2))
+            label = ("Copy to " if self._copying else "Move to ") + self._rect_name((r, c, r + r2 - r1, c + c2 - c1))
+            p.setFont(self.f_norm)
+            fm2 = QFontMetrics(self.f_norm)
+            lw = fm2.horizontalAdvance(label) + 12
+            lr = QRect(rr.left(), max(self.hh, rr.top() - 22), lw, 20)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(QColor("#1f2a3c")))
+            p.drawRoundedRect(lr, 3, 3)
+            p.setPen(QColor("white"))
+            p.drawText(lr, Qt.AlignmentFlag.AlignCenter, label)
 
     def _paint_text(self, p, fm, r, c, cell, c_last):
         wb = self.wb
@@ -840,6 +895,12 @@ class Grid(QAbstractScrollArea):
                 self._drag = ("fill", self.sel())
                 self._timer.start()
                 return
+            if not shift and self._on_border(pos):                  # the border of the selection: drag it to move the cells (Ctrl: copy them)
+                r1, c1, r2, c2 = self.sel()
+                self._drag = ("move", (r1, c1, r2, c2), (hit[0] - r1, hit[1] - c1), hit)
+                self._moved_to = None
+                self._timer.start()
+                return
             if shift:
                 self.move_to(hit[0], hit[1], extend=True)
             elif ctrl:                                       # another block: the old one stays selected
@@ -957,6 +1018,41 @@ class Grid(QAbstractScrollArea):
             self._set_row_height(d[1], d[3] + pos.y() - d[2], live=True)
         elif kind == "fill":
             self.viewport().update()
+        elif kind == "move":
+            self._moved_to = self._move_target(d, pos)
+            self._copying = bool(ev.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            self.viewport().update()
+
+    def _on_border(self, pos):
+        """True when `pos` is on the border of the selected block (not on the fill handle): a press there drags the block."""
+        if self.sel_chart is not None or self.areas or self.edit:
+            return False
+        r1, c1, r2, c2 = self.sel()
+        if (r2 - r1 + 1) * (c2 - c1 + 1) > MOVE_LIMIT:
+            return False
+        sel = self.block_rect(r1, c1, r2, c2)
+        if not sel.adjusted(-3, -3, 3, 3).contains(pos) or sel.adjusted(3, 3, -3, -3).contains(pos):
+            return False
+        return not QRect(sel.right() - 9, sel.bottom() - 9, 14, 14).contains(pos)
+
+    def _cell_under(self, pos):
+        return (self.rows.index_at(max(0, pos.y() - self.hh) + self.y0), self.cols.index_at(max(0, pos.x() - self.hw) + self.x0))
+
+    def _move_target(self, d, pos):
+        """(row, column) of the top left cell of a dragged block when the mouse is at `pos`, kept on the sheet."""
+        r1, c1, r2, c2 = d[1]
+        r, c = self._cell_under(pos)
+        r, c = r - d[2][0], c - d[2][1]
+        return max(1, min(r, E.MAXROW - (r2 - r1))), max(1, min(c, E.MAXCOL - (c2 - c1)))
+
+    def _fill_target(self, src, pos):
+        """The cells that dragging the fill handle from the block `src` to `pos` fills: (first row, first col, last row, last col), or None."""
+        r1, c1, r2, c2 = src
+        r, c = self._cell_under(pos)
+        down, right = r - r2, c - c2
+        if down <= 0 and right <= 0:
+            return None
+        return (r2 + 1, c1, r, c2) if down >= right else (r1, c2 + 1, r2, c)
 
     def _hover(self, pos):
         hit = self.cell_at(pos)
@@ -970,6 +1066,8 @@ class Grid(QAbstractScrollArea):
             sel = self.block_rect(*self.sel())
             if QRect(sel.right() - 9, sel.bottom() - 9, 14, 14).contains(pos):
                 cur = Qt.CursorShape.CrossCursor
+            elif self._on_border(pos):
+                cur = Qt.CursorShape.SizeAllCursor
         self.viewport().setCursor(cur)
 
     def mouseReleaseEvent(self, ev):
@@ -980,6 +1078,8 @@ class Grid(QAbstractScrollArea):
             return
         if d[0] == "fill":
             self._finish_fill(d[1], ev.position().toPoint())
+        elif d[0] == "move":
+            self._finish_move(d, ev.position().toPoint(), bool(ev.modifiers() & Qt.KeyboardModifier.ControlModifier))
         elif d[0] in ("colsize", "rowsize"):
             self.selection_changed.emit()
 
@@ -1007,11 +1107,11 @@ class Grid(QAbstractScrollArea):
         hb, vb = self.horizontalScrollBar(), self.verticalScrollBar()
         if pos.x() > self.viewport().width() - 6:
             hb.setValue(hb.value() + 24)
-        elif pos.x() < self.hw + 4 and self._drag[0] in ("cells", "fill"):
+        elif pos.x() < self.hw + 4 and self._drag[0] in ("cells", "fill", "move"):
             hb.setValue(hb.value() - 24)
         if pos.y() > self.viewport().height() - 6:
             vb.setValue(vb.value() + 22)
-        elif pos.y() < self.hh + 4 and self._drag[0] in ("cells", "fill"):
+        elif pos.y() < self.hh + 4 and self._drag[0] in ("cells", "fill", "move"):
             vb.setValue(vb.value() - 22)
         if self._drag[0] == "cells":
             hit = (self.rows.index_at(max(0, pos.y() - self.hh) + self.y0), self.cols.index_at(max(0, pos.x() - self.hw) + self.x0))
@@ -1320,6 +1420,8 @@ class Grid(QAbstractScrollArea):
             src = tuple(info["rect"])
             sh, cut = info["sheet"], bool(info["cut"])
             h, w = src[2] - src[0] + 1, src[3] - src[1] + 1
+            if cut and what == "all":
+                wb.begin_group("Move cells")                             # the formulas, names and charts that point at the cells follow them: one undo step
             wb.begin("Paste")
             if (h, w) == (1, 1) and (r2 > r1 or c2 > c1) and not cut:           # one cell over a block: every cell of the block gets it
                 for r in range(r1, r2 + 1):
@@ -1329,6 +1431,8 @@ class Grid(QAbstractScrollArea):
             else:
                 rect = wb.copy_cells(sh, src, self.sheet, r1, c1, what, cut=cut and what == "all")
             wb.end()
+            if cut and what == "all":
+                wb.end_group()
             if cut:
                 self.copied = None
                 QGuiApplication.clipboard().clear()
@@ -1380,18 +1484,37 @@ class Grid(QAbstractScrollArea):
         self.selection_changed.emit()
 
     def _finish_fill(self, src, pos):
-        r1, c1, r2, c2 = src
-        hit = (self.rows.index_at(max(0, pos.y() - self.hh) + self.y0), self.cols.index_at(max(0, pos.x() - self.hw) + self.x0))
-        r, c = hit
-        down, right = r - r2, c - c2
-        if down <= 0 and right <= 0:
+        dst = self._fill_target(src, pos)
+        if dst is None:
             return
-        if down >= right:
-            dst = (r2 + 1, c1, r, c2)
-        else:
-            dst = (r1, c2 + 1, r2, c)
+        r1, c1, r2, c2 = src
         self.wb.fill(self.sheet, src, dst)
         self.select(r1, c1, max(r2, dst[2]), max(c2, dst[3]), active=(r1, c1))
+
+    def _finish_move(self, d, pos, copy):
+        """The block was dragged by its border and dropped at `pos`: move it (formulas, names and charts that point at the cells follow), or copy it with Ctrl."""
+        self._moved_to = None
+        src, press = d[1], d[3]
+        r, c = self._move_target(d, pos)
+        r1, c1, r2, c2 = src
+        if (r, c) == (r1, c1):
+            if self._cell_under(pos) == press:                       # a click on the border of the cell, not a drag
+                self.move_to(*press)
+            self.viewport().update()
+            return
+        h, w = r2 - r1 + 1, c2 - c1 + 1
+        s = self.sheet_obj()
+        clash = any((rr, cc) in s.cells and s.cells[(rr, cc)].raw is not None and not (copy is False and r1 <= rr <= r2 and c1 <= cc <= c2)
+                    for rr in range(r, r + h) for cc in range(c, c + w)) if s and h * w <= MOVE_LIMIT else False
+        if clash and QMessageBox.question(self, "Replace cells", "The cells you drop on already have something in them.\nReplace it?") != QMessageBox.StandardButton.Yes:
+            self.viewport().update()
+            return
+        if copy:
+            self.wb.copy_cells(self.sheet, src, self.sheet, r, c)
+        else:
+            self.wb.copy_cells(self.sheet, src, self.sheet, r, c, cut=True)
+            self.copied = None
+        self.select(r, c, r + h - 1, c + w - 1, active=(r, c))
 
     # ------------------------------------------------------------------ context menu
     def _context(self, pos, gpos, hit):

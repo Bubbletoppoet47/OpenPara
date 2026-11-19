@@ -882,6 +882,104 @@ def adjust_formula(text, formula_sheet, target_sheet, axis, at, n):
     return _rewrite(text, one)
 
 
+def move_formula(text, formula_sheet, src_sheet, rect, dst_sheet, dr, dc):
+    """The formula after the block `rect` of src_sheet was moved (cut and paste, or dragged) `dr` rows down and `dc` columns right, to dst_sheet: every reference
+    that lies wholly inside the block follows it ($ or not - a moved cell is still the same cell); a range that is only partly in the block stays, as in Excel."""
+    if not (isinstance(text, str) and text.startswith("=")):
+        return text
+    r1, c1, r2, c2 = rect
+
+    def one(t):
+        if t.kind in ("col", "row") or (t.sheet or formula_sheet) != src_sheet:
+            return None
+        a, b, c, d = t.rect()
+        if not (r1 <= a and c1 <= b and c <= r2 and d <= c2):
+            return None
+        n = t.copy()
+        n.r1, n.r2, n.c1, n.c2 = n.r1 + dr, n.r2 + dr, n.c1 + dc, n.c2 + dc
+        if not (1 <= n.r1 <= MAXROW and 1 <= n.r2 <= MAXROW and 1 <= n.c1 <= MAXCOL and 1 <= n.c2 <= MAXCOL):
+            return "#REF!"
+        if dst_sheet != src_sheet:
+            n.prefix = quote_sheet(dst_sheet) + "!"
+        return n.text()
+    return _rewrite(text, one)
+
+
+_LOCK_CYCLE = {(False, False): (True, True), (True, True): (True, False), (True, False): (False, True), (False, True): (False, False)}     # (row $, column $)
+
+
+def _ref_spans(text):
+    """[(start, end, RefTok)] of the references in a formula being typed (the text after the =).  A formula that is not finished is read the lenient way."""
+    body = text[1:]
+    try:
+        return [(s + 1, e + 1, val) for kind, tx, s, e, val in tokenize(body) if kind == "ref"]
+    except FormulaError:
+        pass
+    out, quote = [], False
+    for m in _REF_RE.finditer(body):
+        if body.count('"', 0, m.start()) % 2:
+            continue
+        s, e = m.start(), m.end()
+        if s > 0 and (body[s - 1].isalnum() or body[s - 1] in "_."):
+            continue
+        if e < len(body) and (body[e].isalnum() or body[e] == "_"):
+            continue
+        tok = _lenient_token(m)
+        if tok is not None:
+            out.append((s + 1, e + 1, tok))
+    return out
+
+
+def _lenient_token(m):
+    try:
+        toks = tokenize(m.group(0))
+    except FormulaError:
+        return None
+    return toks[0][4] if len(toks) == 1 and toks[0][0] == "ref" else None
+
+
+def cycle_refs(text, a, b):
+    """F4 in a formula: the reference at the cursor (a == b) or every reference the selection a..b touches goes on to the next lock state - B2, $B$2, B$2, $B2,
+    B2 ... (a range moves both its corners together, from the state of the first; whole columns and rows toggle between A:A and $A:$A).
+    Returns (new text, start, end) of what to select / where the cursor goes, or None when there is nothing to do."""
+    if not (isinstance(text, str) and text.startswith("=")):
+        return None
+    spans = _ref_spans(text)
+    if a == b:
+        hit = [sp for sp in spans if sp[0] < a <= sp[1]] or [sp for sp in spans if sp[0] <= a < sp[1]]
+        hit = hit[:1]
+    else:
+        lo, hi = min(a, b), max(a, b)
+        hit = [sp for sp in spans if sp[0] < hi and sp[1] > lo]
+    if not hit:
+        return None
+    first = hit[0][2]
+    if first.kind == "col":
+        state = (False, not first.ac1)
+    elif first.kind == "row":
+        state = (not first.ar1, False)
+    else:
+        state = _LOCK_CYCLE[(bool(first.ar1), bool(first.ac1))]
+    out, pos, shift = [], 0, 0
+    for s, e, t in hit:
+        n = t.copy()
+        if n.kind == "col":
+            n.ac1 = n.ac2 = state[1]
+        elif n.kind == "row":
+            n.ar1 = n.ar2 = state[0]
+        else:
+            n.ar1 = n.ar2 = state[0]
+            n.ac1 = n.ac2 = state[1]
+        out.append(text[pos:s])
+        out.append(n.text())
+        pos = e
+    out.append(text[pos:])
+    new = "".join(out)
+    start = hit[0][0]
+    end = hit[-1][1] + (len(new) - len(text))
+    return new, (start if a != b else end), end
+
+
 def rename_sheet(text, old, new):
     """The formula with the sheet name `old` replaced by `new` in every reference that names it."""
     if not (isinstance(text, str) and text.startswith("=")):

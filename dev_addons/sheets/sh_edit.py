@@ -152,6 +152,9 @@ class FormulaEdit(QLineEdit):
             if k == Qt.Key.Key_Escape:
                 self.pop.hide()
                 return
+        if k == Qt.Key.Key_F4 and not ev.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
+            self.cycle_reference()
+            return
         if k in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.done.emit(-1 if shift else 1, 0)
             return
@@ -168,6 +171,27 @@ class FormulaEdit(QLineEdit):
             self.done.emit({Qt.Key.Key_Up: -1, Qt.Key.Key_Down: 1}.get(k, 0), {Qt.Key.Key_Left: -1, Qt.Key.Key_Right: 1}.get(k, 0))
             return
         super().keyPressEvent(ev)
+
+    def cycle_reference(self):
+        """F4: the reference at the cursor (or the ones in the selection) goes on to the next lock: B2, $B$2, B$2, $B2."""
+        sel = self.selectionStart()
+        if sel >= 0:
+            a, b = sel, sel + len(self.selectedText())
+        else:
+            a = b = self.cursorPosition()
+        got = E.cycle_refs(self.text(), a, b)
+        if got is None:
+            return
+        text, start, end = got
+        self.setText(text)
+        if start != end:
+            self.setSelection(start, end - start)
+        else:
+            self.setCursorPosition(end)
+        refs = [sp for sp in E._ref_spans(text) if sp[0] <= end <= sp[1]]
+        if refs and start == end:
+            self.last_point = (refs[0][0], refs[0][1], text[refs[0][0]:refs[0][1]])            # a click on a cell now replaces this reference, as after pointing
+        self.typed.emit()
 
     # ------------------------------------------------------------------ pointing at cells
     def can_point(self):

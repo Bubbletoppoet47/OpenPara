@@ -9,6 +9,9 @@ A spreadsheet tab. Playground only; nothing in the core program changes.
   Setup (type, data range, X, series, left/right axis, swap X and Y), Customize (fonts, lines, grid, frame, legend, limit lines, zones, notes) and
   Advanced (every matplotlib setting as a typed input, saved with the chart). Looks (presets) are saved in `chart_presets.json`. PNG/SVG/PDF.
 - **Selecting**: Shift / Ctrl + click on cells, rows and columns; every block takes part in clear, format, fill, widths, insert and delete.
+- **Editing references**: F4 in the cell editor or the formula bar cycles the reference at the cursor (or every one in the selection) through `$B$2`, `B$2`, `$B2`, `B2`.
+- **Fill and move**: dragging the fill handle outlines the cells it will fill and shows the values they will get. Dragging the border of a selection moves it
+  (Ctrl: copies it), and so does Cut and Paste: every formula, name, chart range, limit line and study block that points at the moved cells follows them, in one undo step.
 - **Ribbon size**: View > Ribbon size (icon 10-48 pt, text 8-20 pt), kept in `prefs.json` next to the looks.
 - **Standards**: Engineering tab. `std_aisi16.py` encodes AISI S100-16 connection equations (J2, J3, J4) as `AISI16.J4_4_1(...)` etc.
   Equations and section numbers only; the standard's text is not copied.

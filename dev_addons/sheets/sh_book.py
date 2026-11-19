@@ -132,6 +132,7 @@ class Workbook:
         self.active = 0
         self.listeners = []
         self._group = None
+        self._overlay = None          # {(sheet, r, c): value} while fill_preview works out cells that are not there yet
         self.warnings = {}
         self.rev = {}                 # (sheet, column) -> {cell key: [(row1, row2)]}   who reads a run of cells (A1:A9)
         self.pts = {}                 # (sheet, column, row) -> {cell keys}             who reads one cell (A1) - the usual case, found at once
@@ -257,6 +258,9 @@ class Workbook:
         return s.cells.get((r, c)) if s else None
 
     def value(self, sheet, r, c):
+        ov = self._overlay
+        if ov is not None and (sheet, r, c) in ov:                   # a preview in progress (fill_preview): the values the cells would have
+            return ov[(sheet, r, c)]
         s = self.get_sheet(sheet)
         if s is None:
             return E.REF
@@ -765,6 +769,10 @@ class Workbook:
             for c in range(c1, c2 + 1):
                 cell = s.cells.get((r, c))
                 block[(r - r1, c - c1)] = None if cell is None else (cell.raw, cell.st, cell.arr, self.value(src_sheet, r, c))
+        moved = cut and what == "all"
+        grouped = moved and self._group is None and self._tx is None          # a move changes formulas, names and charts elsewhere: one undo step for all of it
+        if grouped:
+            self.begin_group("Cut")
         own = self._tx is None
         if own:
             self.begin("Cut" if cut else "Paste")
@@ -800,18 +808,57 @@ class Workbook:
             else:
                 self._put(dst_sheet, r, c, raw, ..., arr=arr and what == "formulas")
         rect = (dst_r, dst_c, dst_r + r2 - r1, dst_c + c2 - c1)
+        if moved:
+            self._follow_move(src_sheet, src_rect, dst_sheet, dst_r - r1, dst_c - c1)
         if own:
             self.end()
+        if grouped:
+            self.end_group()
         return rect
 
-    def fill(self, sheet, src_rect, dst_rect):
-        """Fills dst_rect (next to src_rect, in line with it) from src_rect, like dragging the fill handle: formulas are copied with their references moved,
-        two or more numbers in a row / column continue as a series, anything else repeats."""
+    def _follow_move(self, src_sheet, rect, dst_sheet, dr, dc):
+        """The block `rect` of src_sheet was moved by (dr, dc) to dst_sheet: every reference that points into it - in the formulas of every sheet (the moved ones
+        too: they keep pointing at the cells they did, or at the moved cells when those moved along), in names, in the ranges and limits of charts - now points
+        to where the cells are.  A study block (link) that moved along keeps its place in the block."""
+        if dr == 0 and dc == 0 and dst_sheet == src_sheet:
+            return
+        mv = lambda text, sh_name: E.move_formula(text, sh_name, src_sheet, rect, dst_sheet, dr, dc)
+        for sh in self.sheets:
+            for (r, c), cell in list(sh.cells.items()):
+                if cell.is_formula:
+                    new = mv(cell.raw, sh.name)
+                    if new != cell.raw:
+                        self._put(sh.name, r, c, new, ..., arr=cell.arr)
+            for ch in sh.charts:
+                _map_chart_refs(ch, lambda t, n=sh.name: mv("=" + t, n)[1:],
+                                lambda t, n=sh.name: _move_data_range(t, n, src_sheet, rect, dst_sheet, dr, dc))
+            for k, v in list(sh.names.items()):
+                sh.names[k] = mv(v, sh.name)
+        for k, v in list(self.names.items()):
+            self.names[k] = mv(v, self.sheets[0].name)
+        src = self.get_sheet(src_sheet)
+        dst = self.get_sheet(dst_sheet)
+        r1, c1, r2, c2 = rect
+        for ln in list(src.links):
+            o = ln.get("origin")
+            if not o:
+                continue
+            lr2, lc2 = o[0] + ln.get("rows", 0), o[1] + max(ln.get("cols", 1), 1) - 1
+            if r1 <= o[0] and c1 <= o[1] and lr2 <= r2 and lc2 <= c2:
+                ln["origin"] = [o[0] + dr, o[1] + dc]
+                if dst is not src:
+                    src.links.remove(ln)
+                    dst.links.append(ln)
+        self._changed.add(("*", 0, 0))
+
+    def _fill_plan(self, sheet, src_rect, dst_rect):
+        """What dragging the fill handle puts where: [(row, col, number, source cell, source row, source col)] - a number when two or more numbers in a line continue
+        as a series, else None and the source cell that is repeated (formulas with their references moved)."""
         r1, c1, r2, c2 = src_rect
         d1, e1, d2, e2 = dst_rect
         s = self.get_sheet(sheet)
         vertical = d1 > r2 or d2 < r1
-        self.begin("Fill")
+        plan = []
         if vertical:
             for c in range(c1, c2 + 1):
                 col = [s.cells.get((r, c)) for r in range(r1, r2 + 1)]
@@ -820,10 +867,7 @@ class Workbook:
                 step = (nums[-1] - nums[0]) / (len(nums) - 1) if series else 0.0
                 for r in range(d1, d2 + 1):
                     k = (r - r1) % len(col)
-                    if series:
-                        self._put(sheet, r, c, nums[0] + step * (r - r1), col[k].st)
-                    else:
-                        self._copy_one(col[k], r1 + k, c, r, c, sheet)
+                    plan.append((r, c, nums[0] + step * (r - r1) if series else None, col[k], r1 + k, c))
         else:
             for r in range(r1, r2 + 1):
                 row = [s.cells.get((r, c)) for c in range(c1, c2 + 1)]
@@ -832,11 +876,54 @@ class Workbook:
                 step = (nums[-1] - nums[0]) / (len(nums) - 1) if series else 0.0
                 for c in range(e1, e2 + 1):
                     k = (c - c1) % len(row)
-                    if series:
-                        self._put(sheet, r, c, nums[0] + step * (c - c1), row[k].st)
-                    else:
-                        self._copy_one(row[k], r, c1 + k, r, c, sheet)
+                    plan.append((r, c, nums[0] + step * (c - c1) if series else None, row[k], r, c1 + k))
+        return plan
+
+    def fill(self, sheet, src_rect, dst_rect):
+        """Fills dst_rect (next to src_rect, in line with it) from src_rect, like dragging the fill handle: formulas are copied with their references moved,
+        two or more numbers in a row / column continue as a series, anything else repeats."""
+        self.begin("Fill")
+        for r, c, num, cell, sr, sc in self._fill_plan(sheet, src_rect, dst_rect):
+            if num is not None:
+                self._put(sheet, r, c, num, cell.st)
+            else:
+                self._copy_one(cell, sr, sc, r, c, sheet)
         return self.end()
+
+    def fill_preview(self, sheet, src_rect, dst_rect, limit=4000):
+        """What fill() would show in each cell of dst_rect, as {(row, col): (text, is a number)} - nothing is changed.  Formulas are worked out as if they stood
+        there, with the other filled cells already holding what they will hold.  At most `limit` cells."""
+        plan = self._fill_plan(sheet, src_rect, dst_rect)[:limit]
+        ov = {}
+        for r, c, num, cell, sr, sc in plan:                                   # first the cells that are not formulas ...
+            raw = None if cell is None else cell.raw
+            if num is not None:
+                ov[(sheet, r, c)] = num
+            elif isinstance(raw, str) and raw.startswith("=") and len(raw) > 1:
+                ov[(sheet, r, c)] = None
+            elif isinstance(raw, str) and raw.startswith("'"):
+                ov[(sheet, r, c)] = raw[1:]
+            else:
+                ov[(sheet, r, c)] = plain(raw)
+        out = {}
+        self._overlay = ov
+        try:
+            for r, c, num, cell, sr, sc in plan:                               # ... then the formulas, in the order they are filled
+                raw = None if cell is None else cell.raw
+                if num is not None:
+                    out[(r, c)] = (sh_fmt.show(num, cell.fmt), True)
+                elif raw is None:
+                    continue
+                elif isinstance(raw, str) and raw.startswith("=") and len(raw) > 1:
+                    v = self.evaluate(E.shift_formula(raw, r - sr, c - sc), sheet, r, c)
+                    ov[(sheet, r, c)] = v
+                    out[(r, c)] = (sh_fmt.show(v, cell.fmt), isinstance(v, float) and not isinstance(v, bool))
+                else:
+                    v = ov[(sheet, r, c)]
+                    out[(r, c)] = (raw[1:] if isinstance(raw, str) and raw.startswith("'") else sh_fmt.show(v, cell.fmt), isinstance(v, float) and not isinstance(v, bool))
+        finally:
+            self._overlay = None
+        return out
 
     def _copy_one(self, src, sr, sc, dr, dc, sheet):
         if src is None:
@@ -1067,14 +1154,82 @@ def _chart_refs(ch):
     return out
 
 
-def _map_chart_refs(ch, fn):
+def _move_data_range(text, chart_sheet, src_sheet, rect, dst_sheet, dr, dc):
+    """The range a chart was made from ('A1:A5, B1:B5') after the block `rect` of src_sheet moved by (dr, dc): a part that is wholly in the block follows it; a part
+    that is cut across by it (a table whose Y column moved away) is split along the block's edge, so the chart reads the same cells where they are now."""
+    r1, c1, r2, c2 = rect
+    parts, cur, quote = [], "", False
+    for ch in text or "":
+        if ch == "'":
+            quote = not quote
+        if ch == "," and not quote:
+            parts.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    parts.append(cur.strip())
+    out = []
+    for part in parts:
+        if not part:
+            continue
+        try:
+            toks = E.tokenize(part)
+        except E.FormulaError:
+            toks = []
+        if len(toks) != 1 or toks[0][0] != "ref" or toks[0][4].kind not in ("cell", "range") or (toks[0][4].sheet or chart_sheet) != src_sheet:
+            out.append(part)
+            continue
+        t = toks[0][4]
+        a, b, c, d = t.rect()
+        if not (r1 <= c and a <= r2 and c1 <= d and b <= c2):                  # no cell of it is in the block
+            out.append(part)
+            continue
+        if r1 <= a and c1 <= b and c <= r2 and d <= c2:                         # all of it
+            out.append(E.move_formula("=" + part, chart_sheet, src_sheet, rect, dst_sheet, dr, dc)[1:])
+            continue
+        if dst_sheet != src_sheet:
+            out.append(part)
+            continue
+        pieces = None
+        if r1 <= a and c <= r2:                                                 # the block is as tall as this part: split it by columns
+            lo, hi = max(b, c1), min(d, c2)
+            pieces = [(a, b, c, lo - 1, False), (a, lo, c, hi, True), (a, hi + 1, c, d, False)]
+        elif c1 <= b and d <= c2:                                               # as wide: by rows
+            lo, hi = max(a, r1), min(c, r2)
+            pieces = [(a, b, lo - 1, d, False), (lo, b, hi, d, True), (hi + 1, b, c, d, False)]
+        if pieces is None:
+            out.append(part)
+            continue
+        for pa, pb, pc, pd, inside in pieces:
+            if pa > pc or pb > pd:
+                continue
+            n = t.copy()
+            n.kind = "cell" if (pa, pb) == (pc, pd) else "range"
+            n.r1, n.c1, n.r2, n.c2 = pa, pb, pc, pd
+            if inside:
+                n.r1, n.r2, n.c1, n.c2 = pa + dr, pc + dr, pb + dc, pd + dc
+            out.append(n.text())
+    return ", ".join(out)
+
+
+def _map_chart_refs(ch, fn, data_fn=None):
+    """Every place a chart keeps a cell reference goes through fn(text) -> text: its X range and series, the range it was made from, and the limits, zones and
+    notes whose values are cells."""
     if ch.get("x"):
         ch["x"] = fn(ch["x"])
+    d = ch.get("data")
+    if isinstance(d, dict) and d.get("range"):
+        d["range"] = (data_fn or fn)(d["range"])
     for s in ch.get("series", []):
         if s.get("y"):
             s["y"] = fn(s["y"])
         if s.get("name_ref"):
             s["name_ref"] = fn(s["name_ref"])
+    for key, fields in (("limits", ("value",)), ("zones", ("lo", "hi")), ("notes", ("x", "y"))):
+        for g in ch.get(key, []):
+            for f in fields:
+                if isinstance(g.get(f), str) and g[f]:
+                    g[f] = fn(g[f])
 
 
 def _adjust_ref(text, formula_sheet, target_sheet, axis, at, n):
