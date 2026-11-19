@@ -176,7 +176,9 @@ class SheetsTab(QWidget):
         ]
         data = [
             ("Study", [("study_in", "s_study_in", "Import\nstudy", "Bring a finished parametric study onto a sheet", self.study_import),
-                       ("study_refresh", "s_study_refresh", "Refresh from\nstudy", "Read the study again; formulas next to it fill down", self.study_refresh)]),
+                       ("study_refresh", "s_study_refresh", "Refresh from\nstudy", "Read the study again; formulas next to it fill down", self.study_refresh),
+                       ("study_select", "s_study_sel", "Select\nstudy", "Select all the cells of the imported study the cursor is on", self.study_select),
+                       ("study_delete", "s_study_del", "Delete\nstudy", "Take the imported study off the sheet (Refresh no longer fills it)", self.study_delete)]),
             ("Excel", [("xl_in", "s_xl_in", "Import\n.xlsx", "Open an Excel workbook", self.import_xlsx_dialog), ("xl_out", "s_xl_out", "Export\n.xlsx", "Save as an Excel workbook", self.export_xlsx_dialog)]),
             ("Names", [("names", "s_names", "Names", "Names for cells and ranges (NumScrews)", self.names_dialog)]),
             ("Sheets", [("sh_add", "s_sh_add", "Add\nsheet", "Add a sheet", self.add_sheet), ("sh_dup", "s_sh_dup", "Copy\nsheet", "Copy the sheet", self.duplicate_sheet),
@@ -321,7 +323,7 @@ class SheetsTab(QWidget):
         fn = {"bold": lambda: self.toggle("bold"), "italic": lambda: self.toggle("italic"), "format": self.format_dialog, "paste_special": self.paste_special,
               "insert": lambda: self.insert("r"), "delete": lambda: self.delete("r"), "insert_row": lambda: self.insert("r"), "insert_col": lambda: self.insert("c"),
               "delete_row": lambda: self.delete("r"), "delete_col": lambda: self.delete("c"), "chart_new": self.chart_new, "col_width": self.col_width,
-              "study_refresh": self.study_refresh, "chart_edit": lambda: self.chart_edit(arg), "chart_export": lambda: self.chart_export(arg),
+              "study_refresh": self.study_refresh, "study_select": self.study_select, "study_delete": self.study_delete, "chart_edit": lambda: self.chart_edit(arg), "chart_export": lambda: self.chart_export(arg),
               "chart_copy": lambda: self.chart_copy(arg)}.get(name)
         if fn:
             fn()
@@ -401,7 +403,8 @@ class SheetsTab(QWidget):
         self.act["redo"].setEnabled(self.wb.can_redo())
         s = self.wb.get_sheet(g.sheet)
         has_link = bool(s and s.links)
-        self.act["study_refresh"].setEnabled(has_link)
+        for k in ("study_refresh", "study_select", "study_delete"):
+            self.act[k].setEnabled(has_link)
         has_chart = bool(s and s.charts)
         for k in ("ch_edit", "ch_copy", "ch_export", "ch_del"):
             self.act[k].setEnabled(has_chart)
@@ -897,22 +900,81 @@ class SheetsTab(QWidget):
         self.mark_extra()
         return link
 
+    def study_at_cursor(self, title, verb):
+        """The imported study an action is for: the one the cursor is on or next to.  With the cursor elsewhere the person is asked - which of several, or whether
+        the only one is meant - so that a study is never refilled (or deleted) by an action that was meant for something else.  None when nothing is chosen."""
+        g = self.grid
+        s = g.sheet_obj()
+        near = sh_study._link_at(s, g.r, g.c)
+        if near is not None:
+            return near
+        close = [x for x in s.links if sh_study.is_near(self.wb, s, x, g.r, g.c)]
+        if len(close) == 1:
+            return close[0]
+        label = lambda x: f"{x.get('name', 'study')} ({E.addr(*sh_study.block_rect(x)[:2])}:{E.addr(*sh_study.block_rect(x)[2:])})"
+        if len(s.links) == 1:
+            x = s.links[0]
+            ok = QMessageBox.question(self, title, f"The cursor is not on the study.\n\n{verb.capitalize()} {label(x)}?") == QMessageBox.StandardButton.Yes
+            return x if ok else None
+        names = [label(x) for x in s.links]
+        pick, ok = QInputDialog.getItem(self, title, "Which one?", names, 0, False)
+        return s.links[names.index(pick)] if ok else None
+
+    def study_select(self):
+        """Selects every cell of the imported study (so it can be moved, copied or cleared as one)."""
+        if not self.grid.sheet_obj().links:
+            self.status.say("This sheet has no imported study.", "warn")
+            return None
+        ln = self.study_at_cursor("Select study", "select")
+        if ln is None:
+            return None
+        r1, c1, r2, c2 = sh_study.block_rect(ln)
+        self.grid.select(r1, c1, r2, c2, active=(r1, c1))
+        self.status.say(f"Selected {ln.get('name', 'the study')}. Drag its border to move it.", "")
+        return ln
+
+    def _ask_study_delete(self, ln):
+        """'cells' (delete the study and its cells), 'keep' (the numbers stay as plain cells) or None."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Delete study")
+        r1, c1, r2, c2 = sh_study.block_rect(ln)
+        box.setText(f"Take {ln.get('name', 'the study')} ({E.addr(r1, c1)}:{E.addr(r2, c2)}) off the sheet?\n\n"
+                    "Refresh from study will no longer fill this area. Formulas next to it are not touched.")
+        b_cells = box.addButton("Delete the study and its cells", QMessageBox.ButtonRole.DestructiveRole)
+        b_keep = box.addButton("Keep the numbers as plain cells", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return "cells" if box.clickedButton() is b_cells else ("keep" if box.clickedButton() is b_keep else None)
+
+    def study_delete(self):
+        """Removes an imported study from the sheet: its cells go too, or stay as plain numbers.  One undo step."""
+        g = self.grid
+        if not g.sheet_obj().links:
+            self.status.say("This sheet has no imported study.", "warn")
+            return None
+        ln = self.study_at_cursor("Delete study", "delete")
+        if ln is None:
+            return None
+        choice = self._ask_study_delete(ln)
+        if choice is None:
+            return None
+        name = ln.get("name", "the study")
+        sh_study.remove_link(self.wb, g.sheet, ln, clear=(choice == "cells"))
+        self.status.say(f"Deleted {name} from the sheet." if choice == "cells" else f"{name} is no longer linked: its numbers stay as plain cells.", "good")
+        self.mark_extra()
+        g.viewport().update()
+        self.update_help()
+        return ln
+
     def study_refresh(self, force=False):
         g = self.grid
         s = g.sheet_obj()
         if not s.links:
             self.status.say("This sheet has no imported study. Data > Import study adds one.", "warn")
             return None
-        ln = sh_study._link_at(s, g.r, g.c)
+        ln = self.study_at_cursor("Refresh from study", "refresh")
         if ln is None:
-            if len(s.links) == 1:
-                ln = s.links[0]
-            else:
-                names = [x.get("name", "study") + f" ({E.addr(*x['origin'])})" for x in s.links]
-                pick, ok = QInputDialog.getItem(self, "Refresh from study", "Which one?", names, 0, False)
-                if not ok:
-                    return None
-                ln = s.links[names.index(pick)]
+            return None
         try:
             done, notes = sh_study.refresh(self.wb, g.sheet, ln, force=force)
         except sh_study.StudyError as ex:

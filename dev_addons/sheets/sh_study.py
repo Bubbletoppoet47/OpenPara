@@ -249,7 +249,36 @@ def is_stale(link):
     return stamp(link["project"], link.get("sub", "")) > link.get("stamp", 0.0) + 0.5
 
 
-def remove_link(wb, sheet, link):
+def block_rect(link):
+    """(first row, first column, last row, last column) of the cells of an imported block: the header row and the data under it."""
+    r0, c0 = link["origin"]
+    return r0, c0, r0 + max(0, link.get("rows", 0)), c0 + max(1, link.get("cols", 1)) - 1
+
+
+def is_near(wb, sheet_obj, link, r, c):
+    """True when (r, c) is in the block, one cell around it, or in the formula columns next to it that Refresh keeps filled."""
+    r1, c1, r2, c2 = block_rect(link)
+    try:
+        fc = formula_columns(wb, sheet_obj, link)
+    except Exception:                                                   # noqa: BLE001 - only a hint
+        fc = []
+    c2 = max([c2] + [x for x in fc if isinstance(x, int)])
+    return r1 - 1 <= r <= r2 + 1 and c1 - 1 <= c <= c2 + 1
+
+
+def remove_link(wb, sheet, link, clear=False):
+    """Takes the block off the sheet's imported studies, so Refresh from study no longer fills it.  clear=True also empties the cells of the block (values and
+    looks; formulas next to it stay).  One undo step."""
     s = wb.get_sheet(sheet)
-    if link in s.links:
+    if link not in s.links:
+        return False
+    rect = block_rect(link)
+    wb.begin_group("Delete study")
+    try:
         s.links.remove(link)
+        if clear:
+            wb.clear(sheet, rect, styles=True)
+    finally:
+        wb.end_group()
+    wb._structure()
+    return True

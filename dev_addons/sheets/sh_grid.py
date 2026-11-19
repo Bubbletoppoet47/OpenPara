@@ -1547,6 +1547,8 @@ class Grid(QAbstractScrollArea):
             if ln is not None:
                 menu.addSeparator()
                 menu.addAction("Refresh from study", lambda: self.command.emit("study_refresh"))
+                menu.addAction("Select study", lambda: self.command.emit("study_select"))
+                menu.addAction("Delete study from sheet...", lambda: self.command.emit("study_delete"))
         elif pos.y() < self.hh:
             menu.addAction("Insert column", lambda: self.command.emit("insert_col"))
             menu.addAction("Delete column", lambda: self.command.emit("delete_col"))

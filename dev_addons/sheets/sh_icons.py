@@ -33,6 +33,8 @@ SHEETS = {
     "s_undo": ('<path class="n" stroke-width="2.200" d="M9 5L4 9.500 9 14M4.500 9.500H14a5.500 5.500 0 0 1 0 11h-4"/>', "feat"),
     "s_redo": ('<path class="n" stroke-width="2.200" d="M15 5l5 4.500-5 4.500M19.500 9.500H10a5.500 5.500 0 0 0 0 11h4"/>', "feat"),
     "s_study_in": ('<rect class="p" x="3" y="12" width="18" height="9" rx="1"/><path class="l" d="M3 16.500h18M9 12v9M15 12v9"/><path class="n" stroke-width="2.200" d="M12 2v8M8.500 6.500L12 10l3.500-3.500"/>', "ana"),
+    "s_study_sel": ('<rect class="p" x="4" y="6" width="16" height="12" rx="1"/><path class="l" d="M4 10h16M9.500 6v12M14.500 6v12"/><rect class="n" stroke-width="1.800" stroke-dasharray="3 2" fill="none" x="2" y="3.500" width="20" height="17" rx="1"/>', "ana"),
+    "s_study_del": ('<rect class="p" x="2" y="4" width="15" height="11" rx="1"/><path class="l" d="M2 8h15M7 4v11M12 4v11"/><path class="n" stroke-width="2.200" d="M14.500 14.500l7 7M21.500 14.500l-7 7"/>', "ana"),
     "s_study_refresh": ('<path class="n" stroke-width="2.200" d="M19 12a7 7 0 1 1-2.300-5.200"/><path class="n" stroke-width="2.200" d="M19.500 3.500v4.500H15"/>', "ana"),
     "s_xl_in": ('<path class="p" d="M9 3h7l4 4v14H9z"/><path class="n" stroke-width="2.200" d="M11.500 11l5 6M16.500 11l-5 6"/><path class="n" stroke-width="2" d="M2 12h5.500M5 9l3 3-3 3"/>', "dat"),
     "s_xl_out": ('<path class="p" d="M4 3h7l4 4v14H4z"/><path class="n" stroke-width="2.200" d="M6.500 11l5 6M11.500 11l-5 6"/><path class="n" stroke-width="2" d="M16.500 12H22M19 9l3 3-3 3"/>', "dat"),

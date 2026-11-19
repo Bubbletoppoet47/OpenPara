@@ -4,7 +4,7 @@ A spreadsheet tab. Playground only; nothing in the core program changes.
 
 - **Formulas**: Excel's syntax, 118 functions, `$` references, other sheets, sheet-scoped names. Cell references stay `F62`-style.
 - **Files**: `.opsheet` (JSON). Excel `.xlsx` opens and exports (openpyxl is downloaded once, on first use).
-- **Studies**: Data > Import study; Refresh from study reads it again and fills formulas next to it down.
+- **Studies**: Data > Import study; Refresh from study reads it again and fills formulas next to it down (it acts on the study under or next to the cursor, and asks when the cursor is elsewhere). Select study picks the whole block; Delete study (Data tab or right-click) takes it off the sheet - its cells go, or the numbers stay as plain cells - in one undo step, and Refresh no longer touches that area.
 - **Charts**: Insert chart (from the selected cells, or empty and pick the cells after); double-click a chart to open the panel on the right.
   Setup (type, data range, X, series, left/right axis, swap X and Y), Customize (fonts, lines, grid, frame, legend, limit lines, zones, notes) and
   Advanced (every matplotlib setting as a typed input, saved with the chart). Looks (presets) are saved in `chart_presets.json`. PNG/SVG/PDF.
