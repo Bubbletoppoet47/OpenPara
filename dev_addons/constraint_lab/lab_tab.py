@@ -18,9 +18,11 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileD
 
 import asm_model
 import assembly
+import paths
 import lab_engine
 import lab_highlight
 import lab_matrix
+import lab_probe
 
 ENGINES = {"Current": asm_model, "Experimental": lab_engine}      # name -> the module that has Assembly, face_ref, MateError ...
 
@@ -54,6 +56,9 @@ class LabWindow(lab_highlight.FaceTint, assembly.AssemblyWindow):
             ("lab_tint", "◧", "Face\nRecolour", "On: a picked or hovered face is shown by recolouring its own triangles (nothing floats).  Off: the old lifted copy "
              "of the face.  Needs the baked outline drawing (Settings); the classic drawing always uses the old copy.", lambda: self.tint_toggle()),
             "|",
+            ("lab_rec", "●", "Drag\nRecorder", "Records what the mouse, the camera and the part do during a drag, and says who moved the camera.  Press once to start, do "
+             "a drag, press again to stop and see the report (it is also saved in the user folder as drag_record.txt).", lambda: self.rec_toggle()),
+            "|",
             ("lab_matrix", "▦", "Mate\nMatrix", "Score an engine on every pick type against every pick type for every mate, from several starting poses",
              lambda: self.matrix_open()),
         ]), "Constraint Lab")
@@ -61,6 +66,11 @@ class LabWindow(lab_highlight.FaceTint, assembly.AssemblyWindow):
         b.setCheckable(True)
         b.setChecked(self.face_tint)
         b.setStyleSheet(b.styleSheet() + " QToolButton:checked{background:#cfe3fb; border:1px solid #6aa0e0;}")
+        b = self.act["lab_rec"]
+        b.setCheckable(True)
+        b.setStyleSheet(b.styleSheet() + " QToolButton:checked{background:#fbd0d0; border:1px solid #d06060;}")
+        self.probe = None
+        self.guard = lab_probe.ViewGuard(self)
         self.show_engine()
         self.say("Constraint Lab: insert parts and mate them as usual.  The engine and the Mate Matrix are on the Constraint Lab tab of the ribbon.")
 
@@ -86,6 +96,27 @@ class LabWindow(lab_highlight.FaceTint, assembly.AssemblyWindow):
                                        "recolour is on, but this view uses the classic outline drawing (Settings > Outline drawing = baked), so the old lifted copy is drawn." if on
                                        else "the old lifted copy of the face."))
 
+    def rec_toggle(self):
+        on = self.act["lab_rec"].isChecked()
+        if on and self.probe is None:
+            self.probe = lab_probe.DragProbe(self)
+            self.say("Drag Recorder is ON: drag a part (and anything else you want to check), then press Drag Recorder again.")
+        elif not on and self.probe is not None:
+            pr, self.probe = self.probe, None
+            text = pr.stop()
+            folder = paths.user_dir()
+            saved = ""
+            try:
+                with open(os.path.join(folder, "drag_record.txt"), "w", encoding="utf-8") as f:
+                    f.write(text)
+                pr.raw_csv(os.path.join(folder, "drag_record_raw.csv"))
+                saved = os.path.join(folder, "drag_record.txt")
+            except OSError as ex:
+                text += f"\n(Could not save the report: {ex})\n"
+            self.say("Drag Recorder is off." + (f"  Saved: {saved}" if saved else ""))
+            self.report_win = ReportDialog(self, "Drag Recorder", text, saved)
+            self.report_win.show()
+
     def show_engine(self):
         self.engine_label.setText(f"  Engine: {self.engine_name}  ")
         for key, name in (("tool_eng_cur", "Current"), ("tool_eng_exp", "Experimental")):
@@ -98,6 +129,33 @@ class LabWindow(lab_highlight.FaceTint, assembly.AssemblyWindow):
             self.matrix_win = MatrixDialog(self)
         self.matrix_win.show()
         self.matrix_win.raise_()
+
+
+class ReportDialog(QDialog):
+    """A text report with Copy."""
+
+    def __init__(self, win, title, text, saved=""):
+        super().__init__(win)
+        self.setWindowTitle(title)
+        self.resize(980, 700)
+        lay = QVBoxLayout(self)
+        if saved:
+            lay.addWidget(QLabel(f"Saved as {saved}"))
+        self.text = QPlainTextEdit()
+        self.text.setReadOnly(True)
+        self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.text.setPlainText(text)
+        lay.addWidget(self.text, 1)
+        bot = QHBoxLayout()
+        cp = QPushButton("Copy report")
+        cp.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.text.toPlainText()))
+        cl = QPushButton("Close")
+        cl.clicked.connect(self.close)
+        bot.addWidget(cp)
+        bot.addStretch(1)
+        bot.addWidget(cl)
+        lay.addLayout(bot)
 
 
 class MatrixDialog(QDialog):
