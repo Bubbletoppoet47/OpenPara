@@ -1,0 +1,19 @@
+{
+ "name": "Constraint Lab",
+ "order": 3,
+ "status": "testing",
+ "description": "A sandbox copy of the assembly window for working on mates: insert your own parts, mate them, and switch between the Current engine (what OpenPara uses) and an Experimental engine that only lives here. The Mate Matrix report scores both engines on every pick-type / mate-type combination.",
+ "tabs": [
+  {
+   "kind": "constraint_lab",
+   "label": "Constraint Lab",
+   "short": "Lab",
+   "module": "lab_tab",
+   "factory": "make_tab",
+   "args": [
+    "host",
+    "path"
+   ]
+  }
+ ]
+}
