@@ -145,8 +145,37 @@ def _groups(n, pairs):
     return sorted(d.values(), key=lambda g: g[0])
 
 
-def analyze_assembly(bodies, tol=0.0):
-    """See the top of the file.  bodies = [(name, solid, material dict as in the part file)], tol = bond distance in mm (0 = automatic)."""
+def _mark_faces(g, res, pieces, piece_body):
+    """Every face of g (the analysis of the compound `res`): the bodies on its sides ("bodies"), the first of them ("body"), and "interface" (it lies
+    between two pieces, so inside the assembly)."""
+    fp = _face_pieces(res, pieces)
+    for f, ps in zip(g["faces"], fp):
+        bs_ = sorted({piece_body[k] for k in ps})
+        f["interface"] = len(ps) >= 2
+        f["bodies"] = bs_
+        f["body"] = bs_[0] if bs_ else 0
+
+
+def _carry_owners(old_pieces, old_body, new_pieces, scale):
+    """{new piece index: body}: a split changes the faces of a piece, not its shape, so every new piece is the old one with the same centre and volume."""
+    import build123d as b123
+    def centre(p):
+        c = p.center(b123.CenterOf.MASS)
+        return np.array([c.X, c.Y, c.Z])
+    old = [(centre(p), float(p.volume), old_body[k]) for k, p in enumerate(old_pieces)]
+    out = {}
+    for k, p in enumerate(new_pieces):
+        c = centre(p)
+        v = float(p.volume)
+        best = min(old, key=lambda o: float(np.linalg.norm(c - o[0])) / scale + abs(v - o[1]) / max(o[1], 1e-12))
+        out[k] = best[2]
+    return out
+
+
+def analyze_assembly(bodies, tol=0.0, splits=None):
+    """See the top of the file.  bodies = [(name, solid, material dict as in the part file)], tol = bond distance in mm (0 = automatic),
+    splits = the face splits of the setup (see solid_geom.analyze); they cut the faces of the FUSED assembly, so a face between two bodies can be split
+    too (the patches are then shared by both bodies)."""
     import build123d as b123
     solids = [s for _n, s, _m in bodies]
     n = len(solids)
@@ -176,14 +205,26 @@ def analyze_assembly(bodies, tol=0.0):
     stray = [k for k in range(len(pieces)) if k not in piece_body]
     for k in stray:
         piece_body[k] = 0
+    splits = [x for x in (splits or []) if int(x.get("cols", 1)) * int(x.get("rows", 1)) > 1]
+    g0 = None
+    split_of = {}
+    if splits:
+        g0 = sg._analyze_solid(res, full=False)
+        for f in g0["faces"]:
+            f["parent"], f["cell"] = f["id"], None
+        _mark_faces(g0, res, pieces, piece_body)
+        cur, records, split_of, snotes = sg.apply_splits(res, g0, splits)
+        notes += snotes
+        new_pieces = cur.solids()
+        piece_body = _carry_owners(pieces, piece_body, new_pieces, max(diag, 1e-12))
+        res, pieces = cur, new_pieces
     g = sg._analyze_solid(res)
-    fp = _face_pieces(res, pieces)
-    for f, ps in zip(g["faces"], fp):
-        bs_ = sorted({piece_body[k] for k in ps})
-        f["parent"], f["cell"] = f["id"], None
-        f["interface"] = len(ps) >= 2
-        f["bodies"] = bs_
-        f["body"] = bs_[0] if bs_ else 0
+    if splits:
+        sg.label_patches(g, g0, records, split_of)
+    else:
+        for f in g["faces"]:
+            f["parent"], f["cell"] = f["id"], None
+    _mark_faces(g, res, pieces, piece_body)
     bonds = {}
     for f in g["faces"]:
         if f["interface"] and len(f["bodies"]) >= 2:
@@ -233,7 +274,7 @@ def analyze_assembly(bodies, tol=0.0):
     for k, p in enumerate(pieces):
         c = p.center(b123.CenterOf.MASS)
         psol.append({"body": piece_body[k], "center": [c.X, c.Y, c.Z], "volume": float(p.volume)})
-    g.update({"orig": None, "split_of": {}, "notes": notes, "solid": res, "bodies": info, "solids": psol, "bonds": bonds, "groups": groups,
+    g.update({"orig": g0, "split_of": split_of, "notes": notes, "solid": res, "bodies": info, "solids": psol, "bonds": bonds, "groups": groups,
               "floating": floating, "hints": hints, "overlaps": [{"a": a, "b": b_, "volume": v} for (a, b_), v in sorted(overlaps.items())], "tol": tol_used})
     return g
 

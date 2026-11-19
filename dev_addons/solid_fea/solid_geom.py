@@ -66,7 +66,17 @@ def analyze(solid, splits=None):
     g0 = _analyze_solid(solid, full=False)
     for f in g0["faces"]:
         f["parent"], f["cell"] = f["id"], None
-    cur = solid
+    cur, records, split_of, notes = apply_splits(solid, g0, splits)
+    g = _analyze_solid(cur)
+    label_patches(g, g0, records, split_of)
+    g.update({"orig": g0, "split_of": split_of, "notes": notes, "solid": cur})
+    return g
+
+
+def apply_splits(shape, g0, splits):
+    """Cuts the faces of `shape` (a Solid, or a Compound of solids - an assembly) as the splits say; g0 = _analyze_solid of the unsplit shape with every
+    face its own parent.  Returns (the new shape, records of the patches, {parent face id: split info}, notes)."""
+    cur = shape
     records, split_of, notes = [], {}, []
     for sp in splits:
         pid = match_face(g0, sp["face"])
@@ -89,7 +99,11 @@ def analyze(solid, splits=None):
         split_of[pid] = {"cols": int(sp["cols"]), "rows": int(sp["rows"]), "u": [float(x) for x in u_used], **info}
         for p in patches:
             records.append({"parent": pid, "cell": p["cell"], "center": p["center"], "area": p["area"]})
-    g = _analyze_solid(cur)
+    return cur, records, split_of, notes
+
+
+def label_patches(g, g0, records, split_of):
+    """Gives every face of g (the analysis of the split shape) its parent in g0 and, for a patch, its cell."""
     tol = 1e-6 * max(g["diag"], 1.0)
     for f in g["faces"]:
         f["parent"], f["cell"] = None, None
@@ -99,8 +113,6 @@ def analyze(solid, splits=None):
             continue
         hit = next((o for o in g0["faces"] if o["id"] not in split_of and _same(f, o["center"], o["area"], tol)), None)
         f["parent"] = hit["id"] if hit is not None else None
-    g.update({"orig": g0, "split_of": split_of, "notes": notes, "solid": cur})
-    return g
 
 
 def _same(f, center, area, tol):
@@ -238,6 +250,10 @@ def _cut_face(solid, face, planes, R):
     if not sp.IsDone():
         raise GeomError("The face could not be split here.")
     r = b.Shape.cast(sp.Shape())
+    if not isinstance(solid, b.Solid):                                    # an assembly (a compound of solids) stays one
+        if not isinstance(r, b.Compound):
+            r = b.Compound([r])
+        return r, n
     if not isinstance(r, b.Solid):
         sols = r.solids()
         if len(sols) != 1:
@@ -363,7 +379,10 @@ def patch_outlines(g):
 
 
 def _base_sig(f):
-    return {"type": "face", "kind": f["kind"], "center": list(f["center"]), "normal": list(f["normal"]), "area": f["area"]}
+    s = {"type": "face", "kind": f["kind"], "center": list(f["center"]), "normal": list(f["normal"]), "area": f["area"]}
+    if f.get("interface"):
+        s["two_sided"] = True                  # a face between two bodies of an assembly: it has no outside, so its normal may come out either way round
+    return s
 
 
 def face_sig(g, fid):
@@ -410,7 +429,8 @@ def match_face(g, sig, tol=0.6):
     for f in g["faces"]:
         if f["kind"] != sig["kind"]:
             continue
-        if float(np.dot(n0, f["normal"])) < 0.7 and sig["kind"] == "plane":
+        dn = float(np.dot(n0, f["normal"]))
+        if (abs(dn) if sig.get("two_sided") else dn) < 0.7 and sig["kind"] == "plane":
             continue
         dist = float(np.linalg.norm(np.asarray(f["center"]) - sig["center"])) / d0
         dist += 0.1 * abs(f["area"] - sig["area"]) / max(sig["area"], 1e-12) * (1 if dist > 0.02 else 0.2)
@@ -427,12 +447,21 @@ def match_vertex(g, sig, tol=0.6):
     return i if d[i] <= tol else None
 
 
-def display_mesh(g):
-    """One triangle mesh of all faces for the 3D view: (points, triangles, face id per triangle)."""
+def display_mesh(g, hidden=()):
+    """One triangle mesh of all faces for the 3D view: (points, triangles, face id per triangle).  hidden = bodies of an assembly that are not drawn: their
+    outer faces go, and a face between a hidden body and a shown one is drawn (it is then the surface of the shown one, and can be picked)."""
     P, T, F = [], [], []
     off = 0
+    hidden = set(hidden or ())
     for i, (v, t) in enumerate(g["tess"]):
-        if not len(t) or g["faces"][i].get("interface"):               # a face between two bodies of an assembly is inside: not drawn, not picked
+        f = g["faces"][i]
+        if not len(t):
+            continue
+        if f.get("interface"):                                         # a face between two bodies of an assembly is inside: drawn only when a body is hidden
+            bs = f.get("bodies") or []
+            if not (hidden and any(b in hidden for b in bs) and any(b not in hidden for b in bs)):
+                continue
+        elif hidden and f.get("body") in hidden:
             continue
         P.append(v)
         T.append(t + off)

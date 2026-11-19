@@ -1,6 +1,7 @@
 """
-solid_tab.py - the 3D FEA window (project folder .gpv): a parametric part, or an ASSEMBLY treated as fully bonded (faces within the bond distance are
-joined, every body keeps its own material), linear elastic, quadratic tetrahedra (or a hex-dominant mesh for a single part).
+solid_tab.py - the 3D FEA window (project folder .gpv): a parametric part, or an ASSEMBLY - fully bonded (faces within the bond distance are joined) or
+joined by SCREWS and BOLTS (frictionless contact between the parts, the patches with a screw bonded, the force through each patch checked with AISI S100-16);
+every body keeps its own material.  Linear elastic, quadratic tetrahedra (or a hex-dominant mesh for a single part).
 
 Project bar:  New project / Import source / Update from original / Save   (the same project folder machinery as the 1D / 2D simulations:
               the part is COPIED into  source/  and the simulation only uses the copy)
@@ -37,6 +38,7 @@ import solid_fem as fem
 import solid_geom as sg
 import solid_mesh as smesh
 import solid_model as sm
+import solid_screw as screw
 import solid_view as sv
 import unitctl
 import units
@@ -143,6 +145,7 @@ class SolidWindow(QWidget):
         self.saved_sig = None
         self.candidate = None
         self.pending_dims = False
+        self.hidden_bodies = set()              # the parts of an assembly that are not drawn (to see and pick the faces between parts); not saved
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
@@ -233,6 +236,70 @@ class SolidWindow(QWidget):
         self.bond_unit = QLabel("mm")
         brow.addWidget(self.bond_unit)
         al.addLayout(brow)
+        jrow = QHBoxLayout()
+        jrow.addWidget(QLabel("Joint"))
+        self.joint_combo = QComboBox()
+        self.joint_combo.addItem("Fully bonded: touching faces are one", "bonded")
+        self.joint_combo.addItem("Screws and bolts: parts touch freely", "contact")
+        self.joint_combo.setToolTip("Fully bonded: the parts are one body wherever their faces touch (no slip, no gap, no separation).\n"
+                                    "Screws and bolts: the faces between two parts are frictionless contact (the parts press on each other but slide and may "
+                                    "open), and only the patches that carry a screw or bolt are bonded. The force through each of those patches is what the "
+                                    "screw or bolt has to carry.")
+        sim_ui.tame(self.joint_combo, 24)
+        self.joint_combo.activated.connect(lambda _i: self.joint_picked())
+        jrow.addWidget(self.joint_combo, 1)
+        al.addLayout(jrow)
+        self.screw_box = QWidget()                                   # only with the joint 'screws and bolts'
+        sl = QVBoxLayout(self.screw_box)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(3)
+        sl.addWidget(self.hint("Cut the face between two parts into patches with Split (below), the size of a screw head or so, and select the patches "
+                               "that carry a screw: click them in the view (untick a part under Show parts to see the faces between the parts) or in the "
+                               "Faces list; Ctrl/Shift for several. Then press Add screw."))
+        sl.addWidget(QLabel("Show parts"))
+        self.show_list = QListWidget()
+        self.show_list.setMaximumHeight(80)
+        self.show_list.setToolTip("Untick a part to hide it: the faces between it and the parts that stay shown then appear and can be clicked.")
+        self.show_list.itemChanged.connect(self.show_changed)
+        sl.addWidget(self.show_list)
+        row = QHBoxLayout()
+        self.b_add_screw = QPushButton("Add screw...")
+        self.b_add_screw.setToolTip("Puts the same screw or bolt on every selected patch (a patch is a face between two parts). The screw sits at the centre of "
+                                    "the patch; no hole is modelled, the patch is bonded and the force through it is read.")
+        self.b_add_screw.clicked.connect(lambda: self.add_screws())
+        self.b_edit_screw = QPushButton("Edit...")
+        self.b_edit_screw.clicked.connect(lambda: self.edit_screw())
+        self.b_del_screw = QPushButton("Remove")
+        self.b_del_screw.clicked.connect(lambda: self.remove_screw())
+        for b in (self.b_add_screw, self.b_edit_screw, self.b_del_screw):
+            row.addWidget(b)
+        sl.addLayout(row)
+        self.screw_table = QTableWidget(0, 5)
+        self.screw_table.setHorizontalHeaderLabels(["Name", "Type", "Size", "Patches", "Result"])
+        self.screw_table.verticalHeader().hide()
+        self.screw_table.setMinimumHeight(90)
+        self.screw_table.setMaximumHeight(170)
+        self.screw_table.horizontalHeader().setStretchLastSection(True)
+        self.screw_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.screw_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.screw_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.screw_table.setToolTip("Click a row to select its patches in the view. Double-click to change the screw.")
+        self.screw_table.itemSelectionChanged.connect(self.screw_row_selected)
+        self.screw_table.cellDoubleClicked.connect(lambda _r, _c: self.edit_screw())
+        sl.addWidget(self.screw_table)
+        drow = QHBoxLayout()
+        drow.addWidget(QLabel("Design method"))
+        self.design_combo = QComboBox()
+        for k, text in screw.METHODS.items():
+            self.design_combo.addItem(text, k)
+        self.design_combo.setToolTip("How the strengths of AISI S100-16 are taken: ASD divides the nominal strength by the safety factor, LRFD multiplies it by "
+                                     "phi, LSD by the Canadian phi, nominal uses it as it is. Loads are the ones you typed (no load factors are applied).")
+        sim_ui.tame(self.design_combo, 24)
+        self.design_combo.activated.connect(lambda _i: self.design_picked())
+        drow.addWidget(self.design_combo, 1)
+        sl.addLayout(drow)
+        al.addWidget(self.screw_box)
+        self.screw_box.hide()
         v.addWidget(self.asm_box)
         self.asm_box.hide()
         self.dims = QTableWidget(0, 2)
@@ -305,25 +372,9 @@ class SolidWindow(QWidget):
         row.addStretch(1)
         v.addLayout(row)
         self.cur_split = None
-        self.part_only = [self.dims, self.split_lbl, self.sp_cols, self.sp_rows, self.b_split, self.b_unsplit, self.split_hdr, self.split_list,
-                          self.sz_table, self.b_setsize, self.b_even] + self.split_words            # what only a single part has: dimensions and face splits
+        self.part_only = [self.dims]                                       # what only a single part has: the dimensions (the face splits work on an assembly too)
         # --- 2 material and analysis
         v = self.sec(2, "Material and analysis", True, summary=lambda: self.mat_combo.currentText().strip() or "custom material")
-        self.body_lbl = QLabel("Bodies of the assembly: select one to see and change its material (it starts as the material of the part).")
-        self.body_lbl.setWordWrap(True)
-        v.addWidget(self.body_lbl)
-        self.body_table = QTableWidget(0, 2)
-        self.body_table.setHorizontalHeaderLabels(["Body", "Material"])
-        self.body_table.verticalHeader().setVisible(False)
-        self.body_table.horizontalHeader().setStretchLastSection(True)
-        self.body_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.body_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.body_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.body_table.setMaximumHeight(160)
-        self.body_table.itemSelectionChanged.connect(self.body_selected)
-        v.addWidget(self.body_table)
-        self.body_lbl.hide()
-        self.body_table.hide()
         self.mat_combo = QComboBox()
         self.mat_combo.activated.connect(self.material_picked)
         row = QHBoxLayout()
@@ -338,6 +389,21 @@ class SolidWindow(QWidget):
         self.b_del_mat.clicked.connect(self.delete_material)
         row.addWidget(self.b_del_mat)
         v.addLayout(row)
+        self.body_lbl = QLabel("Bodies of the assembly: select one, and the material above and the numbers below are its own (a body starts with the material of its part).")
+        self.body_lbl.setWordWrap(True)
+        v.addWidget(self.body_lbl)
+        self.body_table = QTableWidget(0, 2)
+        self.body_table.setHorizontalHeaderLabels(["Body", "Material"])
+        self.body_table.verticalHeader().setVisible(False)
+        self.body_table.horizontalHeader().setStretchLastSection(True)
+        self.body_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.body_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.body_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.body_table.setMaximumHeight(160)
+        self.body_table.itemSelectionChanged.connect(self.body_selected)
+        v.addWidget(self.body_table)
+        self.body_lbl.hide()
+        self.body_table.hide()
         self.mat_note = QLabel("")
         self.mat_note.setWordWrap(True)
         self.mat_note.setStyleSheet("color:#707070;")
@@ -976,6 +1042,9 @@ class SolidWindow(QWidget):
         self.res_lbl.setText("The setup changed since the last solve: press Solve." if had else "No result yet.")
         self.view.clear_result()
         self.enable_buttons()
+        if had and self.geom is not None and self.is_asm():                      # the screws' results and colours go with the result
+            self.fill_screws()
+            self.colour()
 
     def enable_buttons(self):
         have = self.geom is not None
@@ -1056,7 +1125,7 @@ class SolidWindow(QWidget):
         dlg = QDialog(self)
         dlg.setWindowTitle("Import source")
         lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel("Copy this part or assembly into the project (an assembly is solved as fully bonded parts):"))
+        lay.addWidget(QLabel("Copy this part or assembly into the project (an assembly is solved as fully bonded parts, or joined by screws):"))
         lst = QListWidget()
         tabs = self.open_tabs()
         for text, _w in tabs:
@@ -1116,6 +1185,7 @@ class SolidWindow(QWidget):
         self.setup["dims"] = {}
         self.setup["body_mats"] = {}
         self.cur_body = None
+        self.hidden_bodies = set()
         ok = self.load_geometry(first=True)
         self.show_source()
         miss = ("  Not found, so left out: " + ", ".join(os.path.basename(x.replace("\\", "/")) for x in missing_parts) + ".") if missing_parts else ""
@@ -1173,7 +1243,7 @@ class SolidWindow(QWidget):
         asm = self.source.type == "asm"
         try:
             if asm:
-                g = sasm.analyze_assembly(sasm.bodies_of_source(self.source), self.setup.get("bond_tol") or 0.0)
+                g = sasm.analyze_assembly(sasm.bodies_of_source(self.source), self.setup.get("bond_tol") or 0.0, self.setup.get("splits"))
             else:
                 if not first:
                     self.apply_dims()
@@ -1201,7 +1271,7 @@ class SolidWindow(QWidget):
                 self.read_inputs()
                 if self.mat_combo.currentData() is not None:
                     self.setup["mat_name"] = self.mat_combo.currentData()
-        for sp in ([] if asm else self.setup.get("splits") or []):      # remember the column direction that was used, so a rebuild keeps it
+        for sp in self.setup.get("splits") or []:                       # remember the column direction that was used, so a rebuild keeps it
             pid = sg.match_face(g.get("orig") or g, sp["face"])
             if pid in g["split_of"] and not sp.get("u"):
                 sp["u"] = list(g["split_of"][pid]["u"])
@@ -1209,7 +1279,7 @@ class SolidWindow(QWidget):
         self.fill_dims()
         self.fill_splits()
         self.show_asm()
-        P, T, F = sg.display_mesh(g)
+        P, T, F = sg.display_mesh(g, self.hidden_bodies if asm else ())
         self.view.set_geometry(P, T, F, keep_camera=keep_view)
         self.view.set_lines("grid", sg.patch_outlines(g))
         self.view.set_lines("preview", [])
@@ -1237,13 +1307,20 @@ class SolidWindow(QWidget):
             w.setVisible(on)
         if not on:
             self.cur_body = None
+            self.hidden_bodies = set()
             return
         import html
         g = self.geom
         names = [b["name"] for b in g["bodies"]]
         k = l_out(1.0)
-        lines = [f"Fully bonded where faces are within {l_out(g['tol']):.4g} {UD()['L']} of each other."]
-        lines += [f"{html.escape(names[r['a']])} - {html.escape(names[r['b']])}: bonded, area {r['area'] * k ** 2:.4g} {UD()['L']}2" for r in g["bonds"]]
+        contact = self.setup.get("joint") == "contact"
+        if contact:
+            lines = [f"Parts that touch within {l_out(g['tol']):.4g} {UD()['L']} of each other share a face (a joint). The joint is frictionless contact; "
+                     "only the patches with a screw or bolt are bonded."]
+            lines += [f"{html.escape(names[r['a']])} - {html.escape(names[r['b']])}: joint, area {r['area'] * k ** 2:.4g} {UD()['L']}2" for r in g["bonds"]]
+        else:
+            lines = [f"Fully bonded where faces are within {l_out(g['tol']):.4g} {UD()['L']} of each other."]
+            lines += [f"{html.escape(names[r['a']])} - {html.escape(names[r['b']])}: bonded, area {r['area'] * k ** 2:.4g} {UD()['L']}2" for r in g["bonds"]]
         txt = "<br>".join(lines)
         bad = [html.escape(x) for x in g["hints"] + g["notes"]]
         if bad:
@@ -1254,6 +1331,7 @@ class SolidWindow(QWidget):
         bt = self.setup.get("bond_tol") or 0.0
         self.e_bond.setText(format(l_out(bt), ".8g") if bt else "")
         self.fill_bodies()
+        self.sync_joint()
 
     def bond_changed(self):
         t = self.e_bond.text().strip()
@@ -1328,6 +1406,375 @@ class SolidWindow(QWidget):
             mine[b["name"]] = own
         self.fill_body_materials()
 
+    # ------------------------------------------------------------------ the joint of an assembly: bonded, or screws and bolts with contact
+    def joint_mode(self):
+        return "contact" if self.is_asm() and self.setup.get("joint") == "contact" else "bonded"
+
+    def sync_joint(self):
+        """The joint box, the screw box and the lists show the joint of the setup."""
+        for combo, key, default in ((self.joint_combo, "joint", "bonded"), (self.design_combo, "design", "ASD")):
+            i = combo.findData(self.setup.get(key) or default)
+            combo.blockSignals(True)
+            combo.setCurrentIndex(max(i, 0))
+            combo.blockSignals(False)
+        self.screw_box.setVisible(self.joint_mode() == "contact")
+        self.fill_show_list()
+        self.fill_screws()
+
+    def joint_picked(self):
+        self.set_joint(self.joint_combo.currentData())
+
+    def set_joint(self, mode):
+        """'bonded' or 'contact' (screws and bolts).  The screws stay in the setup when it goes back to bonded; they are not used then."""
+        mode = "contact" if mode == "contact" else "bonded"
+        if not self.is_asm():
+            return False
+        if mode == (self.setup.get("joint") or "bonded"):
+            return True
+        self.setup["joint"] = mode
+        if mode != "contact":
+            self.hidden_bodies = set()                                      # fully bonded: there is nothing to see between the parts
+        keep = [f for f in self.sel_faces if mode == "contact" or not self.geom["faces"][f].get("interface")]
+        self.fill_faces()
+        self.show_asm()
+        self.redraw()
+        self.select_faces(keep)
+        self.after_edit()
+        self.say("The parts touch freely now; only the screws and bolts join them. Cut the face between two parts into patches, select them and press Add screw."
+                 if mode == "contact" else "The parts are fully bonded where their faces touch.")
+        return True
+
+    def design_picked(self):
+        self.set_design(self.design_combo.currentData())
+
+    def set_design(self, method):
+        if method not in screw.METHODS:
+            return False
+        self.setup["design"] = method
+        self.design_combo.blockSignals(True)
+        self.design_combo.setCurrentIndex(max(self.design_combo.findData(method), 0))
+        self.design_combo.blockSignals(False)
+        self.screws_edited(True)
+        return True
+
+    def fill_show_list(self):
+        t = self.show_list
+        t.blockSignals(True)
+        t.clear()
+        if self.is_asm():
+            for i, b in enumerate(self.geom["bodies"]):
+                it = QListWidgetItem(b["name"])
+                it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+                it.setCheckState(Qt.CheckState.Unchecked if i in self.hidden_bodies else Qt.CheckState.Checked)
+                c = self.body_colour(i)
+                it.setBackground(QColor(int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)))
+                it.setForeground(QColor(20, 20, 20))
+                t.addItem(it)
+        t.blockSignals(False)
+
+    def show_changed(self, _item=None):
+        hid = {i for i in range(self.show_list.count()) if self.show_list.item(i).checkState() != Qt.CheckState.Checked}
+        self.set_hidden_bodies(hid)
+
+    def set_hidden_bodies(self, hid):
+        """The parts that are not drawn (body numbers).  At least one part stays."""
+        n = len(self.geom["bodies"]) if self.is_asm() else 0
+        hid = {int(b) for b in hid if 0 <= int(b) < n}
+        if n and len(hid) >= n:
+            hid = set(range(1, n))
+            self.say("At least one part stays on screen.")
+        self.hidden_bodies = hid
+        self.fill_show_list()
+        self.redraw()
+
+    def redraw(self):
+        """Draws the geometry again (a part shown or hidden, the joint changed) from the same point of view."""
+        if self.geom is None:
+            return
+        self.hidden_bodies = {b for b in self.hidden_bodies if b < len(self.geom.get("bodies") or [])}
+        P, T, F = sg.display_mesh(self.geom, self.hidden_bodies if self.is_asm() else ())
+        self.view.set_geometry(P, T, F, keep_camera=True)
+        self.view.set_lines("grid", sg.patch_outlines(self.geom))
+        self._prev_key = None
+        self.view.set_lines("preview", [])
+        self.colour()
+        self.preview_grid()
+        if self.result is not None:
+            self.show_field()
+
+    # ------------------------------------------------------------------ screws and bolts
+    def screw_fids(self, sc):
+        """The patch ids of a stored screw in the geometry now (a patch that is not found any more is left out).  Remembered for the geometry on show: a
+        screw can have hundreds of patches and the colours ask again after every click."""
+        cache = getattr(self, "_fid_cache", None)
+        if cache is None or cache[0] is not self.geom:
+            cache = self._fid_cache = (self.geom, {})
+        key = json.dumps(sc.get("faces", []), sort_keys=True)
+        out = cache[1].get(key)
+        if out is None:
+            out = []
+            for sig in sc.get("faces", []):
+                for i in sg.match_faces(self.geom, sig) or []:
+                    if i not in out:
+                        out.append(i)
+            if len(cache[1]) > 200:
+                cache[1].clear()
+            cache[1][key] = out
+        return list(out)
+
+    def screw_of_patch(self):
+        """{patch id: index of the screw on it}."""
+        m = {}
+        for i, sc in enumerate(self.setup.get("screws") or []):
+            for f in self.screw_fids(sc):
+                m[f] = i
+        return m
+
+    def screw_results(self):
+        """{screw name: [the records of its patches]} of the result on screen."""
+        out = {}
+        for rec in (self.result or {}).get("screws") or []:
+            out.setdefault(rec["screw"], []).append(rec)
+        return out
+
+    @staticmethod
+    def screw_size_text(sc):
+        c = screw.complete(sc)
+        if c["kind"] == "bolt":
+            return f"d {l_out(c['d']):.3g} {UD()['L']}"
+        return f"d {l_out(c['d']):.3g} x {l_out(c['length']):.3g} {UD()['L']}"
+
+    @staticmethod
+    def screw_result_text(recs):
+        if not recs:
+            return ""
+        bad = [r_ for r_ in recs if r_["status"] == "fails"]
+        live = [r_ for r_ in recs if r_["worst"] is not None]
+        worst = max(live, key=lambda r_: r_["worst"]) if live else None
+        if bad:
+            w = max(bad, key=lambda r_: r_["worst"])
+            return f"{len(bad)} of {len(recs)} fail: {w['worst_name']} {w['worst']:.2f}"
+        if any(r_["status"] == "incomplete" for r_ in recs):
+            return (f"{worst['worst']:.2f} so far, " if worst else "") + "some checks need numbers"
+        return f"all ok, worst {worst['worst']:.2f}" if worst else "ok"
+
+    def fill_screws(self):
+        t = self.screw_table
+        t.blockSignals(True)
+        keep = t.currentRow()
+        t.setRowCount(0)
+        if self.geom is not None and self.is_asm():
+            res = self.screw_results()
+            for i, sc in enumerate(self.setup.get("screws") or []):
+                nm = sm.name_of("Screw", i, sc)
+                cells = [nm, screw.KINDS.get(sc.get("kind", "screw"), "Screw").split(" (")[0], self.screw_size_text(sc), str(len(self.screw_fids(sc))),
+                         self.screw_result_text(res.get(nm))]
+                t.insertRow(i)
+                for c, text in enumerate(cells):
+                    it = QTableWidgetItem(text)
+                    it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                    t.setItem(i, c, it)
+            if 0 <= keep < t.rowCount():
+                t.selectRow(keep)
+        t.blockSignals(False)
+        for b in (self.b_edit_screw, self.b_del_screw):
+            b.setEnabled(t.rowCount() > 0)
+
+    def screw_row_selected(self):
+        r = self.screw_table.currentRow()
+        scs = self.setup.get("screws") or []
+        if self.geom is not None and 0 <= r < len(scs):
+            self.select_faces(self.screw_fids(scs[r]))
+
+    def add_screws(self, values=None, fids=None):
+        """Puts the same screw or bolt on every selected patch.  `values` (the numbers of solid_screw.default_screw in mm / N / MPa, with "name" and "kind")
+        skips the window that asks for them."""
+        if not self.is_asm():
+            self.say("Screws and bolts join the parts of an assembly: import an assembly first.")
+            return False
+        if self.joint_mode() != "contact":
+            self.say("Choose the joint 'Screws and bolts' first: with the parts fully bonded there is nothing for a screw to join.")
+            return False
+        fids = sorted(set(self.sel_faces if fids is None else fids))
+        if not fids:
+            self.say("Select the patch(es) first: faces between two parts (untick a part under Show parts to see them, or use the Faces list).")
+            return False
+        faces = self.geom["faces"]
+        bad = [f for f in fids if not faces[f].get("interface") or len(faces[f].get("bodies", ())) < 2]
+        if bad:
+            self.say(f"A screw goes on a face between two parts. {self.face_label(bad[0])} is not one: select joint faces only.")
+            return False
+        taken = self.screw_of_patch()
+        clash = [f for f in fids if f in taken]
+        if clash:
+            self.say(f"{self.face_label(clash[0])} already has a screw ({sm.name_of('Screw', taken[clash[0]], self.setup['screws'][taken[clash[0]]])}): "
+                     "remove it first, or select other patches.")
+            return False
+        if values is None:
+            values = self.ask_screw(None, len(fids))
+            if values is None:
+                return False
+        item = screw.complete(values)
+        scs = self.setup.setdefault("screws", [])
+        base = "Bolt" if item["kind"] == "bolt" else "Screw"
+        n = 1
+        names = {sm.name_of("Screw", i, x) for i, x in enumerate(scs)}
+        nm = (values.get("name") or "").strip()
+        while not nm or nm in names:
+            nm = f"{base} {n}" if not (values.get("name") or "").strip() else f"{values['name'].strip()} ({n})"
+            n += 1
+        item["name"] = nm
+        item["faces"] = [sg.face_sig(self.geom, f) for f in fids]
+        scs.append(item)
+        self.after_edit()
+        self.say(f"{nm}: {len(fids)} patch{'es' if len(fids) != 1 else ''}. Solve to read the force through each and see what fails. "
+                 "(Untick a part under Show parts to see the screws inside the joint.)")
+        return True
+
+    def edit_screw(self, row=None, values=None):
+        """Changes the numbers of the selected screw (all its patches).  `values` skips the window."""
+        r = self.screw_table.currentRow() if row is None else row
+        scs = self.setup.get("screws") or []
+        if not (0 <= r < len(scs)):
+            self.say("Select a screw in the list first.")
+            return False
+        cur = scs[r]
+        if values is None:
+            values = self.ask_screw(cur, len(self.screw_fids(cur)))
+            if values is None:
+                return False
+        new = screw.complete(dict(values, faces=cur["faces"]))
+        new["name"] = (values.get("name") or "").strip() or sm.name_of("Screw", r, cur)
+        scs[r] = new
+        self.screws_edited(True)
+        return True
+
+    def remove_screw(self, row=None):
+        r = self.screw_table.currentRow() if row is None else row
+        scs = self.setup.get("screws") or []
+        if not (0 <= r < len(scs)):
+            self.say("Select a screw in the list first.")
+            return False
+        del scs[r]
+        self.screws_edited(False)
+        return True
+
+    def screws_edited(self, same_patches):
+        """The screws of the setup changed.  When only their numbers (or the design method) changed, a result on screen is checked again from the forces it
+        has; a change of the patches asks for a new solution."""
+        if same_patches and self.result is not None and self.result.get("patch_forces") and self.geom is not None:
+            try:
+                r = sm.resolve(self.geom, self.setup)
+            except fem.FemError:
+                r = None
+            if r is not None and sm.recheck(self.geom, r, self.result):
+                self.fill_screws()
+                self.describe()
+                self.colour()
+                self.say("The checks are made again with the new numbers (the forces are those of the last solution).")
+                return
+        self.after_edit()
+
+    def ask_screw(self, cur=None, n_patches=1):
+        """The window for a screw or bolt: -> its numbers (mm, N, MPa) with "kind", "name" and "head", or None."""
+        c = screw.complete(cur) if cur else screw.default_screw("screw")
+        D = UD()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Screw or bolt" + (f" on {n_patches} patches" if n_patches != 1 else ""))
+        form = QFormLayout(dlg)
+        kind = QComboBox()
+        for k, text in screw.KINDS.items():
+            kind.addItem(text, k)
+        kind.setCurrentIndex(max(kind.findData(c["kind"]), 0))
+        form.addRow("Type", kind)
+        name = QLineEdit((cur or {}).get("name", ""))
+        name.setPlaceholderText("automatic")
+        form.addRow("Name", name)
+        units = {"L": (D["L"], l_out, l_in), "F": (D["F"], f_out, f_in), "S": (D["S"], s_out, s_in), "N": ("", float, float)}
+        specs = [("d", "Diameter", "L", ("screw", "bolt")), ("length", "Length of the screw", "L", ("screw",)),
+                 ("thread", "Threaded length (0 = all of it)", "L", ("screw",)), ("dh", "Head diameter", "L", ("screw",)),
+                 ("dw", "Washer diameter (0 = no washer)", "L", ("screw",)), ("tw", "Washer thickness", "L", ("screw",)),
+                 ("Pnvs", "Shear strength of the screw, from its maker (0 = not given)", "F", ("screw",)),
+                 ("Pnts", "Tension strength of the screw, from its maker (0 = not given)", "F", ("screw",)),
+                 ("Fnv", "Nominal shear stress of the bolt (Table J3.4-1; 0 = not given)", "S", ("bolt",)),
+                 ("Fnt", "Nominal tension stress of the bolt (Table J3.4-1; 0 = not given)", "S", ("bolt",)),
+                 ("planes", "Shear planes through the bolt", "N", ("bolt",))]
+        edits = {}
+        for key, label, q, kinds in specs:
+            u = units[q][0]
+            e = QLineEdit()
+            edits[key] = (e, q, kinds)
+            form.addRow(f"{label}" + (f" ({u})" if u else ""), e)
+        head = QComboBox()
+        for k, text in screw.HEADS.items():
+            head.addItem(text, k)
+        head.setToolTip("Which part has the head (and the washer): the thinner one by default. The other part holds the threads.")
+        form.addRow("Head and washer", head)
+
+        def fill(vals):
+            for key, (e, q, _k) in edits.items():
+                v = float(vals.get(key) or 0.0)
+                e.setText(format(int(v) if q == "N" else units[q][1](v), ".8g"))
+            head.setCurrentIndex(max(head.findData(vals.get("head", "thin")), 0))
+
+        def show():
+            k = kind.currentData()
+            for key, (e, _q, kinds) in edits.items():
+                e.setVisible(k in kinds)
+                form.labelForField(e).setVisible(k in kinds)
+            head.setVisible(k == "screw")
+            form.labelForField(head).setVisible(k == "screw")
+        state = {"kind": c["kind"]}
+
+        def kind_changed(_i=None):
+            if kind.currentData() != state["kind"]:
+                state["kind"] = kind.currentData()
+                fill(screw.default_screw(state["kind"]))                     # another type: the usual numbers of that type
+            show()
+        fill(c)
+        show()
+        kind.currentIndexChanged.connect(kind_changed)
+        form.addRow(QLabel("The same screw goes on every selected patch, at its centre. No hole is modelled: the patch is bonded and the force through it is read.\n"
+                           "The strengths of the screw itself come from its maker; leave them 0 to check the sheets only."))
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        form.addRow(bb)
+        if not dlg.exec():
+            return None
+        k = kind.currentData()
+        out = {"kind": k, "name": name.text().strip(), "head": head.currentData()}
+        try:
+            for key, (e, q, kinds) in edits.items():
+                if k in kinds:
+                    v = float(e.text().replace(",", ".")) if e.text().strip() else 0.0
+                    out[key] = int(v) if q == "N" else units[q][2](v)
+        except ValueError:
+            QMessageBox.warning(self, "Screw or bolt", "Type numbers.")
+            return None
+        if out["d"] <= 0 or (k == "screw" and out["length"] <= 0) or (k == "bolt" and out.get("planes", 1) < 1) or any(v < 0 for key, v in out.items() if isinstance(v, (int, float))):
+            QMessageBox.warning(self, "Screw or bolt", "The diameter and the length must be positive, the other numbers zero or more, and a bolt has at least one shear plane.")
+            return None
+        return out
+
+    def update_markers(self):
+        """A round marker at the centre of every screw patch, teal; after a solution green (ok), orange (needs numbers) or red (fails), carried along with the
+        deformed shape."""
+        pts, cols = [], []
+        if self.geom is not None and self.joint_mode() == "contact" and (self.setup.get("screws") or []):
+            status = {rec["fid"]: rec["status"] for rec in (self.result or {}).get("screws") or []}
+            r = self.result
+            sc_ = self.scale_value() if r is not None else 0.0
+            for sc in self.setup["screws"]:
+                for f in self.screw_fids(sc):
+                    p = np.asarray(self.geom["faces"][f]["center"], float)
+                    if r is not None and sc_:
+                        i = int(np.argmin(np.linalg.norm(r["nodes"] - p, axis=1)))
+                        p = p + sc_ * r["u"][i]
+                    pts.append(p)
+                    cols.append(tuple(0.55 * x for x in sv.STATUS_RGB.get(status.get(f), sv.STATUS_RGB[None])))      # darker than the patch under it
+        self.view.set_markers(pts, cols, size=22)
+
     def set_geo_text(self):
         g = self.geom
         if g is None:
@@ -1350,7 +1797,7 @@ class SolidWindow(QWidget):
             n = f["normal"]
             self.faces.addItem(f"{self.face_label(f['id'])}: {f['kind']}, area {f['area'] * l_out(1.0) ** 2:.4g} {UD()['L']}2, "
                                f"normal ({n[0]:.2f}, {n[1]:.2f}, {n[2]:.2f})")
-            if f.get("interface"):                                      # a face between two bodies is inside the assembly: nothing to pick there
+            if f.get("interface") and self.setup.get("joint") != "contact":       # fully bonded: a face between two bodies is inside, nothing to pick there
                 self.faces.item(f["id"]).setHidden(True)
         self.faces.blockSignals(False)
 
@@ -1360,7 +1807,11 @@ class SolidWindow(QWidget):
         p = f.get("parent")
         n = (p if p is not None else fid) + 1
         if self.geom.get("bodies"):
-            return f"{self.geom['bodies'][f['body']]['name']}, face {n}"
+            nm = self.geom["bodies"]
+            cell = f", column {f['cell'][0] + 1} row {f['cell'][1] + 1}" if f.get("cell") is not None else ""
+            if f.get("interface"):
+                return f"{' - '.join(nm[b]['name'] for b in f['bodies'][:2])}, joint face {n}{cell}"
+            return f"{nm[f['body']]['name']}, face {n}{cell}"
         if f.get("cell") is not None:
             return f"Face {n}, column {f['cell'][0] + 1} row {f['cell'][1] + 1}"
         return f"Face {n}"
@@ -1769,6 +2220,8 @@ class SolidWindow(QWidget):
         cols = {}
         if self.is_asm():
             cols = {f["id"]: self.body_colour(f["body"]) for f in self.geom["faces"] if not f["interface"]}
+            if self.joint_mode() == "contact":
+                cols.update({f["id"]: sv.JOINT for f in self.geom["faces"] if f["interface"]})
         try:
             r = sm.resolve(self.geom, self.setup)
         except fem.FemError:
@@ -1779,9 +2232,15 @@ class SolidWindow(QWidget):
         for l in r["loads"]:
             for f in l.get("fids", []):
                 cols[f] = sv.LOAD
+        if self.joint_mode() == "contact":
+            status = {rec["fid"]: rec["status"] for rec in (self.result or {}).get("screws") or []}
+            for sc in self.setup.get("screws") or []:
+                for f in self.screw_fids(sc):
+                    cols[f] = sv.STATUS_RGB.get(status.get(f), sv.SCREW) if status.get(f) else sv.SCREW
         for f in self.sel_faces:
             cols[f] = sv.PICK
         self.view.colour_faces(cols)
+        self.update_markers()
 
     SUPPORT_TYPES = {"fixed": "Fixed", "slide": "One direction (normal)", "bolt": "Bolt / pin hole"}
 
@@ -1806,6 +2265,7 @@ class SolidWindow(QWidget):
                 t.setItem(r, c, it)
         t.blockSignals(False)
         self.fill_face_table()
+        self.fill_screws()
 
     @staticmethod
     def load_cells(l):
@@ -1898,6 +2358,9 @@ class SolidWindow(QWidget):
         if self.geom is None or not fids:
             self.say("Select the face(s) of the support first.")
             return False
+        if any(self.geom["faces"][f].get("interface") for f in fids):
+            self.say("A face between two parts is inside the assembly: put the support on an outside face. (Screws go on those faces: Add screw.)")
+            return False
         mode = mode or "fixed"
         n = sum(1 for s in self.setup["supports"] if s["mode"] == mode) + 1
         self.setup["supports"].append({"mode": mode, "faces": [sg.face_sig(self.geom, f) for f in fids], "name": f"{mode.capitalize()} support {n}"})
@@ -1911,6 +2374,9 @@ class SolidWindow(QWidget):
         fids = self.sel_faces if fids is None else fids
         if kind in ("force", "pressure") and not fids:
             self.say("Select the face(s) the load acts on first.")
+            return False
+        if kind in ("force", "pressure") and any(self.geom["faces"][f].get("interface") for f in fids):
+            self.say("A face between two parts is inside the assembly: put the load on an outside face.")
             return False
         item = {"kind": kind}
         if values is None:
@@ -2057,7 +2523,7 @@ class SolidWindow(QWidget):
             return False
         g, h = self.geom, self.setup["h"] or sm.auto_h(self.geom)
         try:
-            opts = smesh.resolve(g, self.setup, h)
+            opts = sm.resolve(g, self.setup)["mesh"] if self.joint_mode() == "contact" else smesh.resolve(g, self.setup, h)     # screws: finer on the patches
         except fem.FemError as ex:
             self.say(str(ex))
             return False
@@ -2096,6 +2562,8 @@ class SolidWindow(QWidget):
             self.show_quality(res.get("quality"), res.get("hexdom_note"))
             self.describe()
             self.show_field()
+            self.fill_screws()
+            self.colour()
             self.enable_buttons()
         return self.run_job(work, done, "Solving")
 
@@ -2113,13 +2581,22 @@ class SolidWindow(QWidget):
             html += R.heading("Reactions", D["F"])
             html += R.grid(["", "Fx", "Fy", "Fz"], [[n, *(R.num(f_out(x)) for x in v)] for n, v in r["support_reactions"]])
         if r.get("bodies"):
-            html += R.heading("Bodies (fully bonded)")
+            contact = r.get("joint") == "contact"
+            html += R.heading("Bodies (joined by screws and bolts)" if contact else "Bodies (fully bonded)")
             html += R.grid(["Body", "Material", f"von Mises max ({D['S']})", "Safety factor", f"Mass ({mu[1]})"],
                            [[b["name"], b["material"].get("name") or "custom", R.num(s_out(b["vm_max"])), R.num(b["fos_y"], 3) if b.get("fos_y") else "-",
                              R.num(b["mass"] * mu[3])] for b in r["bodies"]])
-            html += R.note("The parts are bonded where their faces touch: no slip, no gap, no separation. A bolted or sliding joint is stiffer here than in "
-                           "reality, and the stress right at the edge of a bonded face is not reliable. The coloured stress is averaged at the nodes of a shared "
-                           "face, so it blends the two bodies there; the table above is per body.")
+            if contact:
+                html += R.note("Between the parts there is frictionless contact: they press on each other, slide and may open. Only the screw patches are bonded, "
+                               "and the stress right at a patch is not reliable (there is no hole and no screw stiffness): the force through the patch is what counts.")
+            else:
+                html += R.note("The parts are bonded where their faces touch: no slip, no gap, no separation. A bolted or sliding joint is stiffer here than in "
+                               "reality, and the stress right at the edge of a bonded face is not reliable. The coloured stress is averaged at the nodes of a shared "
+                               "face, so it blends the two bodies there; the table above is per body.")
+            for t_ in r.get("notes") or []:
+                html += R.note(t_, "#b05a00")
+        if r.get("contact"):
+            html += self.joint_report(r)
         kind = 'quadratic' if r.get('order', 2) == 2 else 'linear'
         cn = r.get("counts") or {}
         if cn.get("hexes") or cn.get("pyramids"):
@@ -2139,6 +2616,71 @@ class SolidWindow(QWidget):
                                [f"Relative error of the force balance {r['equilibrium']:.1e}."] if not ok else None)
         self.res_lbl.setText(html)
         self.say("Solved.")
+
+    def joint_report(self, r):
+        """The HTML of the contact between the parts and of the screws and bolts (see solid_model._contact_results)."""
+        D = UD()
+        k2 = l_out(1.0) ** 2
+        c = r["contact"]
+        out = R.heading("Contact between the parts")
+        rows = [[f"{j['a']} - {j['b']}", R.num(j["area"] * k2), f"{100.0 * j['closed_area'] / max(j['area'], 1e-12):.0f} %", R.num(f_out(j["force"])),
+                 R.num(l_out(j["gap_max"]))] for j in c["joints"]]
+        if rows:
+            out += R.grid(["Joint", f"Area ({D['L']}2)", "Pressing", f"Contact force ({D['F']})", f"Largest gap ({D['L']})"], rows)
+        if c["pairs"]:
+            out += R.note(f"{c['closed']:,} of {c['pairs']:,} node pairs press, found in {c['iterations']} round{'s' if c['iterations'] != 1 else ''}. "
+                          "The contact force is what the parts press on each other with, besides the screws.")
+        else:
+            out += R.note("Every face between the parts is a screw patch, so it is all bonded and there is no free contact.")
+        if not c["converged"]:
+            out += R.note("The set of pairs that press kept changing and was cut off: the contact is not settled. Try a smaller element size.", "#b00020")
+        recs = r.get("screws") or []
+        if not recs:
+            return out + R.note("No screw or bolt: nothing is bonded between the parts, so every part must be held by the supports.")
+        method = screw.METHODS.get(r.get("design") or "ASD", "ASD")
+        out += R.heading("Screws and bolts", f"AISI S100-16, {method}")
+        loc = lambda p: "(" + ", ".join(format(l_out(x), ".4g") for x in p) + ")"
+        rows = []
+        for rec in recs:
+            kind = {"ok": "ok", "fails": "bad", "incomplete": "warn"}.get(rec["status"], "warn")
+            word = {"ok": "ok", "fails": "FAILS", "incomplete": "needs numbers"}.get(rec["status"], "?")
+            rows.append([f"{rec['screw']} at {loc(rec['centre'])}", " - ".join(rec["bodies"]), R.num(f_out(rec["V"])), R.num(f_out(rec["T"])),
+                         rec["worst_name"].rpartition("(")[2].rstrip(")") if rec["worst_name"] else "-",
+                         R.num(rec["worst"], 3) if rec["worst"] is not None else "-", R.chip(word, kind)])
+        out += R.grid(["Screw (position)", "Joins", f"Shear V ({D['F']})", f"Tension T ({D['F']})", "Governs", "Ratio", ""], rows)
+        out += R.note("Ratio = demand over available strength, 1 or less passes; Governs is the clause of the check with the largest ratio (listed below for the "
+                      "failing screws). Shear is the force in the plane of the joint through the patch; tension is the force along its normal and includes "
+                      "prying (a negative value is compression, which a screw does not feel). Both come from the solution.")
+        show = [rec for rec in recs if rec["status"] == "fails"] or []
+        live = [rec for rec in recs if rec["worst"] is not None]
+        if live:
+            top = max(live, key=lambda rec: rec["worst"])
+            if top not in show:
+                show.append(top)
+        for rec in show[:4]:
+            out += R.subhead(f"{rec['screw']} at {loc(rec['centre'])}: the checks", f"{' - '.join(rec['bodies'])}")
+            rows = []
+            for ck in rec["checks"]:
+                if not ck["applies"]:
+                    rows.append([f"{ck['name']} ({ck['clause']})", "-", "-", "-", ck["note"]])
+                    continue
+                unit = ck.get("unit")
+                fmt = (lambda x: R.num(f_out(x))) if unit == "N" else ((lambda x: R.num(l_out(x))) if unit == "mm" else (lambda x: R.num(x, 3)))
+                rows.append([f"{ck['name']} ({ck['clause']})", fmt(ck["demand"]) if ck["demand"] is not None else "-",
+                             fmt(ck["capacity"]) if ck["capacity"] is not None else "-", R.num(ck["ratio"], 3), ck["note"] or ""])
+            out += R.grid(["Check", "Demand", "Available", "Ratio", "Note"], rows)
+            t1, t2 = l_out(rec["t1"]), l_out(rec["t2"])
+            if rec["kind"] == "bolt":
+                out += R.note(f"Thickness of the parts: {rec['bodies'][0 if rec['head_body'] == rec['a'] else 1]} {t1:.4g} {D['L']}, "
+                              f"{rec['bodies'][1 if rec['head_body'] == rec['a'] else 0]} {t2:.4g} {D['L']}.")
+            else:
+                out += R.note(f"Under the head: {rec['bodies'][0 if rec['head_body'] == rec['a'] else 1]}, t1 = {t1:.4g} {D['L']}; the part with the threads, "
+                              f"{rec['bodies'][1 if rec['head_body'] == rec['a'] else 0]}, t2 = {t2:.4g} {D['L']}.")
+            for t_ in rec["notes"]:
+                out += R.note(t_, "#b05a00")
+        if len(show) < len(recs):
+            out += R.note(f"The checks of the failing screws and of the one with the largest ratio are shown; there are {len(recs)} patches in all.")
+        return out
 
     def scale_value(self):
         """The displacement magnification on screen: 0 when the deformed shape is off, a tenth of the part when blank / auto."""
@@ -2189,6 +2731,13 @@ class SolidWindow(QWidget):
                "labels": [(0.0, f"{hi:.4g}"), (0.5, f"{(hi + lo) / 2:.4g}"), (1.0, f"{lo:.4g}")], "subtitle": None}
         return full * ramp, leg
 
+    def shown_cells(self):
+        """The elements of the result that are drawn: all of them, but without the parts of an assembly that are hidden (so the joint faces and the screws show)."""
+        r = self.result
+        if self.hidden_bodies and self.is_asm() and r.get("tet_body") is not None and len(r["tet_body"]) == len(r["conn"]) and not r.get("viewcells"):
+            return r["conn"][~np.isin(r["tet_body"], sorted(self.hidden_bodies))]
+        return r.get("viewcells") or r["conn"]
+
     def show_field(self, mesh_only=False):
         if self.result is None:
             if self.mesh_q is not None:
@@ -2197,8 +2746,9 @@ class SolidWindow(QWidget):
             return
         r = self.result
         vals, leg = self.field_values()
-        self.view.show_result(r["nodes"], r.get("viewcells") or r["conn"], r["u"], vals, self.scale_value(), self.cb_edges.isChecked(), leg["lo"], leg["hi"], leg["flip"],
+        self.view.show_result(r["nodes"], self.shown_cells(), r["u"], vals, self.scale_value(), self.cb_edges.isChecked(), leg["lo"], leg["hi"], leg["flip"],
                               legend={"title": leg["title"], "labels": leg["labels"], "subtitle": leg["subtitle"]})
+        self.update_markers()
 
     def colours_changed(self, *_a):
         """The shared colour scheme was changed (here or in another tab)."""
@@ -2380,6 +2930,9 @@ class SolidWindow(QWidget):
         s.setdefault("splits", [])
         s.setdefault("bond_tol", 0.0)
         s.setdefault("body_mats", {})
+        s.setdefault("joint", "bonded")
+        s.setdefault("screws", [])
+        s.setdefault("design", "ASD")
         s["mesh"] = smesh.complete(s.get("mesh"))
         dims_changed = (s["dims"] != self.setup.get("dims") or s["splits"] != (self.setup.get("splits") or []) or getattr(self, "geom_case", False)
                         or s["bond_tol"] != self.setup.get("bond_tol") or s["body_mats"] != self.setup.get("body_mats"))
@@ -2391,6 +2944,10 @@ class SolidWindow(QWidget):
         self.put_mesh_options()
         if dims_changed and self.source is not None:
             self.load_geometry()
+        elif self.geom is not None and self.is_asm():
+            self.fill_faces()
+            self.show_asm()
+            self.redraw()
         self.result = st.get("result")
         self.refresh_lists()
         self.colour()
@@ -2455,6 +3012,9 @@ class SolidWindow(QWidget):
                     st.setdefault("splits", [])
                     st.setdefault("bond_tol", 0.0)
                     st.setdefault("body_mats", {})
+                    st.setdefault("joint", "bonded")
+                    st.setdefault("screws", [])
+                    st.setdefault("design", "ASD")
                     st["mesh"] = smesh.complete(st.get("mesh"))
                     w.setup = st
             except Exception:
