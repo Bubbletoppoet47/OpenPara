@@ -271,6 +271,20 @@ def soften(panel):
     return panel
 
 
+def soften_area(widget, tabs=False):
+    """The soft bevel look for an area that is not a make_panel panel (the bar and the tables of the Study tab): the style sheet of the panels, set on
+    this widget and so only on what is inside it (a dialog opened from the area keeps the program's look).  `tabs`: the area holds a tab widget."""
+    try:
+        import sim_style
+        sheet = sim_style.stylesheet() + (sim_style.TABS if tabs else "")
+    except Exception:  # noqa: BLE001 - a look must never break the window
+        return widget
+    widget.setObjectName("simpanel")
+    widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    widget.setStyleSheet(sheet)
+    return widget
+
+
 def fit_side_panel(split, panel, content):
     """The panel opens as wide as its sections need (nothing cut off, no sideways scroll bar at the start), between 340 and 640 pixels; the view
     gets the rest.  The user can still drag the divider; the width is not remembered."""

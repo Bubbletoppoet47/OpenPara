@@ -328,6 +328,7 @@ class StudyTab(QWidget):
         self.own_state = None
         self.dirty = not core.exists(sw.path)
         self.building = False
+        self.soft = False                     # True once the soft look of the simulation panels is on (it needs a Simulation add-on that has it)
 
         import sim_ui                                        # the numbered, foldable sections of the simulation panels (a study always belongs to one)
         import ui_kit
@@ -392,6 +393,7 @@ class StudyTab(QWidget):
                   help_text="Tick the inputs that should change from case to case. Each ticked input becomes a column of the design-point table; "
                             "every row of the table is one case.",
                   summary=lambda: f"{len(self.cols())} input(s) ticked" if self.desc else "")
+        lay.addWidget(self.hint("Tick the inputs that change from case to case: each one becomes a column of the table."))
         self.tree = QTreeWidget()
         self.tree.setColumnCount(2)
         self.tree.setHeaderLabels(["Input", "Now"])
@@ -402,6 +404,7 @@ class StudyTab(QWidget):
 
         lay = sec(2, "Outputs to record", True, help_text="The results that are written into the results table for every case.",
                   summary=lambda: f"{len(self.data.out_checked)} output(s)")
+        lay.addWidget(self.hint("These results are written into the results table for every case."))
         self.out_tree = QTreeWidget()
         self.out_tree.setColumnCount(1)
         self.out_tree.setHeaderHidden(True)
@@ -413,6 +416,7 @@ class StudyTab(QWidget):
                   help_text="Checked after every case, in table order. The case that meets a condition is kept (and marked); every row below it "
                             "is skipped. Put the heavier cases last.",
                   summary=lambda: f"{sum(1 for c in self.data.exit_conds if c.get('on', True))} condition(s) on" if self.data.exit_conds else "No conditions")
+        lay.addWidget(self.hint("Checked after every case, in table order; the rows below the case that meets one are skipped."))
         self.exit_table = QTableWidget(0, 4)
         self.exit_table.setHorizontalHeaderLabels(["On", "Output", "", "Value"])
         self.exit_table.verticalHeader().hide()
@@ -421,8 +425,8 @@ class StudyTab(QWidget):
         hh = self.exit_table.horizontalHeader()
         hh.setStretchLastSection(True)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)        # the output's name takes the room; no sideways scroll bar
-        self.exit_table.setColumnWidth(0, 34)
-        self.exit_table.setColumnWidth(2, 54)
+        self.exit_table.setColumnWidth(0, 40)
+        self.exit_table.setColumnWidth(2, 70)
         self.exit_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         lay.addWidget(self.exit_table)
         row = QHBoxLayout()
@@ -444,6 +448,7 @@ class StudyTab(QWidget):
         runbar = QFrame()                                    # pinned under the scrolling steps: Run is always one click away
         runbar.setObjectName("runbar")
         runbar.setStyleSheet("QFrame#runbar { border-top:1px solid #cfd6e0; background:#f6f8fa; }")
+        self.runbar = runbar
         rl = QVBoxLayout(runbar)
         rl.setContentsMargins(8, 8, 8, 6)
         rl.setSpacing(6)
@@ -488,6 +493,7 @@ class StudyTab(QWidget):
         self.panel = panel
 
         right = QSplitter(Qt.Orientation.Vertical)
+        self.right = right
         top = QWidget()
         tl = QVBoxLayout(top)
         tl.setContentsMargins(6, 6, 6, 0)
@@ -549,8 +555,14 @@ class StudyTab(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        outer.addLayout(topbar)
-        outer.addLayout(bar2)
+        header = QWidget()                                   # the two bars on top, as one widget (it gets the soft look as a whole)
+        hl = QVBoxLayout(header)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(0)
+        hl.addLayout(topbar)
+        hl.addLayout(bar2)
+        self.header = header
+        outer.addWidget(header)
         outer.addWidget(split, 1)
         self.fill_picker()
 
@@ -561,6 +573,29 @@ class StudyTab(QWidget):
         self.refresh_convergence()
         if self.data.cases:
             self.case_lbl.setText("Results of the last run, loaded from the project. Click a row to show it.")
+        self.soften()
+
+    def soften(self):
+        """The soft bevel look of the simulation panels on the whole tab (the bar on top, the left panel, the two tables and their buttons), and the
+        Run bar built like the Solve bar.  Needs a Simulation add-on that has the look; with an older one the tab keeps the look it always had."""
+        try:
+            import sim_ui
+            import sim_style
+            if not (hasattr(sim_ui, "soften") and hasattr(sim_ui, "soften_area") and hasattr(sim_style, "TABS")):
+                return
+        except ImportError:
+            return
+        scroll = self.panel.findChild(QScrollArea)
+        self.panel.scroll = scroll                              # (soften() finds the scrolled content through it)
+        self.b_all.setProperty("simrole", "solve")              # Run all rows is the Solve button of this tab, Stop sits beside it as Cancel does
+        self.b_all.setMinimumHeight(46)
+        self.b_stop.setProperty("simrole", "solveside")
+        self.b_stop.setMinimumHeight(46)
+        self.runbar.setStyleSheet("QFrame#runbar { border-top:1px solid #d9dfe9; background:#eef1f6; }")
+        sim_ui.soften(self.panel)
+        sim_ui.soften_area(self.header)
+        sim_ui.soften_area(self.right, tabs=True)
+        self.soft = True
 
     # ------------------------------------------------------------------ small helpers
     @staticmethod
@@ -583,6 +618,14 @@ class StudyTab(QWidget):
         lb = QLabel(text)
         lb.setWordWrap(True)
         lb.setStyleSheet("color:#606060;")
+        return lb
+
+    @staticmethod
+    def hint(text):
+        """The one-line explanation over a table of the left panel (as over Supports and Loads in the simulation panels)."""
+        lb = QLabel(text)
+        lb.setWordWrap(True)
+        lb.setStyleSheet("color:#53647c; font-size:11px;")
         return lb
 
     def title(self):
@@ -752,6 +795,11 @@ class StudyTab(QWidget):
             cb.toggled.connect(lambda on, r=r: setk(r, "on", bool(on)))
             t.setCellWidget(r, 0, cb)
             ck = QComboBox()
+            try:
+                import sim_ui
+                sim_ui.tame(ck, 14)                              # a long output name does not widen the column; the whole text is in the list
+            except ImportError:
+                pass
             for k, lab in outs:
                 ck.addItem(lab, k)
             if not any(k == c["key"] for k, _ in outs):
@@ -766,7 +814,9 @@ class StudyTab(QWidget):
             t.setCellWidget(r, 2, co)
             t.setItem(r, 3, QTableWidgetItem(str(c.get("value", ""))))
         t.resizeColumnsToContents()
+        t.setColumnWidth(0, 40)
         t.setColumnWidth(1, 200)
+        t.setColumnWidth(2, 70)                                  # (the soft drop-down needs a little more room than the flat one)
         t.blockSignals(False)
         try:
             t.itemChanged.disconnect()

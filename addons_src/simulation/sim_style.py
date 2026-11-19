@@ -8,7 +8,7 @@ sim_style.py - the look of the left panels of 1D FEA, 2D FEA, 3D FEA and 2D CFD:
 Only the panel gets this look (sim_ui.soften(panel) sets the style sheet on it); nothing else in the program changes.
 
   stylesheet()     the style sheet of a panel (a string)
-  SECTION_BAR, SECTION_BAR_HOT, BODY, SOLVE, HELP      style sheets of single parts, used by sim_ui
+  SECTION_BAR, SECTION_BAR_HOT, BODY, SOLVE, SOLVE_SIDE, HELP, TABS      style sheets of single parts, used by sim_ui
   images()         {name: path} of the small pictures the style sheet needs (check mark, radio dot, arrows); drawn once into the user folder,
                    in 1x and @2x sizes; {} when they cannot be written (the panel then keeps the default check boxes)
 """
@@ -46,6 +46,12 @@ SOLVE = (f"QPushButton {{ background:{grad('#17949b', TEAL)}; color:white; font-
 
 # Stop / Cancel beside the Solve button: the same height as its face (the panel's own button look, only taller)
 SOLVE_SIDE = "QPushButton { margin:6px 4px 6px 0px; min-height:28px; }"
+
+# Tab bars with the soft look (the Study tab has one under its design-point table); added to stylesheet() for areas that hold tab widgets
+TABS = (f"QTabBar::tab {{ background:{grad('#fbfcfe', '#e3e8f0')}; border:1px solid {EDGE_L}; border-bottom:none; padding:4px 14px; margin-right:2px; "
+        f"border-top-left-radius:4px; border-top-right-radius:4px; color:{INK}; }}"
+        f"QTabBar::tab:selected {{ background:{TILE}; font-weight:bold; color:{HEAD}; }}"
+        f"QTabWidget::pane {{ border:1px solid #d9dfe9; border-radius:4px; background:{TILE}; top:-1px; }}")
 
 
 def _draw(path, w, h, ratio, fn):
