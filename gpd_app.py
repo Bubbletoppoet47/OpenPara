@@ -70,6 +70,9 @@ class AppShell(QMainWindow):
     def __init__(self, files=None):
         super().__init__()
         self.tab_counts = {}
+        self._session_on = False                      # session.py: the list of open tabs is written once restore_session has run (and not after the window closed)
+        self._session_last = None
+        self._restart_asked = False                   # the window is being closed FOR a restart (an update, a changed mode): the next start puts the tabs back
         self.setWindowTitle(channel.title())
         self.resize(1400, 860)
         self.tabs = QTabWidget()
@@ -210,6 +213,84 @@ class AppShell(QMainWindow):
                 json.dump({"w": g.width(), "h": g.height(), "x": g.x(), "y": g.y(), "max": bool(self.isMaximized())}, f)
         except OSError:
             pass
+
+    # ------------------------------------------------------------------ the tabs that were open (session.py)
+    def session_tabs(self):
+        """([{"path", "kind"}] of the tabs that have a file or a project folder, in tab order, the path of the tab in front)."""
+        out, cur = [], ""
+        front = self.tabs.currentIndex()
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            p = getattr(w, "path", None)
+            if not (isinstance(p, str) and p and os.path.exists(p)):
+                continue
+            p = os.path.abspath(p)
+            try:
+                kind = self.kind_label(w)
+            except Exception:                         # noqa: BLE001
+                kind = ""
+            out.append({"path": p, "kind": kind})
+            if i == front:
+                cur = p
+        return out, cur
+
+    def save_session(self):
+        """Writes the list of open tabs when it changed (cheap: it is called after every tab change and from the title timer)."""
+        if not self._session_on:
+            return
+        import session
+        import version
+        tabs, cur = self.session_tabs()
+        key = (tuple(t["path"] for t in tabs), cur, self._restart_asked)
+        if key == self._session_last:
+            return
+        self._session_last = key
+        session.write(tabs, cur, version.__version__, self._restart_asked)
+
+    def restore_session(self):
+        """At the start: after an update (or a restart the program asked for) the tabs that were open are opened again, in the same order, and the one that
+        was in front is shown (Settings > General > Reopen my tabs after an update).  From now on the list of open tabs is kept up to date.
+        -> how many tabs were opened."""
+        import session
+        import version
+        tabs, cur = session.to_restore(session.read(), version.__version__, bool(settings.get("reopen_tabs")))
+        opened, failed = 0, []
+        if tabs:
+            with self.busy("Reopening your tabs..."):
+                for t in tabs:
+                    p = t["path"]
+                    try:
+                        w = self.open_path(p) if os.path.exists(p) else None
+                    except Exception:                 # noqa: BLE001 - one tab that cannot come back must not stop the others
+                        import traceback
+                        log_error("A tab could not be reopened (" + p + "):\n" + traceback.format_exc())
+                        w = None
+                    if w is None:
+                        failed.append(p)
+                    else:
+                        opened += 1
+                i = self.find_tab(cur) if cur else None
+                if i is not None:
+                    self.tabs.setCurrentIndex(i)
+        self._session_on = True
+        self._session_last = None
+        self.save_session()
+        if failed:
+            QMessageBox.information(self, "Reopen my tabs", "These could not be opened again (moved, renamed, on a drive that is not connected, or an add-on "
+                                    "that is not installed):\n\n" + "\n".join(failed))
+        return opened
+
+    def close_for_restart(self):
+        """Closes the window so that the program can start again (open documents are asked about first); the tabs are noted so that the next start puts
+        them back.  -> True when the window closed (False: the user cancelled, the program keeps running as it was)."""
+        self._restart_asked = True
+        self.save_session()
+        self.close()
+        if self.isVisible():
+            self._restart_asked = False
+            self.save_session()
+            return False
+        return True
 
     @staticmethod
     def dropped_paths(mime):
@@ -680,6 +761,7 @@ class AppShell(QMainWindow):
             w.refresh_parts()                     # parts may have been edited in another tab
         self.refresh_titles()
         self.update_window()
+        self.save_session()
 
     # ------------------------------------------------------------------ documents
     def add_tab(self, w):
@@ -690,6 +772,7 @@ class AppShell(QMainWindow):
         self.tabs.setCurrentIndex(i)
         self.show_stack()
         self.note_recent(w)
+        self.save_session()
         return w
 
     def need_addon(self, aid, what):
@@ -748,8 +831,7 @@ class AppShell(QMainWindow):
         import subprocess
         import updater
         lay = updater.installed_layout()
-        self.close()
-        if not self.isVisible():
+        if self.close_for_restart():
             subprocess.Popen(updater.restart_command(), cwd=lay[0] if lay else os.getcwd())
             QApplication.quit()
 
@@ -1073,6 +1155,7 @@ class AppShell(QMainWindow):
                     self.tabs.setTabToolTip(i, tip)
             self.note_recent(w)                           # a document saved under a (new) name, a project folder just made
         self.update_window()
+        self.save_session()
 
     def close_tab(self, i):
         w = self.tabs.widget(i)
@@ -1097,6 +1180,7 @@ class AppShell(QMainWindow):
         w.deleteLater()
         self.show_stack()
         self.update_window()
+        self.save_session()
         return True
 
     def confirm_exit(self):
@@ -1177,6 +1261,8 @@ class AppShell(QMainWindow):
             self.tabs.widget(i).saved_json = getattr(self.tabs.widget(i), "saved_json", None)
         unitctl.off_change(self.units_changed)
         self.save_window()
+        self.save_session()
+        self._session_on = False                          # the tabs go away with the window: that must not empty the list
         ev.accept()
 
 
@@ -1317,7 +1403,11 @@ def main():
     if SPLASH is not None:
         SPLASH.finish(w)                              # the card goes away when the window is up
     w.updates.check_later()
-    QTimer.singleShot(2500, lambda: (w.report_addon_errors(), w.offer_first_run(), w.offer_addon_updates()))          # one after the other, never two questions at once
+
+    def after_start():
+        w.restore_session()                                # the tabs of the last run (after an update) come back first ...
+        QTimer.singleShot(2500, lambda: (w.report_addon_errors(), w.offer_first_run(), w.offer_addon_updates()))          # ... then one question after the other, never two at once
+    QTimer.singleShot(300, after_start)
     sys.exit(app.exec())
 
 if __name__ == "__main__":

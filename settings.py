@@ -61,6 +61,7 @@ SPEC = {
     "autosave_s": (60.0, 5.0, 86400.0, "AutoSave every"),                    # seconds; the dialog shows minutes:seconds
     "cores": (0, 0, 512, "Cores OpenPara may use"),                          # 0 = Auto (all but one core for calculations); see perf.py
     "slow_log": (False, False, True, "Record slow moments of the window"),   # perf.SlowWatch writes slow.log in the user's data folder
+    "reopen_tabs": (True, False, True, "Reopen my tabs after an update"),     # session.py: the documents that were open come back after an update / restart
 }
 FINE_EDGE, FINE_SURF = 0.004, 0.02          # below these a big model gets slow: the dialog warns
 _state = {}

@@ -265,8 +265,7 @@ class UpdateController(QObject):
         r = QMessageBox.question(self.shell, "Update", f"{channel.app_name()} {rel['version']} is installed.\nRestart now? (open documents are asked about first)",
                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if r == QMessageBox.StandardButton.Yes:
-            self.shell.close()
-            if not self.shell.isVisible():
+            if self.shell.close_for_restart():                  # (the tabs that are open are noted: the next start puts them back)
                 subprocess.Popen(updater.restart_command(), cwd=lay[0])
                 QApplication.quit()
 

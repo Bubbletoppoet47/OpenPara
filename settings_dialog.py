@@ -433,6 +433,12 @@ class SettingsDialog(QDialog):
 
         self.curve, self.surf, self.line, self.pull = CurvePreview(), SurfacePreview(), LinePreview(), PullPreview()
         self.dimprev = DimPreview()
+        self.reopen = QCheckBox("Reopen my tabs after an update")
+        self.reopen.setChecked(bool(settings.get("reopen_tabs")))
+        self.reopen.setToolTip("When OpenPara starts after an update (or after a restart that OpenPara asked for), the files and project folders that were open come back, "
+                               "in the same order and with the same tab in front. A document that was never saved has no file, so it cannot come back: "
+                               "you are asked to save it before the update restarts the program.")
+        self.section("General", [], extra=self.reopen)
         self.section("Curves && Surfaces", [("edge_gap", self.curve), ("surf_gap", self.surf)], extra=self.warn)
         import channel
         self.section("Outlines", [("line_px", self.line), ("pull_px", self.pull)] + ([("outline_mode", None)] if channel.name_of_channel() == "playground" else []))
@@ -519,6 +525,7 @@ class SettingsDialog(QDialog):
         out = {k: f.value for k, f in self.fields.items()}
         out["hover"] = self.hover.isChecked()
         out["slow_log"] = self.slow.isChecked()
+        out["reopen_tabs"] = self.reopen.isChecked()
         return out
 
     def reset_defaults(self):
@@ -528,6 +535,7 @@ class SettingsDialog(QDialog):
             f.set_value(d[k])
         self.hover.setChecked(bool(d["hover"]))
         self.slow.setChecked(bool(d["slow_log"]))
+        self.reopen.setChecked(bool(d["reopen_tabs"]))
 
     def apply(self):
         settings.set_many(self.values())
