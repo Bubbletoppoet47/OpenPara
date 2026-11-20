@@ -12,7 +12,9 @@ No window in it (sh_tab.py is the window).
 A formula that is changed makes the cells that use it work themselves out again, in an order where every cell is calculated after the cells it reads
 (no deep recursion: a column of 10 000 running totals is fine).  A cell that reads itself shows #CIRC!.
 """
+import base64
 import copy
+import hashlib
 import json
 import re
 from collections import namedtuple
@@ -64,6 +66,7 @@ class Sheet:
         self.row_h = {}
         self.names = {}               # names that belong to this sheet: {NAME: "=Sheet1!$B$2"}
         self.charts = []              # chart definitions (sh_chart.py)
+        self.pictures = []            # pictures on the sheet (sh_picture.py): {id, image (a key of Workbook.images), pos, size, orig, keep, name}
         self.links = []               # imported studies (sh_study.py)
         self.freeze = None            # (rows, cols) kept on screen
         self._ext = None
@@ -146,6 +149,7 @@ class Workbook:
         self._silent = 0
         self._changed = set()
         self.version = 0
+        self.images = {}              # picture bytes by key: kept once here, so the undo steps and copied sheets only carry the key
         if with_sheet:
             self.add_sheet("Sheet1")
 
@@ -236,6 +240,7 @@ class Workbook:
             n.cells[k] = c2
         n.col_w, n.row_h, n.freeze = dict(s.col_w), dict(s.row_h), s.freeze
         n.names = {k: v for k, v in s.names.items()}
+        n.pictures = copy.deepcopy(s.pictures)
         n.charts = copy.deepcopy(s.charts)
         for ch in n.charts:
             ch["id"] = _new_id(n.charts)
@@ -660,6 +665,8 @@ class Workbook:
         e = self._undo.pop()
         if e[0] == "cells":
             self._apply(e[2])
+        elif e[0] == "pic":
+            self._set_picture(e[2], e[3])
         else:
             self._load_state(e[2])
         self._redo.append(e)
@@ -671,6 +678,8 @@ class Workbook:
         e = self._redo.pop()
         if e[0] == "cells":
             self._apply(e[3])
+        elif e[0] == "pic":
+            self._set_picture(e[2], e[4])
         else:
             self._load_state(e[3])
         self._undo.append(e)
@@ -1035,7 +1044,8 @@ class Workbook:
         self._changed.add(("*", 0, 0))
 
     # ------------------------------------------------------------------------------------------------ the file
-    def to_json(self):
+    def to_json(self, embed=False):
+        """The workbook as plain data.  `embed`: the pictures' bytes go in too (the file); the undo steps leave them out, they only name them."""
         styles, sidx = [], {}
         sheets = []
         for s in self.sheets:
@@ -1055,8 +1065,13 @@ class Workbook:
                     item.append("a")
                 cells.append(item)
             sheets.append({"name": s.name, "cells": cells, "col_w": {str(k): v for k, v in s.col_w.items()}, "row_h": {str(k): v for k, v in s.row_h.items()},
-                           "names": dict(s.names), "charts": copy.deepcopy(s.charts), "links": copy.deepcopy(s.links), "freeze": s.freeze})
-        return {"format": FORMAT, "version": 1, "active": self.active, "names": dict(self.names), "styles": styles, "sheets": sheets}
+                           "names": dict(s.names), "charts": copy.deepcopy(s.charts), "links": copy.deepcopy(s.links), "freeze": s.freeze,
+                           "pictures": copy.deepcopy(s.pictures)})
+        out = {"format": FORMAT, "version": 1, "active": self.active, "names": dict(self.names), "styles": styles, "sheets": sheets}
+        if embed:
+            used = {p["image"] for s in self.sheets for p in s.pictures}
+            out["images"] = {k: base64.b64encode(v).decode("ascii") for k, v in self.images.items() if k in used}
+        return out
 
     @classmethod
     def from_json(cls, d):
@@ -1085,8 +1100,16 @@ class Workbook:
             s.names = dict(sd.get("names", {}))
             s.charts = copy.deepcopy(list(sd.get("charts", [])))
             s.links = copy.deepcopy(list(sd.get("links", [])))
+            s.pictures = [p for p in (_clean_picture(x) for x in sd.get("pictures", [])) if p]
             s.freeze = tuple(sd["freeze"]) if sd.get("freeze") else None
             self.sheets.append(s)
+        for k, v in (d.get("images") or {}).items():                  # (a file carries its pictures; an undo step does not: they are still here)
+            try:
+                self.images[k] = base64.b64decode(v)
+            except (ValueError, TypeError):
+                pass
+        for s in self.sheets:
+            s.pictures = [p for p in s.pictures if p["image"] in self.images]
         if not self.sheets:
             self.sheets.append(Sheet("Sheet1"))
         self.active = max(0, min(int(d.get("active", 0)), len(self.sheets) - 1))
@@ -1096,12 +1119,83 @@ class Workbook:
 
     def save(self, path):
         import fileio
-        fileio.write_text(path, json.dumps(self.to_json(), separators=(",", ":")))
+        fileio.write_text(path, json.dumps(self.to_json(embed=True), separators=(",", ":")))
 
     @classmethod
     def load(cls, path):
         with open(path, encoding="utf-8") as f:
             return cls.from_json(json.load(f))
+
+    # ------------------------------------------------------------------------------------------------ pictures
+    def add_image(self, data):
+        """Keeps the bytes of a picture (PNG, JPEG ...) and returns the key that names them; the same bytes always have the same key."""
+        key = hashlib.sha1(data).hexdigest()[:24]
+        self.images.setdefault(key, bytes(data))
+        return key
+
+    def picture(self, sheet, pid):
+        s = self.get_sheet(sheet)
+        return next((p for p in (s.pictures if s else []) if p.get("id") == pid), None)
+
+    def new_picture_id(self, sheet):
+        s = self.get_sheet(sheet)
+        ids = {p.get("id") for p in (s.pictures if s else [])}
+        i = 1
+        while f"pic{i}" in ids:
+            i += 1
+        return f"pic{i}"
+
+    def picture_state(self, sheet, pid):
+        """A copy of a picture as it is now (for record_picture, after something changes it in place), or None."""
+        p = self.picture(sheet, pid)
+        return copy.deepcopy(p) if p is not None else None
+
+    def add_picture(self, sheet, pic, label="Insert picture"):
+        """Puts a picture on a sheet (one undo step).  `pic["image"]` must be a key from add_image."""
+        s = self.get_sheet(sheet)
+        if s is None or pic.get("image") not in self.images:
+            return None
+        s.pictures.append(pic)
+        self._push_picture(label, sheet, pic["id"], None, copy.deepcopy(pic), len(s.pictures) - 1)
+        self._structure()
+        return pic
+
+    def delete_picture(self, sheet, pid, label="Delete picture"):
+        s = self.get_sheet(sheet)
+        p = self.picture(sheet, pid) if s else None
+        if p is None:
+            return False
+        i = s.pictures.index(p)
+        s.pictures.pop(i)
+        self._push_picture(label, sheet, pid, copy.deepcopy(p), None, i)
+        self._structure()
+        return True
+
+    def record_picture(self, label, sheet, pid, before):
+        """A picture was changed in place (moved, resized) since `before` = picture_state(): that is one undo step.  False when nothing differs."""
+        s = self.get_sheet(sheet)
+        p = self.picture(sheet, pid) if s else None
+        if p is None or before is None or p == before:
+            return False
+        self._push_picture(label, sheet, pid, before, copy.deepcopy(p), s.pictures.index(p))
+        self.version += 1
+        return True
+
+    def _push_picture(self, label, sheet, pid, before, after, index):
+        self._undo.append(("pic", label, (sheet, pid, index), before, after))
+        self._undo[:] = self._undo[-UNDO_LIMIT:]
+        self._redo.clear()
+
+    def _set_picture(self, where, state):
+        """Undo / redo of a picture step: the picture is put back as `state` (None: it is taken off the sheet) at the place it had in the stack."""
+        sheet, pid, index = where
+        s = self.get_sheet(sheet)
+        if s is None:
+            return
+        s.pictures = [p for p in s.pictures if p.get("id") != pid]
+        if state is not None:
+            s.pictures.insert(max(0, min(index, len(s.pictures))), copy.deepcopy(state))
+        self._structure()
 
     # ------------------------------------------------------------------------------------------------ blocks of values (charts, import)
     def parse_range(self, text, default_sheet=None):
@@ -1134,6 +1228,19 @@ def _moved(raw, src_sheet, dst_sheet):
     if src_sheet != dst_sheet:
         return E.qualify(raw, src_sheet)
     return raw
+
+
+def _clean_picture(p):
+    """A picture as read from a file: only what is needed, and numbers that are sane (None when it is not a picture)."""
+    if not isinstance(p, dict) or not isinstance(p.get("id"), str) or not isinstance(p.get("image"), str):
+        return None
+    try:
+        x, y = (max(0.0, float(v)) for v in p.get("pos", [0, 0])[:2])
+        w, h = (min(20000.0, max(4.0, float(v))) for v in p.get("size", [0, 0])[:2])
+        ow, oh = (min(20000.0, max(4.0, float(v))) for v in p.get("orig", p.get("size", [0, 0]))[:2])
+    except (TypeError, ValueError):
+        return None
+    return {"id": p["id"], "image": p["image"], "pos": [x, y], "size": [w, h], "orig": [ow, oh], "keep": bool(p.get("keep", True)), "name": str(p.get("name", ""))[:120]}
 
 
 def _new_id(charts):

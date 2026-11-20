@@ -1,10 +1,10 @@
 """
 sh_xlsx.py - Excel files in and out of Sheets (needs openpyxl: sh_deps.py gets it).
 
-    import_xlsx(path)  -> (Workbook, notes)      values, formulas (also array formulas), number formats, bold / italic / colours, column widths, names
-    export_xlsx(wb, path) -> notes               the same back, with the charts as Excel charts
+    import_xlsx(path)  -> (Workbook, notes)      values, formulas (also array formulas), number formats, bold / italic / colours, column widths, names, pictures
+    export_xlsx(wb, path) -> notes               the same back, with the charts as Excel charts and the pictures as Excel pictures at the cell they are over
 
-Notes are short lines about what did not come across (pictures, merged cells, functions Sheets does not have; AISI and other standards functions leave
+Notes are short lines about what did not come across (charts, merged cells, functions Sheets does not have; AISI and other standards functions leave
 Excel as their values, with the formula text in a cell comment, because Excel cannot work them out).
 """
 import datetime
@@ -19,6 +19,8 @@ class XlsxError(Exception):
     pass
 
 
+DEF_W, DEF_H = 72, 22                                          # the size of a cell that a sheet gives no size to (the grid's own)
+EMU = 9525                                                      # English Metric Units in a pixel (what Excel measures a picture in)
 _XLFN = {"IFNA", "IFS", "CONCAT", "TEXTJOIN", "MAXIFS", "MINIFS", "STDEV.S", "STDEV.P", "VAR.S", "VAR.P", "XOR"}
 
 
@@ -65,11 +67,10 @@ def import_xlsx(path):
     except Exception as ex:                                  # noqa: BLE001 - a damaged or password-protected file
         raise XlsxError(f"The file could not be read: {ex}")
     wb = B.Workbook(with_sheet=False)
-    pics = charts = merged = 0
+    pics = charts = merged = 0                                # (pics: pictures that could not be brought across)
     unknown = {}
     for ws in wbx.worksheets:
         s = B.Sheet(ws.title)
-        pics += len(getattr(ws, "_images", []))
         charts += len(getattr(ws, "_charts", []))
         merged += len(ws.merged_cells.ranges)
         for row in ws.iter_rows():
@@ -113,6 +114,9 @@ def import_xlsx(path):
         for ri, dim in ws.row_dimensions.items():
             if dim.height:
                 s.row_h[ri] = int(round(dim.height * 4 / 3))
+        for img in list(getattr(ws, "_images", [])):
+            if not _import_picture(wb, s, img):
+                pics += 1
         fp = ws.freeze_panes
         if fp:
             a = E.parse_addr(str(fp))
@@ -137,7 +141,7 @@ def import_xlsx(path):
     wb.recalc()
     wb._changed.clear()
     if pics:
-        notes.append(f"{pics} picture(s) were not brought across.")
+        notes.append(f"{pics} picture(s) could not be brought across.")
     if charts:
         notes.append(f"{charts} Excel chart(s) were not brought across: make them again with Insert chart.")
     if merged:
@@ -227,6 +231,11 @@ def export_xlsx(wb, path):
             ws.row_dimensions[ri].height = h * 0.75
         if s.freeze and (s.freeze[0] or s.freeze[1]):
             ws.freeze_panes = E.addr(s.freeze[0] + 1, s.freeze[1] + 1)
+        for pic in s.pictures:
+            try:
+                _export_picture(wb, s, ws, pic)
+            except Exception as ex:                          # noqa: BLE001 - one picture Excel cannot hold must not lose the file
+                notes.append(f"Picture '{pic.get('name') or pic.get('id')}' was not exported: {ex}")
         for ch in s.charts:
             try:
                 _export_chart(wb, wx, ws, ch)
@@ -249,6 +258,74 @@ def export_xlsx(wb, path):
     if custom:
         notes.append(f"{custom} cell(s) use a standard's function: Excel gets their values, and the formula text is in a cell comment.")
     return notes
+
+
+def _cell_at(s, x, y):
+    """(column, row, x offset, y offset) of the cell that holds the pixel (x, y) of the sheet."""
+    c, left = 1, 0.0
+    while c < E.MAXCOL and left + s.col_w.get(c, DEF_W) <= x:
+        left += s.col_w.get(c, DEF_W)
+        c += 1
+    r, top = 1, 0.0
+    while r < E.MAXROW and top + s.row_h.get(r, DEF_H) <= y:
+        top += s.row_h.get(r, DEF_H)
+        r += 1
+    return c, r, x - left, y - top
+
+
+def _pixel_of(s, col, row, dx=0.0, dy=0.0):
+    """The pixel (x, y) of the sheet that is `dx`, `dy` into the cell (column, row)."""
+    return (sum(s.col_w.get(c, DEF_W) for c in range(1, col)) + dx, sum(s.row_h.get(r, DEF_H) for r in range(1, row)) + dy)
+
+
+def _export_picture(wb, s, ws, pic):
+    from io import BytesIO
+
+    from openpyxl.drawing.image import Image as XImage
+    from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+    from openpyxl.drawing.xdr import XDRPositiveSize2D
+    data = wb.images.get(pic["image"])
+    if not data:
+        raise ValueError("its data is missing")
+    img = XImage(BytesIO(data))                              # (needs Pillow: openpyxl says so when it is not there)
+    c, r, dx, dy = _cell_at(s, pic["pos"][0], pic["pos"][1])
+    w, h = pic["size"]
+    img.width, img.height = w, h
+    img.anchor = OneCellAnchor(_from=AnchorMarker(col=c - 1, row=r - 1, colOff=int(dx * EMU), rowOff=int(dy * EMU)), ext=XDRPositiveSize2D(int(w * EMU), int(h * EMU)))
+    ws.add_image(img)
+
+
+def _import_picture(wb, s, img):
+    """A picture of an Excel sheet -> s.pictures (True), or False when it cannot be read."""
+    try:
+        raw = img._data()
+        a = img.anchor
+        mk = getattr(a, "_from", None)
+        if mk is not None:
+            x, y = _pixel_of(s, mk.col + 1, mk.row + 1, mk.colOff / EMU, mk.rowOff / EMU)
+        else:
+            x, y = a.pos.x / EMU, a.pos.y / EMU
+        ow, oh = float(img.width), float(img.height)         # (the pixels it has)
+        ext, end = getattr(a, "ext", None), getattr(a, "to", None)
+        if ext is not None and ext.width and ext.height:
+            w, h = ext.width / EMU, ext.height / EMU
+        elif end is not None:
+            x2, y2 = _pixel_of(s, end.col + 1, end.row + 1, end.colOff / EMU, end.rowOff / EMU)
+            w, h = x2 - x, y2 - y
+        else:
+            w, h = ow, oh
+        if not raw or w < 1 or h < 1:
+            return False
+        key = wb.add_image(bytes(raw))
+        ids = {p["id"] for p in s.pictures}
+        n = 1
+        while f"pic{n}" in ids:
+            n += 1
+        s.pictures.append({"id": f"pic{n}", "image": key, "pos": [max(0.0, x), max(0.0, y)], "size": [float(round(w)), float(round(h))],
+                           "orig": [float(round(ow)), float(round(oh))], "keep": True, "name": "Picture"})
+        return True
+    except Exception:                                        # noqa: BLE001 - a picture that cannot be read must not stop the workbook opening
+        return False
 
 
 def _export_chart(wb, wx, ws, ch):

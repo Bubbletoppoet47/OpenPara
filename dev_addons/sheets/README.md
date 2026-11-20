@@ -3,11 +3,16 @@
 A spreadsheet tab. Playground only; nothing in the core program changes.
 
 - **Formulas**: Excel's syntax, 118 functions, `$` references, other sheets, sheet-scoped names. Cell references stay `F62`-style.
-- **Files**: `.opsheet` (JSON). Excel `.xlsx` opens and exports (openpyxl is downloaded once, on first use).
+- **Files**: `.opsheet` (JSON, pictures inside). Excel `.xlsx` opens and exports (openpyxl is downloaded once, on first use).
 - **Studies**: Data > Import study; Refresh from study reads it again and fills formulas next to it down (it acts on the study under or next to the cursor, and asks when the cursor is elsewhere). Select study picks the whole block; Delete study (Data tab or right-click) takes it off the sheet - its cells go, or the numbers stay as plain cells - in one undo step, and Refresh no longer touches that area.
 - **Charts**: Insert chart (from the selected cells, or empty and pick the cells after); double-click a chart to open the panel on the right.
   Setup (type, data range, X, series, left/right axis, swap X and Y), Customize (fonts, lines, grid, frame, legend, limit lines, zones, notes) and
   Advanced (every matplotlib setting as a typed input, saved with the chart). Looks (presets) are saved in `chart_presets.json`. PNG/SVG/PDF.
+- **Images**: copy a screenshot (or any picture) and press Ctrl+V: it lands at the selected cell. The Images tab mirrors Charts: Insert image (a PNG / JPG / BMP / GIF / WebP file),
+  Edit image, Copy image (a duplicate), Export image, Delete image. Drag a picture to move it, drag its corner to resize it; double-click it to open the panel on the right
+  (width, height, keep proportions, scale, back to the original size). Ctrl+C / Ctrl+X on a picked picture copy it for other programs. Pictures are kept inside the `.opsheet`
+  file and go into the `.xlsx` as Excel pictures (and come back from it). Cells copied from Excel paste as cells; Paste special > Picture takes the image instead.
+  Like charts, a picture sits at a pixel position, so inserting rows above it does not move it.
 - **Selecting**: Shift / Ctrl + click on cells, rows and columns; every block takes part in clear, format, fill, widths, insert and delete.
 - **Editing references**: F4 in the cell editor or the formula bar cycles the reference at the cursor (or every one in the selection) through `$B$2`, `B$2`, `$B2`, `B2`.
 - **Fill and move**: dragging the fill handle outlines the cells it will fill and shows the values they will get. Dragging the border of a selection moves it
@@ -19,4 +24,4 @@ A spreadsheet tab. Playground only; nothing in the core program changes.
 
 Modules: `sh_engine` / `sh_funcs` (formulas), `sh_book` (workbook, undo), `sh_grid` / `sh_edit` (grid and editing), `sh_dialogs`, `sh_chart` (drawing),
 `sh_panel` (the chart panel), `sh_adv` (the advanced settings, built from the installed matplotlib), `sh_presets` (looks), `sh_prefs` / `sh_ribbon` (ribbon size),
-`sh_study`, `sh_xlsx`, `sh_std` / `std_aisi16`, `sh_tab` (the window).
+`sh_picture` (pictures on the sheet and their panel), `sh_study`, `sh_xlsx`, `sh_std` / `std_aisi16`, `sh_tab` (the window).

@@ -19,8 +19,10 @@ import sh_deps
 import sh_edit
 import sh_engine as E
 import sh_fmt
+import sh_picture
 
 MIME = "application/x-openpara-sheets"
+PIC_MIME = "application/x-openpara-sheets-picture"      # a copied picture: how big it is on the sheet (so it pastes at that size)
 TOKEN = f"{os.getpid()}"
 DEF_W, DEF_H, HDR_H, MIN_W, MIN_H = 72, 22, 22, 14, 10
 MOVE_LIMIT = 200_000            # the biggest block that can be dragged by its border (whole columns and rows are too big)
@@ -234,6 +236,7 @@ class Grid(QAbstractScrollArea):
     message = pyqtSignal(str, str)
     command = pyqtSignal(str)                 # a command that needs a window: the tab runs it (format, paste_special, chart_edit ...)
     charts_changed = pyqtSignal()
+    pictures_changed = pyqtSignal()           # a picture was added, moved, resized or taken off
     sheet_asked = pyqtSignal(str)             # a click on a reference in another sheet: show that sheet's tab
 
     def __init__(self, wb, bar=None, parent=None):
@@ -255,6 +258,8 @@ class Grid(QAbstractScrollArea):
         self.edit = None                      # {"sheet", "r", "c"} while a cell is being edited
         self.frames = {}
         self.sel_chart = None
+        self._sel_picture = None
+        self.pframes = {}                     # picture id -> PictureFrame (sh_picture.py)
         self._drag = None
         self._moved_to = None                 # where a block that is being dragged by its border would land
         self._copying = False                 # ... and whether Ctrl makes it a copy
@@ -308,10 +313,15 @@ class Grid(QAbstractScrollArea):
         self.views = {}
         self.copied = None
         self.sel_chart = None
+        self.sel_picture = None
         for f in self.frames.values():
             f.hide()
             f.deleteLater()
         self.frames = {}
+        for f in self.pframes.values():
+            f.hide()
+            f.deleteLater()
+        self.pframes = {}
         self.sheet = wb.sheets[min(wb.active, len(wb.sheets) - 1)].name
         self.r = self.c = self.er = self.ec = 1
         self.areas = []
@@ -327,6 +337,21 @@ class Grid(QAbstractScrollArea):
 
     def sheet_obj(self):
         return self.wb.get_sheet(self.sheet)
+
+    @property
+    def sel_picture(self):
+        """The id of the picture that is picked on the sheet (None: none; then the cells are what is selected)."""
+        return self._sel_picture
+
+    @sel_picture.setter
+    def sel_picture(self, pid):
+        if pid == self._sel_picture:
+            return
+        self._sel_picture = pid
+        for i, f in self.pframes.items():
+            f.selected = i == pid
+            f.update()
+        self.viewport().update()
 
     def _load_sizes(self):
         s = self.sheet_obj()
@@ -345,6 +370,7 @@ class Grid(QAbstractScrollArea):
         self._load_sizes()
         v = self.views.get(name)
         self.sel_chart = None
+        self.sel_picture = None
         if v:
             self.r, self.c, self.er, self.ec, x0, y0 = v
         else:
@@ -416,6 +442,7 @@ class Grid(QAbstractScrollArea):
         self.er = r2 if self.r == r1 else r1
         self.ec = c2 if self.c == c1 else c1
         self.sel_chart = None
+        self.sel_picture = None
         self._grow(self.er, self.ec)
         self.ensure_visible(self.r, self.c)
         self.viewport().update()
@@ -433,6 +460,7 @@ class Grid(QAbstractScrollArea):
             self.r = self.er = r
             self.c = self.ec = c
         self.sel_chart = None
+        self.sel_picture = None
         self._grow(r, c)
         self.ensure_visible(r, c)
         self.viewport().update()
@@ -594,7 +622,7 @@ class Grid(QAbstractScrollArea):
             cell = s.cells.get((self.r, self.c)) if s else None
             if cell is not None and cell.raw is not None:
                 self._paint_text(p, fm, self.r, self.c, cell, c_last)
-        if self.sel_chart is None:
+        if self.sel_chart is None and self.sel_picture is None:
             p.setPen(QPen(ACCENT, 2))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(sel.adjusted(0, 0, -2, -2))
@@ -891,7 +919,7 @@ class Grid(QAbstractScrollArea):
             return
         if hit is not None:
             sel = self.block_rect(*self.sel())
-            if QRect(sel.right() - 9, sel.bottom() - 9, 14, 14).contains(pos) and self.sel_chart is None and not ctrl:
+            if QRect(sel.right() - 9, sel.bottom() - 9, 14, 14).contains(pos) and self.sel_chart is None and self.sel_picture is None and not ctrl:
                 self._drag = ("fill", self.sel())
                 self._timer.start()
                 return
@@ -932,6 +960,7 @@ class Grid(QAbstractScrollArea):
                     self.areas = []
                 self.r, self.c, self.er, self.ec = 1, c, self.nr, c
             self.sel_chart = None
+            self.sel_picture = None
             self._drag = ("cols", c)
             self.selection_changed.emit()
             self.viewport().update()
@@ -952,6 +981,7 @@ class Grid(QAbstractScrollArea):
                 self.areas = []
             self.r, self.c, self.er, self.ec = r, 1, r, self.nc
         self.sel_chart = None
+        self.sel_picture = None
         self._drag = ("rows", r)
         self.selection_changed.emit()
         self.viewport().update()
@@ -1025,7 +1055,7 @@ class Grid(QAbstractScrollArea):
 
     def _on_border(self, pos):
         """True when `pos` is on the border of the selected block (not on the fill handle): a press there drags the block."""
-        if self.sel_chart is not None or self.areas or self.edit:
+        if self.sel_chart is not None or self.sel_picture is not None or self.areas or self.edit:
             return False
         r1, c1, r2, c2 = self.sel()
         if (r2 - r1 + 1) * (c2 - c1 + 1) > MOVE_LIMIT:
@@ -1224,6 +1254,8 @@ class Grid(QAbstractScrollArea):
         if k in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             if self.sel_chart:
                 return self.delete_chart(self.sel_chart)
+            if self.sel_picture:
+                return self.delete_picture(self.sel_picture)
             return self.clear_selection()
         if k in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             return self._step(-1 if shift else 1, 0)
@@ -1362,6 +1394,8 @@ class Grid(QAbstractScrollArea):
         return "\n".join(lines)
 
     def copy(self, cut=False):
+        if self.sel_picture:
+            return self.copy_picture(cut)
         rects = self.rects()
         layout = _layout(rects)
         if len(rects) > 1:
@@ -1390,6 +1424,8 @@ class Grid(QAbstractScrollArea):
         md = QGuiApplication.clipboard().mimeData()
         if md is None:
             return
+        if what == "picture":                                           # Paste special > Picture: the image on the clipboard, whatever else is there
+            return self.paste_picture(md)
         wb = self.wb
         r1, c1, r2, c2 = self.sel()
         info = None
@@ -1439,6 +1475,8 @@ class Grid(QAbstractScrollArea):
             self.select(*rect, active=(rect[0], rect[1]))
             return
         text = md.text() if md.hasText() else ""
+        if not text and sh_picture.has_clipboard_image(md):
+            return self.paste_picture(md)
         if not text:
             return
         lines = text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n").split("\n")
@@ -1609,9 +1647,12 @@ class Grid(QAbstractScrollArea):
             self.frames[cid].update()
         if self.sel_chart not in self.frames:
             self.sel_chart = None
+        self._sync_pictures()
 
     def _place_charts(self):
         for f in self.frames.values():
+            f.place()
+        for f in self.pframes.values():
             f.place()
 
     def refresh_charts(self):
@@ -1633,6 +1674,7 @@ class Grid(QAbstractScrollArea):
 
     def pick_chart(self, cid):
         self.sel_chart = cid
+        self.sel_picture = None
         for i, f in self.frames.items():
             f.selected = i == cid
             f.update()
@@ -1653,6 +1695,147 @@ class Grid(QAbstractScrollArea):
         menu.addAction("Duplicate", lambda: self.command.emit("chart_copy:" + cid))
         menu.addSeparator()
         menu.addAction("Delete chart", lambda: self.delete_chart(cid))
+        menu.exec(gpos)
+
+    # ------------------------------------------------------------------ pictures
+    def _sync_pictures(self):
+        s = self.sheet_obj()
+        want = {p["id"]: p for p in (s.pictures if s else [])}
+        for pid in list(self.pframes):
+            if pid not in want:
+                f = self.pframes.pop(pid)
+                f.hide()
+                f.deleteLater()
+        for pid, pic in want.items():
+            if pid not in self.pframes:
+                f = sh_picture.PictureFrame(self, pic)
+                f.changed.connect(lambda _i: self.pictures_changed.emit())
+                f.edit_asked.connect(lambda i: self.command.emit("picture_edit:" + i))
+                f.menu_asked.connect(self._picture_menu)
+                f.picked.connect(self.pick_picture)
+                self.pframes[pid] = f
+            f = self.pframes[pid]
+            f.selected = pid == self._sel_picture
+            f.place()
+            f.raise_()
+            f.update()
+        if self._sel_picture not in self.pframes:
+            self._sel_picture = None
+
+    def refresh_pictures(self):
+        self._sync_pictures()
+
+    def pick_picture(self, pid):
+        """Picks a picture: the cell marker goes, Delete / Ctrl+C work on the picture."""
+        self.sel_chart = None
+        for i, f in self.frames.items():
+            f.selected = False
+            f.update()
+        self.sel_picture = pid
+        if self.edit is None:
+            self.setFocus()
+        self.selection_changed.emit()
+
+    def reveal_picture(self, pid):
+        pic = self.wb.picture(self.sheet, pid)
+        if pic is None:
+            return
+        (x, y), (w, h) = pic["pos"], pic["size"]
+        vw, vh = self.viewport().width() - self.hw, self.viewport().height() - self.hh
+        hb, vb = self.horizontalScrollBar(), self.verticalScrollBar()
+        if x + w > self.x0 + vw or x < self.x0:
+            hb.setValue(int(max(0, min(x - 10, x + w - vw + 10))))
+        if y + h > self.y0 + vh or y < self.y0:
+            vb.setValue(int(max(0, min(y - 10, y + h - vh + 10))))
+
+    def picture_room(self):
+        """How big a new picture may be: the part of the sheet that can be seen (a bigger picture is made smaller to fit; it can be set back in the panel)."""
+        return (self.viewport().width() - self.hw - 24, self.viewport().height() - self.hh - 24)
+
+    def add_picture_data(self, data, image, name, pos=None, size=None):
+        """Puts a picture (from sh_picture.read_*) on the sheet at the selected cell (or `pos`) and picks it; `size` is how big it was when it was copied."""
+        r, c = self.sel()[:2]
+        pos = pos or (self.cols.pos(c), self.rows.pos(r))
+        pic = sh_picture.new_picture(self.wb, self.sheet, data, image, name, pos, None if size else self.picture_room())
+        if size:
+            pic["size"] = [float(size[0]), float(size[1])]
+        if not self.wb.add_picture(self.sheet, pic):
+            return None
+        self.pick_picture(pic["id"])
+        self.reveal_picture(pic["id"])
+        self.pictures_changed.emit()
+        return pic
+
+    def paste_picture(self, md=None):
+        """Ctrl+V of an image (a screenshot, a picture copied in a browser or in Word, a copied image file): it lands at the selected cell."""
+        try:
+            got = sh_picture.clipboard_image(md)
+        except sh_picture.PictureError as ex:
+            self.message.emit(str(ex), "bad")
+            return
+        if got is None:
+            self.message.emit("There is no picture on the clipboard.", "warn")
+            return
+        size = None
+        mime = (md if md is not None else QGuiApplication.clipboard().mimeData())
+        if mime is not None and mime.hasFormat(PIC_MIME):
+            try:
+                info = json.loads(bytes(mime.data(PIC_MIME)).decode("utf-8"))
+                if info.get("token") == TOKEN:
+                    size = [float(info["size"][0]), float(info["size"][1])]
+            except (ValueError, UnicodeDecodeError, KeyError, TypeError, IndexError):
+                size = None
+        pic = self.add_picture_data(*got, size=size)
+        if pic is not None:
+            self.message.emit("Picture pasted: drag it to move it, double-click it to set its size.", "good")
+
+    def copy_picture(self, cut=False):
+        pic = self.wb.picture(self.sheet, self.sel_picture)
+        if pic is None:
+            return
+        img = sh_picture.qimage_of(self.wb, pic)
+        if img.isNull():
+            self.message.emit("This picture could not be read.", "bad")
+            return
+        md = QMimeData()
+        md.setImageData(img)
+        md.setData(PIC_MIME, json.dumps({"token": TOKEN, "size": list(pic["size"])}).encode("utf-8"))
+        QGuiApplication.clipboard().setMimeData(md)
+        self.copied = None
+        self.viewport().update()
+        if cut:
+            self.delete_picture(pic["id"])
+            self.message.emit("Cut the picture: choose where it goes, then Paste.", "")
+        else:
+            self.message.emit("Copied the picture: choose where it goes, then Paste.", "")
+
+    def delete_picture(self, pid):
+        if self.wb.delete_picture(self.sheet, pid):
+            self.sel_picture = None
+            self.pictures_changed.emit()
+
+    def duplicate_picture(self, pid):
+        pic = self.wb.picture(self.sheet, pid)
+        if pic is None:
+            return None
+        c2 = dict(pic)
+        c2["id"] = self.wb.new_picture_id(self.sheet)
+        c2["pos"] = [pic["pos"][0] + 24, pic["pos"][1] + 24]
+        c2["size"], c2["orig"] = list(pic["size"]), list(pic["orig"])
+        if not self.wb.add_picture(self.sheet, c2, "Copy picture"):
+            return None
+        self.pick_picture(c2["id"])
+        self.pictures_changed.emit()
+        return c2
+
+    def _picture_menu(self, pid, gpos):
+        menu = QMenu(self)
+        menu.addAction("Edit image...", lambda: self.command.emit("picture_edit:" + pid))
+        menu.addAction("Copy", lambda: (self.pick_picture(pid), self.copy_picture(False)))
+        menu.addAction("Duplicate", lambda: self.duplicate_picture(pid))
+        menu.addAction("Export image...", lambda: self.command.emit("picture_export:" + pid))
+        menu.addSeparator()
+        menu.addAction("Delete image", lambda: self.delete_picture(pid))
         menu.exec(gpos)
 
     def add_chart(self, ch):

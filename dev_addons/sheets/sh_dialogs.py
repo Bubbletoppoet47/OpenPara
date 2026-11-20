@@ -810,7 +810,7 @@ class PasteSpecialDialog(QDialog):
         self.setWindowTitle("Paste special")
         lay = QVBoxLayout(self)
         self.opts = []
-        for key, text in (("all", "All"), ("values", "Values only"), ("formulas", "Formulas (no formats)"), ("formats", "Formats only")):
+        for key, text in (("all", "All"), ("values", "Values only"), ("formulas", "Formulas (no formats)"), ("formats", "Formats only"), ("picture", "Picture (the image on the clipboard)")):
             rb = QRadioButton(text)
             rb.key = key
             self.opts.append(rb)

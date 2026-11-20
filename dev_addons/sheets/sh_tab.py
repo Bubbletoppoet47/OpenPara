@@ -1,5 +1,5 @@
 """
-sh_tab.py - the Sheets tab: a ribbon (Home, Data, Charts, Engineering), the name box and formula bar, the grid, the sheet tabs and a status line.
+sh_tab.py - the Sheets tab: a ribbon (Home, Data, Charts, Images, Engineering), the name box and formula bar, the grid, the sheet tabs and a status line.
 
 Files: .opsheet (JSON, the whole workbook with its charts and study links).  Excel files (.xlsx) open into a new workbook and export from the Data tab.
 """
@@ -19,6 +19,7 @@ import sh_edit
 import sh_engine as E
 import sh_fmt
 import sh_grid
+import sh_picture
 import sh_prefs
 import sh_presets
 import sh_ribbon
@@ -57,6 +58,7 @@ class SheetsTab(QWidget):
         self.extra_dirty = False
         self.dialogs = []                       # windows that stay open next to the grid
         self.panel = None                       # the chart panel to the right of the grid (made when it is first needed)
+        self.pic_panel = None                   # the image panel in the same place (one of the two is open at a time)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -189,11 +191,16 @@ class SheetsTab(QWidget):
             ("Chart", [("ch_edit", "s_ch_edit", "Edit\nchart", "Open the chart panel: data, series, look and advanced settings", self.chart_edit), ("ch_copy", "s_ch_copy", "Copy\nchart", "Duplicate the chart", self.chart_copy),
                        ("ch_export", "s_ch_export", "Export\nchart", "Save the chart as PNG, SVG or PDF", self.chart_export), ("ch_del", "s_ch_del", "Delete\nchart", "Remove the chart", self.chart_delete)]),
         ]
+        images = [
+            ("Insert", [("pic_new", "s_pic_new", "Insert\nimage", "Put a picture file (PNG, JPG ...) on the sheet at the selected cell. To bring in a screenshot, copy it and press Ctrl+V.", self.picture_new)]),
+            ("Image", [("pic_edit", "s_pic_edit", "Edit\nimage", "Open the image panel: size", self.picture_edit), ("pic_copy", "s_pic_copy", "Copy\nimage", "Duplicate the image", self.picture_copy),
+                       ("pic_export", "s_pic_export", "Export\nimage", "Save the image as a file", self.picture_export), ("pic_del", "s_pic_del", "Delete\nimage", "Remove the image", self.picture_delete)]),
+        ]
         eng = [("Functions", [("fx", "s_fx", "Insert\nfunction", "Insert a function with its Function Arguments window", self.fx)]),
                ("Standards", self.standard_items()),
                ("Browse", [("std_select", "s_std_select", "Standard\nselect", "Browse every installed standard", lambda: self.standards(None))])]
         view = [("Ribbon", [("ribbon_size", "s_ribbon_size", "Ribbon\nsize", "Icon size and text size of the ribbon", self.ribbon_size_dialog)])]
-        for title, groups in (("Home", home), ("Data", data), ("Charts", charts), ("Engineering", eng), ("View", view)):
+        for title, groups in (("Home", home), ("Data", data), ("Charts", charts), ("Images", images), ("Engineering", eng), ("View", view)):
             tabs.addTab(self.ribbon_page(groups), title)
         QTimer.singleShot(0, self.apply_ribbon_sizes)
         return tabs
@@ -291,6 +298,7 @@ class SheetsTab(QWidget):
         g.message.connect(lambda t, lv: self.status.say(t, lv))
         g.command.connect(self.run_command)
         g.charts_changed.connect(self.on_charts_changed)
+        g.pictures_changed.connect(self.on_pictures_changed)
         g.edit_text.connect(self.on_edit_text)
         g.edit_started.connect(self.on_edit_started)
         g.edit_ended.connect(self.on_edit_ended)
@@ -324,7 +332,8 @@ class SheetsTab(QWidget):
               "insert": lambda: self.insert("r"), "delete": lambda: self.delete("r"), "insert_row": lambda: self.insert("r"), "insert_col": lambda: self.insert("c"),
               "delete_row": lambda: self.delete("r"), "delete_col": lambda: self.delete("c"), "chart_new": self.chart_new, "col_width": self.col_width,
               "study_refresh": self.study_refresh, "study_select": self.study_select, "study_delete": self.study_delete, "chart_edit": lambda: self.chart_edit(arg), "chart_export": lambda: self.chart_export(arg),
-              "chart_copy": lambda: self.chart_copy(arg)}.get(name)
+              "chart_copy": lambda: self.chart_copy(arg), "picture_edit": lambda: self.picture_edit(arg), "picture_export": lambda: self.picture_export(arg),
+              "picture_copy": lambda: self.picture_copy(arg)}.get(name)
         if fn:
             fn()
 
@@ -334,6 +343,8 @@ class SheetsTab(QWidget):
             self.rebuild_sheet_tabs()
         self.update_ribbon()
         self.update_titles()
+        if structure:
+            self.follow_pic_panel()                              # (a picture was put back, taken off, or another one is there after an undo)
 
     def mark_extra(self):
         self.extra_dirty = True
@@ -362,7 +373,7 @@ class SheetsTab(QWidget):
         self.sync_sheet_tab()
         r1, c1, r2, c2 = g.sel()
         if g.edit is None:
-            if (r1, c1) == (r2, c2) or g.sel_chart:
+            if (r1, c1) == (r2, c2) or g.sel_chart or g.sel_picture:
                 self.name_box.setText(E.addr(g.r, g.c))
             else:
                 self.name_box.setText(f"{E.addr(r1, c1)}:{E.addr(r2, c2)}")
@@ -374,6 +385,7 @@ class SheetsTab(QWidget):
         self.update_stats()
         self.update_help()
         self.follow_panel()
+        self.follow_pic_panel()
 
     def update_stats(self):
         g = self.grid
@@ -408,6 +420,9 @@ class SheetsTab(QWidget):
         has_chart = bool(s and s.charts)
         for k in ("ch_edit", "ch_copy", "ch_export", "ch_del"):
             self.act[k].setEnabled(has_chart)
+        has_pic = bool(s and s.pictures)
+        for k in ("pic_edit", "pic_copy", "pic_export", "pic_del"):
+            self.act[k].setEnabled(has_pic)
         self.act["sh_del"].setEnabled(len(self.wb.sheets) > 1)
 
     def on_edit_started(self):
@@ -436,7 +451,7 @@ class SheetsTab(QWidget):
                 self.help.setText(f"{name}({', '.join(parts)})" + (f"  -  {hint}" if hint else ""))
                 self.help.setStyleSheet(f"color:{ui_kit.MUTED}; padding:1px 8px; font-size:11px;")
                 return
-        elif not g.sel_chart:
+        elif not g.sel_chart and not g.sel_picture:
             warn = self.wb.warnings.get((g.sheet, g.r, g.c))
             if warn:
                 self.help.setText("⚠ " + "; ".join(warn))
@@ -794,13 +809,15 @@ class SheetsTab(QWidget):
         return self.panel is not None and not self.panel.isHidden() and self.panel.chart is not None
 
     def open_panel(self, ch, start_pick=False):
+        if self.pic_panel is not None and not self.pic_panel.isHidden():
+            self.pic_panel.close_panel()
         p = self.ensure_panel()
         was_hidden = p.isHidden()
         p.set_context(self.wb, self.grid)
         p.show()
         if was_hidden:
             total = max(self.split.width(), 900)
-            self.split.setSizes([max(300, total - 400), 400])
+            self.split.setSizes([max(300, total - 400), 400, 0])
         p.open_chart(ch, self.grid.sheet, start_pick)
         self.grid.reveal_chart(ch["id"])
 
@@ -860,6 +877,119 @@ class SheetsTab(QWidget):
             p += ".png"
         msg = sh_chart.export(self.wb, ch, p)
         self.status.say(msg or f"Saved {p}", "bad" if msg else "good")
+
+    # ------------------------------------------------------------------ images
+    def picture_by_id(self, pid=None):
+        g = self.grid
+        s = g.sheet_obj()
+        pid = pid or g.sel_picture or (s.pictures[0]["id"] if s.pictures else None)
+        return next((p for p in s.pictures if p.get("id") == pid), None)
+
+    def picture_new(self):
+        """Insert image: a picture file goes on the sheet at the selected cell and is picked, so it can be dragged at once."""
+        start = os.path.dirname(self.path) if self.path else ""
+        p, _ = QFileDialog.getOpenFileName(self, "Insert image", start, sh_picture.FILE_FILTER)
+        if not p:
+            return
+        try:
+            got = sh_picture.read_file(p)
+        except sh_picture.PictureError as ex:
+            self.status.say(str(ex), "bad")
+            return
+        if self.grid.add_picture_data(*got) is not None:
+            self.status.say("Image added: drag it to move it, double-click it to set its size.", "good")
+
+    def picture_edit(self, pid=None):
+        pic = self.picture_by_id(pid or None)
+        if pic is None:
+            self.status.say("There is no image on this sheet yet: Insert image, or copy a picture and press Ctrl+V.", "warn")
+            return
+        self.grid.pick_picture(pic["id"])
+        self.open_pic_panel(pic)
+
+    def picture_copy(self, pid=None):
+        pic = self.picture_by_id(pid or None)
+        if pic is not None:
+            self.grid.duplicate_picture(pic["id"])
+
+    def picture_delete(self):
+        pic = self.picture_by_id()
+        if pic is not None:
+            self.grid.delete_picture(pic["id"])
+
+    def picture_export(self, pid=None):
+        pic = self.picture_by_id(pid or None)
+        if pic is None:
+            self.status.say("There is no image on this sheet.", "warn")
+            return
+        ext = sh_picture.suffix_of(self.wb.images.get(pic["image"], b""))
+        p, _ = QFileDialog.getSaveFileName(self, "Export image", (pic.get("name") or "image") + ext, "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;BMP image (*.bmp)")
+        if not p:
+            return
+        if "." not in os.path.basename(p):
+            p += ext
+        msg = sh_picture.export(self.wb, pic, p)
+        self.status.say(msg or f"Saved {p}", "bad" if msg else "good")
+
+    def ensure_pic_panel(self):
+        if self.pic_panel is None:
+            p = sh_picture.PicturePanel()
+            p.set_context(self.wb, self.grid)
+            p.changed.connect(self.pic_panel_changed)
+            p.closed.connect(self.panel_closed)
+            p.export_asked.connect(lambda pid: self.picture_export(pid))
+            p.delete_asked.connect(lambda pid: self.grid.delete_picture(pid))
+            p.hide()
+            self.split.addWidget(p)
+            self.split.setStretchFactor(self.split.indexOf(p), 0)
+            self.pic_panel = p
+        return self.pic_panel
+
+    def pic_panel_open(self):
+        return self.pic_panel is not None and not self.pic_panel.isHidden() and self.pic_panel.picture is not None
+
+    def open_pic_panel(self, pic):
+        if self.panel is not None and not self.panel.isHidden():
+            self.panel.close_panel()
+        p = self.ensure_pic_panel()
+        was_hidden = p.isHidden()
+        p.set_context(self.wb, self.grid)
+        p.show()
+        if was_hidden:
+            total = max(self.split.width(), 900)
+            self.split.setSizes([max(300, total - 320), 0, 320])
+        p.open_picture(pic, self.grid.sheet)
+        self.grid.reveal_picture(pic["id"])
+
+    def pic_panel_changed(self, pid):
+        self.grid.refresh_pictures()
+        self.update_ribbon()
+        self.update_titles()
+
+    def follow_pic_panel(self):
+        """The panel shows the picture that is picked on the sheet; it closes when its picture is gone or another sheet is shown."""
+        if not self.pic_panel_open():
+            return
+        p, g = self.pic_panel, self.grid
+        s = g.sheet_obj()
+        by_id = {x.get("id"): x for x in (s.pictures if s else [])}
+        if g.sel_picture in by_id:
+            if by_id[g.sel_picture] is not p.picture or p.sheet != g.sheet:
+                p.open_picture(by_id[g.sel_picture], g.sheet)
+            return
+        live = by_id.get(p.picture.get("id")) if p.sheet == g.sheet else None
+        if live is None:
+            p.close_panel()                                    # (its picture was deleted, or this is another sheet)
+        elif live is not p.picture:
+            p.open_picture(live, g.sheet)                      # (an undo put it back as a new object)
+            return
+
+    def on_pictures_changed(self):
+        self.update_ribbon()
+        self.update_titles()
+        self.follow_pic_panel()
+        if self.pic_panel_open():
+            self.pic_panel.load()
 
     # ------------------------------------------------------------------ studies
     def open_study_projects(self):
@@ -1068,6 +1198,9 @@ class SheetsTab(QWidget):
         if self.panel is not None:
             self.panel.close_panel()
             self.panel.set_context(wb, self.grid)
+        if self.pic_panel is not None:
+            self.pic_panel.close_panel()
+            self.pic_panel.set_context(wb, self.grid)
         self.grid.set_workbook(wb)                          # the grid listens first, so it already shows a sheet that exists
         wb.listeners.append(self.wb_changed)
         self.path = path
