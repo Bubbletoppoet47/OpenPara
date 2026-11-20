@@ -31,9 +31,6 @@ SUPPORT = (0.25, 0.5, 0.95)
 LOAD = (0.9, 0.25, 0.25)
 BODY_COLOURS = [(0.78, 0.80, 0.84), (0.84, 0.78, 0.62), (0.66, 0.80, 0.72), (0.76, 0.70, 0.84), (0.86, 0.74, 0.76), (0.66, 0.78, 0.86),
                 (0.80, 0.82, 0.62), (0.70, 0.74, 0.62)]      # the bodies of an assembly, in soft colours that do not look like a support, a load or a pick
-SCREW = (0.1, 0.62, 0.62)                           # a patch that carries a screw
-JOINT = (0.93, 0.80, 0.55)                          # a face between two parts, shown when one of the parts is hidden
-STATUS_RGB = {"ok": (0.15, 0.62, 0.25), "fails": (0.85, 0.12, 0.12), "incomplete": (0.95, 0.65, 0.1), None: (0.1, 0.62, 0.62)}
 NO_DATA = (153, 153, 153)                           # a value that does not exist (no yield strength for a safety factor)
 LEGEND_W = 240                                      # the legend is drawn in a picture this wide (its text wraps inside it) and put top right
 AXES_BOX = (0.0, 0.0, 0.2, 0.2)                     # the axes triad: bottom-left corner, as a fraction of the view
@@ -112,8 +109,6 @@ class SolidView:
         self.legend = None                         # the legend picture in the corner: {"rep", "widget", "w", "h"}
         self.legend_note = False                   # True when the legend had to fall back to one line of text
         self.axes_on = False
-        self.markers = None                        # the actor of the screw markers (see set_markers)
-        self.marker_data = []                      # [(point, rgb)] of the markers (kept for the tests and when there is no 3D view)
         self.lines = {}                            # name -> actor of a line overlay (see set_lines)
         self.line_data = {}                        # name -> its segments (kept for the tests and when there is no 3D view)
         if QtInteractor is None:
@@ -143,9 +138,6 @@ class SolidView:
         self.clear_result()
         for name in list(self.lines):
             self.set_lines(name, [])
-        if self.markers is not None:
-            self.plotter.remove_actor(self.markers)
-            self.markers = None
         if self.actor is not None:
             self.plotter.remove_actor(self.actor)
             self.actor = None
@@ -175,22 +167,6 @@ class SolidView:
         cells = np.hstack([np.full((len(segs), 1), 2), np.arange(0, 2 * len(segs), 2)[:, None], np.arange(1, 2 * len(segs), 2)[:, None]]).ravel()
         poly = pv.PolyData(P, lines=cells)
         self.lines[name] = self.plotter.add_mesh(poly, color=color, line_width=width, pickable=False, reset_camera=False, show_scalar_bar=False)
-        self.plotter.render()
-
-    def set_markers(self, points, colours, size=16):
-        """Round markers (the screws) at `points` [(x, y, z)] with the colours [(r, g, b)]; an empty list takes them away."""
-        self.marker_data = list(zip([tuple(map(float, p)) for p in points], [tuple(c) for c in colours]))
-        if self.plotter is None:
-            return
-        if self.markers is not None:
-            self.plotter.remove_actor(self.markers)
-            self.markers = None
-        if len(points):
-            P = np.asarray(points, float).reshape(-1, 3)
-            poly = pv.PolyData(P)
-            poly.point_data["rgb"] = (np.asarray(colours, float).reshape(-1, 3) * 255).astype(np.uint8)
-            self.markers = self.plotter.add_mesh(poly, scalars="rgb", rgb=True, point_size=size, render_points_as_spheres=True, pickable=False,
-                                                 reset_camera=False, show_scalar_bar=False)
         self.plotter.render()
 
     def colour_faces(self, colours):

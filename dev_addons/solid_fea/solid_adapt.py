@@ -12,7 +12,7 @@ setup["adapt"] = {
   "hmin":     mm (0 = automatic),         the smallest element the loops may make (automatic: a tenth of the smallest element size, or the minimum size of
                                          the advanced mesh options when that is set)
 }
-For single parts and for bonded assemblies of tetrahedra.  Not for hex-dominant meshes, and not for assemblies with screws or contact (`unsupported`).
+For single parts and for bonded assemblies of tetrahedra.  Not for hex-dominant meshes (`unsupported`).
 
 HOW A LOOP WORKS
   1. The error of every element is estimated from the solution itself (Zienkiewicz-Zhu): the stress an element computes on its own is compared with the stress
@@ -95,8 +95,6 @@ def unsupported(geom, setup):
     """Why adaptive meshing cannot be used on this setup, or None."""
     if smesh.options(setup)["type"] != "tets":
         return "Adaptive meshing works with tetrahedra only: choose the tetrahedra mesh type (or switch the adaptive mesh off)."
-    if geom is not None and geom.get("bodies") and setup.get("joint") == "contact":
-        return "Adaptive meshing does not work with screws and contact yet: use bonded parts (or switch the adaptive mesh off)."
     return None
 
 

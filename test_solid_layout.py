@@ -82,8 +82,9 @@ assert w.probe_at(tuple(p)) is not None and w.last_probe["i"] == i
 assert w.panel.maximumWidth() >= 16000 and w.panel.minimumWidth() <= 400
 from PyQt6.QtWidgets import QPushButton
 texts = [b_.text().strip() for b_ in w.findChildren(QPushButton)]
-for want in ("Force on face(s)...", "Pressure on face(s)...", "Force at vertex...", "Gravity...", "Fixed", "One direction (normal)", "Bolt / pin hole"):
+for want in ("Force on face(s)...", "Pressure on face(s)...", "Force at vertex...", "Gravity...", "Fixed", "One direction (normal)"):
     assert want in texts, want
+assert "Bolt / pin hole" not in texts, "screws and bolts are gone from the 3D FEA"
 
 # ---- the Results block is laid out like the one of 1D FEA: result box (displacement magnitude first), Colours, deformed shape, scale, Animate; Probe is inside it
 from PyQt6.QtWidgets import QCheckBox

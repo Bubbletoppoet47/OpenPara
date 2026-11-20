@@ -1,7 +1,7 @@
 """solid_progress.py - the progress bar of the 3D FEA window: how far along a mesh or a solve is, how long it has taken and how long it will probably take.
 
 What can be known.  The solver goes through a few stages (mesh, assemble the stiffness matrix, solve, stresses).  Some of them know their own progress
-(the assembly works through the elements in chunks; the iterative solver has a residual that falls; the contact solve counts its rounds).  The big one,
+(the assembly works through the elements in chunks; the iterative solver has a residual that falls).  The big one,
 the direct factorisation of the stiffness matrix (95 % of the time of a typical solve), is ONE call into a library that reports nothing while it runs, so
 for that stage the bar is a time estimate: the cost grows with the number of unknowns and with the thickness of the part, and the constant for this
 computer is learned from the solves it has done before (solid_timing.json in the user folder).  The first solve on a computer uses the speed of its own
@@ -27,21 +27,19 @@ STAGES = {
     "meshhex": (0.5, 3.0e-4),        # hex-dominant mesh: slower and less predictable
     "assemble": (0.02, 6.5e-5),      # size: elements
     "factor": (0.05, 2.0e-8),        # size: factor_cost() of the direct solve of a body held in place
-    "factor_sym": (0.05, 7.0e-9),    # the same for the contact rounds (the symmetric ordering is about three times quicker)
     "ilu": (0.1, 1.3e-5),            # the incomplete factorisation that precedes the iterative solver; size: non-zeros of the matrix (110 s for 8.6 million)
     "cg": (0.1, 3.0e-4),             # the iterations themselves (their progress is measured); size: unknowns (about 300 iterations of 1e-6 s per unknown)
     "stress": (0.02, 1.2e-5),        # size: elements
     "other": (1.0, 0.0),             # a stage nobody has a name for
 }
-LEARN = ("mesh", "meshhex", "assemble", "factor", "factor_sym", "ilu", "cg", "stress")        # the stages whose time is kept for next time
+LEARN = ("mesh", "meshhex", "assemble", "factor", "ilu", "cg", "stress")        # the stages whose time is kept for next time
 MIN_LEARN_S = 0.25                   # a stage shorter than this says nothing about the speed of the computer
-SPEED_KEYS = ("mesh", "meshhex", "factor", "factor_sym", "ilu", "cg", "stress")       # the stages scaled by the speed measured in the assembly of this solve
+SPEED_KEYS = ("mesh", "meshhex", "factor", "ilu", "cg", "stress")       # the stages scaled by the speed measured in the assembly of this solve
 ELEMENT_FACTOR = 0.19                # elements ~ volume / (ELEMENT_FACTOR * h^3) for the quadratic tetrahedra of the automatic mesh (measured: 0.17 to 0.20)
 NODES_PER_ELEMENT = 1.7              # quadratic tetrahedra
 NNZ_PER_UNKNOWN = 80.0               # the stiffness matrix of quadratic tetrahedra
-CONTACT_ROUNDS = 3                   # contact rounds assumed before the first one is done (one more is always assumed to follow the current one)
 ON_TIME = 0.96                       # how far through a stage the bar is when its estimated time is up (it jumps to the end when the stage really ends)
-ORDER = {"mesh": 0, "meshhex": 0, "assemble": 1, "factor": 2, "factor_sym": 2, "ilu": 2, "cg": 3, "stress": 4}        # the order the stages come in
+ORDER = {"mesh": 0, "meshhex": 0, "assemble": 1, "factor": 2, "ilu": 2, "cg": 3, "stress": 4}        # the order the stages come in
 CEILING = 0.995                      # the bar never shows more than this before the work is finished
 DIRECT_LIMIT = 80000                 # the same number as solid_fem.DIRECT_LIMIT (the largest system that is solved directly; a test checks they agree)
 
@@ -203,8 +201,6 @@ class Tracker:
                 if k == key:
                     del self.future[i]
                     break
-            if key == "factor_sym" and not any(k == "factor_sym" for k, _ in self.future):
-                self.future.insert(0, ("factor_sym", size))            # the contact rounds go on until nothing changes: one more is always possible
             self.cur = {"key": key, "size": size, "t0": now, "pred": self._predict(key, size), "frac": None, "label": self.label}
 
     def part(self, fraction):
@@ -321,11 +317,8 @@ def plan_for(geom, r, mesh=None, meshing=True, solving=True):
         except (TypeError, ValueError, IndexError):
             ext = None
     out.append(("assemble", el))
-    contact = bool(r and r.get("joint") == "contact" and (geom or {}).get("bodies"))
     if unknowns > DIRECT_LIMIT:
         out += [("ilu", unknowns * NNZ_PER_UNKNOWN), ("cg", unknowns)]
-    elif contact:
-        out += [("factor_sym", factor_cost(unknowns, ext))] * CONTACT_ROUNDS
     else:
         out.append(("factor", factor_cost(unknowns, ext)))
     out.append(("stress", el))

@@ -1,6 +1,6 @@
 """3D FEA, adaptive mesh (h-type): the settings, the error estimate (exact where the stress is constant, its energy adds up), loops that settle on known
 answers (a cantilever, a thick cylinder under pressure, two bonded bars) with fewer elements than a uniform mesh, the reasons they stop (converged, most
-loops, size limit, smallest size, cancel), what is refused (hex-dominant, screws and contact), the window (tick box, menu, report, error colours, save and
+loops, size limit, smallest size, cancel), what is refused (hex-dominant), the window (tick box, menu, report, error colours, save and
 open) and the parametric study (inputs and outputs).   python test_solid_adapt.py"""
 import faulthandler; faulthandler.dump_traceback_later(590, exit=True)
 import os, sys, tempfile, shutil
@@ -219,7 +219,7 @@ ok([k for k, _s in trk2.future].count("mesh") == 0, "a plan that is not cyclic d
 pl = sad.plan(g, sm.resolve(g, settings(g, tip, sup, 8.0, loops=3)), 8.0)
 ok([k for k, _s in pl].count("mesh") == 4 and [k for k, _s in pl].count("stress") == 4, f"the plan of a run: a mesh and a solve per loop ({len(pl)} stages)")
 
-# ------------------------------------------------------------------------------------------------ bonded parts; screws and contact are refused
+# ------------------------------------------------------------------------------------------------ bonded parts
 print("assembly")
 STEEL = {"name": "Steel", "density": 7850.0, "E_MPa": 200000.0, "nu": 0.3, "Sy_MPa": 250.0, "Su_MPa": 400.0}
 ALU = {"name": "Aluminium", "density": 2700.0, "E_MPa": 70000.0, "nu": 0.33, "Sy_MPa": 100.0, "Su_MPa": 200.0}
@@ -233,13 +233,8 @@ sa_ = settings(ga, aload, asup, 10.0, crit="umax", tol=1.0)
 res = sm.run(ga, sm.resolve(ga, sa_), {})
 a = res["adapt"]
 ok(a["loops"] >= 1 and abs(res["umax"] - want) / want < 0.03, f"two bonded bars: {res['umax']:.6f} mm against {want:.6f} mm in series, {a['loops']} loop(s)")
-ok(res["bodies"] and res["equilibrium"] < 1e-6 and res["joint"] == "bonded", "the result still has its bodies, and equilibrium holds")
-cs = dict(sa_); cs["joint"] = "contact"
-try:
-    sm.resolve(ga, cs); ok(False, "screws and contact must be refused")
-except fem.FemError as ex:
-    ok("screws and contact" in str(ex), f"screws and contact are refused: {ex}")
-ok(sad.unsupported(ga, cs) and not sad.unsupported(ga, sa_) and not sad.unsupported(g, on), "unsupported(): contact assemblies only")
+ok(res["bodies"] and res["equilibrium"] < 1e-6, "the result still has its bodies, and equilibrium holds")
+ok(not sad.unsupported(ga, sa_) and not sad.unsupported(g, on), "unsupported(): a bonded assembly and a single part are both fine")
 
 # ------------------------------------------------------------------------------------------------ the window
 print("window")
@@ -383,12 +378,7 @@ want = 10000.0 * (30 / 200000.0 + 20 / 68900.0) / 400.0
 ok("Bodies (fully bonded)" in txt and "Adaptive mesh" in txt and abs(wa.result["umax"] - want) / want < 0.05, f"the report has the bodies and the loops; {wa.result['umax']:.6f} mm against {want:.6f} mm")
 counts = [int(wa.size_table.item(i, 2).text().replace(",", "")) for i in range(wa.size_table.rowCount())]
 ok(sum(counts) == wa.result["n_tets"] and len(counts) == 2, f"the element count of every part is that of the last mesh ({counts})")
-wa.set_joint("contact")
-ok(not wa.cb_adapt.isChecked() and not wa.setup["adapt"]["on"] and "screws and contact" in wa.status_lbl.text() and "switched off" in wa.status_lbl.text(),
-   f"screws and contact: the tick box switches itself off and says so ({wa.status_lbl.text()[-90:]})")
-ok(not wa.cb_adapt.isEnabled(), "and is greyed out while the joint is screws and contact")
-wa.set_joint("bonded")
-ok(wa.cb_adapt.isEnabled(), "bonded again: it can be used again")
+ok(wa.cb_adapt.isEnabled(), "the tick box stays available for the assembly (every assembly is bonded now)")
 
 shutil.rmtree(T, ignore_errors=True)
 print("OK solid adapt")

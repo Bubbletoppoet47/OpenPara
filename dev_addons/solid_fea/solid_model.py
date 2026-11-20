@@ -6,7 +6,7 @@ setup = {
   "h": element size (mm, 0 = automatic): of a single part, or of the parts of an assembly that have no size of their own,
   "body_h": {body name: mm}              an ASSEMBLY: the element size of the parts that have one of their own (a blank or missing one gets "h"); the parts are
                                       still meshed as one mesh, so the nodes of the faces they share stay shared (see solid_mesh)
-  "supports": [{"mode": "fixed" | "slide" | "bolt", "faces": [face signature]}],
+  "supports": [{"mode": "fixed" | "slide", "faces": [face signature]}],
   "loads":    [{"kind": "force", "faces": [sig], "f": [Fx, Fy, Fz]}              total force spread over the faces (N)
               | {"kind": "pressure", "faces": [sig], "p": MPa}                    positive pushes into the part
               | {"kind": "point", "vertex": vertex signature, "f": [Fx, Fy, Fz]}
@@ -18,9 +18,6 @@ setup = {
   "adapt": {"on", "crit", "tol", "loops", "cap", "strength", "hmin"}      h-adaptive meshing: solve, refine where the error is large, solve again (see solid_adapt)
   "splits": [{"face": face signature, "cols": n, "rows": m, "u": [x, y, z], "col_sizes": [mm | None, ...], "row_sizes": [...]}]
                                       flat faces cut into patches (see solid_geom.analyze); a size that is None is free (the free ones share the rest equally)
-  "joint": "bonded" | "contact"       an ASSEMBLY: fully bonded where parts touch, or frictionless contact with the screws as the only bonded places
-  "screws": [{"name", "faces": [signature of a patch between two parts], "kind": "screw" | "bolt", "d", "length", ...}]     see solid_screw.default_screw
-  "design": "ASD" | "LRFD" | "LSD" | "nominal"     the design method of the screw checks
 }
 A face signature in a support or a load is either a WHOLE face (all its patches when it was split later) or a patch of a split face (see solid_geom.face_sig);
 conditions on a whole face and on its patches add up.
@@ -36,15 +33,14 @@ import solid_adapt as sad
 import solid_fem as fem
 import solid_geom as sg
 import solid_mesh as smesh
-import solid_screw as screw
 
-MODES = {"fixed": "Fixed (all directions)", "slide": "One direction (normal to the face)", "bolt": "Bolt / pin hole (fixed on the hole surface)"}
+MODES = {"fixed": "Fixed (all directions)", "slide": "One direction (normal to the face)"}
 KINDS = {"force": "Force on faces", "pressure": "Pressure on faces", "point": "Force at a vertex", "gravity": "Gravity"}
 
 
 def default_setup():
     return {"material": {"E": 200000.0, "nu": 0.3, "rho": 7850.0, "sy": 250.0, "su": 400.0}, "h": 0.0, "supports": [], "loads": [], "probe": None, "splits": [],
-            "mesh": smesh.default_mesh(), "adapt": sad.default_adapt(), "bond_tol": 0.0, "body_mats": {}, "body_h": {}, "joint": "bonded", "screws": [], "design": "ASD"}
+            "mesh": smesh.default_mesh(), "adapt": sad.default_adapt(), "bond_tol": 0.0, "body_mats": {}, "body_h": {}}
 
 
 def body_materials(geom, setup):
@@ -56,6 +52,27 @@ def body_materials(geom, setup):
         m.update({k: v for k, v in (mine.get(b["name"]) or {}).items() if v is not None})
         out.append(m)
     return out
+
+
+def migrate(setup):
+    """Screws, bolts and the contact joint were taken out of the 3D FEA.  An old setup is brought up to date in place: an assembly that was joined by screws is
+    now fully bonded (its screws are dropped), a bolt / pin hole support is a fixed support (that is exactly what it was).  -> plain sentences about what
+    was changed ([] when nothing was)."""
+    notes = []
+    screws = len(setup.get("screws") or [])
+    if setup.get("joint") == "contact" or screws:
+        notes.append("Screws, bolts and contact are not part of the 3D FEA any more: this assembly is solved fully bonded" +
+                     (f", and its {screws} screw(s) and bolt(s) were removed." if screws else "."))
+    for k in ("joint", "screws", "design"):
+        setup.pop(k, None)
+    n = 0
+    for s_ in setup.get("supports") or []:
+        if s_.get("mode") == "bolt":
+            s_["mode"] = "fixed"
+            n += 1
+    if n:
+        notes.append(f"{n} bolt / pin hole support(s) are now fixed supports (the same thing).")
+    return notes
 
 
 def name_of(kind, i, item=None):
@@ -78,14 +95,9 @@ def resolve(geom, setup):
     r = {"material": dict(setup["material"]), "h": float(setup.get("h") or 0.0), "supports": [], "loads": [], "probe": setup.get("probe"),
          "mesh": smesh.resolve(geom, setup, float(setup.get("h") or 0.0) or auto_h(geom))}
     r["adapt"] = sad.resolve(geom, setup)                                    # None = a single mesh
-    r["joint"], r["screws"], r["design"] = "bonded", [], setup.get("design") or "ASD"
     if geom.get("bodies"):
         r["materials"] = body_materials(geom, setup)
         r["material"] = dict(r["materials"][0])
-        if setup.get("joint") == "contact":
-            r["joint"] = "contact"
-            r["screws"] = _resolve_screws(geom, setup)
-            _patch_mesh(geom, r, float(setup.get("h") or 0.0) or auto_h(geom))
     for i, s in enumerate(setup["supports"]):
         nm = name_of("Support", i, s)
         fids = _fids(geom, s["faces"], nm)
@@ -103,43 +115,6 @@ def resolve(geom, setup):
             it["vid"] = vid
         r["loads"].append(it)
     return r
-
-
-def _resolve_screws(geom, setup):
-    """[{"name", "kind", ..., "fids": [patch ids]}] of the screws; a face that is not a face between two parts is an error naming the screw."""
-    out = []
-    seen = {}
-    for i, sc in enumerate(setup.get("screws") or []):
-        nm = name_of("Screw", i, sc)
-        fids = _fids(geom, sc["faces"], nm)
-        for f in fids:
-            fc = geom["faces"][f]
-            if not fc.get("interface") or len(fc.get("bodies", ())) < 2:
-                raise fem.FemError(f"{nm}: a screw goes on a face between two parts, and a face it is on is not one. Remove it and add it again.")
-            if f in seen:
-                raise fem.FemError(f"{nm} and {seen[f]} are on the same patch. A patch holds one screw: remove one of them.")
-            seen[f] = nm
-        it = screw.complete(sc)
-        it.update({"name": nm, "fids": fids})
-        out.append(it)
-    return out
-
-
-def _patch_mesh(geom, r, h):
-    """A finer mesh on the screw patches (a third of their size), so that the force through a patch is read from several nodes.  Changes r["mesh"]."""
-    fids = sorted({f for sc in r["screws"] for f in sc["fids"]})
-    if not fids:
-        return
-    m = r["mesh"] or {"type": "tets", "order": 2, "hmin": 0.0, "growth": 1.3, "curv": 10, "face_sizes": []}
-    m = dict(m, face_sizes=[dict(x) for x in m["face_sizes"]])
-    eff = fem.element_sizes(geom, h, m)
-    for f in fids:
-        fc = geom["faces"][f]
-        href = min([eff[b] for b in fc.get("bodies", ()) if b < len(eff)] or [h])           # the size the mesh has there: the finer of the two parts
-        hf = screw.patch_size(fc["area"], href, m["hmin"])
-        if hf is not None:
-            m["face_sizes"].append({"fids": [f], "h": float(hf), "name": "screw patch"})
-    r["mesh"] = m
 
 
 def thin_parts(geom, h, sizes=None):
@@ -180,7 +155,7 @@ def patch_conditions(setup, geom, fid):
     o = geom.get("orig") or geom
     pid = geom["faces"][fid].get("parent")
     out = []
-    for kind, items in (("Support", setup["supports"]), ("Load", setup["loads"]), ("Screw", setup.get("screws") or [])):
+    for kind, items in (("Support", setup["supports"]), ("Load", setup["loads"])):
         for i, it in enumerate(items):
             if any("cell" in s and sg.match_face(o, s["parent"]) == pid for s in it.get("faces", [])):
                 out.append(name_of(kind, i, it))
@@ -194,7 +169,7 @@ def set_split(setup, geom, fid, cols, rows):
     pid = geom["faces"][fid]["parent"]
     i, rec = split_of_face(setup, geom, fid)
     changed = patch_conditions(setup, geom, fid)
-    for key in ("supports", "loads", "screws"):
+    for key in ("supports", "loads"):
         keep = []
         for it in setup.get(key) or []:
             if "faces" in it:
@@ -235,7 +210,7 @@ def check_ready(setup, geom=None):
         return "Add at least one load."
     if geom is not None and geom.get("bodies"):
         import solid_asm
-        why = solid_asm.check(geom) if setup.get("joint") != "contact" else None
+        why = solid_asm.check(geom)
         if why:
             return why
         for b, m in zip(geom["bodies"], body_materials(geom, setup)):
@@ -295,10 +270,6 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
     mat = r["material"]
     sizes = fem.element_sizes(geom, h, r.get("mesh"))                           # the element size of every part (one entry for a single part)
     mats = r.get("materials") if geom.get("bodies") else None
-    contact = None
-    if mats and r.get("joint") == "contact":                                   # parts joined by screws: contact everywhere else
-        import solid_contact as scon
-        q, contact = scon.split_interfaces(q, geom, {f for s_ in r["screws"] for f in s_["fids"]}, h, mats, sizes)
     nodes, conn, groups = q["nodes"], q["conn"], q["groups"]
     if mats:                                                                   # an assembly: every body's elements carry its own material
         groups = [dict(g, mat=(mats[g["body"]]["E"], mats[g["body"]]["nu"])) for g in groups]
@@ -316,7 +287,6 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
             cons.append((nd, face_normal(q, geom, fid) if s["mode"] == "slide" else None))
             names.append(s["name"])
     force = np.zeros(3 * nn)
-    fbody = {}                                                                 # contact: the part of the load vector that belongs to each body
     applied = np.zeros(3)
     for l in r["loads"]:
         k = l["kind"]
@@ -327,19 +297,17 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
             parts = []
             for fid, t6, t3 in tris:
                 nv, area = fem.outward_normals(q, t3)
-                parts.append((t6, nv, area, int(geom["faces"][fid].get("body", 0)) if mats else 0))
-            total = sum(float(a.sum()) for _t, _n, a, _b in parts)
-            for t6, nv, area, bod in parts:
+                parts.append((t6, nv, area))
+            total = sum(float(a.sum()) for _t, _n, a in parts)
+            for t6, nv, area in parts:
                 if k == "pressure":
                     trac = -float(l["p"]) * nv                                     # (nt, 3) traction N/mm2, into the part for p > 0
                 else:
                     trac = np.tile(np.asarray(l["f"], float) / total, (len(area), 1))
                 fe = trac * (area / 3.0)[:, None]
-                tgt = [force] + ([fbody.setdefault(bod, np.zeros(3 * nn))] if contact is not None else [])
                 for j in load_cols:                                               # the three mid-edge nodes (corners of a linear mesh) each carry A/3
                     for c in range(3):
-                        for arr in tgt:
-                            np.add.at(arr, 3 * t6[:, j] + c, fe[:, c])
+                        np.add.at(force, 3 * t6[:, j] + c, fe[:, c])
                 applied += fe.sum(axis=0) * 3
         elif k == "point":
             nd = q["verts"].get(l["vid"])
@@ -347,8 +315,6 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
                 raise fem.FemError(f"{l['name']}: the mesh has no node at that vertex.")
             f = np.asarray(l["f"], float)
             force[3 * nd:3 * nd + 3] += f
-            if contact is not None and contact["node_body"][nd] >= 0:
-                fbody.setdefault(int(contact["node_body"][nd]), np.zeros(3 * nn))[3 * nd:3 * nd + 3] += f
             applied += f
         elif k == "gravity":
             d = np.asarray(l["dir"], float)
@@ -359,13 +325,10 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
                 b = d * float(mat["rho"]) * float(l["g"]) * 1e-9
             fb = fem.body_load(nodes, groups, b)
             force += fb
-            if contact is not None:
-                for bi in sorted({g["body"] for g in groups}):
-                    fbody[bi] = fbody.get(bi, 0.0) + fem.body_load(nodes, [g for g in groups if g["body"] == bi], b)
             applied += fb.reshape(-1, 3).sum(axis=0)
     if not np.any(force):
         raise fem.FemError("The loads are all zero.")
-    u, reac, info, K, D = fem.solve(q, mat["E"], mat["nu"], cons, force, cancel, progress, contact=contact)
+    u, reac, info, K, D = fem.solve(q, mat["E"], mat["nu"], cons, force, cancel, progress)
     progress("stresses")
     fem._stage(progress, "stress", float(sum(len(g["conn"]) for g in groups)))
     vm_el, sig, vol = fem.stresses(nodes, groups, D, u.ravel())
@@ -407,58 +370,9 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
     if per_body is not None:
         res.update({"bodies": per_body, "sy_node": sy_node, "material": dict(mat, sy=0.0, su=0.0), "bond_tol": geom.get("tol"),
                     "bonds": [{"a": geom["bodies"][b["a"]]["name"], "b": geom["bodies"][b["b"]]["name"], "area": b["area"]} for b in geom["bonds"]]})
-        res["joint"] = r.get("joint", "bonded")
         res["notes"] = thin_notes(geom, h, sizes)
         res["part_sizes"] = [{"name": b["name"], "h": float(sizes[i])} for i, b in enumerate(geom["bodies"])]
-    if contact is not None:
-        res.update(_contact_results(geom, r, contact, u, fbody, mats))
     return res
-
-
-def _contact_results(geom, r, contact, u, fbody, mats):
-    """What the contact and the screws came to: the state of the joints and one record per screw patch with its checks."""
-    import solid_contact as scon
-    out = contact["out"]
-    names = contact["body_names"]
-    joints = [{"a": names[j["a"]], "b": names[j["b"]], "area": j["area"], "closed_area": j["closed_area"], "force": j["force"], "gap_max": j["gap_max"]}
-              for j in out["joints"]]
-    res = {"contact": {"iterations": out["iterations"], "converged": out["converged"], "pairs": out["pairs"], "closed": out["closed"], "force": out["force"],
-                       "joints": joints}, "screws": [], "design": r.get("design") or "ASD"}
-    if not r["screws"]:
-        return res
-    pf = scon.patch_forces(contact, u.ravel(), fbody)
-    res["patch_forces"] = {int(fid): {"F": [float(x) for x in p["F"]], "n": [float(x) for x in p["n"]], "T": float(p["T"]), "V": float(p["V"]), "a": int(p["a"]),
-                                      "b": int(p["b"]), "area": float(p["area"])} for fid, p in pf.items()}
-    res["screws"] = _screw_records(geom, r, res["patch_forces"], mats)
-    return res
-
-
-def _screw_records(geom, r, pf, mats):
-    """One record per screw patch (see solid_screw.evaluate): the checks of the screws of r["screws"] on the forces pf = {patch id: forces}."""
-    out = []
-    centres = {fid: np.array(screw.patch_centre(geom, fid)) for fid in pf}
-    for sc in r["screws"]:
-        for fid in sc["fids"]:
-            if fid not in pf:
-                continue
-            others = [np.linalg.norm(centres[fid] - c) for f2, c in centres.items() if f2 != fid]
-            f = dict(pf[fid], F=np.asarray(pf[fid]["F"], float), n=np.asarray(pf[fid]["n"], float))
-            rec = screw.evaluate(geom, sc, fid, f, mats, r.get("design") or "ASD", spacing=(min(others) if others else None))
-            rec.update({"screw": sc["name"], "F": [float(x) for x in f["F"]]})
-            out.append(rec)
-    return out
-
-
-def recheck(geom, r, res):
-    """Makes the checks of the screws again with the numbers of `r` (a fresh resolve of the setup) on the forces of the result `res`: what happens when only
-    the size, the strengths or the design method of a screw changed, which does not change the forces.  Returns False (and changes nothing) when the patches
-    are not the ones that were solved."""
-    pf = res.get("patch_forces")
-    if not pf or r.get("joint") != "contact" or {f for s_ in r["screws"] for f in s_["fids"]} != set(pf):
-        return False
-    res["screws"] = _screw_records(geom, r, pf, r["materials"])
-    res["design"] = r.get("design") or "ASD"
-    return True
 
 
 def _per_body(geom, mats, groups, vm_el, vol, nn):

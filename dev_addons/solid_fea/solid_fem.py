@@ -553,10 +553,9 @@ def _coo(Ke, ed, n):
     return sp.coo_matrix((Ke.ravel(), (np.repeat(ed, nd, axis=1).ravel(), np.tile(ed, (1, nd)).ravel())), shape=(n, n)).tocsr()
 
 
-def assemble(nodes, groups, E, nu, cancel=lambda: False, per_body=None, on_part=None):
+def assemble(nodes, groups, E, nu, cancel=lambda: False, on_part=None):
     """The stiffness matrix of all the elements (`groups`: see the top of the file; or just the connectivity of tetrahedra) and the material matrix.
-    per_body: a dict that gets {body: the stiffness matrix of that body's elements} (an assembly with contact: the forces a body passes on through a
-    screw are read from it).  on_part(fraction of the elements done) is called after every chunk of elements."""
+    on_part(fraction of the elements done) is called after every chunk of elements."""
     nn = len(nodes)
     D0 = D = material_matrix(E, nu)
     K = None
@@ -592,8 +591,6 @@ def assemble(nodes, groups, E, nu, cancel=lambda: False, per_body=None, on_part=
                 ed = _edofs(hx)
             part = _coo(Ke, ed, 3 * nn)
             K = part if K is None else K + part
-            if per_body is not None and g.get("body") is not None:
-                per_body[g["body"]] = part if g["body"] not in per_body else per_body[g["body"]] + part
             done += e - s
             if on_part is not None:
                 on_part(done / total)
@@ -711,23 +708,18 @@ def _rigid_check(nodes, rows):
         raise FemError("The supports leave the part free to move or turn (a rigid-body motion is not stopped). Add or enlarge a support.")
 
 
-def solve_system(Kff, ff, symmetric=False, progress=None, cancel=None, extent=None):
+def solve_system(Kff, ff, progress=None, cancel=None, extent=None):
     """Solves Kff x = ff: a direct solution up to DIRECT_LIMIT unknowns, else an incomplete-LU preconditioned CG.  Returns (x, 'direct' | 'iterative').
-    symmetric=True says the matrix is symmetric positive definite (the contact solution uses it): the factorisation then keeps the symmetric pattern, which
-    is about three times quicker for the matrices that the contact springs make.
     progress / cancel / extent (the three sides of the bounding box of the part) only serve the progress bar: the stage that begins is announced, the
     iterative solver reports how far its residual has fallen, and a Cancel is noticed between iterations."""
     if len(ff) <= DIRECT_LIMIT:
         try:
             import solid_progress as spg
-            _stage(progress, "factor_sym" if symmetric else "factor", spg.factor_cost(len(ff), extent))
+            _stage(progress, "factor", spg.factor_cost(len(ff), extent))
         except Exception:
             pass
         try:
-            if symmetric:
-                lu = spl.splu(Kff, permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=0.0, options={"SymmetricMode": True})
-            else:
-                lu = spl.splu(Kff)
+            lu = spl.splu(Kff)
             return lu.solve(ff), "direct"
         except RuntimeError as ex:
             raise FemError(f"The system is singular ({ex}). Check the supports.")
@@ -750,17 +742,14 @@ def solve_system(Kff, ff, symmetric=False, progress=None, cancel=None, extent=No
     return uf, "iterative"
 
 
-def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t: None, contact=None):
+def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t: None):
     """q = quadratic mesh.  constraints: [(node array, direction (3,) or None for all three)]; force: (3 nn,) vector.
-    contact: None, or what solid_contact.split_interfaces made for an assembly whose parts touch (frictionless contact, screws): the contact pairs are
-    then solved with an active set, and contact["K_body"] / contact["out"] get the stiffness matrix of each body and the state of the contact.
     Returns u (nn, 3), reactions per constraint, info."""
     nodes = q["nodes"]
     nn = len(nodes)
     progress("assembling")
     _stage(progress, "assemble", float(sum(len(g["conn"]) for g in _as_groups(q.get("groups") or q["conn"]))))
-    Kb = {} if contact is not None else None
-    K, D = assemble(nodes, q.get("groups") or q["conn"], E, nu, cancel, Kb, on_part=(lambda f: _part(progress, f)) if hasattr(progress, "part") else None)
+    K, D = assemble(nodes, q.get("groups") or q["conn"], E, nu, cancel, on_part=(lambda f: _part(progress, f)) if hasattr(progress, "part") else None)
     fixed = np.zeros(3 * nn, bool)
     pen = []
     rows = []                                                # (node, direction) pairs for the rigid-body check
@@ -783,11 +772,7 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
             rows += [(int(n), d) for n in nd]
     if not rows:
         raise FemError("There is no support: the part is free to move.")
-    if contact is not None:
-        import solid_contact as sc
-        sc.check_held(nodes, rows, contact)
-    else:
-        _rigid_check(nodes, rows)
+    _rigid_check(nodes, rows)
     if pen:
         kk = 1e8 * float(K.diagonal().mean())
         P = sp.lil_matrix((3 * nn, 3 * nn))
@@ -799,20 +784,13 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     progress(f"solving {len(free):,} unknowns")
     t0 = time.time()
     extent = np.ptp(np.asarray(nodes, float), axis=0).tolist()                 # the sides of the bounding box: what the progress bar's time estimate looks at
-    if contact is None:
-        Kff = K[free][:, free].tocsc()
-        ff = force[free]
-        if cancel():
-            raise Cancelled()
-        uf, how = solve_system(Kff, ff, progress=progress, cancel=cancel, extent=extent)
-        u = np.zeros(3 * nn)
-        u[free] = uf
-    else:
-        contact["K_body"] = Kb
-        contact["extent"] = extent
-        u, K, how = sc.solve_contact(K, free, fixed, force, contact, cancel, progress)
-        Kff = K[free][:, free].tocsc()
-        uf, ff = u[free], force[free]
+    Kff = K[free][:, free].tocsc()
+    ff = force[free]
+    if cancel():
+        raise Cancelled()
+    uf, how = solve_system(Kff, ff, progress=progress, cancel=cancel, extent=extent)
+    u = np.zeros(3 * nn)
+    u[free] = uf
     res = float(np.linalg.norm(Kff @ uf - ff) / max(np.linalg.norm(ff), 1e-300))
     if not np.isfinite(u).all() or res > 1e-6:
         raise FemError(f"The solution is not reliable (relative residual {res:.1e}). Check the supports: the part may be able to move freely.")

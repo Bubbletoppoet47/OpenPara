@@ -1,8 +1,8 @@
 """3D FEA: an element size for every PART of an assembly (the Element size box is now a table: one row per part, a single part has one row).
 
-Model (no window): the sizes of the parts go into ONE mesh, so the faces two parts share keep matching nodes (bonded: the same nodes; contact and screws: the
-node pairs the joint needs) - the face gets the finer of the two sizes and the coarser part grows away from it; a size that equals the default changes
-nothing (same cache key); the checks (minimum size, local sizes, thin parts); the penalty of a joint follows the finer size; the progress estimate.
+Model (no window): the sizes of the parts go into ONE mesh, so the faces two parts share keep matching nodes (the bonded joint: the same nodes) - the face
+gets the finer of the two sizes and the coarser part grows away from it; a size that equals the default changes nothing (same cache key); the checks
+(minimum size, local sizes, thin parts); the progress estimate.
 Window: the table (auto text, typing, bad numbers, clearing, element counts after meshing), save and reopen, a project saved with one size for all parts,
 the studies' element size, units, local sizes on parts of different sizes, the thin-part mark."""
 import faulthandler
@@ -15,7 +15,7 @@ SIM = next(p for p in (os.path.join(HERE, "addons_src", "simulation"), os.path.j
 sys.path[:0] = [HERE, SIM, os.path.join(HERE, "dev_addons", "solid_fea"), os.path.join(HERE, "addons_src", "parametric"), os.path.join(HERE, "shared")]
 import numpy as np
 import build123d as b
-import solid_geom as sg, solid_fem as fem, solid_model as sm, solid_asm as sa, solid_mesh as smesh, solid_contact as scon, solid_progress as spg, solid_screw as screw
+import solid_geom as sg, solid_fem as fem, solid_model as sm, solid_asm as sa, solid_mesh as smesh, solid_progress as spg
 
 STEEL = {"name": "Steel", "density": 7850.0, "E_MPa": 200000.0, "nu": 0.3, "Sy_MPa": 250.0, "Su_MPa": 400.0}
 ALU = {"name": "Aluminium", "density": 2700.0, "E_MPa": 70000.0, "nu": 0.33, "Sy_MPa": 100.0, "Su_MPa": 200.0}
@@ -145,43 +145,6 @@ for sizes in ({}, {"Base": 9.0, "Block": 4.0}, {"Base": 4.0, "Block": 9.0}):
     assert abs(res["umax"] - want) / want < 0.05 and res["equilibrium"] < 1e-6 and abs(res["reaction"][2] - 10000.0) < 1e-3, (sizes, res["umax"], want)
     assert [p["name"] for p in res["part_sizes"]] == ["Base", "Block"] and [p["h"] for p in res["part_sizes"]] == [sizes.get("Base", 6.0), sizes.get("Block", 6.0)]
 print("series ok (the stack's answer is the same for different sizes)")
-
-# ---- contact and screws: the joint needs the matching node pairs, and its stiffness follows the finer size
-BODIES = [("A", box(0, 100, 0, 40, 0, 10), STEEL), ("B", box(0, 100, 0, 40, 10, 20), STEEL)]
-g0 = sa.analyze_assembly(BODIES)
-if0 = next(f for f in g0["faces"] if f["interface"])
-gs = sa.analyze_assembly(BODIES, 0.0, [{"face": sg.face_sig(g0, if0["id"]), "cols": 5, "rows": 3, "u": None}])
-patches = {f["cell"]: f["id"] for f in gs["faces"] if f["interface"]}
-
-
-def outer(nrm, axis, val, body):
-    return next(f["id"] for f in gs["faces"] if not f["interface"] and f["body"] == body and abs(f["normal"][axis] - nrm) < 1e-6 and abs(f["center"][axis] - val) < 1e-6)
-
-
-sc = screw.default_screw()
-sc.update({"name": "S", "faces": [sg.face_sig(gs, patches[(2, 1)])]})
-stc = sm.default_setup()
-stc.update({"h": 8.0, "body_h": {"B": 4.0}, "joint": "contact", "screws": [sc]})
-stc["supports"] = [{"mode": "fixed", "faces": [sg.face_sig(gs, outer(-1, 2, 0.0, 0))]}]
-stc["loads"] = [{"kind": "force", "faces": [sg.face_sig(gs, outer(1, 0, 100.0, 1))], "f": [1000.0, 0.0, 0.0]}]
-rc = sm.resolve(gs, stc)
-assert rc["mesh"]["body_h"] == {1: 4.0} and not rc["mesh"]["face_sizes"], "the patch (about 16 mm) is already meshed at the finer part's 4 mm: nothing to refine"
-st_big = dict(stc, h=20.0, body_h={"B": 10.0})                                     # coarse parts: the patch is refined against the size the mesh has THERE (10 mm)
-rb = sm.resolve(gs, st_big)
-pf = [x for x in rb["mesh"]["face_sizes"] if x["name"] == "screw patch"]
-assert len(pf) == 1 and abs(pf[0]["h"] - np.sqrt(4000.0 / 15.0) / 3.0) < 1e-9, pf
-resc = sm.run(gs, rc, {})
-assert resc["joint"] == "contact" and resc["equilibrium"] < 1e-9 and resc["contact"]["converged"] and resc["contact"]["pairs"] > 0, resc["contact"]
-assert abs(resc["screws"][0]["V"] - 1000.0) < 1e-6, resc["screws"][0]["V"]       # all the shear goes through the one screw: exact, whatever the mesh
-assert [p["h"] for p in resc["part_sizes"]] == [8.0, 4.0]
-hh = rc["h"] or sm.auto_h(gs)
-qc = sm.get_mesh(gs, hh, {}, lambda: False, lambda t: None, rc["mesh"])
-mats = sm.body_materials(gs, stc)
-fids = {f for s_ in rc["screws"] for f in s_["fids"]}
-_q1, c1 = scon.split_interfaces(qc, gs, fids, hh, mats, None)
-_q2, c2 = scon.split_interfaces(qc, gs, fids, hh, mats, fem.element_sizes(gs, hh, rc["mesh"]))
-assert len(c1["k"]) and np.allclose(c2["k"], 2.0 * c1["k"]) and c2["h"] == 4.0 and c1["h"] == 8.0, "the joint is stiffer where the mesh is finer (8 mm / 4 mm)"
-print("contact and screws ok: pairs", resc["contact"]["pairs"], "V", resc["screws"][0]["V"])
 
 # ---- the thin-part check and the progress estimate follow the sizes of the parts
 THIN = sa.analyze_assembly([("Block", box(0, 40, 0, 40, 0, 40), STEEL), ("Sheet", box(0, 40, 0, 40, 40, 42), STEEL)])

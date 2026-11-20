@@ -99,7 +99,7 @@ hole = next(f["id"] for f in g3["faces"] if f["kind"] == "cylinder")
 left = next(f["id"] for f in g3["faces"] if np.dot(f["normal"], [-1, 0, 0]) > 0.99)
 right = next(f["id"] for f in g3["faces"] if np.dot(f["normal"], [1, 0, 0]) > 0.99)
 s3 = sm.default_setup(); s3["h"] = 4.0
-s3["supports"] = [{"mode": "bolt", "faces": [sg.face_sig(g3, hole)]}]
+s3["supports"] = [{"mode": "fixed", "faces": [sg.face_sig(g3, hole)]}]
 s3["loads"] = [{"kind": "pressure", "faces": [sg.face_sig(g3, right)], "p": 5.0}]
 r3 = sm.run(g3, sm.resolve(g3, s3), {})
 assert r3["equilibrium"] < 1e-6 and r3["vm_max"] > 5.0

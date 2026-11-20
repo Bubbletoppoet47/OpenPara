@@ -17,7 +17,7 @@ setup["mesh"] = {
 
 The ELEMENT SIZE is not one of these options: a single part has setup["h"] (mm, 0 = automatic), and every part of an assembly can have a size of its own in
 setup["body_h"] = {body name: mm} (a part without one gets setup["h"], or the automatic size).  The parts are still meshed as ONE mesh, so the nodes of a face
-that two parts share stay shared (bonded) or stay a matching pair (contact, screws): that face gets the finer of the two sizes and the coarser part grows away
+that two parts share stay shared (bonded): that face gets the finer of the two sizes and the coarser part grows away
 from it.  `body_sizes` turns the names into body indexes; `resolve` puts them in the options as "body_h": {body index: mm}.
 """
 import copy

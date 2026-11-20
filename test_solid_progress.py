@@ -110,21 +110,7 @@ t.stage("assemble", 10000); ck.add(2.0 * (spg.STAGES["assemble"][0] + spg.STAGES
 ok(1.9 < t.speed < 2.1, f"this computer assembled twice as slowly as the table: speed {t.speed:.2f}")
 ok(abs(t.cur["pred"] - (fixed + 2.0 * c0 * 1e8)) < 0.5, "so the first estimate of the factorisation is doubled too")
 
-# ---- 6. contact rounds: the number is not known; one more is always assumed to follow
-ck = Clock(); t = tracker(ck)
-t.expect(spg.plan_for({"volume": 1e5, "bbox": [[0, 0, 0], [100, 50, 20]], "bodies": [1, 2]}, {"h": 4.0, "joint": "contact"}))
-keys = [k for k, _ in t.future]
-ok(keys.count("factor_sym") == spg.CONTACT_ROUNDS and keys[0] == "mesh" and keys[-1] == "stress", "the plan of a contact solve has rounds: " + ", ".join(keys))
-for rd in range(6):
-    t.stage("factor_sym", 1e7); ck.add(3.0)
-    ok(any(k == "factor_sym" for k, _ in t.future), f"after round {rd + 1} another one is still expected")
-t.stage("stress", 1e4)
-ok(not any(k == "factor_sym" for k, _ in t.future), "once the stresses begin the contact rounds are over: none is expected any more")
-ck = Clock(); t = tracker(ck); t.expect([("assemble", 1000), ("factor", 1e7), ("stress", 1000)])
-t.stage("assemble", 1000); t.stage("ilu", 1e6)
-ok([k for k, _ in t.future] == ["stress"], "a plan that said 'direct' is dropped when the solve turns out to be iterative")
-
-# ---- 7. cancelling
+# ---- 6. cancelling
 ck = Clock(); t = tracker(ck); t.stage("factor", 1e8); t.cancelling = True
 ok("Cancelling" in t.snapshot()[1], "after Cancel the line says that it stops when the step that is running ends")
 
