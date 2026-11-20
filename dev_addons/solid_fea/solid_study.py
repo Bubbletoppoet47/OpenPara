@@ -157,7 +157,7 @@ class SolidStudy(StudyAdapter):
             try:
                 ad = (r or {}).get("adapt")
                 if k == "sf.adapt":
-                    v = None if r is None else ("off" if not ad else ("converged" if ad["converged"] else "not converged"))
+                    v = None if r is None else ("off" if not ad else sad.OUTCOME_TEXT[sad.outcome(ad)])
                 elif k.startswith("sf.") and k[3:] in ("converged", "loops", "change", "err"):
                     v = None if not ad else {"converged": 1.0 if ad["converged"] else 0.0, "loops": ad["loops"], "change": ad["change"], "err": ad["err"]}[k[3:]]
                 elif k == "sf.status":

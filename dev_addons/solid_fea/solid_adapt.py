@@ -7,7 +7,9 @@ setup["adapt"] = {
   "crit":     "vm" | "umax" | "energy",   the number that has to settle: the peak von Mises stress, the peak displacement or the strain energy
   "tol":      percent (1.0),              converged when the criterion changed by less than this between two loops
   "loops":    1..20 (5),                  the most refinements: loop 0 is your own mesh, every loop after it refines and solves again
-  "cap":      elements (0 = automatic),   stop before a mesh gets larger than this (automatic: AUTO_UNKNOWNS unknowns)
+  "cap":      elements (0 = automatic),   the largest mesh you allow.  The loops never go above it: when the next mesh would, it is made with less refinement
+                                         so that the last mesh lands just under it.  Automatic: the loops stop by themselves when the result settles, or at
+                                         AUTO_UNKNOWNS unknowns, or when the memory of this computer is used up.  (A typed maximum is also stopped by memory.)
   "strength": "gentle" | "normal" | "strong",   how much of the estimated error one loop tries to remove
   "hmin":     mm (0 = automatic),         the smallest element the loops may make (automatic: a tenth of the smallest element size, or the minimum size of
                                          the advanced mesh options when that is set)
@@ -24,7 +26,13 @@ HOW A LOOP WORKS
   3. The sizes are put at the nodes of the last mesh and graded (growth rate of the mesh options), and gmsh meshes the part again with that as its size map.
   4. The new mesh is solved; the criterion of this loop is compared with that of the one before.
 The stress at a point load, at a sharp inside corner or at a fixed edge has no finite value, so a PEAK von Mises there keeps growing with every loop: the loops
-then end at the maximum and say "not converged".  Displacement and strain energy do converge there.
+then run to the end (the most loops, or the largest mesh) and say so.  Displacement and strain energy do converge there.
+
+HOW BIG A MESH MAY GET
+  The solver itself has no size limit that matters here: above fem.DIRECT_LIMIT unknowns it uses multigrid (see solid_fem).  What stops the loops is the
+  maximum you typed ("max"), the automatic limit when you typed none ("auto"), and the memory that is free on this computer ("memory"; fem.memory_ceiling).
+  When the next mesh would cross the limit, the refinement is damped (the size reduction of every element raised to a power t < 1, t found from the predicted
+  element count and one or two trial meshes) so that the last mesh is the largest that fits, just under the limit.
 
     default_adapt() / complete(a) / options(setup) / validate(a) / unsupported(geom, setup) / resolve(geom, setup)
     indicator(q, r, u)         -> the error of every element (see above)
@@ -50,7 +58,11 @@ TOL_RANGE = (0.001, 50.0)
 FMIN = 0.4                  # the most one loop makes an element smaller (a size factor)
 FSKIP = 0.9                 # an element that would get less than a 10 % smaller size is left alone
 AUTO_FLOOR = 10.0           # the automatic smallest size: the smallest element size over this
-AUTO_UNKNOWNS = 80000       # the automatic largest mesh (unknowns), when no maximum is typed: what the direct solver used to take
+AUTO_UNKNOWNS = 400000      # the automatic largest mesh (unknowns), when no maximum is typed: about two minutes a solve on a modest computer, 2 GB of memory
+LAND = 0.95                 # the mesh that has to fit under the limit is aimed at this share of it
+LAND_MIN = 1.2              # a loop that could add less than this factor of elements is not worth its solve: the loops stop at the limit instead
+LAND_TRIES = 2              # extra trial meshes to land under the limit
+LAND_LOW = 0.85             # a mesh that lands under this share of the limit gets one more try
 GROWTH_PER_LOOP = 2.2       # the number of elements a loop is expected to make (only for the progress bar's estimate)
 BIG = 1e30
 
@@ -230,9 +242,9 @@ def grade(xyz, edges, S, growth, iters=60):
     return S
 
 
-def size_map(q, ind, order, reduce, floor, field, growth, hbig):
-    """The size map of the next mesh from the error `ind` of the mesh `q`.  `field` = the map of the loop before ({"xyz", "S"} or None): what an earlier
-    loop made finer stays finer.  -> ({"xyz", "tets", "size"} for gmsh, the field to keep for the next loop, a dict of counts)."""
+def _prepare(q, ind, order, reduce, field):
+    """What the size map needs from the mesh and its error, and does not change with the damping: the corner nodes, the tetrahedra, the size every element has
+    (or an earlier loop already gave its nodes), and the factor each wants (1 = leave it, FMIN = as much finer as one loop may make it)."""
     nc = int(q["conn"][:, :4].max()) + 1
     xyz = np.asarray(q["nodes"], float)[:nc]
     tets = np.asarray(q["conn"][:, :4], np.int64)
@@ -247,17 +259,56 @@ def size_map(q, ind, order, reduce, floor, field, growth, hbig):
     target = reduce * ind["eta"] / math.sqrt(ne)
     expo = 1.0 / (order + 1.5)
     fac = np.clip((target / np.maximum(eta, 1e-300)) ** expo, FMIN, 1.0)
+    return {"xyz": xyz, "tets": tets, "ne": ne, "held": held, "base": base, "fac": fac}
+
+
+def _refined(P, floor, damp):
+    """(the factor of every element with the damping, which elements are marked, which of them can be refined, their new sizes)."""
+    fac = P["fac"] ** damp if damp != 1.0 else P["fac"]
     marked = fac < FSKIP
-    new = fac * base
-    can = marked & (base * FSKIP > floor)                                      # an element that is already at the smallest size cannot be refined
-    new = np.maximum(new, floor)
-    S = held.copy()
+    can = marked & (P["base"] * FSKIP > floor)                                 # an element that is already at the smallest size cannot be refined
+    new = np.maximum(fac * P["base"], floor)
+    return marked, can, new
+
+
+def predicted_elements(P, floor, damp=1.0):
+    """The number of elements the next mesh will have, about: every element that is refined becomes (old size / new size)^3 elements."""
+    _marked, can, new = _refined(P, floor, damp)
+    return float(np.where(can, (P["base"] / new) ** 3, 1.0).sum())
+
+
+def fit_damp(P, floor, want, kappa=1.0):
+    """The damping t (1 = the refinement the error asks for, near 0 = hardly any) at which kappa * predicted_elements is `want`; None when even the least
+    refinement is above it.  kappa = what a real mesh had (its elements over the prediction), so that the prediction is corrected by what has been seen."""
+    lo, hi = 0.02, 1.0
+    if kappa * predicted_elements(P, floor, lo) > want:
+        return None
+    if kappa * predicted_elements(P, floor, hi) <= want:
+        return hi
+    for _ in range(24):
+        mid = 0.5 * (lo + hi)
+        if kappa * predicted_elements(P, floor, mid) <= want:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+def size_map(q, ind, order, reduce, floor, field, growth, hbig, damp=1.0, prep=None):
+    """The size map of the next mesh from the error `ind` of the mesh `q`.  `field` = the map of the loop before ({"xyz", "S"} or None): what an earlier
+    loop made finer stays finer.  `damp` < 1 refines less (see fit_damp); `prep` = _prepare(...) when the caller has it already.
+    -> ({"xyz", "tets", "size"} for gmsh, the field to keep for the next loop, a dict of counts)."""
+    P = prep or _prepare(q, ind, order, reduce, field)
+    xyz, tets, ne = P["xyz"], P["tets"], P["ne"]
+    marked, can, new = _refined(P, floor, damp)
+    S = P["held"].copy()
     for j in range(4):
         np.minimum.at(S, tets[:, j], np.where(can, new, BIG))
     S = grade(xyz, _edges(tets), S, growth)
     keep = {"xyz": xyz, "S": S}
     out = {"xyz": xyz, "tets": tets, "size": np.minimum(S, hbig)}
-    info = {"marked": int(marked.sum()), "refined": int(can.sum()), "at_floor": int((marked & ~can).sum()), "elements": int(ne)}
+    info = {"marked": int(marked.sum()), "refined": int(can.sum()), "at_floor": int((marked & ~can).sum()), "elements": int(ne),
+            "predicted": float(np.where(can, (P["base"] / new) ** 3, 1.0).sum()), "damp": float(damp)}
     return out, keep, info
 
 
@@ -290,10 +341,9 @@ def plan(geom, r, h, mesh=None):
     except (TypeError, ValueError, IndexError):
         ext = None
     out = [] if mesh is not None else [("mesh", el0)]
+    elmax, _kind = element_limit(a, *unknown_limit(a), per_el)
     for k in range(a["loops"] + 1):
-        el = el0 * GROWTH_PER_LOOP ** k
-        if a["cap"]:
-            el = min(el, float(a["cap"]))
+        el = min(el0 * GROWTH_PER_LOOP ** k, max(elmax, el0))
         nodes = el * per_el
         if k:
             out.append(("mesh", el))
@@ -311,6 +361,48 @@ def _peak_edge(q, res):
 
 def criterion_value(res, crit):
     return float({"vm": res["vm_max"], "umax": res["umax"], "energy": res["energy"]}[crit])
+
+
+def unknown_limit(a, free=None):
+    """(the most unknowns a mesh may have, what sets it): the free memory ("memory"), and when no largest mesh is typed the automatic limit ("auto").
+    (None, None) when nothing limits it.  A typed maximum is not an unknown limit: it counts elements (see element_limit)."""
+    mem = fem.memory_ceiling(free)
+    auto = None if a["cap"] else AUTO_UNKNOWNS
+    if mem is not None and (auto is None or mem <= auto):
+        return mem, "memory"
+    return auto, ("auto" if auto is not None else None)
+
+
+def element_limit(a, ulimit, ukind, ratio):
+    """(the most elements the next mesh may have, what sets it): the typed maximum ("max") or the unknown limit (`ulimit`, kind `ukind`) turned into elements
+    with `ratio` = the nodes per element of the mesh at hand.  (inf, None) when nothing limits it."""
+    lim, kind = math.inf, None
+    if a["cap"]:
+        lim, kind = float(a["cap"]), "max"
+    if ulimit is not None and ulimit / (3.0 * max(ratio, 1e-9)) < lim:
+        lim, kind = ulimit / (3.0 * max(ratio, 1e-9)), ukind
+    return lim, kind
+
+
+def limit_reason(kind, a, n, ulimit):
+    """The plain words for a loop that stopped at a limit; n = the elements of the last mesh."""
+    if kind == "max":
+        return f"Reached your maximum of {int(a['cap']):,} elements (the last mesh has {n:,})."
+    if kind == "memory":
+        free = fem.available_memory()
+        return (f"Stopped at {n:,} elements: a finer mesh would need more memory than this computer has free" +
+                (f" (about {free / 1e9:.1f} GB)." if free else "."))
+    return f"Reached the automatic size limit of about {int(ulimit):,} unknowns ({n:,} elements). Type a larger 'Largest mesh' to go further."
+
+
+OUTCOME_TEXT = {"converged": "converged", "max": "reached maximum", "auto": "reached size limit", "memory": "stopped by memory", "not converged": "not converged"}
+
+
+def outcome(ad):
+    """How the loops ended, in one word: converged | max | auto | memory | not converged (a key of OUTCOME_TEXT)."""
+    if ad["converged"]:
+        return "converged"
+    return ad.get("limit") or "not converged"
 
 
 def _mesh(geom, h, opts, cancel, progress):
@@ -336,9 +428,19 @@ def run(geom, r, h, cache, cancel, progress, get_mesh, solve_mesh):
     except (AttributeError, TypeError):
         pass
     maxloops = a["loops"]
-    unk_cap = AUTO_UNKNOWNS
+    ulim, ukind = unknown_limit(a)
+    per_el0 = len(q["nodes"]) / max(len(q["conn"]), 1)
+    warning = None
+    if a["cap"]:                                                                # a typed maximum that this computer cannot hold: said at the start
+        free = fem.available_memory()
+        need = fem.memory_estimate(3.0 * a["cap"] * per_el0)
+        if free and need > fem.MEM_SHARE * free:
+            warning = (f"Your maximum of {int(a['cap']):,} elements would need about {need / 1e9:.1f} GB to solve and this computer has about {free / 1e9:.1f} GB "
+                       "free: the loops stop earlier, when the memory is used up.")
+            progress(warning)
     hist, field, prev = [], None, None
     reason, converged, res, ind, qlast, refined, last, pe_prev = None, False, None, None, q, None, None, None
+    limit, held = None, None                                                    # what limit ended the loops; the limit that held the last mesh's refinement back
     nm = {"vm": "von Mises stress (peak)", "umax": "displacement (peak)", "energy": "strain energy"}[a["crit"]]
     for k in range(maxloops + 1):
         if cancel():
@@ -352,10 +454,15 @@ def run(geom, r, h, cache, cancel, progress, get_mesh, solve_mesh):
         val = criterion_value(res, a["crit"])
         change = None if prev is None else abs(val - prev) / max(abs(val), 1e-300) * 100.0
         pe = _peak_edge(q, res) if a["crit"] == "vm" else None
-        hist.append({"loop": k, "elements": int(len(res["conn"])), "nodes": int(len(res["nodes"])), "unknowns": int(res["info"]["unknowns"]), "value": val,
+        n_now = int(len(res["conn"]))
+        hist.append({"loop": k, "elements": n_now, "nodes": int(len(res["nodes"])), "unknowns": int(res["info"]["unknowns"]), "value": val,
                      "change": change, "err": 100.0 * float(ind["theta"]), "refined": refined, "seconds": time.time() - t0})
         if change is not None and change <= a["tol"]:
-            if last is not None and last["marked"] and last["at_floor"] > 0.5 * last["marked"]:           # most of what needed refining could not be refined
+            if held is not None:                                                # this mesh was refined less than the error asked for: a small change shows nothing
+                limit = held
+                reason = (limit_reason(held, a, n_now, ulim) + f" The {nm} changed by {change:.3g} % in the last loop, but that loop was held back by the "
+                          "limit, so the change does not show that the result has settled.")
+            elif last is not None and last["marked"] and last["at_floor"] > 0.5 * last["marked"]:           # most of what needed refining could not be refined
                 reason = (f"The {nm} changed by {change:.3g} %, but the smallest element size ({floor:.3g} mm) limits the refinement: {last['at_floor']:,} of the "
                           f"{last['marked']:,} elements that need refining are already that small, so the small change does not show that the result has settled "
                           f"(estimated error {100.0 * float(ind['theta']):.3g} %). Allow a smaller size or a larger mesh.")
@@ -368,31 +475,58 @@ def run(geom, r, h, cache, cancel, progress, get_mesh, solve_mesh):
             break
         if k == maxloops:
             reason = f"The most loops ({maxloops}) are done and the {nm} still changed by {change:.3g} %." if change is not None else "No loops."
+            if held is not None:
+                limit = held
+                reason = limit_reason(held, a, n_now, ulim) + " " + reason
             break
-        if 3 * len(res["nodes"]) > unk_cap:
-            reason = f"The automatic size limit is reached: the mesh already has about {unk_cap:,} unknowns."
+        elim, ekind = element_limit(a, ulim, ukind, len(res["nodes"]) / max(n_now, 1))
+        if n_now >= elim or elim < LAND_MIN * n_now:                            # at the limit, or so close to it that a loop could hardly add anything
+            limit, reason = ekind, limit_reason(ekind, a, n_now, ulim)
             break
-        if a["cap"] and len(res["conn"]) >= a["cap"]:
-            reason = f"The largest number of elements ({a['cap']:,}) is reached."
-            break
-        sm_, field_next, info = size_map(q, ind, order, a["reduce"], floor, field, float(base.get("growth") or 1.3), hbig)
+        P = _prepare(q, ind, order, a["reduce"], field)
+        sm_, field_next, info = size_map(q, ind, order, a["reduce"], floor, field, float(base.get("growth") or 1.3), hbig, prep=P)
         if info["refined"] == 0:
             reason = ("Nothing can be refined any more: the elements that need it are at the smallest size." if info["marked"] else
                       "No element needs refining: the estimated error is the same everywhere.")
             break
-        opts = dict(base, hmin=floor, size_map=sm_, expect=float(len(res["conn"])) * GROWTH_PER_LOOP)
+        opts = dict(base, hmin=floor, size_map=sm_, expect=float(n_now) * GROWTH_PER_LOOP)
         if cancel():
             raise fem.Cancelled()
         progress(f"Loop {k + 1} of {maxloops}: meshing ({info['refined']:,} of {info['elements']:,} elements refined)")
         qn = _mesh(geom, h, opts, cancel, progress)
-        if 3 * len(qn["nodes"]) > unk_cap or (a["cap"] and len(qn["conn"]) > a["cap"]):
-            reason = (f"The next mesh would have {len(qn['conn']):,} elements, more than the " +
-                      (f"{a['cap']:,} allowed." if a["cap"] and len(qn["conn"]) > a["cap"] else f"automatic limit ({unk_cap // 3:,} nodes)."))
+        ratio_n = len(qn["nodes"]) / max(len(qn["conn"]), 1)
+        elim, ekind = element_limit(a, ulim, ukind, ratio_n)
+        cand = (qn, field_next, info)                                           # the mesh the error asks for
+        fits = []                                                               # the meshes that are under the limit
+        tries = 0
+        while True:
+            n = len(cand[0]["conn"])
+            if n <= elim:
+                fits.append(cand)
+            low = cand[2]["damp"] < 1.0 and n < LAND_LOW * elim                 # landed well under: one more try, with what this mesh has shown
+            if (n <= elim and not low) or tries >= LAND_TRIES:
+                break
+            kappa = n / max(cand[2]["predicted"], 1.0)
+            t = fit_damp(P, floor, LAND * elim, kappa)
+            if t is None or t >= 1.0 or abs(t - cand[2]["damp"]) < 0.01:
+                break
+            progress(f"Loop {k + 1} of {maxloops}: the next mesh would have {n:,} elements, the limit is {int(elim):,}: " + ("refining less" if n > elim else "refining a little more"))
+            sm_, field_n2, info2 = size_map(q, ind, order, a["reduce"], floor, field, float(base.get("growth") or 1.3), hbig, damp=t, prep=P)
+            if info2["refined"] == 0:
+                break
+            cand = (_mesh(geom, h, dict(base, hmin=floor, size_map=sm_, expect=info2["predicted"]), cancel, progress), field_n2, info2)
+            tries += 1
+        if not fits:                                                            # could not be brought under the limit: the last mesh that was solved is the answer
+            limit, reason = ekind, limit_reason(ekind, a, n_now, ulim)
             break
+        qn, field_next, info = max(fits, key=lambda c: len(c[0]["conn"]))
+        held_now = ekind if info["damp"] < 1.0 else None
+        held = held_now
         field, prev, q, refined, last, pe_prev = field_next, val, qn, info["refined"], info, pe
     res["node_err"] = node_error(qlast, ind)
     res["adapt"] = {"crit": a["crit"], "tol": a["tol"], "loops_max": maxloops, "loops": len(hist) - 1, "converged": bool(converged), "reason": reason,
-                    "change": hist[-1]["change"], "err": hist[-1]["err"], "history": hist, "floor": float(floor), "strength": a["strength"]}
+                    "change": hist[-1]["change"], "err": hist[-1]["err"], "history": hist, "floor": float(floor), "strength": a["strength"],
+                    "limit": limit, "warning": warning, "max_elements": int(a["cap"])}
     return res
 
 

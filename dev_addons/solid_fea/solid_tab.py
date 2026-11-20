@@ -694,8 +694,8 @@ class SolidWindow(QWidget):
         for k, (name, _u) in sad.CRITERIA.items():
             self.ad_crit.addItem(name, k)
         self.ad_crit.setToolTip("The number that has to settle. Displacement and strain energy settle on any mesh. A PEAK stress at a point load, a sharp inside "
-                                "corner or a fixed edge has no finite value and keeps growing as the elements get smaller: the loops then stop at the maximum "
-                                "and say that it did not converge.")
+                                "corner or a fixed edge has no finite value and keeps growing as the elements get smaller: the loops then run to the end (the most "
+                                "loops or the largest mesh) and say so.")
         sim_ui.tame(self.ad_crit, 24)
         f.addRow("Criterion", self.ad_crit)
         self.ad_tol = QLineEdit("1")
@@ -716,8 +716,9 @@ class SolidWindow(QWidget):
         f.addRow("Refinement", self.ad_strength)
         self.ad_cap = QLineEdit()
         self.ad_cap.setPlaceholderText("auto")
-        self.ad_cap.setToolTip("Stop before a mesh gets larger than this many elements (blank = automatic: about "
-                               f"{sad.AUTO_UNKNOWNS:,} unknowns).")
+        self.ad_cap.setToolTip("The largest mesh you allow, in elements. The loops never go above it: when the next mesh would, it is refined less so that the last mesh "
+                               "lands just under it. Blank = automatic: the loops stop when the result settles, at about "
+                               f"{sad.AUTO_UNKNOWNS:,} unknowns, or when this computer's free memory is used up.")
         f.addRow("Largest mesh (elements)", self.ad_cap)
         self.ad_hmin = QLineEdit()
         self.ad_hmin.setPlaceholderText("auto")
@@ -2561,7 +2562,10 @@ class SolidWindow(QWidget):
         conv = {"vm": (lambda v: s_out(v), D["S"]), "umax": (lambda v: l_out(v), D["L"]),
                 "energy": (lambda v: f_out(1.0) * l_out(1.0) * v, f"{D['F']} {D['L']}")}[ad["crit"]]
         out = R.heading("Adaptive mesh", f"h-adaptive, {name.lower()} to {ad['tol']:g} %")
-        out += R.chip("Converged" if ad["converged"] else "Not converged", "ok" if ad["converged"] else "warn") + " " + (ad.get("reason") or "")
+        chip = {"converged": "Converged", "max": "Reached your maximum", "auto": "Reached the size limit", "memory": "Stopped by memory"}.get(sad.outcome(ad), "Not converged")
+        out += R.chip(chip, "ok" if ad["converged"] else "warn") + " " + (ad.get("reason") or "")
+        if ad.get("warning"):
+            out += R.note(ad["warning"], R.AMBER)
         rows = [[f"{h_['loop']}" + (" (your mesh)" if h_["loop"] == 0 else ""), f"{h_['elements']:,}", R.num(conv[0](h_["value"])),
                  "-" if h_["change"] is None else f"{h_['change']:.3g} %", f"{h_['err']:.2f} %", f"{h_['seconds']:.1f} s"] for h_ in ad["history"]]
         out += R.grid(["Loop", "Elements", f"{name} ({conv[1]})", "Change", "Estimated error", "Time"], rows)

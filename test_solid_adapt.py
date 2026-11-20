@@ -185,10 +185,70 @@ a = res["adapt"]
 ok(not a["converged"] and a["loops"] == 2 and "most loops (2)" in a["reason"], f"most loops: {a['reason'][:70]}")
 res = sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=5, cap=300)), {})
 a = res["adapt"]
-ok(not a["converged"] and a["loops"] == 0 and "300" in a["reason"], f"size limit: {a['reason']}")
+ok(not a["converged"] and a["loops"] == 0 and a["reason"].startswith("Reached your maximum of 300 elements") and a["limit"] == "max", f"size limit: {a['reason']}")
 res = sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=5, hmin=20.0)), {})
 a = res["adapt"]
 ok(not a["converged"] and a["loops"] == 0 and "smallest size" in a["reason"], f"nothing can be refined: {a['reason']}")
+
+# ------------------------------------------------------------------------------------------------ the largest mesh: never crossed, landed under
+print("the largest mesh")
+free_run = sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=1)), {})["adapt"]
+n0, n1 = free_run["history"][0]["elements"], free_run["history"][1]["elements"]
+u0 = free_run["history"][0]["unknowns"]
+ok(n1 > 1.5 * n0 and free_run["limit"] is None, f"without a maximum the first loop goes from {n0:,} to {n1:,} elements")
+cap = int(n0 + 0.5 * (n1 - n0))
+res = sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=5, cap=cap)), {})
+a = CAPPED = res["adapt"]
+last_n = a["history"][-1]["elements"]
+ok(a["loops"] == 1 and n0 < last_n <= cap and last_n >= 0.85 * cap, f"a maximum of {cap:,} between the two: the loop refines less and lands at {last_n:,} elements, just under it")
+ok(max(h_["elements"] for h_ in a["history"]) <= cap, "no mesh is above the maximum")
+ok(not a["converged"] and a["limit"] == "max" and a["reason"].startswith(f"Reached your maximum of {cap:,} elements") and "converge" not in a["reason"].split("The ")[0],
+   f"it says it reached the maximum, not that it did not converge: {a['reason'][:110]}")
+ok(sad.outcome(a) == "max" and sad.OUTCOME_TEXT[sad.outcome(a)] == "reached maximum", "the outcome in one word")
+ok(res["n_tets"] == last_n and res["equilibrium"] < 1e-6, "the result is that of the last mesh, and equilibrium holds")
+res = sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=5, cap=int(n0 * 1.1))), {})
+a = res["adapt"]
+ok(a["loops"] == 0 and a["limit"] == "max" and "Reached your maximum" in a["reason"], f"a maximum so close to the first mesh that a loop could add nothing: stops at once ({a['reason'][:70]})")
+big_cap = sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=1, cap=50 * n0)), {})["adapt"]
+ok(big_cap["history"][1]["elements"] == n1 and big_cap["limit"] is None, "a maximum that is not reached changes nothing")
+# automatic: no maximum typed; the limit of the program, and the loops stop by themselves
+real_auto = sad.AUTO_UNKNOWNS
+sad.AUTO_UNKNOWNS = int(2.0 * u0)
+try:
+    res = sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=5)), {})
+    a = res["adapt"]
+    ok(a["limit"] == "auto" and not a["converged"] and "automatic size limit" in a["reason"] and a["history"][-1]["unknowns"] <= sad.AUTO_UNKNOWNS * 1.02
+       and a["history"][-1]["unknowns"] > 0.85 * sad.AUTO_UNKNOWNS, f"automatic: the loops stop at the limit ({a['history'][-1]['unknowns']:,} of {sad.AUTO_UNKNOWNS:,} unknowns): {a['reason'][:70]}")
+    ok(sad.outcome(a) == "auto", "and the outcome says so")
+    sad.AUTO_UNKNOWNS = int(1.3 * u0)
+    res = sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=1, cap=50 * n0)), {})
+    a = res["adapt"]
+    ok(a["history"][-1]["unknowns"] > 1.2 * sad.AUTO_UNKNOWNS and a["limit"] is None, f"a typed maximum is honoured above the automatic limit ({a['history'][-1]['unknowns']:,} unknowns, the automatic limit is {sad.AUTO_UNKNOWNS:,})")
+finally:
+    sad.AUTO_UNKNOWNS = real_auto
+# the memory of this computer
+real_free = fem.available_memory
+fem.available_memory = lambda: (fem.MEM_PER_UNKNOWN * 2.0 * u0 + fem.MEM_BASE) / fem.MEM_SHARE
+try:
+    res = sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=5)), {})
+    a = res["adapt"]
+    ok(a["limit"] == "memory" and "more memory" in a["reason"] and a["history"][-1]["unknowns"] <= 2.0 * u0 * 1.02 and not a["converged"],
+       f"memory: the loops stop where the free memory ends ({a['history'][-1]['unknowns']:,} unknowns): {a['reason']}")
+    res = sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=5, cap=50 * n0)), {})
+    a = res["adapt"]
+    ok(a["limit"] == "memory" and a["warning"] and f"{50 * n0:,}" in a["warning"] and "GB" in a["warning"], f"a typed maximum the memory cannot hold is said at the start: {a['warning']}")
+    ok(sad.outcome(a) == "memory", "and the outcome is the memory")
+finally:
+    fem.available_memory = real_free
+ok(sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=1, cap=50 * n0)), {})["adapt"]["warning"] is None, "with enough memory there is no warning")
+# a loop that lands under the maximum makes extra trial meshes: the progress bar and its messages take them in their stride
+trk_l = solid_progress.Tracker()
+say = []
+trk_l.attach(say.append)
+res = sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", tol=0.001, loops=3, cap=cap)), {}, progress=trk_l)
+snap = trk_l.snapshot()
+ok(res["adapt"]["limit"] == "max" and any("refining" in t for t in say), f"a run that lands under the maximum, with a real progress tracker, says so: {[t for t in say if 'refining' in t][:1]}")
+ok(res["adapt"]["history"][-1]["elements"] <= cap and 0.0 <= snap[0] <= 1.0, f"and the bar stays between 0 and 1 ({snap[0]:.2f})")
 try:
     sm.run(g, sm.resolve(g, settings(g, tip, sup, 8.0, crit="vm", loops=3)), {}, cancel=lambda: True)
     ok(False, "cancel must stop the loops")
@@ -269,6 +329,9 @@ ok(w.run_solve() and w.result is not None and w.result.get("adapt"), w.status_lb
 res = w.result
 a = res["adapt"]
 ok(a["converged"] and "Adaptive mesh" in w.res_lbl.text() and "Converged" in w.res_lbl.text() and "your mesh" in w.res_lbl.text(), "the report says what the loops did, one row per loop")
+rep = w.adapt_report(dict(CAPPED, warning="Your maximum would need more memory than there is."))
+ok("Reached your maximum" in rep and "Not converged" not in rep and "more memory than there is" in rep, "a run that reached the maximum says so in the report, with its warning")
+ok("largest mesh you allow" in w.ad_cap.toolTip().lower() and "lands just under" in w.ad_cap.toolTip(), "the box for the largest mesh explains what it does")
 ok(f"{res['n_tets']:,}" in w.mesh_lbl.text() and w.mesh_q is not None and len(w.mesh_q["conn"]) == res["n_tets"], "the mesh label and picture are those of the last mesh")
 ok(w.cb_field.findData("err") >= 0 and w.cb_field.itemText(w.cb_field.findData("err")).startswith("Estimated mesh error"), "the 'Estimated mesh error' result is offered")
 w.cb_field.setCurrentIndex(w.cb_field.findData("err")); w.show_field()
