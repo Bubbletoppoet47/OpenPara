@@ -6,7 +6,7 @@ setup = {
   "h": element size (mm, 0 = automatic): of a single part, or of the parts of an assembly that have no size of their own,
   "body_h": {body name: mm}              an ASSEMBLY: the element size of the parts that have one of their own (a blank or missing one gets "h"); the parts are
                                       still meshed as one mesh, so the nodes of the faces they share stay shared (see solid_mesh)
-  "supports": [{"mode": "fixed" | "slide", "faces": [face signature]}],
+  "supports": [{"mode": "fixed" | "slide" | "bearing", "faces": [face signature]}],      a bearing is for the round face(s) of a hole
   "loads":    [{"kind": "force", "faces": [sig], "f": [Fx, Fy, Fz]}              total force spread over the faces (N)
               | {"kind": "pressure", "faces": [sig], "p": MPa}                    positive pushes into the part
               | {"kind": "point", "vertex": vertex signature, "f": [Fx, Fy, Fz]}
@@ -34,7 +34,8 @@ import solid_fem as fem
 import solid_geom as sg
 import solid_mesh as smesh
 
-MODES = {"fixed": "Fixed (all directions)", "slide": "One direction (normal to the face)"}
+MODES = {"fixed": "Fixed (all directions)", "slide": "One direction (normal to the face)",
+         "bearing": "Bearing (the hole face is held against moving sideways and along its axis; it can turn)"}
 KINDS = {"force": "Force on faces", "pressure": "Pressure on faces", "point": "Force at a vertex", "gravity": "Gravity"}
 
 
@@ -101,6 +102,10 @@ def resolve(geom, setup):
     for i, s in enumerate(setup["supports"]):
         nm = name_of("Support", i, s)
         fids = _fids(geom, s["faces"], nm)
+        if s["mode"] == "bearing":
+            for f in fids:
+                if not geom["faces"][f].get("cyl"):
+                    raise fem.FemError(f"{nm}: a bearing needs the round (cylindrical) face of a hole, and that face is a {geom['faces'][f]['kind']}.")
         r["supports"].append({"mode": s["mode"], "fids": fids, "name": nm})
     for i, l in enumerate(setup["loads"]):
         nm = name_of("Load", i, l)
@@ -284,7 +289,11 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
             if fid not in ftri:
                 raise fem.FemError(f"{s['name']}: the mesh has no elements on that face.")
             nd = np.unique(ftri[fid])
-            cons.append((nd, face_normal(q, geom, fid) if s["mode"] == "slide" else None))
+            if s["mode"] == "bearing":
+                cy = geom["faces"][fid]["cyl"]
+                cons.append((nd, {"bearing": (cy["origin"], cy["axis"])}))
+            else:
+                cons.append((nd, face_normal(q, geom, fid) if s["mode"] == "slide" else None))
             names.append(s["name"])
     force = np.zeros(3 * nn)
     applied = np.zeros(3)

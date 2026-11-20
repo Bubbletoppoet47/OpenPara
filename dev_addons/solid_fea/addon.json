@@ -5,7 +5,7 @@
  "needs": [
   "simulation"
  ],
- "description": "Linear elastic 3D FEA of a parametric OpenPara part, or of an assembly: the parts are fully bonded where they touch (each with its own material). Pick faces for supports (fixed, one direction) and loads (force, pressure, force at a vertex, gravity), quadratic tetrahedra from gmsh, von Mises, displacement and safety factor, animation. An Adaptive mesh (h) option refines the mesh where the estimated error is large and solves again until a chosen result (von Mises, displacement or strain energy) settles within a tolerance (single parts and bonded assemblies, tetrahedra). A .gpv project folder with its own copy of the part; works with Parametric Studies (single parts).",
+ "description": "Linear elastic 3D FEA of a parametric OpenPara part, or of an assembly: the parts are fully bonded where they touch (each with its own material). Pick faces for supports (fixed, one direction, and a BEARING on the round face of a hole: it holds the hole against moving sideways and along its axis and lets it turn) and loads (force, pressure, force at a vertex, gravity), quadratic tetrahedra from gmsh, von Mises, displacement and safety factor, animation. An Adaptive mesh (h) option refines the mesh where the estimated error is large and solves again until a chosen result (von Mises, displacement or strain energy) settles within a tolerance (single parts and bonded assemblies, tetrahedra). A .gpv project folder with its own copy of the part; works with Parametric Studies (single parts).",
  "extension": "solid_ext",
  "tabs": [
   {

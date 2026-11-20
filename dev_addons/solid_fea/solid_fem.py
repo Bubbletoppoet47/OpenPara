@@ -694,6 +694,19 @@ def rigid_modes(xyz):
     return M
 
 
+def bearing_dirs(nodes, nd, axis_def):
+    """-> (the unit axis (3,), the unit direction away from the axis for every node of `nd` (len(nd), 3)) of a bearing: axis_def = (a point of the axis, its direction)."""
+    o = np.asarray(axis_def[0], float)
+    a = np.asarray(axis_def[1], float)
+    a = a / np.linalg.norm(a)
+    v = np.asarray(nodes, float)[np.asarray(nd, int)] - o
+    v = v - (v @ a)[:, None] * a
+    ln = np.linalg.norm(v, axis=1)
+    if len(ln) and float(ln.min()) < 1e-9 * max(float(ln.max()), 1e-300):
+        raise FemError("A bearing needs the round face of a hole: a node of its face lies on the axis.")
+    return a, v / ln[:, None]
+
+
 def _rigid_check(nodes, rows):
     """Every rigid-body motion of the part must be stopped by the supports: rows = [(node, direction)] of the held directions."""
     nds = np.array(sorted({n for n, _ in rows}))
@@ -743,54 +756,94 @@ def solve_system(Kff, ff, progress=None, cancel=None, extent=None):
 
 
 def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t: None):
-    """q = quadratic mesh.  constraints: [(node array, direction (3,) or None for all three)]; force: (3 nn,) vector.
-    Returns u (nn, 3), reactions per constraint, info."""
+    """q = quadratic mesh.  constraints: [(node array, direction (3,) or None for all three or {"bearing": (a point of the axis, the axis)})]; force: (3 nn,)
+    vector.  A bearing holds every node of its (cylindrical) face against moving along the radius from the axis, in and out, and along the axis: only the
+    turn about the axis (a slide along the face) stays free.  Returns u (nn, 3), reactions per constraint, info."""
     nodes = q["nodes"]
     nn = len(nodes)
     progress("assembling")
     _stage(progress, "assemble", float(sum(len(g["conn"]) for g in _as_groups(q.get("groups") or q["conn"]))))
     K, D = assemble(nodes, q.get("groups") or q["conn"], E, nu, cancel, on_part=(lambda f: _part(progress, f)) if hasattr(progress, "part") else None)
     fixed = np.zeros(3 * nn, bool)
-    pen = []
     rows = []                                                # (node, direction) pairs for the rigid-body check
+    bearing = False
+    held = []                                                # (nodes, (3,) direction for all of them or (len(nodes), 3)), one entry per held direction
+    special = np.zeros(nn, bool)                             # the nodes held in a direction that is not along an axis: they get a frame of their own
+    full = np.zeros(nn, bool)                                # the nodes held in all three directions
     for nd, d in constraints:
         nd = np.unique(nd)
-        if d is None:
+        if isinstance(d, dict):                              # a bearing: along the axis (the same direction for every node) and along the radius (another at each)
+            bearing = True
+            a, rad = bearing_dirs(nodes, nd, d["bearing"])
+            held += [(nd, a), (nd, rad)]
+            special[nd] = True
+            rows += [(int(n), a) for n in nd] + [(int(n), r_) for n, r_ in zip(nd, rad)]
+        elif d is None:
+            fixed[(3 * nd[:, None] + np.arange(3)[None, :]).ravel()] = True
+            full[nd] = True
             for c in range(3):
-                fixed[3 * nd + c] = True
                 e = np.zeros(3)
                 e[c] = 1
                 rows += [(int(n), e) for n in nd]
         else:
             d = np.asarray(d, float)
             d = d / np.linalg.norm(d)
-            k = int(np.argmax(np.abs(d)))
-            if abs(d[k]) > 0.999999:
-                fixed[3 * nd + k] = True
-            else:
-                pen.append((nd, d))
+            held.append((nd, d))
+            if abs(d).max() <= 0.999999:
+                special[nd] = True
             rows += [(int(n), d) for n in nd]
     if not rows:
         raise FemError("There is no support: the part is free to move.")
-    _rigid_check(nodes, rows)
-    if pen:
-        kk = 1e8 * float(K.diagonal().mean())
-        P = sp.lil_matrix((3 * nn, 3 * nn))
-        for nd, d in pen:
-            for n in nd:
-                P[3 * n:3 * n + 3, 3 * n:3 * n + 3] += kk * np.outer(d, d)
-        K = K + P.tocsr()
+    try:
+        _rigid_check(nodes, rows)
+    except FemError as ex:
+        if bearing:
+            raise FemError(str(ex) + " A bearing holds its hole against moving sideways and along its axis, but the part can still turn about that axis: "
+                           "add a second bearing on another hole, or a fixed or one-direction support, to stop the turn.")
+        raise
+    T = None
+    if special.any():                                        # a node held in a slanted direction: its degrees of freedom are turned so that the held directions are
+        vecs = {}                                            # axes of its own frame, and those are fixed (no penalty: nothing gets stiff, the answer is exact)
+        for nd, d in held:
+            dd = np.broadcast_to(np.asarray(d, float), (len(nd), 3))
+            sel = special[nd] & ~full[nd]
+            for n, v in zip(nd[sel], dd[sel]):
+                vecs.setdefault(int(n), []).append(v)
+            alg = ~special[nd]
+            if alg.any():                                    # a node that is not framed: the direction is an axis (or the node is held in all three)
+                v0 = dd[alg][0]
+                k = int(np.argmax(np.abs(v0)))
+                fixed[3 * nd[alg] + k] = True
+        ti, tj, tv = [], [], []
+        framed = np.zeros(nn, bool)
+        for n, vs in vecs.items():
+            _u, sv, vt = np.linalg.svd(np.array(vs), full_matrices=True)
+            k = int((sv > 1e-6 * sv[0]).sum())
+            framed[n] = True
+            for i in range(3):
+                for c in range(3):
+                    ti.append(3 * n + c); tj.append(3 * n + i); tv.append(vt[i, c])
+            fixed[3 * n:3 * n + k] = True
+        rest = np.where(~np.repeat(framed, 3))[0]
+        T = sp.coo_matrix((np.concatenate([np.ones(len(rest)), tv]), (np.concatenate([rest, ti]), np.concatenate([rest, tj]))), shape=(3 * nn, 3 * nn)).tocsr()
+    else:
+        for nd, d in held:
+            k = int(np.argmax(np.abs(d)))
+            fixed[3 * nd + k] = True
     free = np.where(~fixed)[0]
     progress(f"solving {len(free):,} unknowns")
     t0 = time.time()
     extent = np.ptp(np.asarray(nodes, float), axis=0).tolist()                 # the sides of the bounding box: what the progress bar's time estimate looks at
-    Kff = K[free][:, free].tocsc()
-    ff = force[free]
+    Kt, ft = (K, force) if T is None else ((T.T @ K @ T).tocsr(), T.T @ force)
+    Kff = Kt[free][:, free].tocsc()
+    ff = ft[free]
     if cancel():
         raise Cancelled()
     uf, how = solve_system(Kff, ff, progress=progress, cancel=cancel, extent=extent)
     u = np.zeros(3 * nn)
     u[free] = uf
+    if T is not None:
+        u = T @ u
     res = float(np.linalg.norm(Kff @ uf - ff) / max(np.linalg.norm(ff), 1e-300))
     if not np.isfinite(u).all() or res > 1e-6:
         raise FemError(f"The solution is not reliable (relative residual {res:.1e}). Check the supports: the part may be able to move freely.")
@@ -812,7 +865,10 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
             continue
         idx = (3 * mine[:, None] + np.arange(3)[None, :]).ravel()
         rr = r[idx].reshape(-1, 3)
-        if d is None:
+        if isinstance(d, dict):                                     # a bearing carries load along its axis and along the radius of every node, nothing else
+            a, rad = bearing_dirs(nodes, mine, d["bearing"])
+            reac.append((rr @ a).sum() * a + ((rr * rad).sum(axis=1)[:, None] * rad).sum(axis=0))
+        elif d is None:
             reac.append(rr.sum(axis=0))
         else:
             dd = np.asarray(d, float) / np.linalg.norm(d)

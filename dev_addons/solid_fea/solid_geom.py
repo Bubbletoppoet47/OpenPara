@@ -24,7 +24,15 @@ def _analyze_solid(solid, full=True):
     tess = []
     for i, f in enumerate(solid.faces()):
         c, n = f.center(b.CenterOf.MASS), f.normal_at()
-        faces.append({"id": i, "kind": str(f.geom_type).split(".")[-1].lower(), "center": [c.X, c.Y, c.Z], "normal": [n.X, n.Y, n.Z], "area": float(f.area)})
+        rec = {"id": i, "kind": str(f.geom_type).split(".")[-1].lower(), "center": [c.X, c.Y, c.Z], "normal": [n.X, n.Y, n.Z], "area": float(f.area)}
+        if rec["kind"] == "cylinder":                                          # a round face (a hole, a boss): where its axis is and how wide: a bearing support needs it
+            try:
+                ax = f.axis_of_rotation
+                rec["cyl"] = {"origin": [ax.position.X, ax.position.Y, ax.position.Z], "axis": [ax.direction.X, ax.direction.Y, ax.direction.Z],
+                              "radius": float(f.radius)}
+            except Exception:                                                  # noqa: BLE001 (an odd face: it is just not offered to a bearing)
+                pass
+        faces.append(rec)
     bb = solid.bounding_box()
     diag = float(np.linalg.norm([bb.size.X, bb.size.Y, bb.size.Z]))
     step = b""

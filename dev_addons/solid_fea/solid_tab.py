@@ -365,8 +365,11 @@ class SolidWindow(QWidget):
         v = self.sec(3, "Supports", True, summary=lambda: f"{len(self.setup['supports'])} support(s)")
         v.addWidget(self.hint("Select the face(s) first (click them in the view), then press a button."))
         for mode, icn, tip in (("fixed", "fixed", "Holds the selected faces in every direction."),
-                               ("slide", "ux", "Holds the selected faces only in the direction normal to them; they slide freely along it.")):
-            b = sim_ui.icon_button({"fixed": "Fixed", "slide": "One direction (normal)"}[mode], icn, tip)
+                               ("slide", "ux", "Holds the selected faces only in the direction normal to them; they slide freely along it."),
+                               ("bearing", "bolt", "For the round (cylindrical) face of a hole: select that face itself, not its edge.  It holds the face against moving "
+                                                   "sideways (in or out along the radius) and along the axis of the hole; the face can still turn about the axis.  "
+                                                   "One bearing alone leaves the part free to turn about its hole: add a second one on another hole, or another support.")):
+            b = sim_ui.icon_button(self.SUPPORT_TYPES[mode] if mode != "bearing" else "Bearing (hole face)", icn, tip)
             b.clicked.connect(lambda _c=False, m_=mode: self.add_support(m_))
             v.addWidget(b)
         self.sup_list = QListWidget()                 # the plain-text copy of the supports (kept for scripts); the table under Loads shows them
@@ -2132,7 +2135,7 @@ class SolidWindow(QWidget):
             cols[f] = sv.PICK
         self.view.colour_faces(cols)
 
-    SUPPORT_TYPES = {"fixed": "Fixed", "slide": "One direction (normal)"}
+    SUPPORT_TYPES = {"fixed": "Fixed", "slide": "One direction (normal)", "bearing": "Bearing"}
 
     def refresh_lists(self):
         self.sup_list.clear()
@@ -2251,6 +2254,12 @@ class SolidWindow(QWidget):
             self.say("A face between two parts is inside the assembly: put the support on an outside face.")
             return False
         mode = mode or "fixed"
+        if mode == "bearing":
+            bad = [f for f in fids if not self.geom["faces"][f].get("cyl")]
+            if bad:
+                self.say(f"A bearing needs the round (cylindrical) face of a hole: select that face, not an edge. {self.face_label(bad[0])} is a "
+                         f"{self.geom['faces'][bad[0]]['kind']}.")
+                return False
         n = sum(1 for s in self.setup["supports"] if s["mode"] == mode) + 1
         self.setup["supports"].append({"mode": mode, "faces": [sg.face_sig(self.geom, f) for f in fids], "name": f"{mode.capitalize()} support {n}"})
         self.after_edit()
