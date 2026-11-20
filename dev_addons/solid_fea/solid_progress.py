@@ -27,8 +27,8 @@ STAGES = {
     "meshhex": (0.5, 3.0e-4),        # hex-dominant mesh: slower and less predictable
     "assemble": (0.02, 6.5e-5),      # size: elements
     "factor": (0.05, 2.0e-8),        # size: factor_cost() of the direct solve of a body held in place
-    "ilu": (0.1, 1.3e-5),            # the incomplete factorisation that precedes the iterative solver; size: non-zeros of the matrix (110 s for 8.6 million)
-    "cg": (0.1, 3.0e-4),             # the iterations themselves (their progress is measured); size: unknowns (about 300 iterations of 1e-6 s per unknown)
+    "ilu": (0.1, 3.5e-7),            # the multigrid setup that precedes the iterative solver; size: non-zeros of the matrix (18 s for 60 million)
+    "cg": (0.1, 2.5e-4),             # the iterations themselves (their progress is measured); size: unknowns (about 135 iterations of 2e-6 s per unknown)
     "stress": (0.02, 1.2e-5),        # size: elements
     "other": (1.0, 0.0),             # a stage nobody has a name for
 }
@@ -41,7 +41,7 @@ NNZ_PER_UNKNOWN = 80.0               # the stiffness matrix of quadratic tetrahe
 ON_TIME = 0.96                       # how far through a stage the bar is when its estimated time is up (it jumps to the end when the stage really ends)
 ORDER = {"mesh": 0, "meshhex": 0, "assemble": 1, "factor": 2, "ilu": 2, "cg": 3, "stress": 4}        # the order the stages come in
 CEILING = 0.995                      # the bar never shows more than this before the work is finished
-DIRECT_LIMIT = 80000                 # the same number as solid_fem.DIRECT_LIMIT (the largest system that is solved directly; a test checks they agree)
+DIRECT_LIMIT = 40000                 # the same number as solid_fem.DIRECT_LIMIT (the largest system that is solved directly; a test checks they agree)
 
 
 def factor_cost(unknowns, extent=None):

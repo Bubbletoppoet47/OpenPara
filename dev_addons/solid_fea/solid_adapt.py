@@ -7,7 +7,7 @@ setup["adapt"] = {
   "crit":     "vm" | "umax" | "energy",   the number that has to settle: the peak von Mises stress, the peak displacement or the strain energy
   "tol":      percent (1.0),              converged when the criterion changed by less than this between two loops
   "loops":    1..20 (5),                  the most refinements: loop 0 is your own mesh, every loop after it refines and solves again
-  "cap":      elements (0 = automatic),   stop before a mesh gets larger than this (never larger than the direct solver takes: fem.DIRECT_LIMIT unknowns)
+  "cap":      elements (0 = automatic),   stop before a mesh gets larger than this (automatic: AUTO_UNKNOWNS unknowns)
   "strength": "gentle" | "normal" | "strong",   how much of the estimated error one loop tries to remove
   "hmin":     mm (0 = automatic),         the smallest element the loops may make (automatic: a tenth of the smallest element size, or the minimum size of
                                          the advanced mesh options when that is set)
@@ -50,6 +50,7 @@ TOL_RANGE = (0.001, 50.0)
 FMIN = 0.4                  # the most one loop makes an element smaller (a size factor)
 FSKIP = 0.9                 # an element that would get less than a 10 % smaller size is left alone
 AUTO_FLOOR = 10.0           # the automatic smallest size: the smallest element size over this
+AUTO_UNKNOWNS = 80000       # the automatic largest mesh (unknowns), when no maximum is typed: what the direct solver used to take
 GROWTH_PER_LOOP = 2.2       # the number of elements a loop is expected to make (only for the progress bar's estimate)
 BIG = 1e30
 
@@ -335,7 +336,7 @@ def run(geom, r, h, cache, cancel, progress, get_mesh, solve_mesh):
     except (AttributeError, TypeError):
         pass
     maxloops = a["loops"]
-    unk_cap = int(fem.DIRECT_LIMIT)
+    unk_cap = AUTO_UNKNOWNS
     hist, field, prev = [], None, None
     reason, converged, res, ind, qlast, refined, last, pe_prev = None, False, None, None, q, None, None, None
     nm = {"vm": "von Mises stress (peak)", "umax": "displacement (peak)", "energy": "strain energy"}[a["crit"]]
@@ -369,7 +370,7 @@ def run(geom, r, h, cache, cancel, progress, get_mesh, solve_mesh):
             reason = f"The most loops ({maxloops}) are done and the {nm} still changed by {change:.3g} %." if change is not None else "No loops."
             break
         if 3 * len(res["nodes"]) > unk_cap:
-            reason = "The solver's size limit is reached: the mesh already has about as many unknowns as it solves directly."
+            reason = f"The automatic size limit is reached: the mesh already has about {unk_cap:,} unknowns."
             break
         if a["cap"] and len(res["conn"]) >= a["cap"]:
             reason = f"The largest number of elements ({a['cap']:,}) is reached."
@@ -386,7 +387,7 @@ def run(geom, r, h, cache, cancel, progress, get_mesh, solve_mesh):
         qn = _mesh(geom, h, opts, cancel, progress)
         if 3 * len(qn["nodes"]) > unk_cap or (a["cap"] and len(qn["conn"]) > a["cap"]):
             reason = (f"The next mesh would have {len(qn['conn']):,} elements, more than the " +
-                      (f"{a['cap']:,} allowed." if a["cap"] and len(qn["conn"]) > a["cap"] else f"solver takes directly (about {unk_cap // 3:,} nodes)."))
+                      (f"{a['cap']:,} allowed." if a["cap"] and len(qn["conn"]) > a["cap"] else f"automatic limit ({unk_cap // 3:,} nodes)."))
             break
         field, prev, q, refined, last, pe_prev = field_next, val, qn, info["refined"], info, pe
     res["node_err"] = node_error(qlast, ind)

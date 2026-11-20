@@ -39,7 +39,7 @@ class Cancelled(Exception):
     pass
 
 
-DIRECT_LIMIT = 80000                 # the largest system that is solved directly (a factorisation); a larger one by preconditioned conjugate gradients
+DIRECT_LIMIT = 40000                 # the largest system that is solved directly (a factorisation: exact, but its memory grows fast); a larger one by conjugate gradients with a multigrid preconditioner
 
 
 def _stage(progress, key, size=0.0):
@@ -721,38 +721,75 @@ def _rigid_check(nodes, rows):
         raise FemError("The supports leave the part free to move or turn (a rigid-body motion is not stopped). Add or enlarge a support.")
 
 
-def solve_system(Kff, ff, progress=None, cancel=None, extent=None):
-    """Solves Kff x = ff: a direct solution up to DIRECT_LIMIT unknowns, else an incomplete-LU preconditioned CG.  Returns (x, 'direct' | 'iterative').
+def _amg():
+    """The pyamg module, or None when it is not installed (the 3D FEA add-on lists it under "requires" in its addon.json, so the add-on manager installs it)."""
+    try:
+        import pyamg
+        return pyamg
+    except Exception:
+        return None
+
+
+def solve_system(Kff, ff, progress=None, cancel=None, extent=None, B=None):
+    """Solves Kff x = ff (Kff symmetric positive definite).  Up to DIRECT_LIMIT unknowns directly (a sparse factorisation: exact).  Above that by conjugate
+    gradients preconditioned with one algebraic-multigrid cycle (pyamg, smoothed aggregation): the number of iterations hardly grows with the size (about 130
+    from 220,000 to 725,000 unknowns in the tests) and the time and the memory grow in a straight line, where a factorisation runs out of memory.
+    B (n, k): the near-null space of the matrix, the rigid-body motions of the part as the unknowns see them (without it: the three translations).
     progress / cancel / extent (the three sides of the bounding box of the part) only serve the progress bar: the stage that begins is announced, the
-    iterative solver reports how far its residual has fallen, and a Cancel is noticed between iterations."""
-    if len(ff) <= DIRECT_LIMIT:
+    iterative solver reports how far its residual has fallen, and a Cancel is noticed between iterations.  Returns (x, 'direct' | 'iterative')."""
+    n = len(ff)
+    if n <= DIRECT_LIMIT:
         try:
             import solid_progress as spg
-            _stage(progress, "factor", spg.factor_cost(len(ff), extent))
+            _stage(progress, "factor", spg.factor_cost(n, extent))
         except Exception:
             pass
-        try:
-            lu = spl.splu(Kff)
-            return lu.solve(ff), "direct"
+        A = Kff.tocsc()
+        try:                                                  # the matrix is symmetric positive definite: a symmetric ordering and no pivoting need about half the time and memory
+            x = spl.splu(A, permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=0.0, options=dict(SymmetricMode=True)).solve(ff)
+            if np.isfinite(x).all():
+                return x, "direct"
+        except RuntimeError:
+            pass
+        try:                                                  # anything odd: the general factorisation, which also says when the matrix is singular
+            return spl.splu(A).solve(ff), "direct"
         except RuntimeError as ex:
             raise FemError(f"The system is singular ({ex}). Check the supports.")
-    _stage(progress, "ilu", float(Kff.nnz))
-    ilu = spl.spilu(Kff, drop_tol=1e-4, fill_factor=15)
-    _stage(progress, "cg", float(len(ff)))
+    amg = _amg()
+    if amg is None:
+        raise FemError(f"This mesh has {n:,} unknowns, more than the {DIRECT_LIMIT:,} that are solved exactly, and the multigrid solver for larger ones (the package pyamg) "
+                       "is not installed. Reinstall the 3D FEA add-on, which installs it, or use a larger element size.")
+    A = Kff.tocsr()
+    if B is None:
+        B = np.zeros((n, 3))
+        for c in range(3):
+            B[c::3, c] = 1.0
     b_norm = max(float(np.linalg.norm(ff)), 1e-300)
-    seen = [0]
-
-    def after_iteration(xk):                                  # the residual falls from |b| to 1e-9 |b|: the progress is how many of those nine decades are done
-        seen[0] += 1
+    for attempt in range(2):
+        _stage(progress, "ilu", float(A.nnz))                 # (the stage keeps its old name: the preparation of the iterative solver)
         if cancel is not None and cancel():
             raise Cancelled()
-        if progress is not None and seen[0] % 3 == 0:
-            r = float(np.linalg.norm(Kff @ xk - ff)) / b_norm
-            _part(progress, math.log10(1.0 / max(r, 1e-300)) / 9.0 if r < 1.0 else 0.0)
-    uf, info = spl.cg(Kff, ff, rtol=1e-9, maxiter=3000, M=spl.LinearOperator(Kff.shape, ilu.solve), callback=after_iteration)
-    if info != 0:
-        raise FemError("The iterative solver did not converge. Use a larger element size.")
-    return uf, "iterative"
+        if attempt == 0:
+            ml = amg.smoothed_aggregation_solver(A, B=B, max_coarse=500)
+        else:                                                 # the first setup stalled: stronger smoothing and a connection measure that copes with stretched elements
+            ml = amg.smoothed_aggregation_solver(A, B=B, max_coarse=500, strength=("evolution", {"epsilon": 4.0}),
+                                                 presmoother=("block_gauss_seidel", {"sweep": "symmetric", "iterations": 2}),
+                                                 postsmoother=("block_gauss_seidel", {"sweep": "symmetric", "iterations": 2}))
+        _stage(progress, "cg", float(n))
+        seen = [0]
+
+        def after_iteration(xk):                              # the residual falls from |b| to 1e-8 |b|: the progress is how many of those eight decades are done
+            seen[0] += 1
+            if cancel is not None and cancel():
+                raise Cancelled()
+            if progress is not None and seen[0] % 3 == 0:
+                r = float(np.linalg.norm(A @ xk - ff)) / b_norm
+                _part(progress, math.log10(1.0 / max(r, 1e-300)) / 8.0 if r < 1.0 else 0.0)
+        x, info = spl.cg(A, ff, rtol=1e-8, maxiter=400, M=ml.aspreconditioner(cycle="V"), callback=after_iteration)
+        if info == 0 and np.isfinite(x).all():
+            return x, "iterative"
+    raise FemError(f"The iterative solver could not solve this model ({n:,} unknowns). Parts with very thin features, or parts bonded to others of very different "
+                   "stiffness, can do that. Check the supports and the materials, or try a different element size.")
 
 
 def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t: None):
@@ -835,11 +872,17 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     t0 = time.time()
     extent = np.ptp(np.asarray(nodes, float), axis=0).tolist()                 # the sides of the bounding box: what the progress bar's time estimate looks at
     Kt, ft = (K, force) if T is None else ((T.T @ K @ T).tocsr(), T.T @ force)
-    Kff = Kt[free][:, free].tocsc()
+    Kff = Kt[free][:, free]
     ff = ft[free]
+    B = None
+    if len(free) > DIRECT_LIMIT:                             # the rigid-body motions (three translations, three turns) in the unknowns of the system that is solved
+        xyz = np.asarray(nodes, float)
+        xyz = (xyz - xyz.mean(axis=0)) / max(float(np.ptp(xyz, axis=0).max()), 1e-300)
+        B = rigid_modes(xyz)
+        B = (B if T is None else T.T @ B)[free]
     if cancel():
         raise Cancelled()
-    uf, how = solve_system(Kff, ff, progress=progress, cancel=cancel, extent=extent)
+    uf, how = solve_system(Kff, ff, progress=progress, cancel=cancel, extent=extent, B=B)
     u = np.zeros(3 * nn)
     u[free] = uf
     if T is not None:

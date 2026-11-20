@@ -716,8 +716,8 @@ class SolidWindow(QWidget):
         f.addRow("Refinement", self.ad_strength)
         self.ad_cap = QLineEdit()
         self.ad_cap.setPlaceholderText("auto")
-        self.ad_cap.setToolTip("Stop before a mesh gets larger than this many elements (blank = automatic: as large as the direct solver takes, about "
-                               f"{fem.DIRECT_LIMIT:,} unknowns).")
+        self.ad_cap.setToolTip("Stop before a mesh gets larger than this many elements (blank = automatic: about "
+                               f"{sad.AUTO_UNKNOWNS:,} unknowns).")
         f.addRow("Largest mesh (elements)", self.ad_cap)
         self.ad_hmin = QLineEdit()
         self.ad_hmin.setPlaceholderText("auto")
