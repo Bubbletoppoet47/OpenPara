@@ -2,7 +2,13 @@
  "name": "Sheets",
  "order": 7,
  "status": "workshopping",
- "description": "A spreadsheet tab with Excel-style formulas, several sheets per file, charts with a side panel and every matplotlib setting, .xlsx import and export, and engineering standards as cell formulas (AISI S100-16 connections first). Finished parametric studies come in with one button and refresh with their formulas intact.",
+ "description": "A spreadsheet tab with Excel-style formulas, several sheets per file, charts with a side panel and every matplotlib setting, images and videos (MP4, or AVI converted to MP4) stored inside the sheet, .xlsx import and export, and engineering standards as cell formulas (AISI S100-16 connections first). Finished parametric studies come in with one button and refresh with their formulas intact.",
+ "requires": [
+  {
+   "pip": "imageio-ffmpeg==0.7.0",
+   "import": "imageio_ffmpeg"
+  }
+ ],
  "tabs": [
   {
    "kind": "sheets",

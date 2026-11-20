@@ -1,5 +1,5 @@
 """Sheets (dev_addons/sheets): images - a screenshot pasted with Ctrl+V lands at the selected cell, Insert image from a PNG / JPEG file, drag to move and the corner to
-resize (one undo step each), the image panel (width, height, keep proportions, scale, original size), copy / duplicate / export / delete, the Images tab,
+resize (one undo step each), the image panel (width, height, keep proportions, scale, original size), copy / duplicate / export / delete, the Media tab,
 Paste special > Picture, saving in the .opsheet file and opening it again, copied sheets, and Excel files in and out."""
 import faulthandler
 import os
@@ -87,7 +87,7 @@ t = fresh()
 g, wb = t.grid, t.wb
 S = g.sheet
 assert not pics(t) and not t.act["pic_edit"].isEnabled(), "an empty sheet has no image to edit"
-assert [t.ribbon.tabText(i) for i in range(t.ribbon.count())] == ["Home", "Data", "Charts", "Images", "Import", "Engineering", "View"], "the Images tab sits next to Charts"
+assert [t.ribbon.tabText(i) for i in range(t.ribbon.count())] == ["Home", "Data", "Charts", "Media", "Import", "Engineering", "View"], "the Media tab sits next to Charts"
 assert t.act["pic_new"].isEnabled(), "Insert image is always there"
 
 g.select(3, 2)

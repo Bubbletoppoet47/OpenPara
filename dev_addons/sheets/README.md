@@ -3,16 +3,22 @@
 A spreadsheet tab. Playground only; nothing in the core program changes.
 
 - **Formulas**: Excel's syntax, 118 functions, `$` references, other sheets, sheet-scoped names. Cell references stay `F62`-style.
-- **Files**: `.opsheet` (JSON, pictures inside). Excel `.xlsx` opens and exports (openpyxl is downloaded once, on first use).
+- **Files**: `.opsheet` (JSON, pictures and videos inside). Excel `.xlsx` opens and exports (openpyxl is downloaded once, on first use).
 - **Studies**: Data > Import study; Refresh from study reads it again and fills formulas next to it down (it acts on the study under or next to the cursor, and asks when the cursor is elsewhere). Select study picks the whole block; Delete study (Data tab or right-click) takes it off the sheet - its cells go, or the numbers stay as plain cells - in one undo step, and Refresh no longer touches that area.
 - **Charts**: Insert chart (from the selected cells, or empty and pick the cells after); double-click a chart to open the panel on the right.
   Setup (type, data range, X, series, left/right axis, swap X and Y), Customize (fonts, lines, grid, frame, legend, limit lines, zones, notes) and
   Advanced (every matplotlib setting as a typed input, saved with the chart). Looks (presets) are saved in `chart_presets.json`. PNG/SVG/PDF.
-- **Images**: copy a screenshot (or any picture) and press Ctrl+V: it lands at the selected cell. The Images tab mirrors Charts: Insert image (a PNG / JPG / BMP / GIF / WebP file),
-  Edit image, Copy image (a duplicate), Export image, Delete image. Drag a picture to move it, drag its corner to resize it; double-click it to open the panel on the right
+- **Media** (images and videos): copy a screenshot (or any picture) and press Ctrl+V: it lands at the selected cell. The Media tab mirrors Charts: Insert image (a PNG / JPG / BMP / GIF / WebP file),
+  Insert video, Edit media, Copy media (a duplicate), Export media, Delete media. Drag a picture to move it, drag its corner to resize it; double-click it to open the panel on the right
   (width, height, keep proportions, scale, back to the original size). Ctrl+C / Ctrl+X on a picked picture copy it for other programs. Pictures are kept inside the `.opsheet`
   file and go into the `.xlsx` as Excel pictures (and come back from it). Cells copied from Excel paste as cells; Paste special > Picture takes the image instead.
   Like charts, a picture sits at a pixel position, so inserting rows above it does not move it.
+  **Videos**: Insert video takes an `.mp4` or an `.avi` (SolidWorks writes AVI) from one file dialog. An AVI is converted to an H.264 MP4 first (progress window with Cancel; the AVI itself is
+  never touched), so a sheet only ever holds MP4. The MP4 is stored inside the `.opsheet` file, not linked, so the sheet can be moved or emailed on its own; above about 50 MB a question asks
+  first, and a file over 250 MB is refused. A video sits on the sheet like a picture (drag, resize, panel on the right) and shows its first frame; click it to play or pause, the bar at the
+  bottom has a play button and a scrubber, and the panel has a Loop tick. Nothing is opened or decoded until the first click, so a sheet full of videos opens as fast as one without.
+  There is no sound output. Export media saves the MP4. In an `.xlsx` a video is written as its first frame with a note (Excel has no embedded video that round-trips); Ctrl+C on a video
+  copies the first frame only, and Ctrl+X is refused (use Copy media). Converting needs ffmpeg (the `imageio-ffmpeg` package, installed with the add-on, or a copy downloaded once on first use).
 - **Import CSV**: Import tab > Import CSV brings a `.csv` / `.tsv` / `.txt` file onto the sheet, at the selected cell or on a new sheet named after the file. A window shows the
   start of the file first: the separator (comma, semicolon, tab or pipe; guessed from the first lines), "first row holds column names" (made bold; guessed), and "numbers are
   written with a decimal comma" (guessed). UTF-8 (with or without a BOM), UTF-16 and Windows-1252 files are read; quoted fields with separators and line breaks work.

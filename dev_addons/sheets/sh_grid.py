@@ -19,6 +19,7 @@ import sh_deps
 import sh_edit
 import sh_engine as E
 import sh_fmt
+import sh_media
 import sh_picture
 
 MIME = "application/x-openpara-sheets"
@@ -319,6 +320,7 @@ class Grid(QAbstractScrollArea):
             f.deleteLater()
         self.frames = {}
         for f in self.pframes.values():
+            f.release()
             f.hide()
             f.deleteLater()
         self.pframes = {}
@@ -1704,11 +1706,12 @@ class Grid(QAbstractScrollArea):
         for pid in list(self.pframes):
             if pid not in want:
                 f = self.pframes.pop(pid)
+                f.release()
                 f.hide()
                 f.deleteLater()
         for pid, pic in want.items():
             if pid not in self.pframes:
-                f = sh_picture.PictureFrame(self, pic)
+                f = sh_media.make_frame(self, pic)
                 f.changed.connect(lambda _i: self.pictures_changed.emit())
                 f.edit_asked.connect(lambda i: self.command.emit("picture_edit:" + i))
                 f.menu_asked.connect(self._picture_menu)
@@ -1766,6 +1769,17 @@ class Grid(QAbstractScrollArea):
         self.pictures_changed.emit()
         return pic
 
+    def add_video(self, prep):
+        """Puts a prepared video (sh_media.prepare) on the sheet at the selected cell and picks it."""
+        r, c = self.sel()[:2]
+        pic = sh_media.new_video(self.wb, self.sheet, prep, (self.cols.pos(c), self.rows.pos(r)), self.picture_room())
+        if not self.wb.add_picture(self.sheet, pic, "Insert video"):
+            return None
+        self.pick_picture(pic["id"])
+        self.reveal_picture(pic["id"])
+        self.pictures_changed.emit()
+        return pic
+
     def paste_picture(self, md=None):
         """Ctrl+V of an image (a screenshot, a picture copied in a browser or in Word, a copied image file): it lands at the selected cell."""
         try:
@@ -1793,6 +1807,9 @@ class Grid(QAbstractScrollArea):
         pic = self.wb.picture(self.sheet, self.sel_picture)
         if pic is None:
             return
+        if pic.get("video") and cut:                          # the clipboard would only get the first frame: the video itself would be lost
+            self.message.emit("A video cannot be cut: use Duplicate to copy it, or Delete to remove it.", "warn")
+            return
         img = sh_picture.qimage_of(self.wb, pic)
         if img.isNull():
             self.message.emit("This picture could not be read.", "bad")
@@ -1806,6 +1823,8 @@ class Grid(QAbstractScrollArea):
         if cut:
             self.delete_picture(pic["id"])
             self.message.emit("Cut the picture: choose where it goes, then Paste.", "")
+        elif pic.get("video"):
+            self.message.emit("Copied the first frame of the video as a picture.  To copy the video itself, use Duplicate.", "")
         else:
             self.message.emit("Copied the picture: choose where it goes, then Paste.", "")
 
@@ -1830,12 +1849,14 @@ class Grid(QAbstractScrollArea):
 
     def _picture_menu(self, pid, gpos):
         menu = QMenu(self)
-        menu.addAction("Edit image...", lambda: self.command.emit("picture_edit:" + pid))
+        pic = self.wb.picture(self.sheet, pid)
+        what = "video" if pic and pic.get("video") else "image"
+        menu.addAction(f"Edit {what}...", lambda: self.command.emit("picture_edit:" + pid))
         menu.addAction("Copy", lambda: (self.pick_picture(pid), self.copy_picture(False)))
         menu.addAction("Duplicate", lambda: self.duplicate_picture(pid))
-        menu.addAction("Export image...", lambda: self.command.emit("picture_export:" + pid))
+        menu.addAction(f"Export {what}...", lambda: self.command.emit("picture_export:" + pid))
         menu.addSeparator()
-        menu.addAction("Delete image", lambda: self.delete_picture(pid))
+        menu.addAction(f"Delete {what}", lambda: self.delete_picture(pid))
         menu.exec(gpos)
 
     def add_chart(self, ch):

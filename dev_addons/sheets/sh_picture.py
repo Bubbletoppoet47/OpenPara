@@ -227,23 +227,25 @@ class PictureFrame(QWidget):
     def _in_corner(self, pos):
         return pos.x() > self.width() - self.CORNER and pos.y() > self.height() - self.CORNER
 
-    def paintEvent(self, ev):
-        p = QPainter(self)
-        r = self.rect()
+    def draw_picture(self, p, r):
+        """The picture itself, filling `r`."""
         if self._pix is None or self._pix.isNull():
             p.fillRect(r, QColor("#f4f6fa"))
             p.setPen(QColor("#b00020"))
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, "This picture\ncould not be read.")
+            return
+        dpr = self.devicePixelRatioF()
+        size = QSize(max(1, round(r.width() * dpr)), max(1, round(r.height() * dpr)))
+        if self._drag is not None and self._drag[0] == "size":     # (while the corner is dragged: quick; smooth again when it is let go)
+            p.drawPixmap(r, self._pix)
         else:
-            dpr = self.devicePixelRatioF()
-            size = QSize(max(1, round(r.width() * dpr)), max(1, round(r.height() * dpr)))
-            if self._drag is not None and self._drag[0] == "size":     # (while the corner is dragged: quick; smooth again when it is let go)
-                p.drawPixmap(r, self._pix)
-            else:
-                if self._scaled is None or self._scaled.size() != size:
-                    self._scaled = self._pix.scaled(size, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                    self._scaled.setDevicePixelRatio(dpr)
-                p.drawPixmap(0, 0, self._scaled)
+            if self._scaled is None or self._scaled.size() != size:
+                self._scaled = self._pix.scaled(size, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self._scaled.setDevicePixelRatio(dpr)
+            p.drawPixmap(0, 0, self._scaled)
+
+    def draw_selection(self, p, r):
+        """The frame and the corner handle of a picked picture."""
         if self.selected:
             p.setPen(QPen(ACCENT, 2))
             p.setBrush(Qt.BrushStyle.NoBrush)
@@ -251,7 +253,16 @@ class PictureFrame(QWidget):
             p.setPen(QPen(QColor("white"), 1))
             p.setBrush(ACCENT)
             p.drawRect(QRect(r.width() - 11, r.height() - 11, 9, 9))
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        r = self.rect()
+        self.draw_picture(p, r)
+        self.draw_selection(p, r)
         p.end()
+
+    def release(self):
+        """The frame is going away (a video stops its player here)."""
 
     def mousePressEvent(self, ev):
         self.picked.emit(self.pid)
@@ -363,6 +374,9 @@ class PicturePanel(QWidget):
         form.addRow("Height", self.h)
         form.addRow("", self.keep)
         form.addRow("Scale", self.scale)
+        self.loop = QCheckBox("Loop (start again when it ends)")
+        self.loop.setToolTip("Play the video again and again; saved with the sheet")
+        form.addRow("", self.loop)
         lay.addLayout(form)
         self.orig_lbl = QLabel("")
         self.orig_lbl.setStyleSheet(f"color:{ui_kit.MUTED}; font-size:11px;")
@@ -381,6 +395,7 @@ class PicturePanel(QWidget):
         self.h.valueChanged.connect(lambda _v: self.edited("h"))
         self.scale.valueChanged.connect(lambda _v: self.edited("s"))
         self.keep.toggled.connect(self.keep_toggled)
+        self.loop.toggled.connect(self.loop_toggled)
         self.reset.clicked.connect(lambda _c=False: self.to_original())
 
     def set_context(self, wb, grid):
@@ -403,7 +418,12 @@ class PicturePanel(QWidget):
         if pic is None:
             return
         self._loading = True
-        self.name_lbl.setText(pic.get("name") or "")
+        video = bool(pic.get("video"))
+        self.heading.setText("Video" if video else "Image")
+        self.delete_btn.setText("Delete video" if video else "Delete image")
+        self.loop.setVisible(video)
+        self.loop.setChecked(bool(pic.get("loop")))
+        self.name_lbl.setText((pic.get("name") or "") + (f"  ({int(pic.get('dur') or 0) // 60}:{int(pic.get('dur') or 0) % 60:02d})" if video and pic.get("dur") else ""))
         self.w.setValue(pic["size"][0])
         self.h.setValue(pic["size"][1])
         self.keep.setChecked(bool(pic.get("keep", True)))
@@ -446,6 +466,11 @@ class PicturePanel(QWidget):
             w, h = pic["orig"][0] * k, pic["orig"][1] * k
         w, h = min(MAX_SIZE, max(MIN_SIZE, round(w))), min(MAX_SIZE, max(MIN_SIZE, round(h)))
         self.apply("Resize picture", size=[float(w), float(h)])
+
+    def loop_toggled(self, on):
+        if self._loading or self.picture is None or not self.picture.get("video"):
+            return
+        self.apply("Video loop", loop=bool(on))
 
     def keep_toggled(self, on):
         if self._loading or self.picture is None:

@@ -1069,7 +1069,7 @@ class Workbook:
                            "pictures": copy.deepcopy(s.pictures)})
         out = {"format": FORMAT, "version": 1, "active": self.active, "names": dict(self.names), "styles": styles, "sheets": sheets}
         if embed:
-            used = {p["image"] for s in self.sheets for p in s.pictures}
+            used = {k for s in self.sheets for p in s.pictures for k in (p["image"], p.get("video")) if k}
             out["images"] = {k: base64.b64encode(v).decode("ascii") for k, v in self.images.items() if k in used}
         return out
 
@@ -1110,6 +1110,10 @@ class Workbook:
                 pass
         for s in self.sheets:
             s.pictures = [p for p in s.pictures if p["image"] in self.images]
+            for p in s.pictures:
+                if p.get("video") and p["video"] not in self.images:         # a video whose data is not in the file: its first frame stays, as a picture
+                    for k in ("video", "loop", "dur"):
+                        p.pop(k, None)
         if not self.sheets:
             self.sheets.append(Sheet("Sheet1"))
         self.active = max(0, min(int(d.get("active", 0)), len(self.sheets) - 1))
@@ -1153,7 +1157,7 @@ class Workbook:
     def add_picture(self, sheet, pic, label="Insert picture"):
         """Puts a picture on a sheet (one undo step).  `pic["image"]` must be a key from add_image."""
         s = self.get_sheet(sheet)
-        if s is None or pic.get("image") not in self.images:
+        if s is None or pic.get("image") not in self.images or (pic.get("video") and pic["video"] not in self.images):
             return None
         s.pictures.append(pic)
         self._push_picture(label, sheet, pic["id"], None, copy.deepcopy(pic), len(s.pictures) - 1)
@@ -1240,7 +1244,15 @@ def _clean_picture(p):
         ow, oh = (min(20000.0, max(4.0, float(v))) for v in p.get("orig", p.get("size", [0, 0]))[:2])
     except (TypeError, ValueError):
         return None
-    return {"id": p["id"], "image": p["image"], "pos": [x, y], "size": [w, h], "orig": [ow, oh], "keep": bool(p.get("keep", True)), "name": str(p.get("name", ""))[:120]}
+    out = {"id": p["id"], "image": p["image"], "pos": [x, y], "size": [w, h], "orig": [ow, oh], "keep": bool(p.get("keep", True)), "name": str(p.get("name", ""))[:120]}
+    if isinstance(p.get("video"), str) and p["video"]:                         # a video: the picture is its first frame
+        out["video"] = p["video"]
+        out["loop"] = bool(p.get("loop", False))
+        try:
+            out["dur"] = max(0.0, float(p.get("dur", 0.0)))
+        except (TypeError, ValueError):
+            out["dur"] = 0.0
+    return out
 
 
 def _new_id(charts):

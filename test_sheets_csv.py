@@ -129,7 +129,7 @@ assert C.looks_like_header([["Bauteil", "Länge"], ["A", "3,5"]], True) and not 
 t = fresh()
 g, wb = t.grid, t.wb
 S = g.sheet
-assert [t.ribbon.tabText(i) for i in range(t.ribbon.count())] == ["Home", "Data", "Charts", "Images", "Import", "Engineering", "View"], "the Import tab sits after Images"
+assert [t.ribbon.tabText(i) for i in range(t.ribbon.count())] == ["Home", "Data", "Charts", "Media", "Import", "Engineering", "View"], "the Import tab sits after Media"
 assert "csv_in" in t.act and t.act["csv_in"].isEnabled(), "Import CSV is always there"
 assert "Import" in t.act["csv_in"].text().replace("\n", " ")
 assert "xl_in" in t.act and "study_in" in t.act, "Import study and Import .xlsx stay on the Data tab"

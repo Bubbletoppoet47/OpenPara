@@ -2,7 +2,7 @@
 sh_xlsx.py - Excel files in and out of Sheets (needs openpyxl: sh_deps.py gets it).
 
     import_xlsx(path)  -> (Workbook, notes)      values, formulas (also array formulas), number formats, bold / italic / colours, column widths, names, pictures
-    export_xlsx(wb, path) -> notes               the same back, with the charts as Excel charts and the pictures as Excel pictures at the cell they are over
+    export_xlsx(wb, path) -> notes               the same back, with the charts as Excel charts and the pictures as Excel pictures at the cell they are over (a video: its first frame, with a note in that cell)
 
 Notes are short lines about what did not come across (charts, merged cells, functions Sheets does not have; AISI and other standards functions leave
 Excel as their values, with the formula text in a cell comment, because Excel cannot work them out).
@@ -293,6 +293,12 @@ def _export_picture(wb, s, ws, pic):
     img.width, img.height = w, h
     img.anchor = OneCellAnchor(_from=AnchorMarker(col=c - 1, row=r - 1, colOff=int(dx * EMU), rowOff=int(dy * EMU)), ext=XDRPositiveSize2D(int(w * EMU), int(h * EMU)))
     ws.add_image(img)
+    if pic.get("video"):                                     # Excel has no place for a video that is stored in the file: the first frame is the picture, and a note says so
+        from openpyxl.comments import Comment
+        cell = ws.cell(row=r, column=c)
+        note = (f"Video '{pic.get('name') or 'video'}': the picture here is its first frame.  The video itself stays in the Sheets file (.opsheet); "
+                "Excel cannot play it from here.")
+        cell.comment = Comment((cell.comment.text + "\n\n" if cell.comment else "") + note, "Sheets")
 
 
 def _import_picture(wb, s, img):

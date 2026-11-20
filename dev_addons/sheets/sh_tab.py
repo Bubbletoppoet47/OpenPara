@@ -1,5 +1,5 @@
 """
-sh_tab.py - the Sheets tab: a ribbon (Home, Data, Charts, Images, Import, Engineering), the name box and formula bar, the grid, the sheet tabs and a status line.
+sh_tab.py - the Sheets tab: a ribbon (Home, Data, Charts, Media, Import, Engineering), the name box and formula bar, the grid, the sheet tabs and a status line.
 
 Files: .opsheet (JSON, the whole workbook with its charts and study links).  Excel files (.xlsx) open into a new workbook and export from the Data tab.
 """
@@ -21,6 +21,7 @@ import sh_engine as E
 import sh_fmt
 import sh_csv
 import sh_grid
+import sh_media
 import sh_picture
 import sh_prefs
 import sh_presets
@@ -194,9 +195,10 @@ class SheetsTab(QWidget):
                        ("ch_export", "s_ch_export", "Export\nchart", "Save the chart as PNG, SVG or PDF", self.chart_export), ("ch_del", "s_ch_del", "Delete\nchart", "Remove the chart", self.chart_delete)]),
         ]
         images = [
-            ("Insert", [("pic_new", "s_pic_new", "Insert\nimage", "Put a picture file (PNG, JPG ...) on the sheet at the selected cell. To bring in a screenshot, copy it and press Ctrl+V.", self.picture_new)]),
-            ("Image", [("pic_edit", "s_pic_edit", "Edit\nimage", "Open the image panel: size", self.picture_edit), ("pic_copy", "s_pic_copy", "Copy\nimage", "Duplicate the image", self.picture_copy),
-                       ("pic_export", "s_pic_export", "Export\nimage", "Save the image as a file", self.picture_export), ("pic_del", "s_pic_del", "Delete\nimage", "Remove the image", self.picture_delete)]),
+            ("Insert", [("pic_new", "s_pic_new", "Insert\nimage", "Put a picture file (PNG, JPG ...) on the sheet at the selected cell. To bring in a screenshot, copy it and press Ctrl+V.", self.picture_new),
+                        ("vid_new", "s_vid_new", "Insert\nvideo", "Put a video on the sheet at the selected cell: an MP4, or an AVI (such as SolidWorks exports), which is converted to MP4. The video is stored inside the sheet file.", self.video_new)]),
+            ("Media", [("pic_edit", "s_pic_edit", "Edit\nmedia", "Open the panel of the selected image or video: size, and Loop for a video", self.picture_edit), ("pic_copy", "s_pic_copy", "Copy\nmedia", "Duplicate the image or video", self.picture_copy),
+                       ("pic_export", "s_pic_export", "Export\nmedia", "Save the image as a file, or the video as an MP4 file", self.picture_export), ("pic_del", "s_pic_del", "Delete\nmedia", "Remove the image or video", self.picture_delete)]),
         ]
         imports = [
             ("CSV", [("csv_in", "s_csv_in", "Import\nCSV", "Bring a CSV file (comma, semicolon, tab or pipe separated) onto a sheet: at the selected cell, or on a new sheet", self.csv_import)]),
@@ -205,7 +207,7 @@ class SheetsTab(QWidget):
                ("Standards", self.standard_items()),
                ("Browse", [("std_select", "s_std_select", "Standard\nselect", "Browse every installed standard", lambda: self.standards(None))])]
         view = [("Ribbon", [("ribbon_size", "s_ribbon_size", "Ribbon\nsize", "Icon size and text size of the ribbon", self.ribbon_size_dialog)])]
-        for title, groups in (("Home", home), ("Data", data), ("Charts", charts), ("Images", images), ("Import", imports), ("Engineering", eng), ("View", view)):
+        for title, groups in (("Home", home), ("Data", data), ("Charts", charts), ("Media", images), ("Import", imports), ("Engineering", eng), ("View", view)):
             tabs.addTab(self.ribbon_page(groups), title)
         QTimer.singleShot(0, self.apply_ribbon_sizes)
         return tabs
@@ -972,10 +974,108 @@ class SheetsTab(QWidget):
         if self.grid.add_picture_data(*got) is not None:
             self.status.say("Image added: drag it to move it, double-click it to set its size.", "good")
 
+    def video_new(self):
+        """Insert video: one file dialog for .mp4 and .avi; an AVI is converted to an H.264 MP4 first (the file itself is not touched)."""
+        start = os.path.dirname(self.path) if self.path else ""
+        p, _ = QFileDialog.getOpenFileName(self, "Insert video", start, sh_media.VIDEO_FILTER)
+        if not p:
+            return None
+        return self.video_from_file(p)
+
+    CONFIRM_BIG = True                         # a test turns the question about a big video off
+
+    def video_from_file(self, p):
+        """Makes the video file ready (with a progress window and a Cancel button), asks when it is big, and puts it on the sheet.  -> the entry or None."""
+        if not self.ensure_ffmpeg():
+            return None
+        prep = self.prepare_video(p)
+        if prep is None:
+            return None
+        size = len(prep["mp4"])
+        if size > sh_media.WARN_BYTES and self.CONFIRM_BIG:
+            if QMessageBox.question(self, "Insert video", f"This video is {size / 1e6:.0f} MB.  It is stored inside the sheet file, so the file grows by that much "
+                                    "and takes longer to open and save.\n\nInsert it anyway?") != QMessageBox.StandardButton.Yes:
+                return None
+        pic = self.grid.add_video(prep)
+        if pic is None:
+            self.status.say("The video could not be put on the sheet.", "bad")
+            return None
+        how = "converted from " + os.path.splitext(p)[1].upper().lstrip(".") + " to MP4 and " if prep["converted"] else ""
+        self.status.say(f"Video {how}added ({size / 1e6:.1f} MB, kept inside the sheet): click it to play, drag it to move it, double-click it for its panel.", "good")
+        return pic
+
+    def prepare_video(self, p):
+        label = "Converting the video to MP4 ..." if os.path.splitext(p)[1].lower() != ".mp4" else "Reading the video ..."
+        dlg = QProgressDialog(label, "Cancel", 0, 100, self)
+        dlg.setWindowTitle("Insert video")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        cancel = threading.Event()
+        dlg.canceled.connect(cancel.set)
+        res = {"frac": 0.0}
+
+        def work():
+            try:
+                res["prep"] = sh_media.prepare(p, cancel.is_set, lambda f: res.__setitem__("frac", f))
+            except sh_media.Cancelled:
+                res["cancelled"] = True
+            except BaseException as ex:                       # noqa: BLE001 - shown to the person, never raised in a thread
+                res["err"] = str(ex)
+        th = threading.Thread(target=work, daemon=True)
+        dlg.show()
+        th.start()
+        while th.is_alive():
+            QApplication.processEvents()
+            dlg.setValue(int(100 * res["frac"]))
+            th.join(0.05)
+        dlg.close()
+        if res.get("cancelled"):
+            self.status.say("Cancelled: nothing was added.", "warn")
+            return None
+        if "err" in res:
+            self.status.say(res["err"], "bad")
+            QMessageBox.warning(self, "Insert video", res["err"])
+            return None
+        return res["prep"]
+
+    def ensure_ffmpeg(self):
+        if sh_deps.ffmpeg_exe() is not None:
+            return True
+        if not self.AUTO_DOWNLOAD:
+            self.status.say(sh_media.NO_FFMPEG, "bad")
+            return False
+        if QMessageBox.question(self, "Insert video", "Videos need a small helper (ffmpeg, about 30 MB, once).\n\nDownload it now? This needs an internet connection.") \
+                != QMessageBox.StandardButton.Yes:
+            return False
+        dlg = QProgressDialog("Downloading ffmpeg ...", None, 0, 0, self)
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setCancelButton(None)
+        dlg.show()
+        res = {}
+
+        def work():
+            try:
+                sh_deps.install_ffmpeg(lambda text, frac=None: None, self.installer)
+                res["ok"] = True
+            except BaseException as ex:                       # noqa: BLE001 - shown to the person, never raised in a thread
+                res["err"] = str(ex)
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        while th.is_alive():
+            QApplication.processEvents()
+            th.join(0.05)
+        dlg.close()
+        if res.get("ok"):
+            return True
+        QMessageBox.warning(self, "Insert video", "ffmpeg could not be downloaded.\n\n" + (res.get("err", "").strip()[-500:] or "Check the internet connection and try again."))
+        return False
+
     def picture_edit(self, pid=None):
         pic = self.picture_by_id(pid or None)
         if pic is None:
-            self.status.say("There is no image on this sheet yet: Insert image, or copy a picture and press Ctrl+V.", "warn")
+            self.status.say("There is no image or video on this sheet yet: Insert image, Insert video, or copy a picture and press Ctrl+V.", "warn")
             return
         self.grid.pick_picture(pic["id"])
         self.open_pic_panel(pic)
@@ -994,6 +1094,15 @@ class SheetsTab(QWidget):
         pic = self.picture_by_id(pid or None)
         if pic is None:
             self.status.say("There is no image on this sheet.", "warn")
+            return
+        if pic.get("video"):
+            p, _ = QFileDialog.getSaveFileName(self, "Export video", (pic.get("name") or "video") + ".mp4", "MP4 video (*.mp4)")
+            if not p:
+                return
+            if "." not in os.path.basename(p):
+                p += ".mp4"
+            msg = sh_media.export_mp4(self.wb, pic, p)
+            self.status.say(msg or f"Saved {p}", "bad" if msg else "good")
             return
         ext = sh_picture.suffix_of(self.wb.images.get(pic["image"], b""))
         p, _ = QFileDialog.getSaveFileName(self, "Export image", (pic.get("name") or "image") + ext, "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;BMP image (*.bmp)")
