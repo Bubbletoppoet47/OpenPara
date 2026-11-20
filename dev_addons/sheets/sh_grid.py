@@ -260,7 +260,7 @@ class Grid(QAbstractScrollArea):
         self.frames = {}
         self.sel_chart = None
         self._sel_picture = None
-        self.pframes = {}                     # picture id -> PictureFrame (sh_picture.py)
+        self.pframes = {}                     # picture id (on the sheet that is shown) -> PictureFrame / VideoFrame (sh_picture.py, sh_media.py)
         self._drag = None
         self._moved_to = None                 # where a block that is being dragged by its border would land
         self._copying = False                 # ... and whether Ctrl makes it a copy
@@ -1704,7 +1704,7 @@ class Grid(QAbstractScrollArea):
         s = self.sheet_obj()
         want = {p["id"]: p for p in (s.pictures if s else [])}
         for pid in list(self.pframes):
-            if pid not in want:
+            if pid not in want or not sh_media.frame_fits(self.pframes[pid], want[pid], s):         # (ids repeat from sheet to sheet: see frame_fits)
                 f = self.pframes.pop(pid)
                 f.release()
                 f.hide()

@@ -333,6 +333,132 @@ sh_deps.ffmpeg_exe = real
 ASKED.clear()
 ok(t.video_from_file(junk) is None and any("not a video" in a for a in ASKED), "a file that is not a video says so in a window and adds nothing")
 
+# ------------------------------------------------------------------------------------------------ the same id on several sheets
+# A picture's id is only its number on ITS sheet: the first picture of every sheet is "pic1".  A frame that was kept by id alone was shown for the
+# "pic1" of another sheet: a video turned into a photo that does nothing, a photo showed (and played) a video that was never put on its sheet.
+from PyQt6.QtCore import QBuffer, QByteArray, QIODevice
+from PyQt6.QtGui import QColor
+
+
+def photo_data(color):
+    im = QImage(120, 80, QImage.Format.Format_RGB32)
+    im.fill(QColor(color))
+    ba = QByteArray()
+    b_ = QBuffer(ba)
+    b_.open(QIODevice.OpenModeFlag.WriteOnly)
+    im.save(b_, "PNG")
+    return bytes(ba), im
+
+
+def wait(cond, secs=8.0):
+    end = time.time() + secs
+    while time.time() < end:
+        app.processEvents()
+        if cond():
+            return True
+        time.sleep(0.03)
+    app.processEvents()
+    return bool(cond())
+
+
+def centre(f):
+    img = f.grab().toImage()
+    return img.pixelColor(img.width() // 2, 8).name()
+
+
+mp4b = make("second.mp4", ["-c:v", "libx264", "-pix_fmt", "yuv420p"], secs=1.2, size="128x96", rate=10)
+t3 = TAB.make_tab()
+t3.resize(1300, 800)
+t3.show()
+app.processEvents()
+g3, wb3 = t3.grid, t3.wb
+N1 = wb3.sheet_names()[0]
+ok(t3.video_from_file(mp4) is not None, "sheet 1: a video")
+wb3.add_sheet()
+N2 = wb3.sheet_names()[1]
+g3.set_sheet(N2)
+d_, im_ = photo_data("#00aa00")
+wb3.add_picture(N2, P.new_picture(wb3, N2, d_, im_, "green", (10, 10)))
+g3._sync_pictures()
+wb3.add_sheet()
+N3 = wb3.sheet_names()[2]
+g3.set_sheet(N3)
+ok(t3.video_from_file(mp4b) is not None, "sheet 3: another video")
+wb3.add_sheet()
+N4 = wb3.sheet_names()[3]
+g3.set_sheet(N4)
+d_, im_ = photo_data("#aa00aa")
+wb3.add_picture(N4, P.new_picture(wb3, N4, d_, im_, "purple", (10, 10)))
+g3._sync_pictures()
+wb3.add_sheet()
+N5 = wb3.sheet_names()[4]
+g3.set_sheet(N5)
+d_, im_ = photo_data("#aa6600")
+wb3.add_picture(N5, P.new_picture(wb3, N5, d_, im_, "orange", (10, 10)))
+g3._sync_pictures()
+names3 = [N1, N2, N3, N4, N5]
+ok(all(wb3.get_sheet(n).pictures[0]["id"] == "pic1" for n in names3), "every one of the five sheets has its picture under the same id, pic1")
+want_colour = {N2: "#00aa00", N4: "#aa00aa", N5: "#aa6600"}
+bad = []
+for rnd in range(2):                                              # forward, then backwards: every sheet shows its own picture, every time
+    for n in (names3 if rnd == 0 else list(reversed(names3))):
+        g3.set_sheet(n)
+        app.processEvents()
+        pic3 = wb3.get_sheet(n).pictures[0]
+        f = g3.pframes.get("pic1")
+        is_vid = bool(pic3.get("video"))
+        if f is None or isinstance(f, M.VideoFrame) != is_vid or len(g3.pframes) != 1:
+            bad.append(f"{n}: {type(f).__name__ if f is not None else None}, {len(g3.pframes)} frames")
+        elif is_vid and f.kind != pic3["video"]:
+            bad.append(f"{n}: a video that is not its own")
+        elif not is_vid and centre(f) != want_colour[n]:
+            bad.append(f"{n}: shows {centre(f)} and not {want_colour[n]}")
+ok(not bad, f"each sheet shows its own picture or video, going forward and backwards ({bad})")
+seen_ids = set()
+for n in names3:
+    g3.set_sheet(n)
+    seen_ids.add(id(g3.pframes["pic1"]))
+ok(len(seen_ids) >= 3, "a frame is never carried over from one sheet to the next")
+
+# the video of sheet 1 plays ITS video, the one of sheet 3 plays its own
+for n, vid_path in ((N3, mp4b), (N1, mp4)):
+    g3.set_sheet(n)
+    f = g3.pframes["pic1"]
+    f.toggle()
+    ok(wait(lambda: f.img is not None), f"{n}: the video plays and its frames arrive")
+    key = wb3.get_sheet(n).pictures[0]["video"]
+    ok(f.player is not None and key in f.player.source().toLocalFile(), f"{n}: and it is that sheet's own video that is playing")
+    ok(abs(f.img.width() - (128 if n == N3 else 160)) <= 1, f"{n}: with its own picture size ({f.img.width()} px wide)")
+    f.pause()
+g3.set_sheet(N4)
+f4 = g3.pframes["pic1"]
+ok(type(f4).__name__ == "PictureFrame" and centre(f4) == "#aa00aa" and not hasattr(f4, "toggle"), "the purple photo is still a photo after the videos were played")
+
+# a playing video is not interrupted by work on its own sheet
+g3.set_sheet(N1)
+f1 = g3.pframes["pic1"]
+f1.play()
+ok(wait(lambda: f1.playing and f1.img is not None), "sheet 1: playing again")
+wb3.set_raw(N1, 3, 3, "hello")
+wb3.add_sheet()
+app.processEvents()
+ok(g3.pframes.get("pic1") is f1 and f1.player is not None, "typing in a cell and adding a sheet do not take the video away (the same widget goes on)")
+f1.pause()
+
+# undo and redo of a video's removal on its own sheet
+g3.delete_picture("pic1")
+app.processEvents()
+ok(not g3.pframes, "the video is deleted from sheet 1")
+wb3.undo()
+app.processEvents()
+f1b = g3.pframes.get("pic1")
+ok(f1b is not None and isinstance(f1b, M.VideoFrame) and f1b.kind == wb3.get_sheet(N1).pictures[0]["video"], "undo brings it back as a video that can be played")
+# a sheet with a photo after one with a video: each has its own widget
+g3.set_sheet(N3)
+ok(isinstance(g3.pframes["pic1"], M.VideoFrame), "sheet 3 shows its video")
+g3.set_sheet(N2)
+ok(type(g3.pframes["pic1"]).__name__ == "PictureFrame" and centre(g3.pframes["pic1"]) == "#00aa00", "and sheet 2 its green photo")
+
 print("FAILED:" if FAILS else "OK sheets media", FAILS or "")
 sys.stdout.flush()
 os._exit(1 if FAILS else 0)

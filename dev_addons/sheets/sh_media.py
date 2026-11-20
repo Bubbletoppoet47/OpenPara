@@ -452,5 +452,15 @@ class VideoFrame(sh_picture.PictureFrame):
 
 
 def make_frame(grid, pic):
-    """The widget for a picture of a sheet: a video gets a VideoFrame, a picture a PictureFrame."""
-    return VideoFrame(grid, pic) if pic.get("video") else sh_picture.PictureFrame(grid, pic)
+    """The widget for a picture of a sheet: a video gets a VideoFrame, a picture a PictureFrame.  It remembers what it was made for (see frame_fits)."""
+    f = VideoFrame(grid, pic) if pic.get("video") else sh_picture.PictureFrame(grid, pic)
+    f.owner = grid.sheet_obj()
+    f.kind = pic.get("video") or ""
+    return f
+
+
+def frame_fits(f, pic, sheet):
+    """True when the widget `f` may go on showing `pic` of `sheet`.  A picture's id is only its number on ITS sheet ("pic1" is on every sheet that has a picture),
+    so the id alone cannot tell two pictures apart: a frame is kept only for the sheet it was made for, and for a video only while it is that same video
+    (a photo never becomes a video's widget or the other way round, and a video never plays on a sheet it was not put on)."""
+    return getattr(f, "owner", None) is sheet and getattr(f, "kind", None) == (pic.get("video") or "")
