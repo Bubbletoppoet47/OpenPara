@@ -339,7 +339,7 @@ def face(nv):
     return next(f["id"] for f in w.geom["faces"] if np.dot(f["normal"], nv) > 0.99)
 w.select_faces([face([-1, 0, 0])]); assert w.add_support("fixed")
 w.select_faces([face([1, 0, 0])]); assert w.add_load("force", {"f": [0.0, 0.0, -1000.0]})
-w.e_h.setText("5"); w.inputs_changed()
+w.set_size("5"); w.inputs_changed()
 w.order_combo.setCurrentIndex(w.order_combo.findData(1)); w.order_combo.activated.emit(w.order_combo.currentIndex())
 assert w.run_mesh() and "tetrahedra" in w.mesh_lbl.text() and "hexahedra" not in w.mesh_lbl.text()
 w.type_combo.setCurrentIndex(w.type_combo.findData("hexdom")); w.type_combo.activated.emit(w.type_combo.currentIndex())
@@ -355,12 +355,12 @@ assert w.result["viewcells"] is not None and w.result["n_elements"] == cn["eleme
 src = open(os.path.join(HERE, "dev_addons", "solid_fea", "solid_study.py")).read()
 assert '("sf.tets", "Elements", True)' in src and 'r.get("n_elements", r["n_tets"])' in src
 # a size too big for any brick: tetrahedra and the note
-w.e_h.setText("30"); w.inputs_changed()
+w.set_size("30"); w.inputs_changed()
 assert w.run_mesh() and w.mesh_q["quality"]["hexes"] == 0 and w.mesh_q.get("hexdom_note")
 assert "Tetrahedra only" in w.quality_lbl.text() and "hexahedra" not in w.mesh_lbl.text(), (w.quality_lbl.text(), w.mesh_lbl.text())
 assert w.run_solve() and "Hex-dominant was asked for" in w.res_lbl.text() and w.result["hexdom_note"]
 # back to a size with room, save, open
-w.e_h.setText("5"); w.inputs_changed()
+w.set_size("5"); w.inputs_changed()
 w.type_combo.setCurrentIndex(w.type_combo.findData("hexdom")); w.type_combo.activated.emit(w.type_combo.currentIndex())
 assert w.run_solve() and w.result["counts"]["hexes"] > 0
 assert w.save(), w.status_lbl.text()

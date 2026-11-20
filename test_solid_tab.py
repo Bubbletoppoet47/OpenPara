@@ -45,7 +45,7 @@ w.select_faces([right]); assert w.add_load("force", {"f": [1000.0, 0.0, 0.0]})
 assert w.ready() is None and w.sup_list.count() == 1 and w.load_list.count() == 1
 w.picked(top, tuple(w.geom["faces"][top]["center"]))        # a click on the top face: selected, nearest vertex remembered
 assert w.sel_faces == [top] and w.sel_vertex is not None
-w.e_h.setText("6"); w.inputs_changed()
+w.set_size("6"); w.inputs_changed()
 assert w.run_mesh() and w.mesh_q is not None and "tetrahedra" in w.mesh_lbl.text()
 assert w.run_solve() and w.result is not None, w.status_lbl.text()
 res = w.result

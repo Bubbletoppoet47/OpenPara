@@ -144,7 +144,7 @@ QDialog.exec = real_exec
 # ---- supports, load, mesh and solve
 w.select_faces([bottom]); assert w.add_support("fixed")
 w.select_faces([sidef]); assert w.add_load("force", {"f": [600.0, 0.0, 0.0]})
-w.e_h.setText("4"); w.inputs_changed()
+w.set_size("4"); w.inputs_changed()
 assert w.ready() is None, w.ready()
 assert w.run_mesh() and "tetrahedra" in w.mesh_lbl.text(), w.status_lbl.text()
 assert w.run_solve() and w.result is not None, w.status_lbl.text()

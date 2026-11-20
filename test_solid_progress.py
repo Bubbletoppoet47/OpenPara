@@ -150,7 +150,7 @@ assert w.create_project(os.path.join(T, "bar_p")) and w.import_file(part)
 g = w.geom
 face = lambda n: next(f["id"] for f in g["faces"] if np.dot(f["normal"], n) > 0.99)
 w.select_faces([face([-1, 0, 0])]); w.add_support("fixed"); w.select_faces([face([1, 0, 0])]); w.add_load("force", {"f": [1000.0, 0.0, 0.0]})
-w.e_h.setText("6"); w.inputs_changed(); w.read_inputs()
+w.set_size("6"); w.inputs_changed(); w.read_inputs()
 r = sm.resolve(g, w.setup)
 
 
@@ -211,7 +211,7 @@ face2 = lambda n: next(f["id"] for f in g2["faces"] if np.dot(f["normal"], n) > 
 w2.select_faces([face2([-1, 0, 0])]); w2.add_support("fixed"); w2.select_faces([face2([1, 0, 0])]); w2.add_load("force", {"f": [1000.0, 0.0, 0.0]})
 w2.resize(1400, 900); w2.show(); app.processEvents()
 ok(not w2.prog.isVisible(), "no bar while nothing runs")
-w2.e_h.setText("2.2"); w2.inputs_changed()                     # about 5 000 elements: a couple of seconds
+w2.set_size("2.2"); w2.inputs_changed()                     # about 5 000 elements: a couple of seconds
 vals, texts, vis = [], [], []
 assert w2.run_solve()
 t_start = time.time()
@@ -231,7 +231,7 @@ ok("factor" in hist, "the solve was written to the timing history: " + ", ".join
 w2.prog.HIDE_MS = 50
 w2.prog.hide()
 # a second solve: the estimate made at the start is now about right
-w2.e_h.setText("2.2"); w2.inputs_changed()
+w2.set_size("2.2"); w2.inputs_changed()
 w2.cache.clear()
 tr_seen = []
 assert w2.run_solve()
@@ -248,7 +248,7 @@ took2 = time.time() - t_start
 ok(est0 is None or 0.4 < est0 / took2 < 2.5, f"the estimate made half a second into the second solve ({est0}) is close to what it took ({took2:.1f} s)")
 
 # ---- 12. Cancel
-w2.e_h.setText("2.0"); w2.inputs_changed(); w2.cache.clear()
+w2.set_size("2.0"); w2.inputs_changed(); w2.cache.clear()
 assert w2.run_solve()
 n_hist = len(json.load(open(os.path.join(UD, "solid_timing.json")))["c"].get("factor", []))
 w2.cancel()
@@ -262,7 +262,7 @@ ok(len(json.load(open(os.path.join(UD, "solid_timing.json")))["c"].get("factor",
 ok(w2.b_solve.isEnabled() and not w2.b_cancel.isEnabled(), "the buttons are back")
 
 # ---- 13. a mesh-only job has the bar too
-w2.e_h.setText("3"); w2.inputs_changed(); w2.cache.clear()
+w2.set_size("3"); w2.inputs_changed(); w2.cache.clear()
 assert w2.run_mesh()
 ok(w2.prog.isVisible(), "Mesh: the bar is shown")
 t_start = time.time()

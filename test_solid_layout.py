@@ -52,7 +52,7 @@ def face(n):
     return next(f["id"] for f in w.geom["faces"] if np.dot(f["normal"], n) > 0.99)
 w.select_faces([face([-1, 0, 0])]); w.add_support("fixed")
 w.select_faces([face([1, 0, 0])]); w.add_load("force", {"f": [1000.0, 0.0, 0.0]})
-w.e_h.setText("6"); w.inputs_changed()
+w.set_size("6"); w.inputs_changed()
 assert w.run_mesh()
 if w.view.plotter is not None:
     assert w.view.mesh_actor is not None and w.view.result_actor is None, "meshed only: plain grey surface, no result colours"

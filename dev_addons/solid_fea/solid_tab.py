@@ -21,7 +21,7 @@ import numpy as np
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
-                             QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter,
+                             QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter,
                              QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 import anim_export
@@ -473,16 +473,31 @@ class SolidWindow(QWidget):
         v.addLayout(row)
         # --- 5 mesh
         v = self.sec(5, "Mesh", True, summary=lambda: self.mesh_lbl.text() or "not meshed",
-                     help_text="The part is filled with tetrahedra. Element size: the length of an element edge (blank = automatic, a fourteenth of "
-                               "the part's size). Smaller elements are more accurate and slower. Advanced mesh options: choose linear or quadratic "
+                     help_text="The part is filled with tetrahedra. Element size: the length of an element edge, typed for every part in the table (blank = "
+                               "automatic, a fourteenth of the size of the whole model). Smaller elements are more accurate and slower. The parts of an "
+                               "assembly can have different sizes: they are still meshed as one, so the faces they share keep matching nodes. "
+                               "Advanced mesh options: choose linear or quadratic "
                                "elements, make the mesh finer at curved surfaces or on single faces, and read how good the elements are.")
-        f = QFormLayout()
-        self.e_h = QLineEdit()
-        self.e_h.setPlaceholderText("auto")
-        self.e_h.editingFinished.connect(self.inputs_changed)
         self.h_label = QLabel()
-        f.addRow(self.h_label, self.e_h)
-        v.addLayout(f)
+        v.addWidget(self.h_label)
+        self.size_table = QTableWidget(0, 3)
+        self.size_table.setHorizontalHeaderLabels(["Part", "Size", "Elements"])
+        self.size_table.verticalHeader().hide()
+        self.size_table.setMinimumHeight(60)
+        self.size_table.setMaximumHeight(190)
+        hd_ = self.size_table.horizontalHeader()
+        hd_.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hd_.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hd_.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.size_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.size_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.size_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.size_table.setToolTip("Double-click the size of a part and type its element size (blank = automatic). Every part can have its own size, "
+                                   "for example a fine mesh on a small part and a coarse one on a big part next to it. The parts are meshed as one mesh, "
+                                   "so the nodes of the faces they share match: that face gets the finer of the two sizes, and the coarser part grows "
+                                   "away from it. The last column shows how many elements each part got.")
+        self.size_table.itemChanged.connect(self.part_size_changed)
+        v.addWidget(self.size_table)
         self.build_advanced_mesh(v)
         self.b_mesh = QPushButton("Mesh")
         self.b_mesh.clicked.connect(self.run_mesh)
@@ -657,7 +672,7 @@ class SolidWindow(QWidget):
         f.addRow("Element order", self.order_combo)
         self.e_hmin = QLineEdit()
         self.e_hmin.setPlaceholderText("auto")
-        self.e_hmin.setToolTip("The smallest element edge the mesher may make (blank = a sixth of the element size).")
+        self.e_hmin.setToolTip("The smallest element edge the mesher may make (blank = a sixth of the smallest element size).")
         self.hmin_label = QLabel("Minimum size")
         f.addRow(self.hmin_label, self.e_hmin)
         self.e_growth = QLineEdit("1.3")
@@ -735,8 +750,9 @@ class SolidWindow(QWidget):
         self.sp_curv.setEnabled(bool(on))
         self.inputs_changed()
 
-    def read_mesh_options(self, h):
-        """The mesh options from the boxes into the setup.  `h` = the element size typed (mm, 0 = automatic).  Raises ValueError for a bad number."""
+    def read_mesh_options(self, h, bs=None, hd=None):
+        """The mesh options from the boxes into the setup.  `h` = the smallest element size (mm, 0 = automatic); `bs` = {body index: mm} of the parts of an
+        assembly that have a size of their own and `hd` = the size of the others.  Raises ValueError for a bad number."""
         mo = smesh.complete(self.setup.get("mesh"))                      # the local sizes stay as they are
         mo["advanced"] = self.cb_adv.isChecked()
         mo["order"] = self.order_combo.currentData()
@@ -749,7 +765,7 @@ class SolidWindow(QWidget):
         t = self.e_hmin.text().strip()
         mo["hmin"] = l_in(num(self.e_hmin, "Minimum size")) if t else 0.0
         mo["growth"] = num(self.e_growth, "Growth rate")
-        why = smesh.validate(mo, h or (sm.auto_h(self.geom) if self.geom is not None else 0.0))
+        why = smesh.validate(mo, h or (sm.auto_h(self.geom) if self.geom is not None else 0.0), self.local_refs(mo["face_sizes"], bs, hd))
         if why:
             raise ValueError(why)
 
@@ -803,19 +819,21 @@ class SolidWindow(QWidget):
         self.invalidate(mesh=True)
 
     def effective_h(self):
-        """The element size (mm) the next mesh gets: the typed one, or the automatic one."""
-        try:
-            t = self.e_h.text().strip()
-            h = l_in(float(t.replace(",", "."))) if t else 0.0
-        except ValueError:
-            h = 0.0
-        return h or (sm.auto_h(self.geom) if self.geom is not None else 0.0)
+        """The (smallest) element size (mm) the next mesh gets: the typed one, or the automatic one."""
+        return self.size_state()[2]
+
+    def local_refs(self, face_sizes, bs, hd):
+        """The element size of the part under each local size, for smesh.validate (None: they are all compared with the one size)."""
+        if not bs or self.geom is None:
+            return None
+        return smesh.face_refs(self.geom, [sg.match_faces(self.geom, x["face"]) for x in face_sizes], bs, hd)
 
     def try_face_sizes(self, sizes):
         """Takes a new list of local sizes when the options stay valid with it; else says why not."""
         mo = smesh.complete(self.setup.get("mesh"))
         mo["face_sizes"] = sizes
-        why = smesh.validate(dict(mo, advanced=True), self.effective_h())
+        hd, bs, hlow = self.size_state()
+        why = smesh.validate(dict(mo, advanced=True), hlow, self.local_refs(sizes, bs, hd))
         if why:
             self.say(why)
             return False
@@ -856,6 +874,165 @@ class SolidWindow(QWidget):
             return False
         del sizes[r]
         return self.try_face_sizes(sizes)
+
+    # ------------------------------------------------------------------ the element size of every part
+    def part_names(self):
+        """The rows of the size table: the bodies of an assembly, or the one part."""
+        if self.geom is None:
+            return []
+        if self.is_asm():
+            return [b["name"] for b in self.geom["bodies"]]
+        return [self.src.get("name") or "Part"]
+
+    @staticmethod
+    def parse_size(text, label):
+        """mm from the text typed in the program's length unit; 0.0 (automatic) for a blank one or one that starts with 'auto'.  ValueError otherwise."""
+        t = (text or "").strip()
+        if not t or t.lower().startswith("auto"):
+            return 0.0
+        try:
+            v = float(t.replace(",", "."))
+        except ValueError:
+            raise ValueError(f"{label}: '{t}' is not a number.")
+        if v < 0:
+            raise ValueError(f"{label}: the element size cannot be negative.")
+        return l_in(v)
+
+    def read_sizes(self):
+        """(h, body_h) from the table: h = the size of a single part (mm, 0 = automatic) and body_h = {part name: mm} of an assembly (only the parts that
+        have one).  The setup's own numbers when the table has no rows yet.  ValueError for a bad number."""
+        t = self.size_table
+        if self.geom is None or t.rowCount() == 0:
+            return float(self.setup.get("h") or 0.0), dict(self.setup.get("body_h") or {})
+        names = self.part_names()
+        asm = self.is_asm()
+        vals = []
+        for r in range(min(t.rowCount(), len(names))):
+            it = t.item(r, 1)
+            vals.append(self.parse_size(it.text() if it is not None else "", f"Element size of {names[r]}" if asm else "Element size"))
+        if asm:
+            return float(self.setup.get("h") or 0.0), {n: v for n, v in zip(names, vals) if v > 0}
+        return (vals[0] if vals else 0.0), dict(self.setup.get("body_h") or {})
+
+    def size_state(self):
+        """(the size of the parts without one of their own, {body index: mm} of those that have one, the smallest size) - what the next mesh gets."""
+        try:
+            h, bh = self.read_sizes()
+        except ValueError:
+            h, bh = float(self.setup.get("h") or 0.0), dict(self.setup.get("body_h") or {})
+        if self.geom is None:
+            return h, {}, h
+        hd = h or sm.auto_h(self.geom)
+        try:
+            bs = smesh.body_sizes(self.geom, {"body_h": bh}, hd)
+        except fem.FemError:
+            bs = {}
+        return hd, bs, min(fem.element_sizes(self.geom, hd, {"body_h": bs}))
+
+    def set_size(self, text, part=None):
+        """Types `text` (the program's length unit; blank = automatic) into the size of the part named `part`, or of every part.  inputs_changed() then
+        reads it into the setup - what the old Element size box did, for scripts and the parametric studies."""
+        t = self.size_table
+        names = self.part_names()
+        if not names or t.rowCount() == 0:
+            self.setup["h"] = self.parse_size(str(text), "Element size")
+            return
+        t.blockSignals(True)
+        for r in range(min(t.rowCount(), len(names))):
+            if part is None or names[r] == part:
+                t.item(r, 1).setText(str(text))
+        t.blockSignals(False)
+
+    def adopt_default_size(self):
+        """An assembly saved with one element size for all its parts (setup["h"]): every part gets it as its own, so the table shows it."""
+        if not self.is_asm() or not self.setup.get("h"):
+            return
+        mine = self.setup.setdefault("body_h", {})
+        for n in self.part_names():
+            mine.setdefault(n, float(self.setup["h"]))
+        self.setup["h"] = 0.0
+
+    def fill_part_sizes(self):
+        """The size table from the setup: the parts, their sizes ('auto (size)' where there is none), the elements of the last mesh."""
+        t = self.size_table
+        t.blockSignals(True)
+        t.setRowCount(0)
+        D = UD()
+        t.setHorizontalHeaderLabels(["Part", f"Size ({D['L']})", "Elements"])
+        ro = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if self.geom is not None:
+            self.adopt_default_size()
+            auto = sm.auto_h(self.geom)
+            asm = self.is_asm()
+            for i, n in enumerate(self.part_names()):
+                v = float((self.setup.get("body_h") or {}).get(n) or 0.0) if asm else float(self.setup.get("h") or 0.0)
+                t.insertRow(i)
+                a = QTableWidgetItem(n)
+                a.setFlags(ro)
+                if asm:
+                    c = self.body_colour(i)
+                    a.setBackground(QColor(int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)))
+                    a.setForeground(QColor(20, 20, 20))
+                b = QTableWidgetItem(format(l_out(v), ".8g") if v else f"auto ({l_out(auto):.4g})")
+                b.setFlags(ro | Qt.ItemFlag.ItemIsEditable)
+                if not v:
+                    b.setForeground(QColor(110, 110, 110))
+                t.setItem(i, 0, a)
+                t.setItem(i, 1, b)
+                t.setItem(i, 2, QTableWidgetItem(""))
+                t.item(i, 2).setFlags(ro)
+        t.blockSignals(False)
+        rows = max(t.rowCount(), 1)
+        t.setFixedHeight(min(190, t.horizontalHeader().height() + 2 * t.frameWidth() + 4 + sum(t.rowHeight(i) for i in range(t.rowCount())) + (0 if t.rowCount() else 26 * rows)))
+        self.mark_thin()
+        self.show_counts(self.mesh_q)
+
+    def mark_thin(self):
+        """Colours the size of a part that is thin for it (a coarse mesh through a thin sheet is poor) and says why in its tooltip."""
+        t = self.size_table
+        t.blockSignals(True)
+        notes = {}
+        if self.geom is not None and self.is_asm():
+            hd, bs, _lo = self.size_state()
+            notes = sm.thin_parts(self.geom, hd, fem.element_sizes(self.geom, hd, {"body_h": bs}))
+        for r in range(t.rowCount()):
+            it = t.item(r, 1)
+            if it is None:
+                continue
+            if r in notes:
+                it.setForeground(QColor(176, 90, 0))
+                it.setToolTip(notes[r])
+            else:
+                it.setToolTip("")
+                if it.text().startswith("auto"):
+                    it.setForeground(QColor(110, 110, 110))
+                else:
+                    it.setData(Qt.ItemDataRole.ForegroundRole, None)
+        t.blockSignals(False)
+
+    def show_counts(self, q):
+        """The number of elements of every part in the mesh `q` (blank when there is no mesh)."""
+        t = self.size_table
+        t.blockSignals(True)
+        counts = {}
+        if q is not None and t.rowCount():
+            groups = q.get("groups") or []
+            if self.is_asm() and groups and all("body" in g for g in groups):
+                for g in groups:
+                    counts[g["body"]] = counts.get(g["body"], 0) + len(g["conn"])
+            else:
+                counts[0] = sum(len(g["conn"]) for g in groups) if groups else len(q.get("conn", q.get("tets", ())))
+        for r in range(t.rowCount()):
+            it = t.item(r, 2)
+            if it is not None:
+                it.setText(f"{counts[r]:,}" if r in counts else "")
+        t.blockSignals(False)
+
+    def part_size_changed(self, it):
+        if it.column() != 1:
+            return
+        self.inputs_changed()                                  # reads the table into the setup; a bad number is said in the status line
+        self.fill_part_sizes()                                      # and the table shows what the setup holds (blank as 'auto (size)', a bad number undone)
 
     def face_item_changed(self, it):
         if it.column() != 1:
@@ -903,13 +1080,16 @@ class SolidWindow(QWidget):
 
     @staticmethod
     def mesh_text(n_elements, n_nodes, order, h, counts=None):
-        """One line about the mesh; `counts` = {"tets", "hexes", "pyramids"} when it has bricks."""
+        """One line about the mesh; `h` = the element size (mm), or the list of the sizes of the parts of an assembly (a range is shown when they
+        differ); `counts` = {"tets", "hexes", "pyramids"} when it has bricks."""
         kind = "quadratic" if order == 2 else "linear"
         if counts and (counts.get("hexes") or counts.get("pyramids")):
             what = (f"{n_elements:,} elements ({counts['hexes']:,} hexahedra, {counts['tets']:,} tetrahedra, {counts['pyramids']:,} pyramids)")
         else:
             what = f"{n_elements:,} tetrahedra"
-        return f"{what}, {n_nodes:,} nodes ({kind}), element size {l_out(h):.4g} {UD()['L']}"
+        hs = sorted({round(float(x), 9) for x in (h if isinstance(h, (list, tuple)) else [h])})
+        size = f"element size {l_out(hs[0]):.4g} {UD()['L']}" if len(hs) == 1 else f"element sizes {l_out(hs[0]):.4g} to {l_out(hs[-1]):.4g} {UD()['L']}"
+        return f"{what}, {n_nodes:,} nodes ({kind}), {size}"
 
     def refresh_labels(self):
         """Every label that carries a unit, in the program's current units."""
@@ -917,7 +1097,8 @@ class SolidWindow(QWidget):
         for key, text in (("E", f"Young's modulus E ({D['S']})"), ("nu", "Poisson's ratio"), ("rho", f"Density ({D['rho']})"),
                           ("sy", f"Yield strength ({D['S']})"), ("su", f"Ultimate strength ({D['S']})")):
             self.mat_labels[key].setText(text)
-        self.h_label.setText(f"Element size ({D['L']}, blank = auto)")
+        self.h_label.setText(f"Element size of every part ({D['L']}, blank = auto)")
+        self.size_table.setHorizontalHeaderLabels(["Part", f"Size ({D['L']})", "Elements"])
         self.hmin_label.setText(f"Minimum size ({D['L']})")
         self.e_probe.setPlaceholderText(f"x, y, z  ({D['L']})")
         for i, (key, name) in enumerate(FIELDS):
@@ -929,8 +1110,8 @@ class SolidWindow(QWidget):
         try:
             self.refresh_labels()
             self.put_material(self.setup["material"])
-            self.e_h.setText(format(l_out(self.setup["h"]), ".8g") if self.setup.get("h") else "")
             self.put_mesh_options()
+            self.fill_part_sizes()
             if self.geom is not None:
                 self.fill_faces()
                 self.fill_splits()
@@ -1023,11 +1204,14 @@ class SolidWindow(QWidget):
     def read_inputs(self):
         m = {"E": s_in(num(self.e_E, "E")), "nu": num(self.e_nu, "Poisson's ratio"), "rho": r_in(num(self.e_rho, "Density")),
              "sy": s_in(num(self.e_sy, "Yield strength")), "su": s_in(num(self.e_su, "Ultimate strength"))}
-        h = self.e_h.text().strip()
+        h, bh = self.read_sizes()
         self.setup["material"] = m
         self.store_body_material(m)
-        self.setup["h"] = l_in(num(self.e_h, "Element size")) if h else 0.0
-        self.read_mesh_options(self.setup["h"])
+        self.setup["h"] = h
+        if self.is_asm():
+            self.setup["body_h"] = bh
+        hd, bs, hlow = self.size_state()
+        self.read_mesh_options(hlow, bs, hd)
         return self.setup
 
     def inputs_changed(self):
@@ -1045,6 +1229,8 @@ class SolidWindow(QWidget):
         if mesh:
             self.mesh_q = None
             self.show_quality(None)
+            self.show_counts(None)
+            self.mark_thin()
         self.res_lbl.setText("The setup changed since the last solve: press Solve." if had else "No result yet.")
         self.view.clear_result()
         self.enable_buttons()
@@ -1190,6 +1376,7 @@ class SolidWindow(QWidget):
         self.src = {"type": src.type, "path": orig, "name": m["source"]["name"]}
         self.setup["dims"] = {}
         self.setup["body_mats"] = {}
+        self.setup["body_h"] = {}
         self.cur_body = None
         self.hidden_bodies = set()
         ok = self.load_geometry(first=True)
@@ -1285,6 +1472,7 @@ class SolidWindow(QWidget):
         self.fill_dims()
         self.fill_splits()
         self.show_asm()
+        self.fill_part_sizes()
         P, T, F = sg.display_mesh(g, self.hidden_bodies if asm else ())
         self.view.set_geometry(P, T, F, keep_camera=keep_view)
         self.view.set_lines("grid", sg.patch_outlines(g))
@@ -2556,7 +2744,8 @@ class SolidWindow(QWidget):
         def done(q):
             self.mesh_q = q
             ql = q.get("quality") or {}
-            self.mesh_lbl.setText(self.mesh_text(ql.get("elements", len(q["tets"])), len(q["nodes"]), q["order"], h, ql))
+            self.mesh_lbl.setText(self.mesh_text(ql.get("elements", len(q["tets"])), len(q["nodes"]), q["order"], fem.element_sizes(g, h, opts), ql))
+            self.show_counts(q)
             self.show_quality(q.get("quality"), q.get("hexdom_note"))
             self.say("Meshed.")
             self.show_field(mesh_only=True)
@@ -2581,7 +2770,9 @@ class SolidWindow(QWidget):
         def done(res):
             self.result = res
             self.mesh_q = self.cache.get(sm.mesh_key(g, res["h"], res.get("mesh_opts")), self.mesh_q)
-            self.mesh_lbl.setText(self.mesh_text(res.get("n_elements", res["n_tets"]), res["n_nodes"], res["order"], res["h"], res.get("counts")))
+            self.mesh_lbl.setText(self.mesh_text(res.get("n_elements", res["n_tets"]), res["n_nodes"], res["order"],
+                                                 [p["h"] for p in res["part_sizes"]] if res.get("part_sizes") else res["h"], res.get("counts")))
+            self.show_counts(self.mesh_q)
             self.show_quality(res.get("quality"), res.get("hexdom_note"))
             self.describe()
             self.show_field()
@@ -2636,7 +2827,12 @@ class SolidWindow(QWidget):
                          ("Tetrahedra", f"{cn['tets']:,}", None), ("Pyramids", f"{cn['pyramids']:,}", None)]
         else:
             mesh_rows = [(f"Tetrahedra ({kind})", f"{r['n_tets']:,}", None)]
-        html += R.heading("Mesh") + R.kv(mesh_rows + [("Nodes", f"{r['n_nodes']:,}", None), ("Element size", R.num(l_out(r["h"]), 4), D["L"])])
+        ps = r.get("part_sizes") or []
+        if len({round(p_["h"], 9) for p_ in ps}) > 1:                                       # the parts of an assembly have different sizes
+            size_rows = [(f"Element size, {p_['name']}", R.num(l_out(p_["h"]), 4), D["L"]) for p_ in ps]
+        else:
+            size_rows = [("Element size", R.num(l_out(ps[0]["h"] if ps else r["h"]), 4), D["L"])]
+        html += R.heading("Mesh") + R.kv(mesh_rows + [("Nodes", f"{r['n_nodes']:,}", None)] + size_rows)
         if r.get("hexdom_note"):
             html += R.note("Hex-dominant was asked for, but this mesh is tetrahedra only: " + r["hexdom_note"])
         html += R.note("This window does not refine the mesh by itself: check by meshing finer and comparing, or run a parametric study "
@@ -2962,6 +3158,7 @@ class SolidWindow(QWidget):
         s.setdefault("splits", [])
         s.setdefault("bond_tol", 0.0)
         s.setdefault("body_mats", {})
+        s.setdefault("body_h", {})
         s.setdefault("joint", "bonded")
         s.setdefault("screws", [])
         s.setdefault("design", "ASD")
@@ -2972,7 +3169,6 @@ class SolidWindow(QWidget):
         self.setup = json.loads(json.dumps(s))
         self.put_material(self.setup["material"])
         self.select_material_name(self.setup.get("mat_name"))
-        self.e_h.setText(format(l_out(self.setup["h"]), ".8g") if self.setup.get("h") else "")
         self.put_mesh_options()
         if dims_changed and self.source is not None:
             self.load_geometry()
@@ -2980,6 +3176,7 @@ class SolidWindow(QWidget):
             self.fill_faces()
             self.show_asm()
             self.redraw()
+        self.fill_part_sizes()
         self.result = st.get("result")
         self.refresh_lists()
         self.colour()
@@ -3044,6 +3241,7 @@ class SolidWindow(QWidget):
                     st.setdefault("splits", [])
                     st.setdefault("bond_tol", 0.0)
                     st.setdefault("body_mats", {})
+                    st.setdefault("body_h", {})
                     st.setdefault("joint", "bonded")
                     st.setdefault("screws", [])
                     st.setdefault("design", "ASD")
@@ -3053,7 +3251,6 @@ class SolidWindow(QWidget):
                 pass
         w.put_material(w.setup["material"])
         w.select_material_name(w.setup.get("mat_name"))
-        w.e_h.setText(format(l_out(w.setup["h"]), ".8g") if w.setup.get("h") else "")
         w.put_mesh_options()
         sf = sim_project.source_file(folder, m)
         if sf:

@@ -5,7 +5,7 @@ In an assembly the parts can be fully bonded (see solid_asm: faces that touch sh
 between two parts are NOT bonded; they are frictionless contact (the parts press on each other but slide and may open), except for the screw patches:
 the patches (faces between two parts that carry a screw) stay bonded, and the force that passes through each of them is the force on the screw.
 
-  split_interfaces(q, geom, bonded, h, mats)   the mesh with its nodes duplicated on the faces between two parts (one copy for each part, a shared one on
+  split_interfaces(q, geom, bonded, h, mats, sizes)   the mesh with its nodes duplicated on the faces between two parts (one copy for each part, a shared one on
                                                the bonded patches) -> (new mesh, contact), where contact has the node pairs of the contact, the screw patches
                                                and the bodies that hold together
   check_held(nodes, rows, contact)             every group of parts that hold together must be held by a support
@@ -74,10 +74,11 @@ def bonded_faces(geom, bonded):
     return [f for f in sorted(bonded) if geom["faces"][f].get("interface") and len(geom["faces"][f]["bodies"]) >= 2]
 
 
-def split_interfaces(q, geom, bonded, h, mats):
+def split_interfaces(q, geom, bonded, h, mats, sizes=None):
     """q = a quadratic or linear mesh of an assembly (see solid_fem), bonded = the face ids of the screw patches, h = element size, mats = the material of
-    every body.  Returns (q2, contact): q2 is q with the nodes of the faces between two bodies duplicated (q itself is not changed: it is cached), contact
-    is the dict described at the top of the file."""
+    every body, sizes = the element size of every body when they differ (the mesh at a face between two bodies has the finer of the two).  Returns
+    (q2, contact): q2 is q with the nodes of the faces between two bodies duplicated (q itself is not changed: it is cached), contact is the dict
+    described at the top of the file."""
     nodes = np.asarray(q["nodes"], float)
     nn = len(nodes)
     groups = q["groups"]
@@ -183,7 +184,13 @@ def split_interfaces(q, geom, bonded, h, mats):
         w_ = np.zeros(0)
         bd_ = np.zeros((0, 2), np.int64)
     Em = np.array([float(m["E"]) for m in mats])
-    k_ = PENALTY * np.minimum(Em[bd_[:, 0]], Em[bd_[:, 1]]) / max(float(h), 1e-12) * w_ if len(w_) else np.zeros(0)
+    hb = np.asarray(sizes, float) if sizes is not None and len(sizes) == nbod else np.full(nbod, float(h))
+    h = float(hb.min())                                                              # the finest size is the one the gap tolerance is measured in
+    if len(w_):
+        hp = np.minimum(hb[bd_[:, 0]], hb[bd_[:, 1]])                                # the element size at a joint: the finer of its two parts
+        k_ = PENALTY * np.minimum(Em[bd_[:, 0]], Em[bd_[:, 1]]) / np.maximum(hp, 1e-12) * w_
+    else:
+        k_ = np.zeros(0)
     # --- the screw patches: the nodes (shared by both bodies) with the share of every patch of a node
     patches = {}
     for fid in sorted(bonded):

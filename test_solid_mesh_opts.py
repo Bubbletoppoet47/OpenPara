@@ -183,7 +183,7 @@ def face(nv):
     return next(f["id"] for f in w.geom["faces"] if np.dot(f["normal"], nv) > 0.99)
 w.select_faces([face([-1, 0, 0])]); assert w.add_support("fixed")
 w.select_faces([face([1, 0, 0])]); assert w.add_load("force", {"f": [0.0, 0.0, -100.0]})
-w.e_h.setText("3"); w.inputs_changed()
+w.set_size("3"); w.inputs_changed()
 # options are read into the setup
 w.order_combo.setCurrentIndex(w.order_combo.findData(1)); w.order_combo.activated.emit(w.order_combo.currentIndex())
 assert w.setup["mesh"]["advanced"] is True and w.setup["mesh"]["order"] == 1

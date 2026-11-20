@@ -131,7 +131,7 @@ def face(n):
 left, right, topf = face([-1, 0, 0]), face([1, 0, 0]), face([0, 0, 1])
 w.select_faces([left]); assert w.add_support("fixed")
 w.select_faces([right]); assert w.add_load("force", {"f": [1000.0, 0.0, 0.0]})
-w.e_h.setText("6"); w.inputs_changed()
+w.set_size("6"); w.inputs_changed()
 assert w.run_solve()
 u_whole = w.result["umax"]
 assert abs(u_whole - 1000 * 100 / (400 * 200000)) / 0.00125 < 0.05, u_whole
@@ -293,7 +293,7 @@ assert abs(areas[(0, 0)] - 60) < 1e-6 and abs(areas[(1, 0)] - 97 * 40) < 1e-6 an
 # a load on the first strip (1.5 wide), and a bigger one on the whole face: sizes change, the load stays on its strip
 w4.select_faces([next(f["id"] for f in w4.geom["faces"] if f["normal"][0] < -0.99)]); assert w4.add_support("fixed")
 w4.select_faces([cell(0)]); assert w4.add_load("pressure", {"p": 2.0})
-w4.e_h.setText("6"); w4.inputs_changed()
+w4.set_size("6"); w4.inputs_changed()
 assert w4.run_solve() and abs(abs(w4.result["applied"][2]) + abs(w4.result["applied"][0]) + abs(w4.result["applied"][1]) - 2.0 * 60) < 1e-6 * 100
 # editing the table: column 3 is typed as 10 (fixed), column 1 stays; the middle one takes the rest
 tb.item(2, 1).setText("10")

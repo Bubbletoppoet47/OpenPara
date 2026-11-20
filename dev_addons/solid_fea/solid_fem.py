@@ -87,11 +87,14 @@ def _session(geom, h, opts):
         if not gmsh.model.getEntities(3):
             raise FemError("gmsh found no solid in the part.")
         fmap = _match_surfaces(gmsh, geom)
-        gmsh.option.setNumber("Mesh.MeshSizeMax", float(h))
-        gmsh.option.setNumber("Mesh.MeshSizeMin", float(opts.get("hmin") or 0.0) or float(h) / 6.0)
+        eff = element_sizes(geom, h, opts)                             # the size of every part (all the same size for a part, or for an assembly with one size)
+        hmax, hlow = max(eff), min(eff)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", float(hmax))
+        gmsh.option.setNumber("Mesh.MeshSizeMin", float(opts.get("hmin") or 0.0) or float(hlow) / 6.0)
         gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", float(opts.get("curv", 10)))
         gmsh.option.setNumber("Mesh.Optimize", 1)
-        _local_sizes(gmsh, fmap, opts.get("face_sizes") or [], float(h), float(opts.get("growth") or 1.3))
+        by_body = _body_fields(gmsh, geom, eff, float(h)) if (geom.get("solids") and len(set(eff)) > 1) else []
+        _local_sizes(gmsh, fmap, opts.get("face_sizes") or [], float(hmax), float(opts.get("growth") or 1.3), by_body)
         yield gmsh, fmap
     finally:
         try:
@@ -127,7 +130,7 @@ def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None, opts=None
         raise Cancelled()
     try:
         import solid_progress as spg
-        _stage(progress, "meshhex" if opts.get("type") == "hexdom" else "mesh", spg.estimate_elements(geom.get("volume"), h))
+        _stage(progress, "meshhex" if opts.get("type") == "hexdom" else "mesh", spg.estimate_for(geom, h, opts.get("body_h")))
     except Exception:
         pass
     if opts.get("type") == "hexdom" and geom.get("solids"):
@@ -210,9 +213,7 @@ def _volume_tets(gmsh, geom, remap):
     scale = max(geom["diag"], 1e-12)
     parts = []
     for (_d, tag) in gmsh.model.getEntities(3):
-        c = np.array(gmsh.model.occ.getCenterOfMass(3, tag))
-        v = gmsh.model.occ.getMass(3, tag)
-        best = min(range(len(pieces)), key=lambda k: np.linalg.norm(c - pieces[k]["center"]) / scale + abs(v - pieces[k]["volume"]) / max(pieces[k]["volume"], 1e-12))
+        best = _piece_of(gmsh, tag, pieces, scale)
         et, _et, en = gmsh.model.mesh.getElements(3, tag)
         if 4 in list(et):
             t = remap[np.asarray(en[list(et).index(4)], np.int64).reshape(-1, 4)]
@@ -265,14 +266,54 @@ def _mesh_hexdom(geom, h, cancel, progress, opts, hm):
     return {"nodes": m["nodes"], "tets": m["tets"], "hexes": m["hexes"], "pyrs": m["pyrs"], "faces": faces, "verts": verts, "hexdom": m["info"]}
 
 
-def _local_sizes(gmsh, fmap, face_sizes, h, growth):
+def element_sizes(geom, h, opts=None):
+    """[the element size (mm) of every body of an assembly] - `h` for the bodies that have no size of their own in opts["body_h"] ({body index: mm}) -
+    or [h] for a single part."""
+    nb = len(geom.get("bodies") or ())
+    if not nb:
+        return [float(h)]
+    own = {int(k): float(v) for k, v in ((opts or {}).get("body_h") or {}).items()}
+    return [float(own.get(i, h)) for i in range(nb)]
+
+
+def _piece_of(gmsh, tag, pieces, scale):
+    """The index of the piece of the fused assembly (geom["solids"]) that the gmsh volume `tag` is: nearest by centre of mass and volume."""
+    c = np.array(gmsh.model.occ.getCenterOfMass(3, tag))
+    v = gmsh.model.occ.getMass(3, tag)
+    return min(range(len(pieces)), key=lambda k: np.linalg.norm(c - pieces[k]["center"]) / scale + abs(v - pieces[k]["volume"]) / max(pieces[k]["volume"], 1e-12))
+
+
+def _body_fields(gmsh, geom, eff, h):
+    """The element size of every part of an assembly, for gmsh: a field that is `eff[body]` on the volumes (and the faces, edges and points around them) of
+    that body.  A face between two bodies belongs to both, so it gets the finer of the two sizes, and every part grows away from it: the mesh of the whole
+    assembly stays ONE mesh, the nodes on a shared face stay shared.  -> the ids of the fields (to be minimised with the others)."""
+    fld = gmsh.model.mesh.field
+    pieces, scale = geom["solids"], max(geom["diag"], 1e-12)
+    const = {}
+    out = []
+    for (_d, tag) in gmsh.model.getEntities(3):
+        size = float(eff[pieces[_piece_of(gmsh, tag, pieces, scale)]["body"]]) if pieces else float(h)
+        if size not in const:
+            c = fld.add("MathEval")
+            fld.setString(c, "F", repr(size))
+            const[size] = c
+        r = fld.add("Restrict")
+        fld.setNumber(r, "InField", const[size])
+        fld.setNumbers(r, "VolumesList", [tag])
+        fld.setNumber(r, "IncludeBoundary", 1)
+        out.append(r)
+    return out
+
+
+def _local_sizes(gmsh, fmap, face_sizes, h, growth, extra=()):
     """A smaller element size on single faces: near such a face the size is `size`, and it grows to the global size `h` over the distance at which
-    layers of elements, each `growth` times longer than the one before, have grown that far: (h - size) / (growth - 1)."""
-    if not face_sizes:
+    layers of elements, each `growth` times longer than the one before, have grown that far: (h - size) / (growth - 1).  `h` is the largest size of the
+    model; the fields `extra` (the sizes of the parts of an assembly) are minimised with the face sizes."""
+    if not face_sizes and not extra:
         return
     tag_of = {fid: tag for tag, fid in fmap.items()}
     fld = gmsh.model.mesh.field
-    parts = []
+    parts = list(extra)
     for item in face_sizes:
         tags = [tag_of[f] for f in item["fids"] if f in tag_of]
         hf = float(item["h"])

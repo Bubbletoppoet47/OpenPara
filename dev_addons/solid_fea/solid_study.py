@@ -56,8 +56,8 @@ class SolidStudy(StudyAdapter):
             raise ValueError(f"The input '{pid}' cannot be set from here.")
         import sys
         mod = sys.modules[type(self.tab).__module__]
-        self.tab.e_h.setText(format(mod.l_out(float(text)), ".8g"))
-        self.tab.e_h.editingFinished.emit()
+        self.tab.set_size(format(mod.l_out(float(text)), ".8g"))
+        self.tab.inputs_changed()
 
     def apply(self, setup, values):
         known = {d["id"] for d in self.params()}

@@ -3,7 +3,9 @@ solid_model.py - the SETUP of a 3D FEA (what the panel edits) and the run that t
 
 setup = {
   "material": {"E": MPa, "nu", "rho": kg/m3, "sy": MPa, "su": MPa},
-  "h": element size (mm),
+  "h": element size (mm, 0 = automatic): of a single part, or of the parts of an assembly that have no size of their own,
+  "body_h": {body name: mm}              an ASSEMBLY: the element size of the parts that have one of their own (a blank or missing one gets "h"); the parts are
+                                      still meshed as one mesh, so the nodes of the faces they share stay shared (see solid_mesh)
   "supports": [{"mode": "fixed" | "slide" | "bolt", "faces": [face signature]}],
   "loads":    [{"kind": "force", "faces": [sig], "f": [Fx, Fy, Fz]}              total force spread over the faces (N)
               | {"kind": "pressure", "faces": [sig], "p": MPa}                    positive pushes into the part
@@ -40,7 +42,7 @@ KINDS = {"force": "Force on faces", "pressure": "Pressure on faces", "point": "F
 
 def default_setup():
     return {"material": {"E": 200000.0, "nu": 0.3, "rho": 7850.0, "sy": 250.0, "su": 400.0}, "h": 0.0, "supports": [], "loads": [], "probe": None, "splits": [],
-            "mesh": smesh.default_mesh(), "bond_tol": 0.0, "body_mats": {}, "joint": "bonded", "screws": [], "design": "ASD"}
+            "mesh": smesh.default_mesh(), "bond_tol": 0.0, "body_mats": {}, "body_h": {}, "joint": "bonded", "screws": [], "design": "ASD"}
 
 
 def body_materials(geom, setup):
@@ -127,23 +129,33 @@ def _patch_mesh(geom, r, h):
         return
     m = r["mesh"] or {"type": "tets", "order": 2, "hmin": 0.0, "growth": 1.3, "curv": 10, "face_sizes": []}
     m = dict(m, face_sizes=[dict(x) for x in m["face_sizes"]])
+    eff = fem.element_sizes(geom, h, m)
     for f in fids:
-        hf = screw.patch_size(geom["faces"][f]["area"], h, m["hmin"])
+        fc = geom["faces"][f]
+        href = min([eff[b] for b in fc.get("bodies", ()) if b < len(eff)] or [h])           # the size the mesh has there: the finer of the two parts
+        hf = screw.patch_size(fc["area"], href, m["hmin"])
         if hf is not None:
             m["face_sizes"].append({"fids": [f], "h": float(hf), "name": "screw patch"})
     r["mesh"] = m
 
 
-def thin_notes(geom, h):
-    """Texts for the parts whose thickness (about twice the volume over the surface) is below 1.5 element sizes: a coarse mesh through a thin sheet is poor."""
-    out = []
-    for i, b in enumerate(geom["bodies"]):
+def thin_parts(geom, h, sizes=None):
+    """{body index: text} for the parts whose thickness (about twice the volume over the surface) is below 1.5 element sizes: a coarse mesh through a thin
+    sheet is poor.  `sizes` = the element size of every part when they differ (see solid_fem.element_sizes), else `h` is every part's size."""
+    out = {}
+    for i, b in enumerate(geom.get("bodies") or ()):
+        hb = sizes[i] if sizes is not None and i < len(sizes) else h
         area = sum(f["area"] for f in geom["faces"] if i in f["bodies"])
         t = 2.0 * b["volume"] / max(area, 1e-12)
-        if t > 0 and h > 1.5 * t:
-            out.append(f"{b['name']} is about {t:.3g} mm thick but the element size is {h:.3g} mm: use an element size of {t:.2g} mm or less (or an advanced local size) "
-                       "so that the sheet has several elements through its thickness.")
+        if t > 0 and hb > 1.5 * t:
+            out[i] = (f"{b['name']} is about {t:.3g} mm thick but its element size is {hb:.3g} mm: use an element size of {t:.2g} mm or less (or an advanced "
+                      "local size) so that the sheet has several elements through its thickness.")
     return out
+
+
+def thin_notes(geom, h, sizes=None):
+    """The texts of thin_parts, in the order of the parts."""
+    return [t for _i, t in sorted(thin_parts(geom, h, sizes).items())]
 
 
 # ------------------------------------------------------------------------------------------------------------------------ splitting faces
@@ -271,11 +283,12 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
     mat = r["material"]
     h = r["h"] or auto_h(geom)
     q = get_mesh(geom, h, cache, cancel, progress, r.get("mesh"))
+    sizes = fem.element_sizes(geom, h, r.get("mesh"))                           # the element size of every part (one entry for a single part)
     mats = r.get("materials") if geom.get("bodies") else None
     contact = None
     if mats and r.get("joint") == "contact":                                   # parts joined by screws: contact everywhere else
         import solid_contact as scon
-        q, contact = scon.split_interfaces(q, geom, {f for s_ in r["screws"] for f in s_["fids"]}, h, mats)
+        q, contact = scon.split_interfaces(q, geom, {f for s_ in r["screws"] for f in s_["fids"]}, h, mats, sizes)
     nodes, conn, groups = q["nodes"], q["conn"], q["groups"]
     if mats:                                                                   # an assembly: every body's elements carry its own material
         groups = [dict(g, mat=(mats[g["body"]]["E"], mats[g["body"]]["nu"])) for g in groups]
@@ -385,7 +398,8 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
         res.update({"bodies": per_body, "sy_node": sy_node, "material": dict(mat, sy=0.0, su=0.0), "bond_tol": geom.get("tol"),
                     "bonds": [{"a": geom["bodies"][b["a"]]["name"], "b": geom["bodies"][b["b"]]["name"], "area": b["area"]} for b in geom["bonds"]]})
         res["joint"] = r.get("joint", "bonded")
-        res["notes"] = thin_notes(geom, h)
+        res["notes"] = thin_notes(geom, h, sizes)
+        res["part_sizes"] = [{"name": b["name"], "h": float(sizes[i])} for i, b in enumerate(geom["bodies"])]
     if contact is not None:
         res.update(_contact_results(geom, r, contact, u, fbody, mats))
     return res

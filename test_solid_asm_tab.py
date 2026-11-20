@@ -89,7 +89,7 @@ topf = next(f["id"] for f in g["faces"] if not f["interface"] and f["normal"][2]
 assert "base" in w.face_label(bottom).lower() and "cap" in w.face_label(topf).lower()
 w.select_faces([bottom]); assert w.add_support("fixed")
 w.select_faces([topf]); assert w.add_load("force", {"f": [0.0, 0.0, -10000.0]})
-w.e_h.setText("6"); w.inputs_changed()
+w.set_size("6"); w.inputs_changed()
 assert w.ready() is None, w.ready()
 assert w.run_mesh() and "tetrahedra" in w.mesh_lbl.text()
 assert w.run_solve() and w.result is not None, w.status_lbl.text()

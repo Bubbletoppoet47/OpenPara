@@ -65,6 +65,16 @@ def estimate_elements(volume, h):
     return max(float(volume) / (ELEMENT_FACTOR * float(h) ** 3), 1.0) if h and volume else 1000.0
 
 
+def estimate_for(geom, h, body_h=None):
+    """The number of elements to expect: from the volume and the element size; for an assembly whose parts have sizes of their own
+    (body_h = {body index: mm}), part by part, each at its own size (the parts without one at `h`)."""
+    bodies = (geom or {}).get("bodies")
+    if body_h and bodies:
+        own = {int(k): float(v) for k, v in body_h.items()}
+        return sum(estimate_elements(b.get("volume"), own.get(i, h)) for i, b in enumerate(bodies))
+    return estimate_elements((geom or {}).get("volume"), h)
+
+
 def fmt_time(s, fine=False):
     """12 s, 2 min 05 s, 1 h 03 min.  fine=True gives a tenth of a second under 10 s (the time a finished job took)."""
     s = max(float(s), 0.0)
@@ -288,11 +298,10 @@ def plan_for(geom, r, mesh=None, meshing=True, solving=True):
     """[(stage, size)]: the stages that this mesh or solve is expected to go through, for the time estimate before the first one reports.
     mesh: the finished mesh when there is one in the cache (its real element and node counts are used instead of the estimates)."""
     h = r.get("h") if r else None
-    vol = (geom or {}).get("volume")
     if mesh is not None:
         el, nodes = float(len(mesh.get("conn", mesh.get("tets", [])))), float(len(mesh["nodes"]))
     else:
-        el = estimate_elements(vol, h)
+        el = estimate_for(geom, h, (r.get("mesh") or {}).get("body_h") if r else None)
         nodes = el * NODES_PER_ELEMENT
     hexdom = bool(r and (r.get("mesh") or {}).get("type") == "hexdom")
     out = []
