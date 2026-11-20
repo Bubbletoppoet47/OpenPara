@@ -87,7 +87,7 @@ t = fresh()
 g, wb = t.grid, t.wb
 S = g.sheet
 assert not pics(t) and not t.act["pic_edit"].isEnabled(), "an empty sheet has no image to edit"
-assert [t.ribbon.tabText(i) for i in range(t.ribbon.count())] == ["Home", "Data", "Charts", "Images", "Engineering", "View"], "the Images tab sits next to Charts"
+assert [t.ribbon.tabText(i) for i in range(t.ribbon.count())] == ["Home", "Data", "Charts", "Images", "Import", "Engineering", "View"], "the Images tab sits next to Charts"
 assert t.act["pic_new"].isEnabled(), "Insert image is always there"
 
 g.select(3, 2)

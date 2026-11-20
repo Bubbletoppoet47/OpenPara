@@ -13,6 +13,12 @@ A spreadsheet tab. Playground only; nothing in the core program changes.
   (width, height, keep proportions, scale, back to the original size). Ctrl+C / Ctrl+X on a picked picture copy it for other programs. Pictures are kept inside the `.opsheet`
   file and go into the `.xlsx` as Excel pictures (and come back from it). Cells copied from Excel paste as cells; Paste special > Picture takes the image instead.
   Like charts, a picture sits at a pixel position, so inserting rows above it does not move it.
+- **Import CSV**: Import tab > Import CSV brings a `.csv` / `.tsv` / `.txt` file onto the sheet, at the selected cell or on a new sheet named after the file. A window shows the
+  start of the file first: the separator (comma, semicolon, tab or pipe; guessed from the first lines), "first row holds column names" (made bold; guessed), and "numbers are
+  written with a decimal comma" (guessed). UTF-8 (with or without a BOM), UTF-16 and Windows-1252 files are read; quoted fields with separators and line breaks work.
+  Numbers, percentages and TRUE / FALSE become real values; everything else stays text. Nothing from a file becomes a formula (text that starts with `=` stays text), codes
+  such as 007 keep their zeros, and dates stay text (Sheets has no date type yet). Cells the import would replace are counted and asked about first. The whole import is one
+  undo step (a new sheet included). Rows or columns beyond the sheet, and anything past 1,000,000 cells, are left out and said so. Import study and Import .xlsx stay on the Data tab.
 - **Selecting**: Shift / Ctrl + click on cells, rows and columns; every block takes part in clear, format, fill, widths, insert and delete.
 - **Editing references**: F4 in the cell editor or the formula bar cycles the reference at the cursor (or every one in the selection) through `$B$2`, `B$2`, `$B2`, `B2`.
 - **Fill and move**: dragging the fill handle outlines the cells it will fill and shows the values they will get. Dragging the border of a selection moves it
@@ -24,4 +30,4 @@ A spreadsheet tab. Playground only; nothing in the core program changes.
 
 Modules: `sh_engine` / `sh_funcs` (formulas), `sh_book` (workbook, undo), `sh_grid` / `sh_edit` (grid and editing), `sh_dialogs`, `sh_chart` (drawing),
 `sh_panel` (the chart panel), `sh_adv` (the advanced settings, built from the installed matplotlib), `sh_presets` (looks), `sh_prefs` / `sh_ribbon` (ribbon size),
-`sh_picture` (pictures on the sheet and their panel), `sh_study`, `sh_xlsx`, `sh_std` / `std_aisi16`, `sh_tab` (the window).
+`sh_picture` (pictures on the sheet and their panel), `sh_csv` (reading a CSV file; no Qt), `sh_study`, `sh_xlsx`, `sh_std` / `std_aisi16`, `sh_tab` (the window).

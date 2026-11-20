@@ -1,10 +1,11 @@
 """
-sh_tab.py - the Sheets tab: a ribbon (Home, Data, Charts, Images, Engineering), the name box and formula bar, the grid, the sheet tabs and a status line.
+sh_tab.py - the Sheets tab: a ribbon (Home, Data, Charts, Images, Import, Engineering), the name box and formula bar, the grid, the sheet tabs and a status line.
 
 Files: .opsheet (JSON, the whole workbook with its charts and study links).  Excel files (.xlsx) open into a new workbook and export from the Data tab.
 """
 import json
 import os
+import re
 import threading
 
 from PyQt6.QtCore import QSize, Qt, QTimer
@@ -18,6 +19,7 @@ import sh_dialogs as D
 import sh_edit
 import sh_engine as E
 import sh_fmt
+import sh_csv
 import sh_grid
 import sh_picture
 import sh_prefs
@@ -196,11 +198,14 @@ class SheetsTab(QWidget):
             ("Image", [("pic_edit", "s_pic_edit", "Edit\nimage", "Open the image panel: size", self.picture_edit), ("pic_copy", "s_pic_copy", "Copy\nimage", "Duplicate the image", self.picture_copy),
                        ("pic_export", "s_pic_export", "Export\nimage", "Save the image as a file", self.picture_export), ("pic_del", "s_pic_del", "Delete\nimage", "Remove the image", self.picture_delete)]),
         ]
+        imports = [
+            ("CSV", [("csv_in", "s_csv_in", "Import\nCSV", "Bring a CSV file (comma, semicolon, tab or pipe separated) onto a sheet: at the selected cell, or on a new sheet", self.csv_import)]),
+        ]
         eng = [("Functions", [("fx", "s_fx", "Insert\nfunction", "Insert a function with its Function Arguments window", self.fx)]),
                ("Standards", self.standard_items()),
                ("Browse", [("std_select", "s_std_select", "Standard\nselect", "Browse every installed standard", lambda: self.standards(None))])]
         view = [("Ribbon", [("ribbon_size", "s_ribbon_size", "Ribbon\nsize", "Icon size and text size of the ribbon", self.ribbon_size_dialog)])]
-        for title, groups in (("Home", home), ("Data", data), ("Charts", charts), ("Images", images), ("Engineering", eng), ("View", view)):
+        for title, groups in (("Home", home), ("Data", data), ("Charts", charts), ("Images", images), ("Import", imports), ("Engineering", eng), ("View", view)):
             tabs.addTab(self.ribbon_page(groups), title)
         QTimer.singleShot(0, self.apply_ribbon_sizes)
         return tabs
@@ -877,6 +882,74 @@ class SheetsTab(QWidget):
             p += ".png"
         msg = sh_chart.export(self.wb, ch, p)
         self.status.say(msg or f"Saved {p}", "bad" if msg else "good")
+
+    # ------------------------------------------------------------------ import CSV
+    def csv_import(self, path=None, options=None):
+        """Import CSV: a file is picked, a window shows how it will be split, and the rows go at the selected cell or on a new sheet (one undo step).
+        `path` and `options` ({"delimiter", "header", "decimal", "new_sheet"}; what is left out is guessed) skip the windows (tests).  Returns (rows, columns) or None."""
+        g = self.grid
+        if path is None:
+            start = os.path.dirname(self.path) if self.path else ""
+            path, _ = QFileDialog.getOpenFileName(self, "Import CSV", start, sh_csv.FILE_FILTER)
+            if not path:
+                return None
+        try:
+            f = sh_csv.load(path)
+        except sh_csv.CsvError as ex:
+            self.status.say(str(ex), "bad")
+            return None
+        r0, c0 = g.sel()[:2]
+        base = re.sub(r"[\[\]:*?/\\]", "_", f.name).strip("'")[:31] or "CSV"
+        sheet_name = self.wb.unique_name(base)
+        try:
+            if options is None:
+                dlg = D.CsvImportDialog(f, E.addr(r0, c0), sheet_name, self)
+                if not dlg.exec():
+                    return None
+                got = dlg.result_choice()
+            else:
+                parsed = sh_csv.parse(f.text, options.get("delimiter") or f.delimiter)
+                decimal = options.get("decimal")
+                decimal = sh_csv.looks_decimal_comma(parsed.rows) if decimal is None else decimal
+                got = {"rows": parsed.rows, "header": options.get("header", sh_csv.looks_like_header(parsed.rows, decimal)), "decimal": decimal,
+                       "new_sheet": bool(options.get("new_sheet")), "cut_rows": parsed.cut_rows, "cut_cols": parsed.cut_cols, "capped": parsed.capped}
+        except sh_csv.CsvError as ex:
+            self.status.say(str(ex), "bad")
+            return None
+        rows = got["rows"]
+        if not rows:
+            self.status.say("There is nothing to import in this file.", "warn")
+            return None
+        ncols = max(len(r) for r in rows)
+        if not got["new_sheet"]:
+            n = sh_csv.existing_cells(self.wb, g.sheet, r0, c0, len(rows), ncols)
+            if n and QMessageBox.question(self, "Import CSV", f"The rows go over {n:,} cell(s) that already hold something, and replace them. Import anyway?") != QMessageBox.StandardButton.Yes:
+                return None
+        if got["new_sheet"]:
+            self.wb.begin_group("Import CSV")                     # (the new sheet and what goes on it are one step to undo)
+        waiting = len(rows) * ncols > 20000
+        if waiting:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)       # (a big file takes a few seconds)
+        try:
+            if got["new_sheet"]:
+                self.wb.add_sheet(sheet_name)
+                g.set_sheet(sheet_name)
+                self.rebuild_sheet_tabs()
+                r0, c0 = 1, 1
+            nr, nc = sh_csv.put(self.wb, g.sheet, r0, c0, rows, got["decimal"], got["header"])
+        finally:
+            if got["new_sheet"]:
+                self.wb.end_group()
+            if waiting:
+                QApplication.restoreOverrideCursor()
+        g.select(r0, c0, r0 + nr - 1, c0 + nc - 1, active=(r0, c0))
+        notes = []
+        if got["cut_rows"]:
+            notes.append(f"{got['cut_rows']:,} row(s) were left out: " + (f"an import takes up to {sh_csv.MAX_CELLS:,} cells." if got.get("capped") else "they did not fit on a sheet."))
+        if got["cut_cols"]:
+            notes.append("Columns beyond the sheet's last column were left out.")
+        self.status.say(f"Imported {os.path.basename(path)}: {nr:,} row(s), {nc} column(s). " + " ".join(notes), "warn" if notes else "good")
+        return nr, nc
 
     # ------------------------------------------------------------------ images
     def picture_by_id(self, pid=None):

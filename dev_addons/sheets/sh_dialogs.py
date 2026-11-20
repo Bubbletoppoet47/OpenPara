@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboB
                              QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import sh_book as B
+import sh_csv
 import sh_engine as E
 import sh_fmt
 import sh_icons
@@ -739,6 +740,103 @@ class StudyImportDialog(QDialog):
 
 
 # ------------------------------------------------------------------------------------------------------------------ small ones
+class CsvImportDialog(QDialog):
+    """Import CSV: the start of the file as it will be split, and what to ask - the separator, whether the first row is a header, where it goes.
+    `result_choice()` = {"rows", "delimiter", "header", "decimal", "new_sheet", "cut_rows", "cut_cols", "capped"}."""
+
+    def __init__(self, csvfile, cell_label, sheet_name, parent=None):
+        super().__init__(parent)
+        self.f = csvfile
+        self.sheet_name = sheet_name
+        self.parsed = None
+        self.setWindowTitle("Import CSV")
+        self.setMinimumSize(660, 520)
+        lay = QVBoxLayout(self)
+        self.info = muted("")
+        lay.addWidget(self.info)
+        form = QFormLayout()
+        self.sep = QComboBox()
+        for label, ch in sh_csv.DELIMITERS:
+            self.sep.addItem(label, ch)
+        self.sep.setCurrentIndex(max(0, self.sep.findData(csvfile.delimiter)))
+        self.sep.setToolTip("What the fields of a row are separated by (it was guessed from the file)")
+        form.addRow("Separator", self.sep)
+        lay.addLayout(form)
+        self.header = QCheckBox("First row holds column names (made bold)")
+        self.decimal = QCheckBox("Numbers are written with a decimal comma (3,14)")
+        lay.addWidget(self.header)
+        lay.addWidget(self.decimal)
+        self.here = QRadioButton(f"At the selected cell ({cell_label})")
+        self.new_sheet = QRadioButton(f"On a new sheet ({sheet_name})")
+        self.here.setChecked(True)
+        lay.addWidget(self.here)
+        lay.addWidget(self.new_sheet)
+        lay.addWidget(muted("Preview"))
+        self.table = QTableWidget()
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        lay.addWidget(self.table, 1)
+        self.msg = muted("")
+        lay.addWidget(self.msg)
+        self.bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.ok_btn = self.bb.button(QDialogButtonBox.StandardButton.Ok)
+        self.ok_btn.setText("Import")
+        ui_kit.primary(self.ok_btn)
+        self.bb.accepted.connect(self.accept)
+        self.bb.rejected.connect(self.reject)
+        lay.addWidget(self.bb)
+        self.split(first=True)
+        self.sep.currentIndexChanged.connect(lambda _i: self.split())
+        self.decimal.toggled.connect(lambda _on: self.preview())
+
+    def delimiter(self):
+        return self.sep.currentData()
+
+    def split(self, first=False):
+        """The file split with the chosen separator; the check boxes follow what the new rows look like (until the person has set them)."""
+        try:
+            self.parsed = sh_csv.parse(self.f.text, self.delimiter())
+        except sh_csv.CsvError as ex:
+            self.parsed = sh_csv.Parsed([], 0, 0, False)
+            self.msg.setText(str(ex))
+        rows = self.parsed.rows
+        dec = sh_csv.looks_decimal_comma(rows)
+        for box, value in ((self.header, sh_csv.looks_like_header(rows, dec)), (self.decimal, dec)):
+            box.blockSignals(True)
+            box.setChecked(value)
+            box.blockSignals(False)
+        ncols = max((len(r) for r in rows), default=0)
+        self.info.setText(f"{os.path.basename(self.f.path)}: {len(rows):,} row(s), {ncols} column(s), read as {self.f.encoding}.")
+        self.preview()
+
+    def preview(self):
+        rows = self.parsed.rows
+        show = rows[:sh_csv.PREVIEW_ROWS]
+        ncols = min(max((len(r) for r in rows), default=0), 40)
+        self.table.clear()
+        self.table.setRowCount(len(show))
+        self.table.setColumnCount(ncols)
+        self.table.setHorizontalHeaderLabels([E.col_letter(c) for c in range(1, ncols + 1)])
+        for i, row in enumerate(show):
+            for j in range(min(len(row), ncols)):
+                raw, hint = sh_csv.entry(row[j], self.decimal.isChecked())
+                text = "" if raw is None else B.plain(raw) if isinstance(raw, str) else sh_fmt.show(raw, hint or "General")
+                self.table.setItem(i, j, QTableWidgetItem(str(text)))
+        notes = []
+        if self.parsed.cut_rows:
+            notes.append(f"{self.parsed.cut_rows:,} row(s) are left out: " + (f"an import takes up to {sh_csv.MAX_CELLS:,} cells." if self.parsed.capped else "they do not fit on a sheet."))
+        if self.parsed.cut_cols:
+            notes.append("Columns beyond the sheet's last column are left out.")
+        if rows and ncols <= 1 and "\n" in self.f.text.strip():
+            notes.append("Everything is in one column: another separator may be right.")
+        self.msg.setText(" ".join(notes))
+        self.ok_btn.setEnabled(bool(rows))
+
+    def result_choice(self):
+        return {"rows": self.parsed.rows, "delimiter": self.delimiter(), "header": self.header.isChecked(), "decimal": self.decimal.isChecked(),
+                "new_sheet": self.new_sheet.isChecked(), "cut_rows": self.parsed.cut_rows, "cut_cols": self.parsed.cut_cols, "capped": self.parsed.capped}
+
+
 class FormatDialog(QDialog):
     """Number format, font and colours of the selected cells.  `values()` -> dict of Style fields to set."""
 

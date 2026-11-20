@@ -67,7 +67,7 @@ def close(a, b, tol=1e-9):
 # ================================================================ the window
 t = fresh()
 g, wb = t.grid, t.wb
-assert [t.ribbon.tabText(i) for i in range(t.ribbon.count())] == ["Home", "Data", "Charts", "Images", "Engineering", "View"]
+assert [t.ribbon.tabText(i) for i in range(t.ribbon.count())] == ["Home", "Data", "Charts", "Images", "Import", "Engineering", "View"]
 assert t.title() == "Sheets" and not t.is_dirty() and t.can_close()
 std_buttons = [k for k in t.act if k.startswith("std_")]
 assert "std_aisi-s100-16" in std_buttons and "std_select" in std_buttons
