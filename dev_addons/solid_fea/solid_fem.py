@@ -550,7 +550,33 @@ def _edofs(conn):
 
 def _coo(Ke, ed, n):
     nd = ed.shape[1]
+    if n < 2 ** 31 - 1:
+        ed = ed.astype(np.int32)                                           # half the memory and a faster conversion: scipy keeps the indices 32-bit
     return sp.coo_matrix((Ke.ravel(), (np.repeat(ed, nd, axis=1).ravel(), np.tile(ed, (1, nd)).ravel())), shape=(n, n)).tocsr()
+
+
+class _Sum:
+    """Adds up the matrices of the chunks of elements.  `K = K + part` after every chunk copies the whole of K again and again (the work grows with the square of
+    the number of chunks); this keeps a short stack in which a matrix is added to its neighbour as soon as that one is not much larger, so every entry is
+    copied about log2(chunks) times instead."""
+
+    def __init__(self):
+        self.stack = []
+
+    def add(self, m):
+        self.stack.append(m)
+        while len(self.stack) >= 2 and self.stack[-2].nnz <= 2 * self.stack[-1].nnz:
+            b = self.stack.pop()
+            a = self.stack.pop()
+            self.stack.append(a + b)
+            del a, b
+
+    def total(self):
+        out = None
+        while self.stack:
+            m = self.stack.pop()
+            out = m if out is None else out + m
+        return out
 
 
 def assemble(nodes, groups, E, nu, cancel=lambda: False, on_part=None):
@@ -558,7 +584,7 @@ def assemble(nodes, groups, E, nu, cancel=lambda: False, on_part=None):
     on_part(fraction of the elements done) is called after every chunk of elements."""
     nn = len(nodes)
     D0 = D = material_matrix(E, nu)
-    K = None
+    acc = _Sum()
     groups = list(_as_groups(groups))
     total, done = max(sum(len(g["conn"]) for g in groups), 1), 0
     for g in groups:
@@ -589,12 +615,12 @@ def assemble(nodes, groups, E, nu, cancel=lambda: False, on_part=None):
                 except elem.ElementError as ex:
                     raise FemError(str(ex))
                 ed = _edofs(hx)
-            part = _coo(Ke, ed, 3 * nn)
-            K = part if K is None else K + part
+            acc.add(_coo(Ke, ed, 3 * nn))
+            del Ke
             done += e - s
             if on_part is not None:
                 on_part(done / total)
-    return K, D0
+    return acc.total(), D0
 
 
 def _group_D(g, D):
@@ -721,6 +747,117 @@ def _rigid_check(nodes, rows):
         raise FemError("The supports leave the part free to move or turn (a rigid-body motion is not stopped). Add or enlarge a support.")
 
 
+def pieces(nodes, groups):
+    """(the piece every node belongs to, the number of pieces): two elements are in one piece when they share a node.  A part of several solids that are not joined
+    (a compound) is one mesh of several pieces; a piece without a support is free to move, and the stiffness matrix of the part then cannot be solved."""
+    import scipy.sparse.csgraph as csg
+    nn = len(nodes)
+    a, b = [], []
+    for g in _as_groups(groups):
+        c = np.asarray(g["conn"])
+        a.append(np.repeat(c[:, :1], c.shape[1] - 1, axis=1).ravel())
+        b.append(c[:, 1:].ravel())
+    a, b = np.concatenate(a), np.concatenate(b)
+    G = sp.coo_matrix((np.ones(len(a), np.int8), (a, b)), shape=(nn, nn))
+    m, lab = csg.connected_components(G, directed=False)
+    used = np.unique(lab[np.unique(a)])                                   # nodes that belong to no element do not make a piece
+    remap = np.full(m, -1)
+    remap[used] = np.arange(len(used))
+    return remap[lab], len(used)
+
+
+def rigid_check_pieces(nodes, groups, rows):
+    """_rigid_check for every piece of the mesh: a piece that the supports do not hold is named in words (its size and where it is)."""
+    lab, m = pieces(nodes, groups)
+    if m <= 1:
+        _rigid_check(nodes, rows)
+        return
+    loose = []
+    per = [[] for _ in range(m)]
+    for n, d in rows:
+        per[lab[n]].append((n, d))
+    for i in range(m):
+        mine = per[i]
+        try:
+            if not mine:
+                raise FemError("none")
+            _rigid_check(nodes, mine)
+        except FemError:
+            loose.append(i)
+    if loose:
+        xyz = np.asarray(nodes, float)
+        words = []
+        for i in loose[:4]:
+            p = xyz[lab == i]
+            lo, hi = p.min(axis=0), p.max(axis=0)
+            c = 0.5 * (lo + hi)
+            words.append(f"piece {i + 1} ({hi[0] - lo[0]:.3g} x {hi[1] - lo[1]:.3g} x {hi[2] - lo[2]:.3g} mm, around x {c[0]:.3g}, y {c[1]:.3g}, z {c[2]:.3g} mm)")
+        raise FemError(f"The part is made of {m} pieces that are not joined to each other, and {len(loose)} of them {'has' if len(loose) == 1 else 'have'} no complete "
+                       f"support, so {'it is' if len(loose) == 1 else 'they are'} free to move: " + "; ".join(words) + (" and more" if len(loose) > 4 else "") +
+                       ". Put the pieces in an assembly so that they are bonded to each other, or give every piece its own supports.")
+
+
+def available_memory():
+    """The memory (bytes) this computer has free for a big solve, or None when it cannot be told.  psutil when it is there, else Windows' own call or Linux's
+    /proc/meminfo."""
+    try:
+        import psutil
+        return float(psutil.virtual_memory().available)
+    except Exception:
+        pass
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class _Status(ctypes.Structure):
+                _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong), ("total", ctypes.c_ulonglong), ("avail", ctypes.c_ulonglong),
+                            ("tpage", ctypes.c_ulonglong), ("apage", ctypes.c_ulonglong), ("tvirt", ctypes.c_ulonglong), ("avirt", ctypes.c_ulonglong),
+                            ("aext", ctypes.c_ulonglong)]
+            st = _Status()
+            st.length = ctypes.sizeof(_Status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                return float(st.avail)
+        else:
+            with open("/proc/meminfo") as fh:
+                for line in fh:
+                    if line.startswith("MemAvailable:"):
+                        return float(line.split()[1]) * 1024.0
+    except Exception:
+        pass
+    return None
+
+
+MEM_BASE = 3.0e8                     # bytes: the program itself and the mesh of a small model
+MEM_PER_UNKNOWN = 5500.0             # bytes per unknown of the largest solves measured (222,000 unknowns: 1.3 GB, 425,000: 2.2 GB, 725,000: 3.6 GB; the stiffness
+                                     # matrix, its reduced copy, the multigrid levels and the vectors); a little above what was measured, for the margin
+MEM_SHARE = 0.85                     # the share of the free memory a solve may be expected to use
+
+
+def memory_estimate(unknowns):
+    """The memory (bytes) a solve of this many unknowns takes, from the largest models measured."""
+    return MEM_BASE + MEM_PER_UNKNOWN * float(unknowns)
+
+
+def memory_ceiling(free=None):
+    """The most unknowns that fit in the memory that is free (None when that cannot be told): what the automatic adaptive mesh uses as its largest size."""
+    free = available_memory() if free is None else free
+    if free is None:
+        return None
+    return int(max(free * MEM_SHARE - MEM_BASE, 0.0) / MEM_PER_UNKNOWN)
+
+
+def check_memory(unknowns, free=None):
+    """Raises a FemError in plain words when a solve of this many unknowns would not fit in the free memory (the operating system would otherwise end the
+    program without a word)."""
+    free = available_memory() if free is None else free
+    if free is None:
+        return
+    need = memory_estimate(unknowns)
+    if need > MEM_SHARE * free:
+        raise FemError(f"This model has about {int(unknowns):,} unknowns and needs about {need / 1e9:.1f} GB of memory to solve; this computer has about "
+                       f"{free / 1e9:.1f} GB free. Use larger elements (for the adaptive mesh: a smaller largest mesh), or close other programs and try again.")
+
+
 def _amg():
     """The pyamg module, or None when it is not installed (the 3D FEA add-on lists it under "requires" in its addon.json, so the add-on manager installs it)."""
     try:
@@ -798,9 +935,7 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     turn about the axis (a slide along the face) stays free.  Returns u (nn, 3), reactions per constraint, info."""
     nodes = q["nodes"]
     nn = len(nodes)
-    progress("assembling")
-    _stage(progress, "assemble", float(sum(len(g["conn"]) for g in _as_groups(q.get("groups") or q["conn"]))))
-    K, D = assemble(nodes, q.get("groups") or q["conn"], E, nu, cancel, on_part=(lambda f: _part(progress, f)) if hasattr(progress, "part") else None)
+    check_memory(3 * nn)                                     # before the work: a model that cannot fit is refused at once, in words
     fixed = np.zeros(3 * nn, bool)
     rows = []                                                # (node, direction) pairs for the rigid-body check
     bearing = False
@@ -832,12 +967,15 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     if not rows:
         raise FemError("There is no support: the part is free to move.")
     try:
-        _rigid_check(nodes, rows)
+        rigid_check_pieces(nodes, q.get("groups") or q["conn"], rows)
     except FemError as ex:
-        if bearing:
+        if bearing and "pieces" not in str(ex):
             raise FemError(str(ex) + " A bearing holds its hole against moving sideways and along its axis, but the part can still turn about that axis: "
                            "add a second bearing on another hole, or a fixed or one-direction support, to stop the turn.")
         raise
+    progress("assembling")                                   # after the checks of the supports: a model that cannot be solved is refused before the long work
+    _stage(progress, "assemble", float(sum(len(g["conn"]) for g in _as_groups(q.get("groups") or q["conn"]))))
+    K, D = assemble(nodes, q.get("groups") or q["conn"], E, nu, cancel, on_part=(lambda f: _part(progress, f)) if hasattr(progress, "part") else None)
     T = None
     if special.any():                                        # a node held in a slanted direction: its degrees of freedom are turned so that the held directions are
         vecs = {}                                            # axes of its own frame, and those are fixed (no penalty: nothing gets stiff, the answer is exact)
@@ -874,6 +1012,8 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     Kt, ft = (K, force) if T is None else ((T.T @ K @ T).tocsr(), T.T @ force)
     Kff = Kt[free][:, free]
     ff = ft[free]
+    if T is not None:
+        del Kt                                               # the turned copy of K is not needed any more (K itself stays: the reactions come from it)
     B = None
     if len(free) > DIRECT_LIMIT:                             # the rigid-body motions (three translations, three turns) in the unknowns of the system that is solved
         xyz = np.asarray(nodes, float)
