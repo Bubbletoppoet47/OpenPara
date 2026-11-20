@@ -168,6 +168,7 @@ class Tracker:
         self.speed = None                        # this computer against the machine of the table, from the assembly of this solve
         self.last = 0.0
         self.cancelling = False
+        self.cyclic = False                      # the plan repeats stages (the loops of an adaptive mesh): a stage that begins only takes its own place out of the plan
         self.finished = None                     # None while running; True / False when over
         self.total = None
 
@@ -182,10 +183,12 @@ class Tracker:
     def attach(self, emit):
         self.emit = emit
 
-    def expect(self, stages):
+    def expect(self, stages, cyclic=False):
         """[(key, size)]: the stages that a run like this one will go through (an estimate from the size of the model), so the bar knows the whole
-        job from the first second.  Each real stage that begins replaces its place in this plan."""
+        job from the first second.  Each real stage that begins replaces its place in this plan.  cyclic: the plan goes through the same stages
+        several times (the loops of an adaptive mesh), so a stage that begins does not drop the later stages of an earlier kind."""
         with self.lock:
+            self.cyclic = bool(cyclic)
             self.future = [(k, float(s)) for k, s in stages]
 
     def stage(self, key, size=0.0):
@@ -194,7 +197,7 @@ class Tracker:
             self._close(now)
             size = float(size or 0.0)
             o = ORDER.get(key)
-            if o is not None:                                          # the plan was a guess: what this stage has passed or replaced is no longer expected
+            if o is not None and not self.cyclic:                      # the plan was a guess: what this stage has passed or replaced is no longer expected
                 self.future = [(k, s_) for k, s_ in self.future if ORDER.get(k, 99) > o or (ORDER.get(k) == o and k == key)]
             for i, (k, _s) in enumerate(self.future):                  # this stage was planned: its place in the plan is taken
                 if k == key:

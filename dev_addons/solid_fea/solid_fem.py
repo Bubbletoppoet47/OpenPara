@@ -94,6 +94,8 @@ def _session(geom, h, opts):
         gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", float(opts.get("curv", 10)))
         gmsh.option.setNumber("Mesh.Optimize", 1)
         by_body = _body_fields(gmsh, geom, eff, float(h)) if (geom.get("solids") and len(set(eff)) > 1) else []
+        if opts.get("size_map") is not None:                           # an adaptive mesh: the element size the last solution asks for (see solid_adapt)
+            by_body = list(by_body) + [_size_map_field(gmsh, opts["size_map"])]
         _local_sizes(gmsh, fmap, opts.get("face_sizes") or [], float(hmax), float(opts.get("growth") or 1.3), by_body)
         yield gmsh, fmap
     finally:
@@ -130,7 +132,7 @@ def mesh_solid(geom, h, cancel=lambda: False, progress=lambda t: None, opts=None
         raise Cancelled()
     try:
         import solid_progress as spg
-        _stage(progress, "meshhex" if opts.get("type") == "hexdom" else "mesh", spg.estimate_for(geom, h, opts.get("body_h")))
+        _stage(progress, "meshhex" if opts.get("type") == "hexdom" else "mesh", opts.get("expect") or spg.estimate_for(geom, h, opts.get("body_h")))
     except Exception:
         pass
     if opts.get("type") == "hexdom" and geom.get("solids"):
@@ -303,6 +305,19 @@ def _body_fields(gmsh, geom, eff, h):
         fld.setNumber(r, "IncludeBoundary", 1)
         out.append(r)
     return out
+
+
+def _size_map_field(gmsh, m):
+    """A gmsh size field from sizes at the nodes of an earlier mesh: m = {"xyz": (n, 3), "tets": (ne, 4) corner nodes, "size": (n,) mm}; the size inside
+    an element is the linear interpolation of its four corners."""
+    xyz, tets, size = np.asarray(m["xyz"], float), np.asarray(m["tets"], np.int64), np.asarray(m["size"], float)
+    c, v = xyz[tets], size[tets]
+    data = np.concatenate([c[:, :, 0], c[:, :, 1], c[:, :, 2], v], axis=1)                 # x1..x4 y1..y4 z1..z4 v1..v4 of every tetrahedron
+    view = gmsh.view.add("size map")
+    gmsh.view.addListData(view, "SS", len(tets), data.ravel().tolist())
+    f = gmsh.model.mesh.field.add("PostView")
+    gmsh.model.mesh.field.setNumber(f, "ViewTag", view)
+    return f
 
 
 def _local_sizes(gmsh, fmap, face_sizes, h, growth, extra=()):

@@ -15,6 +15,7 @@ setup = {
   "bond_tol": mm, 0 = automatic        an ASSEMBLY: faces within this distance are bonded (see solid_asm)
   "body_mats": {body name: {"E", "nu", "rho", "sy", "su", "name"}}      an ASSEMBLY: the material of the bodies that were changed from the part's own
   "mesh": {"advanced", "type", "order", "hmin", "growth", "curv", "face_sizes", "follows"}     the advanced mesh options (see solid_mesh); off = the plain automatic mesh
+  "adapt": {"on", "crit", "tol", "loops", "cap", "strength", "hmin"}      h-adaptive meshing: solve, refine where the error is large, solve again (see solid_adapt)
   "splits": [{"face": face signature, "cols": n, "rows": m, "u": [x, y, z], "col_sizes": [mm | None, ...], "row_sizes": [...]}]
                                       flat faces cut into patches (see solid_geom.analyze); a size that is None is free (the free ones share the rest equally)
   "joint": "bonded" | "contact"       an ASSEMBLY: fully bonded where parts touch, or frictionless contact with the screws as the only bonded places
@@ -31,6 +32,7 @@ import hashlib
 
 import numpy as np
 
+import solid_adapt as sad
 import solid_fem as fem
 import solid_geom as sg
 import solid_mesh as smesh
@@ -42,7 +44,7 @@ KINDS = {"force": "Force on faces", "pressure": "Pressure on faces", "point": "F
 
 def default_setup():
     return {"material": {"E": 200000.0, "nu": 0.3, "rho": 7850.0, "sy": 250.0, "su": 400.0}, "h": 0.0, "supports": [], "loads": [], "probe": None, "splits": [],
-            "mesh": smesh.default_mesh(), "bond_tol": 0.0, "body_mats": {}, "body_h": {}, "joint": "bonded", "screws": [], "design": "ASD"}
+            "mesh": smesh.default_mesh(), "adapt": sad.default_adapt(), "bond_tol": 0.0, "body_mats": {}, "body_h": {}, "joint": "bonded", "screws": [], "design": "ASD"}
 
 
 def body_materials(geom, setup):
@@ -75,6 +77,7 @@ def resolve(geom, setup):
     """-> {"supports": [{mode, fids, name}], "loads": [...], ...}; fem.FemError for a face that is gone."""
     r = {"material": dict(setup["material"]), "h": float(setup.get("h") or 0.0), "supports": [], "loads": [], "probe": setup.get("probe"),
          "mesh": smesh.resolve(geom, setup, float(setup.get("h") or 0.0) or auto_h(geom))}
+    r["adapt"] = sad.resolve(geom, setup)                                    # None = a single mesh
     r["joint"], r["screws"], r["design"] = "bonded", [], setup.get("design") or "ASD"
     if geom.get("bodies"):
         r["materials"] = body_materials(geom, setup)
@@ -280,9 +283,16 @@ def face_normal(q, geom, fid):
 
 
 def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
-    mat = r["material"]
     h = r["h"] or auto_h(geom)
+    if r.get("adapt"):                                                         # solve, refine, solve again (solid_adapt)
+        return sad.run(geom, r, h, cache, cancel, progress, get_mesh, solve_mesh)
     q = get_mesh(geom, h, cache, cancel, progress, r.get("mesh"))
+    return solve_mesh(geom, r, h, q, cancel, progress)
+
+
+def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
+    """Solves the setup `r` on the mesh `q` (element size `h`) and returns the result dict."""
+    mat = r["material"]
     sizes = fem.element_sizes(geom, h, r.get("mesh"))                           # the element size of every part (one entry for a single part)
     mats = r.get("materials") if geom.get("bodies") else None
     contact = None

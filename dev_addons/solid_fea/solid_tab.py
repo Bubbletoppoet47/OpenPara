@@ -33,6 +33,7 @@ import sim_project
 import sim_report as R
 import sim_ui
 import sim_source
+import solid_adapt as sad
 import solid_asm as sasm
 import solid_fem as fem
 import solid_geom as sg
@@ -47,6 +48,9 @@ import units
 # the results the "Result" box offers (key, name); displacement magnitude first, as in 1D FEA.  Units are added to the names by refresh_labels().
 FIELDS = [("umag", "Displacement magnitude"), ("ux", "Displacement X"), ("uy", "Displacement Y"), ("uz", "Displacement Z"),
           ("vm", "Von Mises stress"), ("fos", "Safety factor (yield)")]
+ADAPT_TIP = ("Solve, find where the mesh is too coarse (from the solution itself), mesh again with smaller elements only there, and solve again - until the "
+             "number you choose to watch changes by less than the tolerance between two loops. Your element size is the first mesh (loop 0). For a single "
+             "part or bonded parts, with tetrahedra.")
 FOS_LOW, FOS_HIGH = 0.5, 3.0                 # the safety-factor colours, as in 1D FEA: red at or below FOS_LOW, blue at or above FOS_HIGH
 
 
@@ -499,6 +503,7 @@ class SolidWindow(QWidget):
         self.size_table.itemChanged.connect(self.part_size_changed)
         v.addWidget(self.size_table)
         self.build_advanced_mesh(v)
+        self.build_adaptive(v)
         self.b_mesh = QPushButton("Mesh")
         self.b_mesh.clicked.connect(self.run_mesh)
         v.addWidget(self.b_mesh)
@@ -739,6 +744,137 @@ class SolidWindow(QWidget):
         self.cb_curv.toggled.connect(self.curv_toggled)
         self.sp_curv.valueChanged.connect(lambda _v: self.inputs_changed())
 
+    # ------------------------------------------------------------------ adaptive mesh (solid_adapt)
+    def build_adaptive(self, v):
+        """The 'Adaptive mesh (h)' tick box and the small menu it reveals (see solid_adapt for what the loops do)."""
+        self.cb_adapt = QCheckBox("Adaptive mesh (h)")
+        self.cb_adapt.setToolTip(ADAPT_TIP)
+        v.addWidget(self.cb_adapt)
+        self.adapt_box = QWidget()
+        al = QVBoxLayout(self.adapt_box)
+        al.setContentsMargins(14, 0, 0, 0)
+        al.setSpacing(3)
+        f = QFormLayout()
+        self.ad_crit = QComboBox()
+        for k, (name, _u) in sad.CRITERIA.items():
+            self.ad_crit.addItem(name, k)
+        self.ad_crit.setToolTip("The number that has to settle. Displacement and strain energy settle on any mesh. A PEAK stress at a point load, a sharp inside "
+                                "corner or a fixed edge has no finite value and keeps growing as the elements get smaller: the loops then stop at the maximum "
+                                "and say that it did not converge.")
+        sim_ui.tame(self.ad_crit, 24)
+        f.addRow("Criterion", self.ad_crit)
+        self.ad_tol = QLineEdit("1")
+        self.ad_tol.setToolTip("Converged when the criterion changed by less than this many percent between two loops.")
+        f.addRow("Tolerance (%)", self.ad_tol)
+        self.ad_loops = QSpinBox()
+        self.ad_loops.setRange(*sad.LOOPS_RANGE)
+        self.ad_loops.setValue(5)
+        self.ad_loops.setToolTip("The most refinements. Loop 0 is your own mesh; every loop after it refines and solves again, so 5 loops is up to 6 solves.")
+        f.addRow("Maximum loops", self.ad_loops)
+        self.ad_strength = QComboBox()
+        for k, (name, _f) in sad.STRENGTHS.items():
+            self.ad_strength.addItem(name, k)
+        self.ad_strength.setCurrentIndex(self.ad_strength.findData("normal"))
+        self.ad_strength.setToolTip("How much of the estimated error one loop tries to remove: aggressive makes more and smaller elements per loop (fewer loops, "
+                                    "larger meshes), gentle the opposite.")
+        sim_ui.tame(self.ad_strength, 24)
+        f.addRow("Refinement", self.ad_strength)
+        self.ad_cap = QLineEdit()
+        self.ad_cap.setPlaceholderText("auto")
+        self.ad_cap.setToolTip("Stop before a mesh gets larger than this many elements (blank = automatic: as large as the direct solver takes, about "
+                               f"{fem.DIRECT_LIMIT:,} unknowns).")
+        f.addRow("Largest mesh (elements)", self.ad_cap)
+        self.ad_hmin = QLineEdit()
+        self.ad_hmin.setPlaceholderText("auto")
+        self.ad_hmin.setToolTip("The smallest element the loops may make (blank = a tenth of the element size, or the minimum size of the advanced mesh "
+                                "options when that is set).")
+        self.ad_hmin_label = QLabel("Smallest element")
+        f.addRow(self.ad_hmin_label, self.ad_hmin)
+        al.addLayout(f)
+        self.ad_note = QLabel("")
+        self.ad_note.setWordWrap(True)
+        self.ad_note.setStyleSheet("color:#555555; font-size:11px;")
+        al.addWidget(self.ad_note)
+        self.adapt_box.setVisible(False)
+        v.addWidget(self.adapt_box)
+        self.cb_adapt.toggled.connect(self.adapt_toggled)
+        for wd in (self.ad_crit, self.ad_strength):
+            wd.activated.connect(lambda _i: self.inputs_changed())
+        for wd in (self.ad_tol, self.ad_cap, self.ad_hmin):
+            wd.editingFinished.connect(self.inputs_changed)
+        self.ad_loops.valueChanged.connect(lambda _v: self.inputs_changed())
+
+    def adapt_toggled(self, on):
+        self.adapt_box.setVisible(bool(on))
+        self.inputs_changed()
+        for s_ in self.sections:
+            s_.refresh_summary()
+
+    def read_adapt(self):
+        """The adaptive mesh boxes into the setup.  Raises ValueError for a bad number."""
+        a = sad.complete(self.setup.get("adapt"))
+        a["on"] = self.cb_adapt.isChecked()
+        a["crit"] = self.ad_crit.currentData() or "vm"
+        a["strength"] = self.ad_strength.currentData() or "normal"
+        a["loops"] = self.ad_loops.value()
+        self.setup["adapt"] = a
+        if not a["on"]:
+            return
+        a["tol"] = num(self.ad_tol, "Tolerance")
+        t = self.ad_cap.text().strip().replace(",", "")
+        try:
+            a["cap"] = int(float(t)) if t else 0
+        except ValueError:
+            raise ValueError(f"Largest mesh: '{t}' is not a number.")
+        t = self.ad_hmin.text().strip()
+        a["hmin"] = l_in(num(self.ad_hmin, "Smallest element")) if t else 0.0
+        why = sad.validate(a)
+        if why:
+            raise ValueError(why)
+
+    def put_adapt(self):
+        """The adaptive mesh boxes from the setup (after opening a project, importing a state, a change of units ...)."""
+        a = sad.complete(self.setup.get("adapt"))
+        self.setup["adapt"] = a
+        wds = (self.cb_adapt, self.ad_crit, self.ad_strength, self.ad_loops)
+        for wd in wds:
+            wd.blockSignals(True)
+        self.cb_adapt.setChecked(bool(a["on"]))
+        self.ad_crit.setCurrentIndex(max(0, self.ad_crit.findData(a["crit"])))
+        self.ad_strength.setCurrentIndex(max(0, self.ad_strength.findData(a["strength"])))
+        self.ad_loops.setValue(int(a["loops"]))
+        for wd in wds:
+            wd.blockSignals(False)
+        self.ad_tol.setText(format(float(a["tol"]), ".8g"))
+        self.ad_cap.setText(f"{int(a['cap'])}" if a["cap"] else "")
+        self.ad_hmin.setText(format(l_out(a["hmin"]), ".8g") if a["hmin"] else "")
+        self.adapt_box.setVisible(bool(a["on"]))
+        self.update_adapt_state(auto_off=False)
+
+    def update_adapt_state(self, auto_off=True, say_it=True):
+        """The tick box is for tetrahedra and for a single part or bonded parts: when it is not available it is greyed out and its tip says why; (auto_off) it
+        switches itself off when a change of the mesh type or of the joint made it unavailable.  -> the text that says so ('' when it did not), which is
+        also said in the status line unless say_it is False."""
+        why = sad.unsupported(self.geom, self.setup)
+        checked = self.cb_adapt.isChecked()
+        said = ""
+        if why and checked and auto_off:
+            self.cb_adapt.blockSignals(True)
+            self.cb_adapt.setChecked(False)
+            self.cb_adapt.blockSignals(False)
+            self.adapt_box.setVisible(False)
+            self.setup["adapt"] = dict(sad.complete(self.setup.get("adapt")), on=False)
+            said = why + " The adaptive mesh was switched off."
+            if say_it:
+                self.say(said)
+            checked = False
+        self.ad_hmin_label.setText(f"Smallest element ({UD()['L']})")
+        self.cb_adapt.setEnabled(why is None or checked)
+        self.cb_adapt.setToolTip(ADAPT_TIP if why is None else f"Not available: {why}")
+        self.ad_note.setText(why if (why and checked) else "The Mesh button makes your own (first) mesh; the loops run when you press Solve.")
+        self.ad_note.setStyleSheet("color:#b3261e; font-size:11px;" if (why and checked) else "color:#555555; font-size:11px;")
+        return said
+
     def adv_toggled(self, on):
         self.adv_box.setVisible(bool(on))
         self.show_quality(self.mesh_q["quality"] if self.mesh_q is not None else None)
@@ -788,6 +924,7 @@ class SolidWindow(QWidget):
         self.e_growth.setText(format(mo["growth"], ".8g"))
         self.adv_box.setVisible(bool(mo["advanced"]))
         self.fill_face_table()
+        self.put_adapt()
 
     def face_group_label(self, sig):
         ids = sg.match_faces(self.geom, sig) if self.geom is not None else None
@@ -1212,6 +1349,7 @@ class SolidWindow(QWidget):
             self.setup["body_h"] = bh
         hd, bs, hlow = self.size_state()
         self.read_mesh_options(hlow, bs, hd)
+        self.read_adapt()
         return self.setup
 
     def inputs_changed(self):
@@ -1220,6 +1358,7 @@ class SolidWindow(QWidget):
         except ValueError as ex:
             self.say(str(ex))
             return
+        self.update_adapt_state()
         self.invalidate(mesh=True)
 
     def invalidate(self, mesh=False):
@@ -1633,9 +1772,10 @@ class SolidWindow(QWidget):
         self.show_asm()
         self.redraw()
         self.select_faces(keep)
+        off = self.update_adapt_state(say_it=False)
         self.after_edit()
-        self.say("The parts touch freely now; only the screws and bolts join them. Cut the face between two parts into patches, select them and press Add screw."
-                 if mode == "contact" else "The parts are fully bonded where their faces touch.")
+        self.say(("The parts touch freely now; only the screws and bolts join them. Cut the face between two parts into patches, select them and press Add screw."
+                  if mode == "contact" else "The parts are fully bonded where their faces touch.") + (" " + off if off else ""))
         return True
 
     def design_picked(self):
@@ -2769,7 +2909,7 @@ class SolidWindow(QWidget):
 
         def done(res):
             self.result = res
-            self.mesh_q = self.cache.get(sm.mesh_key(g, res["h"], res.get("mesh_opts")), self.mesh_q)
+            self.mesh_q = (self.mesh_view(res) if res.get("adapt") else self.cache.get(sm.mesh_key(g, res["h"], res.get("mesh_opts")), self.mesh_q))
             self.mesh_lbl.setText(self.mesh_text(res.get("n_elements", res["n_tets"]), res["n_nodes"], res["order"],
                                                  [p["h"] for p in res["part_sizes"]] if res.get("part_sizes") else res["h"], res.get("counts")))
             self.show_counts(self.mesh_q)
@@ -2781,11 +2921,21 @@ class SolidWindow(QWidget):
             self.enable_buttons()
         return self.run_job(work, done, "Solving", plan)
 
+    def mesh_view(self, res):
+        """The mesh the last loop of an adaptive solve was solved on, as much of it as the window needs (the picture and the element counts)."""
+        tb = res.get("tet_body")
+        groups = ([{"kind": "tet", "body": int(b), "conn": res["conn"][tb == b]} for b in np.unique(tb)] if tb is not None and len(tb) == len(res["conn"])
+                  else [{"kind": "tet", "conn": res["conn"]}])
+        return {"nodes": res["nodes"], "tets": np.asarray(res["conn"])[:, :4], "conn": res["conn"], "groups": groups, "order": res["order"], "quality": res.get("quality"),
+                "viewcells": res.get("viewcells")}
+
     def job_plan(self, g, r, solving=True):
         """The stages that a mesh or a solve of this setup is expected to go through (the progress bar's estimate); None when that cannot be told."""
         try:
             h = r.get("h") or sm.auto_h(g)
             cached = self.cache.get(sm.mesh_key(g, h, r.get("mesh"))) if self.cache is not None else None
+            if solving and r.get("adapt"):
+                return sad.plan(g, dict(r, h=h), h, cached)
             return solid_progress.plan_for(g, dict(r, h=h), mesh=cached, solving=solving)
         except Exception:
             return None
@@ -2835,8 +2985,11 @@ class SolidWindow(QWidget):
         html += R.heading("Mesh") + R.kv(mesh_rows + [("Nodes", f"{r['n_nodes']:,}", None)] + size_rows)
         if r.get("hexdom_note"):
             html += R.note("Hex-dominant was asked for, but this mesh is tetrahedra only: " + r["hexdom_note"])
-        html += R.note("This window does not refine the mesh by itself: check by meshing finer and comparing, or run a parametric study "
-                       "over the element size.")
+        if r.get("adapt"):
+            html += self.adapt_report(r["adapt"])
+        else:
+            html += R.note("The mesh is not refined by itself: tick 'Adaptive mesh (h)' to let the loops refine it where the error is large, or check by meshing "
+                           "finer and comparing, or run a parametric study over the element size.")
         info = r.get("info") or {}
         ok = r["equilibrium"] < 1e-6
         sums = "Applied + reactions = (" + ", ".join(R.num(f_out(a + b), 3) for a, b in zip(r["applied"], r["reaction"])) + f") {D['F']}"
@@ -2844,6 +2997,22 @@ class SolidWindow(QWidget):
                                [f"Relative error of the force balance {r['equilibrium']:.1e}."] if not ok else None)
         self.res_lbl.setText(html)
         self.say("Solved.")
+
+    def adapt_report(self, ad):
+        """The HTML of what the adaptive mesh did: the outcome and one row per loop."""
+        D = UD()
+        name, _u = sad.CRITERIA[ad["crit"]]
+        conv = {"vm": (lambda v: s_out(v), D["S"]), "umax": (lambda v: l_out(v), D["L"]),
+                "energy": (lambda v: f_out(1.0) * l_out(1.0) * v, f"{D['F']} {D['L']}")}[ad["crit"]]
+        out = R.heading("Adaptive mesh", f"h-adaptive, {name.lower()} to {ad['tol']:g} %")
+        out += R.chip("Converged" if ad["converged"] else "Not converged", "ok" if ad["converged"] else "warn") + " " + (ad.get("reason") or "")
+        rows = [[f"{h_['loop']}" + (" (your mesh)" if h_["loop"] == 0 else ""), f"{h_['elements']:,}", R.num(conv[0](h_["value"])),
+                 "-" if h_["change"] is None else f"{h_['change']:.3g} %", f"{h_['err']:.2f} %", f"{h_['seconds']:.1f} s"] for h_ in ad["history"]]
+        out += R.grid(["Loop", "Elements", f"{name} ({conv[1]})", "Change", "Estimated error", "Time"], rows)
+        out += R.note("The estimated error is the energy of the difference between the stress the elements compute and the stress smoothed over their neighbours, "
+                      "against the energy of the solution: a guide to where the mesh is too coarse (the 'Estimated mesh error' result shows where), not a bound. "
+                      "A criterion that changed by less than the tolerance is a good sign, not a proof.")
+        return out
 
     def joint_report(self, r):
         """The HTML of the contact between the parts and of the screws and bolts (see solid_model._contact_results)."""
@@ -2946,6 +3115,11 @@ class SolidWindow(QWidget):
                    "labels": [(0.0, f"{FOS_LOW:g} or less"), (1.0, f"{FOS_HIGH:g} or more")],
                    "subtitle": "grey = no yield strength" if sy <= 0 else None}
             return vals, leg
+        if key == "err":
+            vals = np.asarray(r["node_err"], float)
+            hi = max(float(np.nanmax(vals)), 1e-9)
+            return vals, {"title": "Estimated mesh error  [%]", "lo": 0.0, "hi": hi, "flip": False,
+                          "labels": [(0.0, f"{hi:.3g}"), (0.5, f"{hi / 2:.3g}"), (1.0, "0")], "subtitle": "of the energy of the solution, per element"}
         full, name, unit = {"umag": (lambda: l_out(r["un"]), "Displacement magnitude", D["L"]),
                             "ux": (lambda: l_out(r["u"][:, 0]), "Displacement X", D["L"]),
                             "uy": (lambda: l_out(r["u"][:, 1]), "Displacement Y", D["L"]),
@@ -2966,7 +3140,23 @@ class SolidWindow(QWidget):
             return r["conn"][~np.isin(r["tet_body"], sorted(self.hidden_bodies))]
         return r.get("viewcells") or r["conn"]
 
+    def sync_err_field(self):
+        """The 'Estimated mesh error' result is offered only for a result that has it (a solve with the adaptive mesh)."""
+        have = self.result is not None and self.result.get("node_err") is not None
+        i = self.cb_field.findData("err")
+        if have == (i >= 0):
+            return
+        self.cb_field.blockSignals(True)
+        if have:
+            self.cb_field.addItem("Estimated mesh error (%)", "err")
+        else:
+            if self.cb_field.currentIndex() == i:
+                self.cb_field.setCurrentIndex(0)
+            self.cb_field.removeItem(i)
+        self.cb_field.blockSignals(False)
+
     def show_field(self, mesh_only=False):
+        self.sync_err_field()
         if self.result is None:
             if self.mesh_q is not None:
                 q = self.mesh_q
