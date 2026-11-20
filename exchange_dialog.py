@@ -1,4 +1,6 @@
-"""The File > Export dialog, and the File > Import STEP flow (Qt side of exchange.py)."""
+"""The File > Export dialog, and the File > Import STEP flow (Qt side of exchange.py).  The same flow opens a .step / .stp file chosen in File > Open,
+dropped on the window or given on the command line: run_import(shell, path)."""
+import contextlib
 import os
 
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QLabel, QMessageBox, QVBoxLayout)
@@ -139,16 +141,40 @@ def import_doc(name, solid, source):
     return d
 
 
-def run_import(shell):
-    p, _ = QFileDialog.getOpenFileName(shell, "Import STEP", "", "STEP (*.step *.stp);;All files (*)")
+STEP_EXTS = (".step", ".stp")
+
+
+def is_step(path):
+    return str(path).lower().endswith(STEP_EXTS)
+
+
+def _busy(shell, text):
+    """The "Just a second..." card of the program window while something slow runs (nothing when the shell has none)."""
+    b = getattr(shell, "busy", None)
+    return b(text) if callable(b) else contextlib.nullcontext()
+
+
+def run_import(shell, path=None):
+    """Brings a STEP file in as a new part (several solids: asks whether to make one part each, one assembly or one part).  `path` is the file
+    (File > Open, a drop, the command line); without it a file dialog asks (File > Import STEP).  Returns the new tab, a list of them, or None
+    (cancelled, or the file could not be read: then a message says why and no tab is made)."""
+    p = path
+    if not p:
+        p, _ = QFileDialog.getOpenFileName(shell, "Import STEP", "", "STEP (*.step *.stp);;All files (*)")
     if not p:
         return None
+    src = os.path.basename(p)
     try:
-        items = ex.read_step(p)
+        with _busy(shell, "Reading " + src):
+            items = ex.read_step(p)
     except Exception as e:
         QMessageBox.warning(shell, "Import STEP", f"That file could not be read: {e}")
         return None
-    src = os.path.basename(p)
+    try:                                                         # (the next File > Open starts in this folder)
+        import recent
+        recent.set_last_folder(p)
+    except Exception:
+        pass
     base = os.path.splitext(src)[0]
     if len(items) == 1:
         return open_part_doc(shell, items[0][0], items[0][1], src)
@@ -172,6 +198,11 @@ def run_import(shell):
 
 
 def open_part_doc(shell, name, solid, src):
+    with _busy(shell, "Opening " + src):
+        return _open_part_doc(shell, name, solid, src)
+
+
+def _open_part_doc(shell, name, solid, src):
     d = import_doc(name, solid, src)
     w = shell.new_part()
     w.doc = d

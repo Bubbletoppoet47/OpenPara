@@ -33,6 +33,7 @@ CORE = {
     # ---- features and tools
     "shell": ('<rect class="b" x="3.500" y="3.500" width="17" height="17" rx="1.500"/><rect class="p" x="8" y="8" width="8" height="8"/>', "feat"),
     "mass_properties": ('<path class="l" stroke-width="1.800" d="M12 5v14.500M7 20.500h10M4.500 8h15"/><path class="b" d="M4.500 8L2 14h5z"/><path class="b" d="M19.500 8L17 14h5z"/><circle class="d" cx="12" cy="4.500" r="1.800"/>', "ref"),
+    "section_properties": ('<path class="b" d="M6 4h12v3.500h-4.500v9H18V20H6v-3.500h4.500v-9H6z"/><path class="n" stroke-width="1.600" stroke-dasharray="2.500 1.500" d="M2.500 12h19"/><circle class="d" cx="12" cy="12" r="1.900"/>', "ref"),
     "measure": ('<path class="b" d="M4 16L16 4l4 4L8 20z"/><path class="l" d="M7 13l2 2M10 10l2 2M13 7l2 2"/>', "ref"),
     "insert_components": ('<path class="b" d="M3 9h10v10H3z"/><path class="b" d="M3 9l4-4h10l-4 4z"/><path class="b" d="M13 9l4-4v10l-4 4z"/><path class="n" stroke-width="2.200" d="M19 3v6M16 6h6"/>', "asm"),
     "edit_component": ('<path class="b" d="M3 10h10v10H3z"/><path class="b" d="M3 10l4-4h10l-4 4z"/><path class="b" d="M13 10l4-4v10l-4 4z"/><path class="a" d="M19.500 3l2 2-7 7-3 1 1-3z"/>', "asm"),

@@ -4,7 +4,7 @@
 
 An open-source parametric CAD modeller written in Python (working title: *Gen Parametric Designer*).
 
-- Parametric parts: sketches with a constraint solver, extrude / cut / revolve / sweep / loft (boss and cut; sweeps can twist), fillet / chamfer, configurations, STEP and STL export of parts and assemblies, and STEP import (File > Import STEP... / Export...; an imported body is the first feature of a new part, and a STEP with several solids can open as one assembly)
+- Parametric parts: sketches with a constraint solver, extrude / cut / revolve / sweep / loft (boss and cut; sweeps can twist), fillet / chamfer, configurations, STEP and STL export of parts and assemblies, and STEP import (File > Open, a .step / .stp file dropped on the window or given on the command line, or File > Import STEP... - Export is under File too; an imported body is the first feature of a new part, a file in inches, feet or metres comes in as the right size, and a STEP with several solids can open as one assembly), and Section Properties (Evaluate tab: cut a part with the Front, Top or Right plane, a reference plane or a flat face you click, and read the area, centroid and area moments of inertia of the cut)
 - Sketches can use geometry of other sketches (ribbon: Other Sketch): a point, a line, or the point where a sweep path pierces the sketch plane, so a profile can be tied to its path with normal relations and follows it when the path changes
 - Assemblies with mates, sub-assemblies and their own Globals (positions, mate values and pattern spacing take formulas)
 - One program-wide unit system (File > Units: mm, cm, m, in, ft, N, kN, kip, ... and a separate speed unit)

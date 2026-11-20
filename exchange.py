@@ -96,7 +96,22 @@ def export_stl_each(folder, items, tol=0.02, ang=0.2):
     return out
 
 
+def _check_step_file(path):
+    """A STEP file starts with ISO-10303-21; (a text file, an empty file or another format is turned away here, with a reason, instead of
+    coming back as "no solids")."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(4096)
+    except OSError as e:
+        raise ValueError(e.strerror or str(e))
+    if not head.strip():
+        raise ValueError("The file is empty.")
+    if b"ISO-10303" not in head:
+        raise ValueError("This does not look like a STEP file (a STEP file starts with ISO-10303-21).")
+
+
 def read_step(path):
+    _check_step_file(path)
     root = _import_step(str(path))
     out = []
 

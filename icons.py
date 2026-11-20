@@ -16,7 +16,7 @@ EXACT = {
 }
 # label start -> drawing (a label that begins like this, e.g. "Mirror Entities", "Trim Entities")
 PREFIX = (
-    ("exit", "exit_sketch"), ("sketch fillet", "sketch_fillet"), ("trim", "trim"), ("offset", "offset"), ("mass", "mass_properties"),
+    ("exit", "exit_sketch"), ("sketch fillet", "sketch_fillet"), ("trim", "trim"), ("offset", "offset"), ("mass", "mass_properties"), ("section", "section_properties"),
     ("mirror", "mirror_entities"), ("sketch pattern", "sketch_pattern"), ("move", "move_entities"), ("convert", "convert_entities"),
     ("add relation", "add_relation"),
 )

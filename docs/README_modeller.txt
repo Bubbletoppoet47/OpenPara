@@ -122,12 +122,19 @@ EVALUATE TAB
   Mass Properties: pick a material (or type a density), units follow File > Units (mm and cm show grams, m kilograms, in and ft pounds). Shows mass, volume, surface area,
   center of mass, principal axes and moments, and the moment of inertia at the center of mass and at the origin
   (positive tensor notation). The material is saved in the .gpd file. Copy to Clipboard copies the text.
+  Section Properties: cuts the part with a plane and measures the flat cut (the area moment of inertia, not the mass one). Choose the Front, Top or Right plane, a reference plane
+  of the part, or click a flat face in the view (the window follows the face you click; the part is drawn see-through so the cut shows inside it). The offset moves the cut along the
+  plane's normal; for a clicked face it is the distance into the part (0 measures the face itself, e.g. the end of a beam). The report gives area, centroid, Ix, Iy, Ixy and J about the
+  centroid and about the origin axes, the principal moments I1, I2 and the angle of the I1 axis, radii of gyration, and the distances to the extreme fibres with the section moduli.
+  Ix = integral of y^2 dA is about the section's X axis, Iy = integral of x^2 dA about its Y axis, Ixy = integral of x*y dA; the section's X and Y are the model axes named in the report (Front:
+  X and Z, Top: X and Y, Right: Y and Z - the same as a sketch on that plane). The numbers are exact (curved edges and holes included). A cut that meets several separate pieces is measured as one
+  section; a cut lying exactly in a face of the part carries a warning (the result may be only a part of the section). Units follow File > Units; Copy to Clipboard copies the text.
   Measure: press it, then click points (vertices), edges or faces. One item gives its coordinates / length (and radius of circles) / area.
   Two items give distances: tick Minimum, Maximum and Center to center as you like, XYZ adds the dX dY dZ split. Lengths are shown in the program's unit (File > Units).
   The measured line is drawn in orange. Maximum distance is found from points sampled along the shapes.
 
 ASSEMBLIES AND TABS  (start with:  python gpd_app.py   or   python pm_app.py)
-  The window has File / Edit / View menus and one tab per document (tabs at the bottom). File > New Part, New Assembly, Open (.gpd parts,
+  The window has File / Edit / View menus and one tab per document (tabs at the bottom). File > New Part, New Assembly, Open (.gpd parts, .step / .stp files as a new part,
   .gpa assemblies), Save, Save As, Close Tab. A star after the tab name means unsaved changes.
   A part tab shows Part Features / Sketch / Evaluate. An assembly tab shows Assembly Features / Evaluate. Add-ons (File > Add-ons) can add buttons and tabs.
   The assembly file (.gpa) is readable JSON: links to the part files (relative paths), each component's position and rotation, its fixed flag,

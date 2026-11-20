@@ -90,10 +90,14 @@ def preview_info(self):
 
 
 def part_opacity(self):
-    """Opacity of the part while a removal is previewed: lowered so that the red body inside it can be seen."""
+    """Opacity of the part while a removal is previewed: lowered so that the red body inside it can be seen (and while Section Properties is open)."""
     op = float(self.doc.display.get("opacity", 1.0))
     info = self.preview_info()
-    return min(op, 0.62) if info is not None and info["cut"] else op
+    op = min(op, 0.62) if info is not None and info["cut"] else op
+    sd = getattr(self, "section_dialog", None)
+    if sd is not None and sd.isVisible() and sd.result is not None:                 # Section Properties is open: see the cut inside the part
+        op = min(op, 0.35)
+    return op
 
 
 def draw_preview(self, pl, pv):

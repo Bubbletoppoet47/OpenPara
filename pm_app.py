@@ -34,6 +34,7 @@ import mini_tree
 import part_refgeo
 import part_preview
 import part_repeat
+import part_section
 import viewpick
 
 try:
@@ -71,7 +72,7 @@ class MainWindow(QMainWindow):
         self.measure_unit = unitctl.length_unit()
         self.measuring = False
         self.meas_items, self.meas_segs, self.meas_sig = [], [], None
-        self.measure_panel = self.mass_dialog = None
+        self.measure_panel = self.mass_dialog = self.section_dialog = None
         qs = QSettings("GenParametricDesigner", "Modeller")
         self.vis = {k: qs.value("show_" + k, "1") in ("1", 1, True, "true") for k in ("planes", "origin", "refgeo", "sketches", "dims", "edges")}
         self.plane_show = {"Front": True, "Top": True, "Right": True}
@@ -178,6 +179,7 @@ class MainWindow(QMainWindow):
         ]), "Sketch")
         self.ribbon.addTab(self.ribbon_page([
             ("mass", "⚖", "Mass\nProperties", "Mass, volume, center of mass and moments of inertia", lambda: self.mass_open()),
+            ("section", "◫", "Section\nProperties", "Area, centroid and area moments of inertia of a cut through the part: the Front, Top or Right plane, a reference plane, or a flat face you click", lambda: self.section_open()),
             ("measure", "↔", "Measure", "Measure points, edges and faces: click one or two items in the view", lambda: self.measure_toggle()),
         ]), "Evaluate")
         import ext
@@ -1691,6 +1693,8 @@ class MainWindow(QMainWindow):
         self.measure_unit = unitctl.length_unit()
         if self.mass_dialog is not None:
             self.mass_dialog.units_changed()
+        if self.section_dialog is not None:
+            self.section_dialog.units_changed()
         if self.measure_panel is not None:
             self.measure_panel.units_changed()
         self.refresh_tree()
@@ -1995,6 +1999,7 @@ class MainWindow(QMainWindow):
                 self.actor_planes[nm] = a_
         self.draw_refgeo(pl, pv, solid, size)
         self.draw_preview(pl, pv)
+        self.draw_section(pl, pv)
         if self.vis["origin"] and self.show_origin_item:
             L = 0.45 * size
             for vec, col in (((L, 0, 0), (0.85, 0.2, 0.2)), ((0, L, 0), (0.2, 0.7, 0.2)), ((0, 0, L), (0.2, 0.35, 0.9))):
@@ -2246,6 +2251,7 @@ class MainWindow(QMainWindow):
                 self.sel = None
             self.refresh_tree()
             self.show_props()
+            self.section_face_clicked()                    # (Section Properties, when its window is open, takes the face)
         self.draw()
 
     @staticmethod
@@ -2308,6 +2314,7 @@ def apply_theme(app):
 part_refgeo.install(MainWindow)
 part_preview.install(MainWindow)
 part_repeat.install(MainWindow)
+part_section.install(MainWindow)
 
 
 def main():

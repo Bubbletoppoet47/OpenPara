@@ -462,7 +462,7 @@ class AppShell(QMainWindow):
         and commands of the installed add-ons, the same things as the top of the File menu."""
         out = [{"text": "New Part", "fn": lambda: self.new_part(), "tip": "A part: sketches, extrudes, revolves ...  (Ctrl+N)"},
                {"text": "New Assembly", "fn": self.new_assembly, "tip": "Parts put together with mates  (Ctrl+Shift+N)"},
-               {"text": "Open...", "fn": self.open_dialog, "tip": "A part, an assembly or a file of an add-on  (Ctrl+O)"},
+               {"text": "Open...", "fn": self.open_dialog, "tip": "A part, an assembly, a STEP file or a file of an add-on  (Ctrl+O)"},
                {"text": "Open Project Folder...", "fn": self.open_project_folder_dialog, "tip": "The project folder of a simulation, a truss or another add-on"}]
         for kind, spec in addons.tab_kinds().items():
             out.append({"text": "New " + spec.get("label", kind), "fn": lambda k=kind: self.new_addon_tab(k), "group": "addon",
@@ -962,12 +962,12 @@ class AppShell(QMainWindow):
         exchange_dialog.run_export(self, self.tabs.currentWidget())
 
     def open_filter(self):
-        """The file-type filter of File > Open: parts, assemblies, what the active add-ons open themselves, and the files of add-ons the program
+        """The file-type filter of File > Open: parts, assemblies, STEP files (they open as a new part, like File > Import STEP), what the active add-ons open themselves, and the files of add-ons the program
         opens through them (.gpr render files; simulation projects are folders, opened with File > Open Project Folder) whenever that add-on is available (installed, or one click away)."""
         extra = sorted({t for sp in addons.tab_kinds().values() for t in sp.get("file_types", [])})
         own = [(ext, label) for ext, (aid, label) in addons.OPENABLE.items() if aid in addons.known() and ext not in extra]
-        every = ["*.gpd", "*.gpa"] + ["*" + t for t in extra] + ["*" + e for e, _ in own]
-        parts = ["All supported files (" + " ".join(every) + ")", "Part (*.gpd)", "Assembly (*.gpa)"]
+        every = ["*.gpd", "*.gpa", "*.step", "*.stp"] + ["*" + t for t in extra] + ["*" + e for e, _ in own]
+        parts = ["All supported files (" + " ".join(every) + ")", "Part (*.gpd)", "Assembly (*.gpa)", "STEP (*.step *.stp)"]
         parts += [f"{label} (*{ext})" for ext, label in own]
         return ";;".join(parts)
 
@@ -1002,6 +1002,10 @@ class AppShell(QMainWindow):
         return None
 
     def open_path(self, path):
+        import exchange_dialog
+        if exchange_dialog.is_step(path) and os.path.isfile(path):
+            r = exchange_dialog.run_import(self, path)           # a STEP file is not edited in place: it opens as a new, unsaved part (the questions and the
+            return r[0] if isinstance(r, list) and r else r      # busy card are this flow's own)
         i = self.find_tab(path)
         if i is not None:
             self.tabs.setCurrentIndex(i)
