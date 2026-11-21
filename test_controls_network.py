@@ -25,7 +25,7 @@ t.resize(1500, 900)
 t.show()
 app.processEvents()
 n = t.section("network")
-assert n is not None and [d.section.key for d in t.drops] == ["transfer_function", "network"]
+assert n is not None and [d.section.key for d in t.drops] == ["transfer_function", "network", "dynamic"]
 t.show_section("network")
 app.processEvents()
 assert t.pages.currentWidget() is n.results and n.inputs.isVisible() and not t.section("transfer_function").inputs.isVisible()

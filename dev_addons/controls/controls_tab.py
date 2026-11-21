@@ -18,21 +18,14 @@ from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, QG
 import ctl_canvas as cv
 import ctl_circuit as ckt
 import ctl_core as core
+from ctl_dyn_section import DynamicSection
+from ctl_section import Section, nice_step, ticks
 
 FILTER = "OpenPara controls (*.opctl);;All files (*)"
 FORMAT = "openpara-controls"
 
 
 # ------------------------------------------------------------------------------------------------------------- pole-zero plot
-def nice_step(span, n=6):
-    raw = max(span, 1e-12) / n
-    mag = 10 ** math.floor(math.log10(raw))
-    for s in (1, 2, 2.5, 5, 10):
-        if s * mag >= raw:
-            return s * mag
-    return 10 * mag
-
-
 class PoleZeroPlot(QWidget):
     """The s-plane: × for poles, ○ for zeros (a number beside it when a root is repeated), the left half-plane lightly tinted."""
 
@@ -140,16 +133,6 @@ class PoleZeroPlot(QWidget):
 
 
 # ------------------------------------------------------------------------------------------------------------- time response plot
-def ticks(lo, hi):
-    step = nice_step(hi - lo)
-    v = math.ceil(lo / step - 1e-9) * step
-    out = []
-    while v <= hi + step * 1e-9:
-        out.append(0.0 if abs(v) < step * 1e-9 else v)
-        v += step
-    return out
-
-
 class TimePlot(QWidget):
     """y(t) of the step or impulse response, drawn from the analytical expression, with the final value as a dashed line."""
 
@@ -385,23 +368,6 @@ class BlockDiagram(QWidget):
 
 
 # ------------------------------------------------------------------------------------------------------------- sections
-class Section:
-    """One tool.  `inputs` goes in the left column (shown when the section is open); `results` is its page on the right."""
-    key = "section"
-    title = "Section"
-
-    def __init__(self, changed):
-        self.changed = changed                      # call when an input was edited
-        self.inputs = QWidget()
-        self.results = QWidget()
-
-    def to_json(self):
-        return {}
-
-    def from_json(self, d):
-        pass
-
-
 class TransferFunctionSection(Section):
     key = "transfer_function"
     title = "Transfer function: poles, zeros, gain"
@@ -830,7 +796,7 @@ class NetworkSection(Section):
         self.set_domain("mechanical" if d.get("domain") == "mechanical" else "electrical")
 
 
-SECTIONS = [TransferFunctionSection, NetworkSection]
+SECTIONS = [TransferFunctionSection, NetworkSection, DynamicSection]
 
 
 # ------------------------------------------------------------------------------------------------------------- the dropdown column
