@@ -1,81 +1,32 @@
 """ctl_dyn_section.py - the "Dynamic simulation" section of the Controls tab.
 
-Draw a mechanism from preset parts (wheel, cart, pivot, links, masses, one motor), set the PID gains and a goal position, press Run and watch it
-balance (or fall).  The engine is ctl_dyn.py (no Qt); the drawing and the plots are in ctl_dyn_view.py.  Units are SI (m, kg, s, N, N*m, degrees for
-angles); File > Units does not change this section yet.
+Draw a self-balancing robot (or another mechanism) from preset parts, say where it should go and what it must not do (tip over or touch the ground), and press
+Learn: the program finds the PID gains itself by trying them, in the background, while you watch the trials.  The gains it finds are shown under Advanced, where
+they can also be set by hand and tried with a single run.  The engine is ctl_dyn.py, the learner ctl_learn.py (no Qt); the Learn panel is ctl_dyn_learn_ui.py; the
+drawing and the plots are in ctl_dyn_view.py.  Units are SI (m, kg, s, N, N*m, degrees for angles); File > Units does not change this section yet.
 """
 import copy
 import math
 
 import numpy as np
 
-from PyQt6.QtCore import QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QSlider,
                              QSplitter, QVBoxLayout, QWidget)
 
 import ctl_core as core
 import ctl_dyn as dyn
-from ctl_dyn_view import SignalPlots, SketchView
+from ctl_dyn_learn_ui import LearnUI
+from ctl_dyn_view import ScorePlot, SignalPlots, SketchView
+from ctl_dyn_widgets import NumEdit, head, small
 from ctl_section import Section
 
-HINT = "Press Run to balance the drawing with the controller. The tilt, position and motor effort appear here."
+HINT = "Press Learn to find the gains for this drawing, or open Advanced and press Run to try gains by hand. The tilt, position and motor effort appear here."
 UNDO_LIMIT = 60
 KIND_LABEL = {"wheel": "wheel", "cart": "cart", "pivot": "pivot", "link": "link", "mass": "mass"}
 
 
-class NumEdit(QLineEdit):
-    """A number field: commits on Enter or when it loses focus, and puts the old value back (tinted) if the text is not a number."""
-    committed = pyqtSignal(float)
-
-    def __init__(self, value=0.0, tip=""):
-        super().__init__()
-        self.value = float(value)
-        self.setText(self._text(self.value))
-        if tip:
-            self.setToolTip(tip)
-        self.setMinimumWidth(70)
-        self.setMinimumHeight(24)
-        self.editingFinished.connect(self._done)
-
-    @staticmethod
-    def _text(v):
-        return f"{v:.6g}"
-
-    def set_value(self, v):
-        self.value = float(v)
-        self.setText(self._text(self.value))
-        self.setStyleSheet("")
-
-    def _done(self):
-        try:
-            v = float(self.text().strip().replace(",", "."))
-            if not math.isfinite(v):
-                raise ValueError
-        except ValueError:
-            self.setText(self._text(self.value))
-            self.setStyleSheet("background:#fbe3e0;")
-            return
-        self.setStyleSheet("")
-        if v != self.value:
-            self.value = v
-            self.setText(self._text(v))
-            self.committed.emit(v)
-
-
-def head(text):
-    lb = QLabel(text)
-    lb.setStyleSheet("font-weight:bold;margin-top:8px;")
-    return lb
-
-
-def small(text):
-    lb = QLabel(text)
-    lb.setWordWrap(True)
-    lb.setStyleSheet("color:#5b6675;")
-    return lb
-
-
-class DynamicSection(Section):
+class DynamicSection(LearnUI, Section):
     key = "dynamic"
     title = "Dynamic simulation: balance a drawn system"
 
@@ -95,9 +46,14 @@ class DynamicSection(Section):
         self.timer = QTimer()
         self.timer.setInterval(33)
         self.timer.timeout.connect(self.tick)
+        self.init_learn()
         self.build_inputs()
         self.build_results()
         self.refresh_all()
+
+    @property
+    def busy(self):
+        return self.running or self.learning
 
     # ============================================================================================================== the left column
     def build_inputs(self):
@@ -105,7 +61,7 @@ class DynamicSection(Section):
         lay.setContentsMargins(8, 4, 8, 8)
         self.ex = QComboBox()
         self.ex.addItem("Examples…")
-        for name, _ in dyn.EXAMPLES:
+        for name, _ in dyn.SHOWN_EXAMPLES:
             self.ex.addItem(name)
         self.ex.activated.connect(self.load_example)
         lay.addWidget(self.ex)
@@ -127,7 +83,8 @@ class DynamicSection(Section):
         pl.addLayout(r1)
         pl.addLayout(r2)
         lay.addWidget(self.pal)
-        lay.addWidget(small("Pick a part in the list or in the drawing; Link and Mass attach to the picked part. Metres, kilograms, N·m; angles in degrees."))
+        lay.addWidget(small("Pick a part in the list or in the drawing; Link and Mass attach to the picked part. The wheel, the body and the masses are the "
+                            "geometry; the motor's maximum torque is the hardware limit. Metres, kilograms, N·m; angles in degrees."))
         self.plist = QListWidget()
         self.plist.setMinimumHeight(72)
         self.plist.setMaximumHeight(110)
@@ -138,51 +95,76 @@ class DynamicSection(Section):
         self.pform.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.pbox)
 
-        lay.addWidget(head("Controller"))
+        lay.addWidget(head("Goal and condition"))
+        self.gbox = QFrame()
+        gf = QFormLayout(self.gbox)
+        gf.setContentsMargins(0, 0, 0, 0)
+        c = lambda: self.sk["controller"]                                                       # noqa: E731
+        g = lambda: c()["goal"]                                                                 # noqa: E731
+        r = lambda: self.sk["run"]                                                              # noqa: E731
+        self.c_balance = QComboBox()
+        self.c_balance.setMinimumHeight(24)
+        self.c_balance.setToolTip("The link that must not tip over.")
+        self.c_balance.activated.connect(lambda _: self.edit(lambda: c().__setitem__("balance", self.c_balance.currentData())))
+        gf.addRow("Keep this link upright", self.c_balance)
+        self.pos_on = QCheckBox("Reach and hold a goal position (x)")
+        self.pos_on.setToolTip("The objective: get the base to a target x and keep it there.")
+        self.pos_on.toggled.connect(lambda on: self.edit(lambda: c().__setitem__("pos_on", bool(on))))
+        gf.addRow(self.pos_on)
+        self.g_kind = QComboBox()
+        self.g_kind.setMinimumHeight(24)
+        for k, label in (("hold", "Fixed point"), ("step", "Step at a time"), ("ramp", "Ramp (moves at a speed)")):
+            self.g_kind.addItem(label, k)
+        self.g_kind.activated.connect(lambda _: self.edit(lambda: g().__setitem__("kind", self.g_kind.currentData())))
+        gf.addRow("Goal", self.g_kind)
+        self.nrow(gf, "gx", "Goal x (m)", lambda: g()["x"], lambda v: g().__setitem__("x", v), "Where the base should end up.")
+        self.nrow(gf, "gr", "Ramp speed (m/s)", lambda: g()["rate"], lambda v: g().__setitem__("rate", v), "How fast a ramp goal moves toward x.")
+        self.nrow(gf, "gt", "Starts at (s)", lambda: g()["t"], lambda v: g().__setitem__("t", v), "When a step or a ramp begins.")
+        self.nrow(gf, "st", "Starts leaning (°)", lambda: r()["start_tilt"], lambda v: r().__setitem__("start_tilt", v),
+                  "How far the balancing link starts away from the drawn angle (positive = toward +x).")
+        self.nrow(gf, "lim", "Fallen when it leans past (°)", lambda: r()["tilt_limit"], lambda v: r().__setitem__("tilt_limit", v),
+                  "The condition: a trial fails when the tilt passes this, or when any part touches the ground.")
+        lay.addWidget(self.gbox)
+
+        self.build_learn(lay)
+
+        self.adv_btn = QPushButton("Advanced ▸")
+        self.adv_btn.setCheckable(True)
+        self.adv_btn.setFlat(True)
+        self.adv_btn.setStyleSheet("text-align:left;font-weight:bold;margin-top:8px;")
+        self.adv_btn.setToolTip("The learned gains, and a single run with gains you type yourself.")
+        lay.addWidget(self.adv_btn)
+        self.adv_box = QFrame()
+        al = QVBoxLayout(self.adv_box)
+        al.setContentsMargins(0, 0, 0, 0)
+        al.addWidget(small("These gains are what the learner found; they are read-only. Tick the box to type your own and test them with Run."))
+        self.by_hand = QCheckBox("Set the gains by hand")
+        self.by_hand.toggled.connect(lambda _=False: self.by_hand_changed())
+        al.addWidget(self.by_hand)
         self.cbox = QFrame()
         cf = QFormLayout(self.cbox)
         cf.setContentsMargins(0, 0, 0, 0)
-        self.c_balance = QComboBox()
-        self.c_balance.setMinimumHeight(24)
-        self.c_balance.activated.connect(lambda _: self.edit(lambda: self.sk["controller"].__setitem__("balance", self.c_balance.currentData())))
-        cf.addRow("Keep this link upright", self.c_balance)
-        c = lambda: self.sk["controller"]                                                       # noqa: E731
         self.nrow(cf, "tkp", "Tilt  Kp", lambda: c()["kp"], lambda v: c().__setitem__("kp", v), "Motor effort per radian of tilt (N·m/rad, or N/rad for a cart).")
         self.nrow(cf, "tki", "Tilt  Ki", lambda: c()["ki"], lambda v: c().__setitem__("ki", v), "Integral gain on the tilt error (0 = off).")
         self.nrow(cf, "tkd", "Tilt  Kd", lambda: c()["kd"], lambda v: c().__setitem__("kd", v),
                   "Damping: motor effort per rad/s of tilt rate (it uses the measured rate, like a gyro).")
-        self.pos_on = QCheckBox("Follow a goal position (x)")
-        self.pos_on.setToolTip("An outer loop turns the position error into a tilt target, so the robot leans toward the goal.")
-        self.pos_on.toggled.connect(lambda on: self.edit(lambda: c().__setitem__("pos_on", bool(on))))
-        cf.addRow(self.pos_on)
         self.nrow(cf, "pkp", "Position  Kp", lambda: c()["pkp"], lambda v: c().__setitem__("pkp", v), "Tilt target (rad) per metre of position error.")
         self.nrow(cf, "pki", "Position  Ki", lambda: c()["pki"], lambda v: c().__setitem__("pki", v), "Integral gain on the position error (0 = off).")
         self.nrow(cf, "pkd", "Position  Kd", lambda: c()["pkd"], lambda v: c().__setitem__("pkd", v), "Tilt target (rad) per m/s of speed (damps the motion).")
         self.nrow(cf, "clamp", "Largest lean (°)", lambda: c()["tilt_clamp"], lambda v: c().__setitem__("tilt_clamp", v),
                   "The position loop is never allowed to ask for more tilt than this.")
-        self.g_kind = QComboBox()
-        self.g_kind.setMinimumHeight(24)
-        for k, label in (("hold", "Fixed point"), ("step", "Step at a time"), ("ramp", "Ramp (moves at a speed)")):
-            self.g_kind.addItem(label, k)
-        self.g_kind.activated.connect(lambda _: self.edit(lambda: c()["goal"].__setitem__("kind", self.g_kind.currentData())))
-        cf.addRow("Goal", self.g_kind)
-        g = lambda: c()["goal"]                                                                 # noqa: E731
-        self.nrow(cf, "gx", "Goal x (m)", lambda: g()["x"], lambda v: g().__setitem__("x", v), "Where the base should end up.")
-        self.nrow(cf, "gr", "Ramp speed (m/s)", lambda: g()["rate"], lambda v: g().__setitem__("rate", v), "How fast a ramp goal moves toward x.")
-        self.nrow(cf, "gt", "Starts at (s)", lambda: g()["t"], lambda v: g().__setitem__("t", v), "When a step or a ramp begins.")
         self.nrow(cf, "rate", "Sample rate (Hz)", lambda: c()["rate"], lambda v: c().__setitem__("rate", v), "How often the controller reads the sensors and updates the motor.")
-        lay.addWidget(self.cbox)
-
-        lay.addWidget(head("Run"))
+        al.addWidget(self.cbox)
+        self.sug_btn = QPushButton("Suggest gains")
+        self.sug_btn.setToolTip("Work out PID gains for this drawing from its linearised model (a linear-quadratic design written as a cascade of PIDs). "
+                                "This is also where Learn starts from.")
+        self.sug_btn.clicked.connect(lambda _=False: self.suggest())
+        al.addWidget(self.sug_btn)
+        al.addWidget(head("Try the gains once"))
         self.rbox = QFrame()
         rf = QFormLayout(self.rbox)
         rf.setContentsMargins(0, 0, 0, 0)
-        r = lambda: self.sk["run"]                                                              # noqa: E731
         self.nrow(rf, "dur", "Duration (s)", lambda: r()["duration"], lambda v: r().__setitem__("duration", v))
-        self.nrow(rf, "st", "Start tilt (°)", lambda: r()["start_tilt"], lambda v: r().__setitem__("start_tilt", v),
-                  "How far the balancing link starts away from the drawn angle (positive = toward +x).")
-        self.nrow(rf, "lim", "Counts as fallen at (°)", lambda: r()["tilt_limit"], lambda v: r().__setitem__("tilt_limit", v),
-                  "A run ends when the tilt passes this, or when any part touches the ground.")
         self.push_on = QCheckBox("Push the top once")
         self.push_on.toggled.connect(lambda on: self.edit(lambda: r()["push"].__setitem__("on", bool(on))))
         rf.addRow(self.push_on)
@@ -190,22 +172,20 @@ class DynamicSection(Section):
         self.nrow(rf, "pf", "Push force (N)", lambda: p()["force"], lambda v: p().__setitem__("force", v))
         self.nrow(rf, "pt", "Push at (s)", lambda: p()["t"], lambda v: p().__setitem__("t", v))
         self.nrow(rf, "pd", "Push lasts (s)", lambda: p()["dur"], lambda v: p().__setitem__("dur", v))
-        lay.addWidget(self.rbox)
-
-        row = QHBoxLayout()
+        al.addWidget(self.rbox)
         self.run_btn = QPushButton("Run")
         self.run_btn.setStyleSheet("font-weight:bold;")
+        self.run_btn.setToolTip("Run the controller once with the gains shown above.")
         self.run_btn.clicked.connect(lambda _=False: self.run())
-        self.sug_btn = QPushButton("Suggest gains")
-        self.sug_btn.setToolTip("Work out PID gains for this drawing from its linearised model (a linear-quadratic design written as a cascade of PIDs).")
-        self.sug_btn.clicked.connect(lambda _=False: self.suggest())
-        row.addWidget(self.run_btn)
-        row.addWidget(self.sug_btn)
-        lay.addLayout(row)
+        al.addWidget(self.run_btn)
         self.tf_btn = QPushButton("Open G(s) in Transfer function")
         self.tf_btn.setToolTip("Linearise at the drawn pose and send G(s) (motor command to tilt) to the Transfer function section: poles, zeros, Routh test.")
         self.tf_btn.clicked.connect(lambda _=False: self.send_tf())
-        lay.addWidget(self.tf_btn)
+        al.addWidget(self.tf_btn)
+        self.adv_box.setVisible(False)
+        lay.addWidget(self.adv_box)
+        self.adv_btn.toggled.connect(self.show_advanced)
+
         self.status = QLabel("")
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color:#1d6b5f;")
@@ -215,7 +195,17 @@ class DynamicSection(Section):
         self.msg.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(self.msg)
         lay.addStretch(1)
-        self.groups = [self.pal, self.plist, self.pbox, self.cbox, self.rbox, self.ex, self.sug_btn, self.tf_btn]
+        self.groups = [self.pal, self.plist, self.pbox, self.gbox, self.cbox, self.rbox, self.ex, self.sug_btn, self.tf_btn, self.by_hand]
+
+    def show_advanced(self, on):
+        self.adv_box.setVisible(bool(on))
+        self.adv_btn.setText("Advanced ▾" if on else "Advanced ▸")
+
+    def by_hand_changed(self):
+        if self.loading:
+            return
+        self.refresh_controller()
+        self.changed()
 
     def _btn(self, layout, text, tip, fn):
         b = QPushButton(text)
@@ -244,22 +234,38 @@ class DynamicSection(Section):
         top = QWidget()
         tl = QVBoxLayout(top)
         tl.setContentsMargins(4, 4, 4, 0)
+        self.trial_lbl = QLabel("")
+        self.trial_lbl.setStyleSheet("font-weight:bold;color:#2b4c7e;")
         self.view = SketchView()
         self.view.picked.connect(self.select)
+        self.score = ScorePlot()
+        row = QSplitter(Qt.Orientation.Horizontal)
+        row.addWidget(self.view)
+        row.addWidget(self.score)
+        row.setStretchFactor(0, 3)
+        row.setStretchFactor(1, 2)
+        row.setSizes([520, 340])
         bar = QHBoxLayout()
         self.play_btn = QPushButton("Play")
         self.play_btn.clicked.connect(lambda _=False: self.toggle_play())
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.valueChanged.connect(self._slid)
         self.tlabel = QLabel("")
-        self.tlabel.setMinimumWidth(110)
+        self.tlabel.setMinimumWidth(170)
         self.speed = QComboBox()
         for label, v in (("1×", 1.0), ("0.5×", 0.5), ("0.25×", 0.25), ("2×", 2.0)):
             self.speed.addItem(label, v)
         self.speed.setToolTip("Playback speed")
         for wdg in (self.play_btn, self.slider, self.tlabel, self.speed):
             bar.addWidget(wdg, 1 if wdg is self.slider else 0)
-        tl.addWidget(self.view, 1)
+        hr = QHBoxLayout()
+        self.learn_btn2 = QPushButton("Learn")                  # the same button as in the left column, where the eye already is
+        self.learn_btn2.setStyleSheet("font-weight:bold;")
+        self.learn_btn2.clicked.connect(lambda _=False: self.learn_pressed())
+        hr.addWidget(self.learn_btn2)
+        hr.addWidget(self.trial_lbl, 1)
+        tl.addLayout(hr)
+        tl.addWidget(row, 1)
         tl.addLayout(bar)
         bot = QWidget()
         bl = QVBoxLayout(bot)
@@ -291,7 +297,7 @@ class DynamicSection(Section):
 
     def edit(self, fn, structural=False):
         """Every change to the drawing or the numbers goes through here: one undo step, the old result is dropped, the notes are refreshed."""
-        if self.running or self.loading:
+        if self.busy or self.loading:
             return
         self.push_undo()
         fn()
@@ -313,7 +319,7 @@ class DynamicSection(Section):
         self.changed()
 
     def do_undo(self):
-        if self.running or not self.undo:
+        if self.busy or not self.undo:
             return
         self.sk = self.undo.pop()
         if dyn.part(self.sk, self.sel) is None:
@@ -396,13 +402,17 @@ class DynamicSection(Section):
             self.labels[key][0].setEnabled(enabled)
         for key in ("pf", "pt", "pd"):
             getattr(self, "n_" + key).setEnabled(bool(self.sk["run"]["push"]["on"]))
+        hand = self.by_hand.isChecked()                     # the learned gains are shown read-only unless the user chooses to type them
+        for key in ("tkp", "tki", "tkd", "pkp", "pki", "pkd"):
+            getattr(self, "n_" + key).setReadOnly(not hand)
         self.undo_btn.setEnabled(bool(self.undo))
+        self.sync_learn_state()
 
     def refresh_notes(self):
         errs, warns = dyn.check(self.sk)
         out = ["<span style='color:#b3261e'>%s</span>" % _esc(e) for e in errs] + ["<span style='color:#8a6100'>%s</span>" % _esc(w) for w in warns]
         self.msg.setText("<br>".join(out))
-        self.run_btn.setEnabled(not errs or self.running)
+        self.run_btn.setEnabled((not errs or self.running) and not self.learning)
 
     # ============================================================================================================== the part list and form
     def _row(self, i):
@@ -569,12 +579,18 @@ class DynamicSection(Section):
         self.edit(do, True)
 
     def load_example(self, i):
-        if i <= 0 or self.running:
+        if i <= 0 or self.busy:
             return
         self.ex.setCurrentIndex(0)
+        self.load_sketch(dyn.SHOWN_EXAMPLES[i - 1][1]())
+
+    def load_sketch(self, sk):
+        """Replace the drawing (one undo step)."""
+        if self.busy:
+            return
         self.push_undo()
-        self.sk = dyn.EXAMPLES[i - 1][1]()
-        self.sel = self.sk["parts"][0]["id"]
+        self.sk = dyn.normalize(sk)
+        self.sel = self.sk["parts"][0]["id"] if self.sk["parts"] else None
         self.result = None
         self.pause()
         self.status.setText("")
@@ -585,13 +601,17 @@ class DynamicSection(Section):
     def set_busy(self, busy):
         for wdg in self.groups:
             wdg.setEnabled(not busy)
-        self.run_btn.setText("Stop" if busy else "Run")
+        self.run_btn.setText("Stop" if self.running else "Run")
+        self.update_learn_buttons()
+        self.refresh_notes()
 
     def _progress(self, f):
         self.run_btn.setText("Stop (%d %%)" % int(100 * f))
         QApplication.processEvents()
 
     def run(self):
+        if self.learning:
+            return
         if self.running:
             self.stop_flag = True
             return
@@ -747,16 +767,27 @@ class DynamicSection(Section):
 
     # ============================================================================================================== file
     def to_json(self):
-        return {"sketch": copy.deepcopy(self.sk)}
+        return {"sketch": copy.deepcopy(self.sk), "learn": self.learn_prefs()}
 
     def from_json(self, d):
         sk = (d or {}).get("sketch")
+        self._abandon()
+        self.learning = self.stopping = False
+        self.poll_timer.stop()
+        self.rtimer.stop()
+        self.worker, self.rp, self.rq = None, None, []
         self.sk = dyn.normalize(sk) if sk and sk.get("parts") else dyn.example_robot()
         self.sel = self.sk["parts"][0]["id"] if self.sk["parts"] else None
         self.undo = []
         self.result = None
         self.pause()
         self.status.setText("")
+        self.loading = True
+        try:
+            self.set_learn_prefs((d or {}).get("learn"))
+        finally:
+            self.loading = False
+        self.drop_learner()
         self.refresh_all()
 
 

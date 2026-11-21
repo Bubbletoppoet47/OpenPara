@@ -250,6 +250,31 @@ except d.SketchError as e:
 # the speed knob: more aggressive weights give a stiffer tilt loop
 assert d.suggest_gains(sk, 10.0)["kp"] >= gs["kp"]
 
+# ---- the closed-form step for a wheel with one body link equals the general tree code (the learner relies on it) ---------------------------------------------
+rng = np.random.default_rng(11)
+for trial in range(24):
+    sk = d.example_robot()
+    w, b, mm = sk["parts"]
+    w["r"], w["m"] = float(rng.uniform(0.03, 0.15)), float(rng.uniform(0.05, 0.5))
+    b["length"], b["m"], b["angle"] = float(rng.uniform(0.1, 0.7)), float(rng.uniform(0.05, 0.6)), float(rng.uniform(60, 120))
+    mm["at"], mm["m"] = float(rng.uniform(0.05, 1.0)) * b["length"], float(rng.uniform(0.0, 0.8))
+    if trial % 3 == 0:
+        b["k"], b["c"] = float(rng.uniform(0.0, 3.0)), float(rng.uniform(0.0, 0.5))
+    if trial % 4 == 1:                                                              # the motor on the wheel instead of the body
+        b["motor"], w["motor"] = None, dict(max=float(rng.uniform(0.2, 3.0)))
+    else:
+        b["motor"]["max"] = float(rng.uniform(0.2, 3.0))
+    m = d.Model(d._finish(sk))
+    assert m._robot is not None
+    z = np.concatenate([rng.uniform(-1, 1, 2) * [3.0, 0.3], rng.uniform(-1, 1, 2) * [4.0, 2.0]])
+    za = zb = z
+    for k in range(120):
+        u, F = float(rng.uniform(-1, 1)) * m.tmax, (float(rng.uniform(-3, 3)) if k % 7 == 0 else 0.0)
+        za, zb = m.step(za, u, F, 0.0025), m.step_generic(zb, u, F, 0.0025)
+    assert np.allclose(za, zb, rtol=1e-8, atol=1e-8), (trial, za, zb)
+# anything else (a cart, a pivot with two links) takes the general path
+assert d.Model(d.example_cartpole())._robot is None and d.Model(d.example_pendulum_up())._robot is None
+
 # ---- speed: a 10 s run is a second or so (the retry loop will do hundreds of them) --------------------------------------------------------------
 import time
 t0 = time.time()

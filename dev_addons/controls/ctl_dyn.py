@@ -379,6 +379,7 @@ class Model:
         self.x_base = X0[0] if has_base_body else 0.0
         self._lin = None
         self._pol = None
+        self._setup_robot()
 
     # ------------------------------------------------------------------ states
     def z0(self, start_tilt_deg=0.0):
@@ -448,13 +449,61 @@ class Model:
         qdd = np.linalg.solve(M, rhs)
         return np.concatenate([qd, qdd])
 
-    def step(self, z, u, push, h):
+    def step_generic(self, z, u, push, h):
         f = self.deriv
         k1 = f(z, u, push)
         k2 = f(z + 0.5 * h * k1, u, push)
         k3 = f(z + 0.5 * h * k2, u, push)
         k4 = f(z + h * k3, u, push)
         return z + (h / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+    def step(self, z, u, push, h):
+        if self._robot is not None:
+            return np.array(self._robot_step(z[0], z[1], z[2], z[3], u, push, h))
+        return self.step_generic(z, u, push, h)
+
+    def _setup_robot(self):
+        """A wheel with one body link is the self-balancing robot, and its two equations are short enough to write out.  That makes a run about
+        five times faster than the general tree code (which the tests use to check it), and the learner makes hundreds of runs."""
+        self._robot = None
+        if not (self.root["kind"] == "wheel" and self.n == 2 and self.parent_b.get(1) == 0):
+            return
+        r = float(self.root["r"])
+        mw, Iw = float(self.m[0]), float(self.I[0])
+        mb, Ib, sc = float(self.m[1]), float(self.I[1]), float(self.W[1, 1])
+        M11 = mw * r * r + Iw + mb * r * r
+        M22 = mb * sc * sc + Ib
+        mbrs, mbgs = mb * r * sc, mb * G * sc
+        q0, q1 = float(self.Qm[0]), float(self.Qm[1])
+        spring = self.SR.shape[0] == 1
+        a0, a1 = (float(self.SR[0, 0]), float(self.SR[0, 1])) if spring else (0.0, 0.0)
+        k, c, phi = (float(self.SK[0]), float(self.SC[0]), float(self.Sphi[0])) if spring else (0.0, 0.0, 0.0)
+        L = float(self.tipw[1])
+        sin, cos = math.sin, math.cos
+
+        def f(p, a, dp, da, u, F):
+            sa, ca = sin(a), cos(a)
+            M12 = -mbrs * sa
+            Qp = u * q0 + F * r
+            Qa = u * q1 - mbgs * ca - F * L * sa
+            if spring:
+                T = -(k * (a0 * p + a1 * a - phi) + c * (a0 * dp + a1 * da))
+                Qp += T * a0
+                Qa += T * a1
+            rp = Qp + mbrs * ca * da * da                   # M11 p'' + M12 a'' = Qp - dM12/da a'^2,  dM12/da = -m r s cos a
+            det = M11 * M22 - M12 * M12
+            return dp, da, (M22 * rp - M12 * Qa) / det, (M11 * Qa - M12 * rp) / det
+
+        def step(p, a, dp, da, u, F, h):
+            h2, h6 = 0.5 * h, h / 6.0
+            k1 = f(p, a, dp, da, u, F)
+            k2 = f(p + h2 * k1[0], a + h2 * k1[1], dp + h2 * k1[2], da + h2 * k1[3], u, F)
+            k3 = f(p + h2 * k2[0], a + h2 * k2[1], dp + h2 * k2[2], da + h2 * k2[3], u, F)
+            k4 = f(p + h * k3[0], a + h * k3[1], dp + h * k3[2], da + h * k3[3], u, F)
+            return (p + h6 * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]), a + h6 * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]),
+                    dp + h6 * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]), da + h6 * (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3]))
+        self._robot_step = step
+        self._robot = f
 
     def energy(self, z):
         n = self.n
@@ -513,6 +562,17 @@ class Model:
         self._pol = ((ctrl["kp"], ctrl["kd"]), bs)
         return bs
 
+    def closed_loop_poles(self, ctrl):
+        """Poles of the linearised loop with this controller (the tilt PD and, if on, the position PD; the integrals and the lean clamp are ignored)."""
+        A, B = self.linear()
+        C = self.sense_matrix()
+        kp, kd = float(ctrl["kp"]), float(ctrl["kd"])
+        K = -(kp * C[0] + kd * C[1])
+        if ctrl.get("pos_on", True) and self.has_pos:
+            K = K - kp * (float(ctrl["pkp"]) * C[2] + float(ctrl["pkd"]) * C[3])
+        K = self.polarity(ctrl) * K
+        return np.linalg.eigvals(A + B @ K.reshape(1, -1))
+
     # ------------------------------------------------------------------ pictures
     def layout(self, z, ang_only=False):
         """Everything to draw at state z."""
@@ -523,6 +583,16 @@ class Model:
         wa = th[0] if self.root["kind"] == "wheel" else 0.0
         ang = {b["id"]: float(th[self.idx[b["id"]]]) for b in self.bodies if b["kind"] == "link"}
         return layout(self.sk, ang=ang, xr=float(xr), wa=float(wa))
+
+
+def min_damping(poles):
+    """The smallest damping ratio among the poles: 1 = real (no ringing), 0 = undamped, negative = unstable."""
+    z = 1.0
+    for p in poles:
+        if p.real >= -1e-9:
+            return -1.0 if p.real > 1e-9 or abs(p.imag) < 1e-9 else 0.0
+        z = min(z, 1.0 if abs(p.imag) <= 1e-6 * abs(p) else -p.real / abs(p))
+    return float(z)
 
 
 def _tip(x, y, ang, s):
@@ -645,13 +715,15 @@ class Result:
         return " ".join(out)
 
 
-def simulate(sk, progress=None, stop=None):
-    """Run the controller on the sketch.  Returns a Result (check(sk) first: this raises SketchError on a bad drawing)."""
+def simulate(sk, progress=None, stop=None, mdl=None, substep=None):
+    """Run the controller on the sketch.  Returns a Result (this raises SketchError on a bad drawing).
+    mdl: a Model already compiled from the same geometry (the learner reuses one); substep: longest physics step (s), default MAX_SUBSTEP."""
     sk = normalize(sk)
-    mdl = Model(sk)
+    if mdl is None:
+        mdl = Model(sk)
     c, r = sk["controller"], sk["run"]
     dtc = 1.0 / float(c["rate"])
-    sub = max(1, int(math.ceil(dtc / MAX_SUBSTEP - 1e-9)))
+    sub = max(1, int(math.ceil(dtc / (substep or MAX_SUBSTEP) - 1e-9)))
     h = dtc / sub
     N = int(round(float(r["duration"]) / dtc))
     pol = mdl.polarity(c)
@@ -856,3 +928,4 @@ def example_pendulum_down():
 
 EXAMPLES = (("Self-balancing robot (wheel + body)", example_robot), ("Cart and pole", example_cartpole),
             ("Inverted pendulum on a pivot", example_pendulum_up), ("Hanging pendulum (motor damps the swing)", example_pendulum_down))
+SHOWN_EXAMPLES = EXAMPLES[:1]            # the section offers only the robot for now (the others stay in the engine, tested, for when a project needs them)

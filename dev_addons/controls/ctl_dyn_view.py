@@ -4,7 +4,7 @@ import math
 import numpy as np
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import QWidget
 
 import ctl_dyn as dyn
@@ -286,10 +286,13 @@ class SignalPlots(QWidget):
         self.setMinimumSize(320, 200)
         self.res = None
         self.t_cur = 0.0
+        self._cache, self._cache_key = None, None            # the curves are drawn once into a picture; only the time cursor moves while it plays
+        self._rects = []
 
     def set_result(self, res):
         self.res = res
         self.t_cur = 0.0
+        self._cache = None
         self.update()
 
     def set_time(self, t):
@@ -312,20 +315,43 @@ class SignalPlots(QWidget):
     def paintEvent(self, ev):
         p = QPainter(self)
         try:
-            self.draw(p)
+            dpr = self.devicePixelRatioF()
+            key = (self.width(), self.height(), dpr)
+            if self._cache is None or self._cache_key != key:
+                pm = QPixmap(max(1, int(self.width() * dpr)), max(1, int(self.height() * dpr)))
+                pm.setDevicePixelRatio(dpr)
+                pp = QPainter(pm)
+                try:
+                    self.draw(pp)
+                finally:
+                    pp.end()
+                self._cache, self._cache_key = pm, key
+            p.drawPixmap(0, 0, self._cache)
+            self.draw_cursor(p)
         except Exception:                      # noqa: BLE001 - an error escaping a paint event would close the whole program
             pass
         finally:
             p.end()
+
+    def draw_cursor(self, p):
+        g = getattr(self, "_geom", None)
+        if self.res is None or self.res.n < 2 or g is None:
+            return
+        left, right, T = g
+        x = left + max(0.0, min(T, self.t_cur)) / T * (right - left)
+        p.setPen(QPen(QColor("#222222"), 1))
+        for top, bottom in self._rects:
+            p.drawLine(QPointF(x, top), QPointF(x, bottom))
 
     def draw(self, p):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
         p.fillRect(0, 0, w, h, QColor("#ffffff"))
         p.setFont(_font(11))
+        self._rects = []
         if self.res is None or self.res.n < 2:
             p.setPen(QColor("#7a8696"))
-            p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "Press Run to see the tilt, position and motor effort here.")
+            p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "Press Learn (or Run under Advanced) to see the tilt, position and motor effort here.")
             return
         panels = self.panels()
         left, right, top, axis = 62, 14, 6, 24
@@ -377,8 +403,7 @@ class SignalPlots(QWidget):
             if not res.ok and res.t_fail is not None:
                 p.setPen(QPen(RED, 1, Qt.PenStyle.DashLine))
                 p.drawLine(QPointF(X(res.t_fail), r.top()), QPointF(X(res.t_fail), r.bottom()))
-            p.setPen(QPen(QColor("#222222"), 1))
-            p.drawLine(QPointF(X(self.t_cur), r.top()), QPointF(X(self.t_cur), r.bottom()))
+            self._rects.append((r.top(), r.bottom()))
             p.setClipping(False)
             p.setPen(SOFT)
             p.setFont(_font(11, True))
@@ -405,3 +430,101 @@ class SignalPlots(QWidget):
     def mouseMoveEvent(self, ev):
         if ev.buttons() & Qt.MouseButton.LeftButton:
             self._scrub(ev.position())
+
+
+class ScorePlot(QWidget):
+    """How the learning is going: the score of every trial (lower is better, log scale).  Green dot = balanced, red dot = fell over or hit the ground,
+    the line = the best score so far, the ring = the trial being shown on the drawing."""
+    TICKS = (0.5, 1, 2, 5, 10, 20, 50, 100, 200, 400, 800)
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(250, 190)
+        self.pts = []                              # (trial index, cost, balanced)
+        self.mark = None
+        self.floor = []                            # best cost so far after each trial
+
+    def reset(self):
+        self.pts, self.floor, self.mark = [], [], None
+        self.update()
+
+    def add(self, tr):
+        self.pts.append((int(tr.index), float(tr.cost), bool(tr.ok)))
+        self.floor.append(min(c for _, c, _ in self.pts))
+        self.update()
+
+    def set_mark(self, index):
+        self.mark = index
+        self.update()
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        try:
+            self.draw(p)
+        except Exception:                          # noqa: BLE001 - an error escaping a paint event would close the whole program
+            pass
+        finally:
+            p.end()
+
+    def draw(self, p):
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        p.fillRect(0, 0, w, h, QColor("#ffffff"))
+        p.setFont(_font(11))
+        if not self.pts:
+            p.setPen(QColor("#7a8696"))
+            p.drawText(QRectF(8, 0, w - 16, h), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                       "Press Learn: the score of every trial appears here (lower is better).")
+            return
+        left, right, top, bottom = 44, 12, 22, 34
+        r = QRectF(left, top, w - left - right, h - top - bottom)
+        if r.width() < 40 or r.height() < 30:
+            return
+        n = max(self.pts[-1][0], 10)
+        costs = [c for _, c, _ in self.pts]
+        lo, hi = math.log10(max(min(costs) / 1.4, 0.3)), math.log10(max(costs) * 1.25)
+        if hi - lo < 0.3:
+            hi = lo + 0.3
+
+        def X(i):
+            return r.left() + (i - 1) / max(n - 1, 1) * r.width()
+
+        def Y(c):
+            return r.bottom() - (math.log10(max(c, 1e-9)) - lo) / (hi - lo) * r.height()
+        p.setPen(SOFT)
+        p.setFont(_font(11, True))
+        p.drawText(QRectF(left, 2, r.width(), 16), Qt.AlignmentFlag.AlignLeft, "Score of each trial (lower is better)")
+        p.setFont(_font(10))
+        for v in self.TICKS:
+            if lo <= math.log10(v) <= hi:
+                p.setPen(QPen(GRID, 1))
+                p.drawLine(QPointF(r.left(), Y(v)), QPointF(r.right(), Y(v)))
+                p.setPen(SOFT)
+                p.drawText(QRectF(0, Y(v) - 7, left - 4, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, _fmt(v, 3))
+        p.setPen(QPen(QColor("#9aa6b8"), 1))
+        p.drawRect(r)
+        p.setPen(SOFT)
+        for v in ticks(1, n):
+            if 1 <= v <= n:
+                p.drawText(QRectF(X(v) - 24, r.bottom() + 3, 48, 14), Qt.AlignmentFlag.AlignCenter, _fmt(v, 4))
+        p.drawText(QRectF(r.left(), r.bottom() + 16, r.width(), 14), Qt.AlignmentFlag.AlignCenter, "trial")
+        p.setClipRect(r)
+        p.setPen(QPen(BLUE, 1.8))
+        prev = None
+        for (i, _, _), f in zip(self.pts, self.floor):                  # the best-so-far line is a staircase
+            q = QPointF(X(i), Y(f))
+            if prev is not None:
+                p.drawLine(prev, QPointF(q.x(), prev.y()))
+                p.drawLine(QPointF(q.x(), prev.y()), q)
+            prev = q
+        p.setPen(Qt.PenStyle.NoPen)
+        for i, c, ok in self.pts:
+            p.setBrush(TEAL if ok else RED)
+            p.drawEllipse(QPointF(X(i), Y(c)), 3.0, 3.0)
+        if self.mark is not None:
+            for i, c, ok in self.pts:
+                if i == self.mark:
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.setPen(QPen(QColor("#222222"), 1.6))
+                    p.drawEllipse(QPointF(X(i), Y(c)), 6.5, 6.5)
+        p.setClipping(False)

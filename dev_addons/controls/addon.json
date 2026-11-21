@@ -2,7 +2,7 @@
  "name": "Systems and Controls",
  "order": 5,
  "status": "workshopping",
- "description": "Control-systems tools built problem by problem from an introductory controls textbook. Transfer function: type G(s) and get zeros, poles, gain, stability, step and impulse responses and plots. Mechanical / Electrical systems: draw a circuit or a mass-spring-damper system and get G(s), its analog and the same plots. Dynamic simulation: draw a mechanism from preset parts (wheel, cart, pivot, links, masses, one ideal motor), set PID gains and a goal position, and watch it balance or fall, with plots; send its G(s) to the Transfer function section.",
+ "description": "Control-systems tools built problem by problem from an introductory controls textbook. Transfer function: type G(s) and get zeros, poles, gain, stability, step and impulse responses and plots. Mechanical / Electrical systems: draw a circuit or a mass-spring-damper system and get G(s), its analog and the same plots. Dynamic simulation: draw a self-balancing robot from preset parts (wheel, links, masses, one ideal motor), give it a goal position and a no-tipping condition, and let it learn its PID gains by trying them while you watch the trials in the background or live; plots, gains under Advanced, and G(s) sent to the Transfer function section.",
  "tabs": [
   {
    "kind": "controls",
