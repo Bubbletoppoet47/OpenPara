@@ -1,4 +1,4 @@
-"""Page Break (dev_addons/page_break): breaks, segments, exclusion, undo, auto-break, combining PDFs, export sizes, project file, the tab, manifest."""
+"""Page Break, the page-project part of the PDF editor (dev_addons/pdf_editor): breaks, segments, exclusion, undo, auto-break, combining PDFs, export sizes, project file, the tab, manifest."""
 import faulthandler
 import json
 import os
@@ -10,7 +10,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 UD = tempfile.mkdtemp(prefix="opara_ud_")
 os.environ["OPARA_USER_DIR"] = UD
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path[:0] = [os.path.join(HERE, "dev_addons", "page_break"), os.path.join(HERE, "shared"), HERE]
+sys.path[:0] = [os.path.join(HERE, "dev_addons", "pdf_editor"), os.path.join(HERE, "shared"), HERE]
 import pb_core as core
 import pymupdf as fitz
 
@@ -227,9 +227,9 @@ tab2.open_path(tall); assert len(tab2.project.items) == 4, "a PDF given to open_
 assert not tab2.open_path(os.path.join(T, "bad.oppb"))
 
 # ---------------------------------------------------------------- 3. the manifest
-man = json.load(open(os.path.join(HERE, "dev_addons", "page_break", "addon.json")))
+man = json.load(open(os.path.join(HERE, "dev_addons", "pdf_editor", "addon.json")))
 t0 = man["tabs"][0]
-assert t0["kind"] == "pagebreak" and t0["module"] == "page_break_tab" and t0["factory"] == "make_tab" and ".oppb" in t0["file_types"]
+assert t0["kind"] == "pdfeditor" and t0["module"] == "pe_tab" and t0["factory"] == "make_tab" and ".oppb" in t0["file_types"] and ".pdf" in t0["file_types"]
 # ---------------------------------------------------------------- 4. PyMuPDF missing: downloaded once into the user folder, then everything works
 import shutil
 import pb_deps, pymupdf

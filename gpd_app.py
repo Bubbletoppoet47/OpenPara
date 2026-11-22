@@ -1092,8 +1092,28 @@ class AppShell(QMainWindow):
         if i is not None:
             self.tabs.setCurrentIndex(i)
             return self.tabs.widget(i)
+        w = self.adopted_by_tab(path)
+        if w is not None:
+            return w
         with self.busy("Opening " + os.path.basename(path)):
             return self._open_path(path)
+
+    def adopted_by_tab(self, path):
+        """A tab that holds several documents of its own (the PDF editor) may take a file that is opened from anywhere, as one more document of its
+        own, instead of the program opening a second tab of that kind: tab.adopt_path(path) -> True when it took it.  -> that tab, else None."""
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            fn = getattr(w, "adopt_path", None)
+            if not callable(fn):
+                continue
+            try:
+                if fn(path):
+                    self.tabs.setCurrentIndex(i)
+                    return w
+            except Exception:                           # noqa: BLE001 - a tab that cannot take the file leaves it to the program
+                import traceback
+                log_error("A tab could not take " + path + ":\n" + traceback.format_exc())
+        return None
 
     def _open_path(self, path):
         spec = next((sp for sp in addons.tab_kinds().values() if path.lower().endswith(tuple(sp.get("file_types", [])) or ("\0",))), None)

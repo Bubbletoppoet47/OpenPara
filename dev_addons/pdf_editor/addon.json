@@ -1,0 +1,23 @@
+{
+ "name": "PDF editor",
+ "order": 6,
+ "status": "workshopping",
+ "description": "Read a PDF aloud from any sentence you choose, highlight it and save the highlights into the file, cut long pages into normal-sized pages and combine pages from several PDFs, or turn pictures of text into a PDF with real text. Several PDFs can be open at once.",
+ "tabs": [
+  {
+   "kind": "pdfeditor",
+   "label": "PDF editor",
+   "short": "PDF editor",
+   "module": "pe_tab",
+   "factory": "make_tab",
+   "args": [
+    "path"
+   ],
+   "set_host": true,
+   "file_types": [
+    ".pdf",
+    ".oppb"
+   ]
+  }
+ ]
+}

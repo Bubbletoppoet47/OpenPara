@@ -719,12 +719,13 @@ class PageBreakTab(QWidget):
     def keyPressEvent(self, ev):
         ctrl = bool(ev.modifiers() & Qt.KeyboardModifier.ControlModifier)
         if ctrl and ev.key() == Qt.Key.Key_S:
-            return self.save()
-        if ctrl and ev.key() == Qt.Key.Key_Z:
-            return self.undo()
-        if ctrl and ev.key() == Qt.Key.Key_Y:
-            return self.redo()
-        super().keyPressEvent(ev)
+            self.save()
+        elif ctrl and ev.key() == Qt.Key.Key_Z:
+            self.undo()
+        elif ctrl and ev.key() == Qt.Key.Key_Y:
+            self.redo()
+        else:
+            super().keyPressEvent(ev)
 
 
 def make_tab(path=None):

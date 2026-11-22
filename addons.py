@@ -177,11 +177,14 @@ def dev_dir():
     return channel.dev_addons_dir()                      # a playground build carries its own dev_addons/ folder
 
 
+RETIRED = {"page_break": "pdf_editor"}           # add-on ids that were merged into another: an update that could only copy files over the old ones leaves the old folder behind
+
+
 def dev_ids():
     d = dev_dir()
     if not d:
         return []
-    return [n for n in sorted(os.listdir(d)) if _manifest(os.path.join(d, n)) is not None]
+    return [n for n in sorted(os.listdir(d)) if n not in RETIRED and _manifest(os.path.join(d, n)) is not None]
 
 
 def is_dev(aid):
