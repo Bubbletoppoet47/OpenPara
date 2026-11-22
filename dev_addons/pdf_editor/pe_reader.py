@@ -1,6 +1,6 @@
 """pe_reader.py - one PDF in the reader: read it aloud from the sentence you choose, highlight it, save the highlights into the file.
 
-Left: numbered sections (Read aloud, Highlights, This PDF) with Play / Pause pinned underneath.  Right: the pages (pe_view.PdfView).
+Left: numbered sections (Read aloud, Highlights, AI check, This PDF) with Play / Pause pinned underneath.  Right: the pages (pe_view.PdfView).
 The window of the PDF editor holds one of these for every PDF that is open (pe_tab.py) and one voice (pe_speech.Hub) that they share.
 
 Where it reads from:  click a sentence = the marker; Play starts at the marker (or at the top of the window when there is none); double-click or right-click
@@ -17,6 +17,7 @@ from PyQt6.QtGui import QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
                              QSlider, QSplitter, QVBoxLayout, QWidget)
 
+import pe_aipanel
 import pe_deps
 import pe_kokoro
 import pe_pdfio as pio
@@ -39,9 +40,11 @@ class Signals(QObject):
     progress = pyqtSignal(str)
     done = pyqtSignal(bool, str)
     natural_done = pyqtSignal(bool, str)
+    ai_progress = pyqtSignal(str, float)         # the AI check (pe_aipanel): what it is doing, how far (-1: not known)
+    ai_done = pyqtSignal(str)                    # ... and that it ended ("" or why it could not go on)
 
 
-class ReaderTab(QWidget):
+class ReaderTab(pe_aipanel.AiPanelMixin, QWidget):
     changed = pyqtSignal()                       # the title (a star) or the buttons changed
     pages_requested = pyqtSignal(str)            # "Cut and combine this PDF"
     images_requested = pyqtSignal()
@@ -66,6 +69,7 @@ class ReaderTab(QWidget):
         self.sig.natural_done.connect(self.natural_setup_done)
         self.cancel_setup = threading.Event()
         self.pending_idx = None
+        self.ai_init()
         self.pump_timer = QTimer(self)
         self.pump_timer.setInterval(40)
         self.pump_timer.timeout.connect(self.pump)
@@ -230,8 +234,13 @@ class ReaderTab(QWidget):
         v.addLayout(row)
         v.addWidget(ui_kit.note("On: each highlight (and each undo) is written into the file right after you make it. Off: it waits for Save."))
 
-        # 3 this PDF
-        v = sec(3, "This PDF", summary=lambda: self.info_lbl.text())
+        # 3 AI check
+        v = sec(3, "AI check", summary=lambda: self.ai_summary(),
+                help_text="Looks for signs of AI-written text in every paragraph. Experimental: a hint, not proof.")
+        self.ai_build(v)
+
+        # 4 this PDF
+        v = sec(4, "This PDF", summary=lambda: self.info_lbl.text())
         self.info_lbl = QLabel("")
         self.info_lbl.setWordWrap(True)
         v.addWidget(self.info_lbl)
@@ -317,6 +326,7 @@ class ReaderTab(QWidget):
             self.placed = True
             QTimer.singleShot(0, self.place_initial)
         self.refresh_voices()
+        self.ai_refresh_rows()
 
     def place_initial(self):
         """The first time the PDF is on screen: where you left it, or fitted to the window."""
@@ -809,6 +819,7 @@ class ReaderTab(QWidget):
         """The tab is closing: stop the voice, remember where you were, let go of the file."""
         self.build_timer.stop()
         self.cancel_setup.set()                                  # a download that is running ends
+        self.ai_shutdown()
         if self.hub.owner is self:
             self.hub.stop()
         self.pump_timer.stop()

@@ -2,7 +2,7 @@
  "name": "PDF editor",
  "order": 6,
  "status": "workshopping",
- "description": "Read a PDF aloud with natural voices from any sentence you choose, highlight it and save the highlights into the file, cut long pages into normal-sized pages and combine pages from several PDFs, or turn pictures of text into a PDF with real text. Several PDFs can be open at once.",
+ "description": "Read a PDF aloud with natural voices from any sentence you choose, highlight it and save the highlights into the file, check it for signs of AI-written text (experimental: a hint, not proof), cut long pages into normal-sized pages and combine pages from several PDFs, or turn pictures of text into a PDF with real text. Several PDFs can be open at once.",
  "tabs": [
   {
    "kind": "pdfeditor",

@@ -3,6 +3,8 @@
     voice support    pywin32 (about 10 MB): how Python talks to the Windows voices.  Needed to read aloud; Windows only.
     text reader      RapidOCR and what it needs: reads the words in a picture.  Needed only by Images -> PDF.
     natural voices   Kokoro (kokoro-onnx, sounddevice) and its model files (about 120 MB): the 28 English voices.  Needed only to read aloud with them.
+    AI check         tokenizers (a few MB; onnxruntime and numpy only when nothing else has brought them): what the AI-text tests need to run.  The
+                     models of the tests are separate downloads (pe_aipacks.py).
 
 The Playground updates the program's files in place and the packages bundled with the program only change with a full installer, so these are
 downloaded once into <user folder>/packages/<name> with the download-and-unpack code the add-ons use (addons._pip_install), and put on the search
@@ -26,6 +28,10 @@ OCR_PINS = ["rapidocr>=3.0", "onnxruntime>=1.16", "opencv-python-headless>=4.8"]
 OCR_MB = 100                                       # rough: the models are inside the RapidOCR download, nothing is fetched later
 OCR_BUNDLED = {"numpy": "numpy", "pillow": "PIL", "shapely": "shapely", "onnxruntime": "onnxruntime"}   # wheel -> module: not downloaded again when it is
                                                                                                     # already there (the program's own, or the other pack's)
+AI = "pdfeditor_aicheck"
+AI_PINS = ["tokenizers>=0.15"]                     # on its own (--no-deps): its requirements are only for downloading models from the Hub, which is not used
+AI_RUNTIME_PINS = ["onnxruntime>=1.16"]            # only when the program or another pack does not have it (numpy comes with the program)
+AI_MB = 20
 NATURAL = "pdfeditor_natural"
 NATURAL_PINS = ["kokoro-onnx>=0.5", "sounddevice>=0.4"]
 NATURAL_BUNDLED = {"numpy": "numpy", "onnxruntime": "onnxruntime"}
@@ -67,7 +73,7 @@ def add_to_path(name):
 
 def add_all_to_path():
     """Every pack that is there: they share what they can (onnxruntime), so each needs the others' folders on the path."""
-    for n in (OCR, NATURAL, VOICE):
+    for n in (OCR, NATURAL, AI, VOICE):
         add_to_path(n)
 
 
@@ -161,17 +167,18 @@ def _bundled(module, own):
     return not os.path.abspath(spec.origin).lower().startswith(os.path.abspath(site_dir(own)).lower())
 
 
-def _wheels_installer(skip, own, what):
-    """An installer(pins, target, progress) that downloads the wheels of `pins` AND what they need (pip download), leaves out the big ones that are
-    already there (`skip`: wheel -> module), and unpacks the rest into `target`.  The program's own python runs pip; it is polled so the window
-    stays alive."""
+def _wheels_installer(skip, own, what, no_deps=False):
+    """An installer(pins, target, progress) that downloads the wheels of `pins` AND what they need (pip download; just the pins with no_deps), leaves
+    out the big ones that are already there (`skip`: wheel -> module), and unpacks the rest into `target`.  The program's own python runs pip; it is
+    polled so the window stays alive."""
     def installer(pins, target, progress):
         import addons
         import paths
         os.makedirs(target, exist_ok=True)
         wheels = tempfile.mkdtemp(prefix="opara_whl_")
         try:
-            cmd = [paths.python_exe(), "-m", "pip", "download", "--dest", wheels, "--only-binary=:all:", "--disable-pip-version-check", "--no-input"] + list(pins)
+            cmd = [paths.python_exe(), "-m", "pip", "download", "--dest", wheels, "--only-binary=:all:", "--disable-pip-version-check", "--no-input"]
+            cmd += (["--no-deps"] if no_deps else []) + list(pins)
             kw = {"creationflags": 0x08000000} if sys.platform == "win32" else {}          # CREATE_NO_WINDOW
             log = tempfile.TemporaryFile()
             p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, **kw)
@@ -210,6 +217,40 @@ def ocr_installer(pins, target, progress):
 
 def natural_installer(pins, target, progress):
     _wheels_installer(NATURAL_BUNDLED, NATURAL, "the voice packages")(pins, target, progress)
+
+
+def _have(module):
+    add_all_to_path()
+    try:
+        return importlib.util.find_spec(module) is not None
+    except Exception:                                  # noqa: BLE001
+        return False
+
+
+def ai_ready(deep=False):
+    """The packages of the AI check can be found (deep: and really imported - slow, so only after a download)."""
+    add_all_to_path()
+    try:
+        for m in ("numpy", "onnxruntime", "tokenizers"):
+            if deep:
+                importlib.import_module(m)
+            elif importlib.util.find_spec(m) is None:
+                return False
+        return True
+    except Exception:                                  # noqa: BLE001
+        return False
+
+
+def ai_installer(pins, target, progress):
+    """tokenizers on its own, then onnxruntime with what it needs - only when nothing else (the program, the text reader, the natural voices) has it."""
+    _wheels_installer({}, AI, "the AI check packages", no_deps=True)(list(pins), target, progress)
+    if not _have("onnxruntime"):
+        _wheels_installer({"numpy": "numpy"}, AI, "the AI check packages")(list(AI_RUNTIME_PINS), target, progress)
+
+
+def install_ai(progress=None, installer=None):
+    with exclusive():
+        install(AI_PINS, AI, progress, installer or ai_installer, check=lambda: ai_ready(deep=True))
 
 
 def install_ocr(progress=None, installer=None):

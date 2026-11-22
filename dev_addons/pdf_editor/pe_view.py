@@ -5,6 +5,7 @@ The viewer knows nothing about speech or saving: it asks its tab (the controller
     tab.doc, tab.text (a pe_text.DocText), tab.edits (a pe_pdfio.Edits)
     tab.sentence_clicked(i), tab.play_requested(i), tab.highlight_selection(name), tab.remove_highlight(pno, xref), tab.copy_selection(),
     tab.toggle_play(), tab.step(d), tab.view_changed()
+and, when it has them, tab.ai_clicked(word): a click on a word (the AI check shows its result for that paragraph).
 """
 import bisect
 from collections import OrderedDict
@@ -25,6 +26,8 @@ MAX_PIXELS = 40_000_000                    # no page image larger than this, how
 READ_FILL = QColor(255, 170, 0, 85)
 READ_EDGE = QColor(230, 140, 0, 200)
 SEL_FILL = QColor(43, 125, 233, 80)
+AI_NONE = QColor(40, 160, 130, 26)         # a paragraph the AI check looked at, where none of the tests leans AI
+AI_EDGE = QColor(150, 40, 190, 230)        # the outline of the paragraph whose result is shown
 PAGE_EDGE = QColor("#aab3c2")
 SHADOW = QColor(40, 50, 70, 55)
 
@@ -110,6 +113,8 @@ class PdfView(QScrollArea):
         self.zoom = 1.0
         self.sel = None                          # (first word, last word)
         self.read_idx = None                     # the sentence marker / the sentence being spoken
+        self.ai_marks = []                       # the AI check: [(page, (x0, y0, x1, y1), strength 0..1, paragraph)] - view only, never written into the PDF
+        self.ai_focus = None                     # ... and the paragraph whose result is shown
         self.page_y, self.page_x, self.page_w, self.page_h = [], [], [], []
         self.total_h, self.total_w, self.content_w = 1, 1, 1
         self.images = OrderedDict()
@@ -318,10 +323,29 @@ class PdfView(QScrollArea):
             p.drawRect(target)
         self.paint_overlays(p, first, last)
 
+    @staticmethod
+    def ai_fill(strength):
+        """No test leaning AI: a faint green; the more of the tests lean AI, the deeper the purple."""
+        if strength <= 0:
+            return AI_NONE
+        return QColor(150, 40, 190, int(40 + 95 * min(1.0, strength)))
+
     def paint_overlays(self, p, first, last):
         text = self.tab.text
         if not text.ready:
             return
+        if self.ai_marks:
+            p.setPen(Qt.PenStyle.NoPen)
+            for pno, r, strength, k in self.ai_marks:
+                if first <= pno <= last:
+                    p.setBrush(self.ai_fill(strength))
+                    p.drawRect(self.to_sheet(pno, r))
+            if self.ai_focus is not None:
+                p.setPen(QPen(AI_EDGE, 2))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                for pno, r, strength, k in self.ai_marks:
+                    if k == self.ai_focus and first <= pno <= last:
+                        p.drawRect(self.to_sheet(pno, r).adjusted(-2, -1, 2, 1))
         if self.read_idx is not None and self.read_idx < len(text.sentences):
             p.setPen(QPen(READ_EDGE, 1))
             p.setBrush(READ_FILL)
@@ -404,6 +428,9 @@ class PdfView(QScrollArea):
             self.tab.sentence_clicked(self.read_idx)
         elif had:
             self.sheet.update()
+        ai = getattr(self.tab, "ai_clicked", None)
+        if ai is not None:
+            ai(t)
 
     def double(self, ev):
         self._ignore_release = True
