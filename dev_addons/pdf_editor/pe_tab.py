@@ -49,6 +49,10 @@ class PdfEditorTab(QWidget):
         self.kind = None
         self.store = pe_store.Store()
         self.hub = pe_speech.Hub(self.backend)
+        try:
+            self.hub.rate = int(self.store.get("rate", 1))           # the speed of last time
+        except (TypeError, ValueError):
+            pass
         self.pending = []                      # paths to open as soon as PyMuPDF is there
         self.setup_busy = False
         self.last_project = None               # the page project that "Cut and combine" adds to

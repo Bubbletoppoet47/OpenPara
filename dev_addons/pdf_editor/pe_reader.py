@@ -10,12 +10,15 @@ that sentence again.  The marker does not move when you scroll.
 Highlights are written into the PDF with Save (Ctrl+S) or, when the switch of this PDF is on, right after each one.
 """
 import os
+import threading
 
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
                              QSlider, QSplitter, QVBoxLayout, QWidget)
 
 import pe_deps
+import pe_kokoro
 import pe_pdfio as pio
 import pe_speech
 import pe_store
@@ -35,6 +38,7 @@ CHIP = "#c8402f"
 class Signals(QObject):
     progress = pyqtSignal(str)
     done = pyqtSignal(bool, str)
+    natural_done = pyqtSignal(bool, str)
 
 
 class ReaderTab(QWidget):
@@ -42,7 +46,9 @@ class ReaderTab(QWidget):
     pages_requested = pyqtSignal(str)            # "Cut and combine this PDF"
     images_requested = pyqtSignal()
     AUTO_SETUP = True                            # download the voice support by itself when it is missing (a test turns this off)
-    installer = None                             # a test can put its own downloader here
+    installer = None                             # a test can put its own downloader here (the Windows voice support)
+    natural_installer = None                     # ... and one for the packages of the natural voices
+    natural_fetch = None                         # ... and one for their model files: fetch(url, dest, progress, what)
 
     def __init__(self, path, hub, store, password_for=None):
         super().__init__()
@@ -57,6 +63,9 @@ class ReaderTab(QWidget):
         self.sig = Signals()
         self.sig.progress.connect(lambda t: self.status.say(t))
         self.sig.done.connect(self.voice_setup_done)
+        self.sig.natural_done.connect(self.natural_setup_done)
+        self.cancel_setup = threading.Event()
+        self.pending_idx = None
         self.pump_timer = QTimer(self)
         self.pump_timer.setInterval(40)
         self.pump_timer.timeout.connect(self.pump)
@@ -161,8 +170,10 @@ class ReaderTab(QWidget):
         row = QHBoxLayout()
         row.addWidget(QLabel("Voice"))
         self.voice_box = QComboBox()
+        self.voice_model = QStandardItemModel(self.voice_box)          # group headings (not selectable) and the voices, each holding its id
+        self.voice_box.setModel(self.voice_model)
         ui_kit.tame_combo(self.voice_box, 26)
-        self.voice_box.currentTextChanged.connect(self.voice_changed)
+        self.voice_box.currentIndexChanged.connect(self.voice_changed)
         row.addWidget(self.voice_box, 1)
         v.addLayout(row)
         row = QHBoxLayout()
@@ -356,59 +367,176 @@ class ReaderTab(QWidget):
     def voice_summary(self):
         return (self.voice_box.currentText() or "no voice") if self.voice_box.count() else "no voice yet"
 
+    def entry(self, vid):
+        for v in self.hub.voice_entries():
+            if v.id == vid:
+                return v
+        return None
+
+    def select_voice(self, vid):
+        i = self.voice_box.findData(vid)
+        if i >= 0:
+            self.voice_box.setCurrentIndex(i)               # (voice_changed does the rest)
+
     def refresh_voices(self):
-        voices = self.hub.voices()
+        entries = self.hub.voice_entries()
+        ids = [v.id for v in entries]
         cur = self.hub.voice_name
-        self.voice_box.blockSignals(True)
-        self.voice_box.clear()
-        self.voice_box.addItems(voices)
-        if voices:
-            if cur not in voices:
-                cur = (self.store.get("voice") if self.store.get("voice") in voices else voices[0])
+        box, model = self.voice_box, self.voice_model
+        box.blockSignals(True)
+        model.clear()
+        several = len({v.group for v in entries}) > 1
+        group = None
+        for v in entries:
+            if several and v.group != group:                # a heading for each group (American women, ...): shown, never chosen
+                group = v.group
+                head = QStandardItem(group)
+                head.setFlags(Qt.ItemFlag.NoItemFlags)
+                f = head.font()
+                f.setBold(True)
+                head.setFont(f)
+                model.appendRow(head)
+            item = QStandardItem(v.label)
+            item.setData(v.id, Qt.ItemDataRole.UserRole)
+            model.appendRow(item)
+        if entries:
+            if cur not in ids:
+                saved = self.store.get("voice")
+                cur = saved if saved in ids else (pe_kokoro.DEFAULT_VOICE if pe_kokoro.DEFAULT_VOICE in ids else ids[0])
                 self.hub.voice_name = cur
-            self.voice_box.setCurrentText(cur)
-        self.voice_box.setEnabled(bool(voices))
-        self.voice_box.blockSignals(False)
+            box.setCurrentIndex(box.findData(cur))
+        box.setEnabled(bool(entries))
+        box.setToolTip(box.currentText())
+        box.blockSignals(False)
         self.speed.blockSignals(True)
         self.speed.setValue(self.hub.rate)
         self.speed.blockSignals(False)
         self.speed_lbl.setText(self.speed_text(self.hub.rate))
-        if voices:
-            self.voice_note.setText("")
-            self.voice_note.setVisible(False)
+        self.update_voice_note()
+        v = self.entry(self.hub.voice_name)
+        if v is not None and v.kind == "natural":
+            self.hub.warm()                                 # the model is loaded in the background, so that Play does not wait for it
+
+    def update_voice_note(self):
+        entries = self.hub.voice_entries()
+        v = self.entry(self.hub.voice_name)
+        grades = "The letters are the voice model's own grades: A is the best, F the weakest."
+        if not entries:
+            text = ("No voice is ready. Press Play: the first time, OpenPara downloads the small package that lets it use the Windows voices "
+                    f"(about {pe_deps.VOICE_MB} MB, once). This needs Windows and an internet connection." if os.name == "nt" else
+                    "Reading aloud needs Windows (or the natural voices).")
+        elif v is None:
+            text = ""
+        elif v.kind == "natural":
+            if self.hub.needs(v.id):
+                text = (f"The natural voices are downloaded the first time you press Play (about {pe_deps.NATURAL_MB} MB, once; after that they work "
+                        "without internet). " + grades)
+            else:
+                text = grades + " The voice is made on this computer, so a slow computer may pause between phrases."
+        elif v.kind == "setup":
+            text = ("Press Play: the first time, OpenPara downloads the small package that lets it use the Windows voices "
+                    f"(about {pe_deps.VOICE_MB} MB, once). This needs an internet connection.")
         else:
-            self.voice_note.setVisible(True)
-            self.voice_note.setText("No Windows voice is ready. Press Play: the first time, OpenPara downloads the small package that lets it use them "
-                                    f"(about {pe_deps.VOICE_MB} MB, once). This needs Windows and an internet connection." if os.name == "nt" else
-                                    "Reading aloud uses the Windows voices, so it needs Windows.")
+            text = ""
+        self.voice_note.setText(text)
+        self.voice_note.setVisible(bool(text))
 
     @staticmethod
     def speed_text(v):
         return f"{v:+d}" if v else "normal"
 
-    def voice_changed(self, name):
-        if name:
-            self.hub.voice_name = name
-            self.store.set("voice", name)
+    def voice_changed(self, i):
+        vid = self.voice_box.itemData(i)
+        if not vid:
+            return
+        self.hub.voice_name = vid
+        self.store.set("voice", vid)
+        self.update_voice_note()
+        for s in self.sections:
+            s.refresh_summary()
+        if self.hub.running and self.hub.needs():
+            if self.hub.owner is self:                      # reading goes on in the sentence it is in, then the new voice would be needed
+                self.stop_reading()
+            else:
+                self.hub.stop()
+            self.status.say("That voice has to be downloaded first. Press Play to get it.", "warn")
+            return
+        v = self.entry(vid)
+        if v is not None and v.kind == "natural":
+            self.hub.warm()
 
     def speed_changed(self, v):
         self.hub.rate = v
         self.speed_lbl.setText(self.speed_text(self.hub.rate))
         self.store.set("rate", self.hub.rate)
 
-    # voice support (pywin32), downloaded the first time
+    # natural voices (Kokoro): the packages and the model, downloaded the first time (after asking)
+    def ask_natural_download(self, mb):
+        r = QMessageBox.question(self, "PDF editor", f"The natural voices need a download of about {mb} MB, once: the voice model and a few packages. "
+                                 "They are kept on this computer, and the voices then work without internet.\n\nDownload them now?")
+        return r == QMessageBox.StandardButton.Yes
+
+    def need_natural(self, idx):
+        if self.setup_busy:
+            return
+        if pe_deps.busy():
+            self.status.say("Another download is already running. Press Play again when it has finished.", "warn")
+            return
+        if not self.AUTO_SETUP:
+            self.status.say("The natural voices are not downloaded.", "warn")
+            return
+        if not self.ask_natural_download(pe_deps.NATURAL_MB):
+            other = any(v.kind in ("windows", "setup") for v in self.hub.voice_entries())
+            self.status.say("Nothing was downloaded. Press Play when you want the natural voices" + (", or choose a Windows voice from the list." if other else "."), "warn")
+            return
+        self.setup_busy = True
+        self.pending_idx = idx
+        self.cancel_setup.clear()
+        cancel = self.cancel_setup
+        self.status.say(f"Getting the natural voices (about {pe_deps.NATURAL_MB} MB, once). This needs an internet connection ...")
+        self.sync()
+
+        def progress(text, frac=None):
+            if cancel.is_set():
+                raise RuntimeError("Stopped.")                  # ends the download; what was half done is removed
+            self.sig.progress.emit(text)
+
+        def work():
+            try:
+                pe_deps.install_natural(progress, self.natural_installer, self.natural_fetch)
+                self.sig.natural_done.emit(True, "")
+            except BaseException as e:                           # noqa: BLE001 - shown to the person, never raised in a thread
+                self.sig.natural_done.emit(False, str(e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def natural_setup_done(self, ok, message):
+        self.setup_busy = False
+        stopped = self.cancel_setup.is_set()
+        idx, self.pending_idx = self.pending_idx, None
+        self.refresh_voices()
+        if ok and not stopped:
+            self.status.say("The natural voices are ready.", "good")
+            if idx is not None:
+                self.play_from(idx)
+        elif stopped:
+            self.status.say("The download was stopped. Nothing half downloaded was kept.", "warn")
+        else:
+            self.status.say("The natural voices could not be downloaded: " + (message.strip().splitlines()[-1] if message.strip() else "the download failed."), "bad")
+        self.sync()
+
+    # Windows voice support (pywin32), downloaded the first time
     def need_voices(self, idx):
         if os.name != "nt":
-            self.status.say("Reading aloud uses the Windows voices, so it needs Windows.", "warn")
+            self.status.say("Reading aloud with these voices needs Windows. The natural voices work everywhere.", "warn")
             return
         if self.setup_busy:
             return
         if not self.AUTO_SETUP:
             self.status.say("The voice support is missing.", "warn")
             return
-        import threading
         self.setup_busy = True
         self.pending_idx = idx
+        self.cancel_setup.clear()
         self.status.say(f"Getting the voice support (about {pe_deps.VOICE_MB} MB, once). This needs an internet connection ...")
 
         def work():
@@ -421,11 +549,15 @@ class ReaderTab(QWidget):
 
     def voice_setup_done(self, ok, message):
         self.setup_busy = False
+        was = self.hub.voice_name
         self.hub.forget_voices()
         self.refresh_voices()
-        if ok and self.hub.voices():
+        windows = [v for v in self.hub.voice_entries() if v.kind == "windows"]
+        if ok and windows:
+            if was == "windows:setup":                           # the stand-in entry is gone: the first real Windows voice takes its place
+                self.select_voice(windows[0].id)
             self.status.say("The voices are ready.", "good")
-            idx, self.pending_idx = getattr(self, "pending_idx", None), None
+            idx, self.pending_idx = self.pending_idx, None
             if idx is not None:
                 self.play_from(idx)
         else:
@@ -452,7 +584,11 @@ class ReaderTab(QWidget):
         self.finish_text()
         if not self.text.sentences:
             return
-        if not self.hub.voices():
+        need = self.hub.needs() if self.hub.voices() else "windows"          # what has to be downloaded before this voice can speak
+        if need == "natural":
+            self.need_natural(idx)
+            return
+        if need:
             self.need_voices(idx)
             return
         idx = max(0, min(idx, len(self.text.sentences) - 1))
@@ -463,6 +599,9 @@ class ReaderTab(QWidget):
         self.update_status()
 
     def stop_reading(self):
+        if self.setup_busy:                                      # Stop also ends a download that is running
+            self.cancel_setup.set()
+            self.status.say("Stopping the download ...")
         if self.hub.owner is self:
             self.hub.stop()
         self.pump_timer.stop()
@@ -506,7 +645,7 @@ class ReaderTab(QWidget):
         self.b_play.setEnabled(has_text)
         self.b_prev.setEnabled(self.text.ready and bool(self.text.sentences))
         self.b_next.setEnabled(self.text.ready and bool(self.text.sentences))
-        self.b_stop.setEnabled(reading)
+        self.b_stop.setEnabled(reading or self.setup_busy)
         self.b_play.setText(("▶  Resume" if self.hub.paused else "⏸  Pause") if reading else "▶  Play")
         self.b_undo.setEnabled(bool(self.edits.undo_stack))
         self.b_redo.setEnabled(bool(self.edits.redo_stack))
@@ -669,6 +808,7 @@ class ReaderTab(QWidget):
     def shutdown(self):
         """The tab is closing: stop the voice, remember where you were, let go of the file."""
         self.build_timer.stop()
+        self.cancel_setup.set()                                  # a download that is running ends
         if self.hub.owner is self:
             self.hub.stop()
         self.pump_timer.stop()

@@ -52,7 +52,7 @@ def set_engine(engine):
 def get_engine():
     global _engine
     if _engine is None:
-        pe_deps.add_to_path(pe_deps.OCR)
+        pe_deps.add_all_to_path()
         logging.getLogger("RapidOCR").setLevel(logging.WARNING)
         from rapidocr import RapidOCR
         _engine = RapidOCR()

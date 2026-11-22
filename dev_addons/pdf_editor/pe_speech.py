@@ -1,4 +1,5 @@
-"""pe_speech.py - reading a document aloud, sentence by sentence, with the Windows voices (SAPI), without blocking the window (no Qt here).
+"""pe_speech.py - reading a document aloud, sentence by sentence, without blocking the window (no Qt here).  Voices: the natural ones (Kokoro,
+pe_kokoro.py) and the Windows ones (SAPI).
 
 Speaker       one worker thread that speaks the sentences from a starting sentence to the end and reports through a queue:
                   ("sentence", run, i)  the voice is about to say sentence i
@@ -7,17 +8,26 @@ Speaker       one worker thread that speaks the sentences from a starting senten
               Pause and resume are exact: the voice itself is paused, so it goes on in the middle of the sentence.  Stop ends the thread.
 Hub           the one voice of the editor: whichever PDF starts reading stops the one that was reading.  It numbers the runs, so that what a
               stopped run still puts in the queue is thrown away.
-SapiBackend   the real voices (pywin32 - downloaded the first time, see pe_deps).  A test passes a backend of its own (list_voices(), engine()).
+SapiBackend   the Windows voices (pywin32 - downloaded the first time, see pe_deps).
+MixedBackend  the natural voices first, then the Windows ones: what the editor really uses.
+A backend offers list_voices() (names), engine() (apply / speak / purge / pause / resume / wait, and optionally prefetch(texts)), and optionally
+voice_entries() (Voice tuples with a group and a grade) and needs(voice) (None when it can speak now, else what has to be downloaded first).
+A test passes a backend of its own.
 """
+import os
 import queue
 import threading
+from collections import namedtuple
 
 import pe_deps
+
+Voice = namedtuple("Voice", "id label group grade kind")          # kind: "natural", "windows", or "setup" (a stand-in for the Windows voices before pywin32 is there)
 
 SVS_ASYNC = 1
 SVS_PURGE = 2
 SVS_NOT_XML = 16
 RATE_MIN, RATE_MAX = -5, 10                    # the speed slider (SAPI itself takes -10..10)
+PREFETCH = 2                                   # how many sentences ahead the natural voices prepare
 
 
 class SapiBackend:
@@ -156,6 +166,8 @@ class Speaker:
                 eng.apply(self.voice_name, self.rate, self.volume)
                 self.events.put(("sentence", tag, i))
                 eng.speak(text)
+                if hasattr(eng, "prefetch"):               # the natural voices make the next sentences ready while this one is said
+                    eng.prefetch([t.strip() for t in texts[i + 1:i + 6] if t.strip()][:PREFETCH])
                 paused = False
                 while True:
                     if stop.is_set():
@@ -182,24 +194,123 @@ class Speaker:
             self.events.put(("done", tag, natural))
 
 
+class MixedEngine:
+    """Speaks with whichever kind of voice is chosen for the sentence (the engines are made when first needed, in the speaking thread)."""
+
+    def __init__(self, backend):
+        self.b = backend
+        self.engines = {}
+        self.cur = None
+
+    def apply(self, voice, rate, volume):
+        kind = "natural" if (self.b.natural is not None and self.b.natural.has(voice)) else "windows"
+        if kind not in self.engines:
+            self.engines[kind] = self.b.natural.engine() if kind == "natural" else self.b.windows.engine()
+        self.cur = self.engines[kind]
+        self.cur.apply(voice, rate, volume)
+
+    def speak(self, text):
+        self.cur.speak(text)
+
+    def prefetch(self, texts):
+        fn = getattr(self.cur, "prefetch", None)
+        if fn:
+            fn(texts)
+
+    def purge(self):
+        self.cur.purge()
+
+    def pause(self):
+        self.cur.pause()
+
+    def resume(self):
+        self.cur.resume()
+
+    def wait(self, ms):
+        return self.cur.wait(ms)
+
+    def close(self):
+        for e in self.engines.values():
+            try:
+                e.close()
+            except Exception:                  # noqa: BLE001
+                pass
+
+
+class MixedBackend:
+    def __init__(self, natural=None, windows=None):
+        self.natural = natural
+        self.windows = windows if windows is not None else SapiBackend()
+
+    def voice_entries(self):
+        out = list(self.natural.voice_entries()) if self.natural is not None else []
+        names = self.windows.list_voices()
+        if names:
+            out += [Voice(n, n, "Windows voices", "", "windows") for n in names]
+        elif os.name == "nt":
+            out.append(Voice("windows:setup", "Windows voices (a small download first)", "Windows voices", "", "setup"))
+        return out
+
+    def list_voices(self):
+        return [v.id for v in self.voice_entries()]
+
+    def needs(self, voice):
+        """None when `voice` can speak now, else what has to come first: "natural" (the model and its packages), "windows" (pywin32), "notwindows"."""
+        if self.natural is not None and self.natural.has(voice):
+            return None if self.natural.ready() else "natural"
+        if voice == "windows:setup":
+            return "windows" if os.name == "nt" else "notwindows"
+        if os.name != "nt":
+            return "notwindows"
+        return None if self.windows.available() else "windows"
+
+    def engine(self):
+        return MixedEngine(self)
+
+    def warm(self):
+        if self.natural is not None:
+            self.natural.warm()
+
+
 class Hub:
     """The one voice of the editor tab, shared by every PDF in it."""
 
     def __init__(self, backend=None):
+        if backend is None:
+            from pe_kokoro import KokoroBackend            # here, not at the top: pe_kokoro uses Voice from this file
+            backend = MixedBackend(KokoroBackend(), SapiBackend())
         self.events = queue.Queue()
         self.speaker = Speaker(self.events, backend)
         self.run_id = 0
         self.owner = None                      # the reader that is reading (or is paused)
-        self._voices = None
+        self._entries = None
 
     # -- settings
+    def voice_entries(self):
+        """[Voice]: the voices in the order to show them.  A backend that only knows names gets plain entries."""
+        if self._entries is None:
+            b = self.speaker.backend
+            if hasattr(b, "voice_entries"):
+                self._entries = list(b.voice_entries())
+            else:
+                self._entries = [Voice(n, n, "Voices", "", "windows") for n in b.list_voices()]
+        return self._entries
+
     def voices(self):
-        if self._voices is None:
-            self._voices = self.speaker.backend.list_voices()
-        return self._voices
+        return [v.id for v in self.voice_entries()]
 
     def forget_voices(self):
-        self._voices = None
+        self._entries = None
+
+    def needs(self, voice=None):
+        """What has to be downloaded before the chosen voice can speak (see MixedBackend.needs), None when nothing."""
+        fn = getattr(self.speaker.backend, "needs", None)
+        return fn(voice or self.voice_name) if fn else None
+
+    def warm(self):
+        fn = getattr(self.speaker.backend, "warm", None)
+        if fn:
+            fn()
 
     @property
     def rate(self):
