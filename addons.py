@@ -93,6 +93,15 @@ CATALOG = {
 
 
 LOAD_ERRORS = {}             # {add-on id: traceback text}: add-ons whose extension module failed at the last register_extensions
+STARTUP_ERRORS = {}          # {add-on id: text}: add-ons that could not be put in place (or upgraded) at the start of this run
+
+
+def _warn(text):
+    """A line for the console.  The shortcut starts the program without one (pythonw.exe: sys.stderr is None), and a message must never stop the start."""
+    try:
+        sys.stderr.write(text)
+    except Exception:                                 # noqa: BLE001
+        pass
 
 
 # files the program opens through an add-on although the add-on has no document tab of its own: extension -> (add-on id, name in the Open dialog)
@@ -400,6 +409,7 @@ def set_update_prompt_declined(on=True):
 
 def startup():
     """Called once when the program starts: tidy, put add-ons that ship in the program folder in place (or upgrade them), activate."""
+    STARTUP_ERRORS.clear()
     try:
         _clean_leftovers()
         removed = set(_read_state()["removed"])
@@ -410,7 +420,8 @@ def startup():
                 try:
                     install(aid, activate_now=False)
                 except Exception as ex:
-                    sys.stderr.write(f"add-on {aid}: could not install: {ex}\n")
+                    STARTUP_ERRORS[aid] = f"The add-on could not be installed or updated: {ex}"
+                    _warn(f"add-on {aid}: could not install: {ex}\n")
     finally:
         activate()
 
@@ -433,12 +444,13 @@ def register_extensions(ext):
                 mod.register(ext)
             except Exception:
                 LOAD_ERRORS[aid] = traceback.format_exc()
-                sys.stderr.write(f"add-on {aid}: could not be loaded:\n{LOAD_ERRORS[aid]}\n")
+                _warn(f"add-on {aid}: could not be loaded:\n{LOAD_ERRORS[aid]}\n")
 
 
 def load_errors():
-    """{add-on id: error text} of the add-ons whose extension could not be loaded at the last register_extensions (shown in File > Add-ons)."""
-    return dict(LOAD_ERRORS)
+    """{add-on id: error text} of the add-ons that could not be put in place at the start or whose extension could not be loaded at the last
+    register_extensions (shown after the start and in File > Add-ons)."""
+    return {**STARTUP_ERRORS, **LOAD_ERRORS}
 
 
 def adds(aid):

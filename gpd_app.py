@@ -8,6 +8,9 @@ import sys
 import time
 import contextlib
 
+import streams
+streams.ensure()          # started by pythonw.exe (no console): sys.stdout / sys.stderr are None and any write to them would stop the program
+
 import channel
 import perf
 
@@ -1394,8 +1397,11 @@ def install_excepthook():
     def hook(et, ev, tb):
         text = "".join(traceback.format_exception(et, ev, tb))
         log_error(text)
-        sys.stderr.write(text)
-        if showing[0]:                                    # an error while the error window is open (a redraw that keeps failing): logged, not stacked
+        try:
+            sys.stderr.write(text)
+        except Exception:                                 # no console (pythonw.exe): the log and the window below carry it
+            pass
+        if showing[0]:                                   # an error while the error window is open (a redraw that keeps failing): logged, not stacked
             return
         showing[0] = True
         try:

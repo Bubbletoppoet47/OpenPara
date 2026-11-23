@@ -59,6 +59,8 @@ def ensure_registered():
     """Makes the Simulation add-on know the kind 'thermal' (project folder .gph, the window, how a saved state changes units).  Safe to call again."""
     import sim_project
     import sim_tab
+    import thermal_ext
+    thermal_ext.check_simulation((sim_project, "register_kind"), (sim_tab, "register_kind"), (pstore, "register_converter"))
     if KIND not in sim_project.EXT:
         sim_project.register_kind(KIND, EXT, LABEL)
     if KIND not in sim_tab.KINDS:
