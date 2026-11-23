@@ -86,7 +86,7 @@ def save_state(**fields):
 
 def mode():
     """'testing' or 'full' (only meaningful in the Playground; the normal program is always 'testing')."""
-    if not is_playground():
+    if not is_playground() or safe_start():
         return "testing"
     m = (os.environ.get("OPARA_PLAYGROUND_MODE") or state().get("mode") or "testing").strip().lower()
     return m if m in MODES else "testing"
@@ -101,9 +101,16 @@ def is_full_dev():
     return is_playground() and mode() == "full"
 
 
+def safe_start():
+    """True for a run that the OpenPara Updater's "Start safely" button started (OPARA_SAFE_START=1): every add-on is off, the Playground is in Testing mode,
+    nothing is installed or updated at the start and the last session's tabs are not reopened.  For this run only: nothing is saved."""
+    return os.environ.get("OPARA_SAFE_START") == "1"
+
+
 def title():
-    """Window title: 'OpenPara', or 'OpenPara Playground (testing)' / '(full dev)'."""
-    return app_name() if not is_playground() else f"{app_name()} ({'full dev' if mode() == 'full' else 'testing'})"
+    """Window title: 'OpenPara', or 'OpenPara Playground (testing)' / '(full dev)'.  A safe start says so."""
+    t = app_name() if not is_playground() else f"{app_name()} ({'full dev' if mode() == 'full' else 'testing'})"
+    return t + " - safe start, add-ons off" if safe_start() else t
 
 
 def dev_addons_dir():

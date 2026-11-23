@@ -219,7 +219,7 @@ class UpdateController(QObject):
         box.exec()
         c = box.clickedButton()
         if c is b_inst:
-            self.install(rel)
+            self.update_now(rel)
         elif c is b_page:
             QDesktopServices.openUrl(QUrl(rel.get("page") or updater.RELEASES_PAGE))
         elif c is b_skip:
@@ -231,7 +231,51 @@ class UpdateController(QObject):
             st["watch_later"] = rel["version"]
             save_state(st)
 
-    # ---- download + install
+    # ---- the OpenPara Updater (updater_tool\\): the only thing that replaces the program files, when it is installed
+    def updater_available(self):
+        return updater.tool_script() is not None
+
+    def spawn_updater(self, *args):
+        """Starts the updater as its own process (it outlives the program: on Windows detached)."""
+        cmd = updater.tool_command(*args)
+        if cmd is None:
+            raise OSError("the updater is not installed")
+        kw = {}
+        if os.name == "nt":
+            kw["creationflags"] = 0x00000008 | 0x00000200                     # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        return subprocess.Popen(cmd, cwd=updater.installed_layout()[0], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                close_fds=True, **kw)
+
+    def open_updater(self):
+        """Help > Open the updater: earlier builds, repair, start safely.  It stays open next to the program; its buttons wait until the program is closed."""
+        try:
+            self.spawn_updater()
+        except OSError as ex:
+            QMessageBox.warning(self.shell, "Updater", f"The updater could not be started: {ex}")
+
+    def update_now(self, rel):
+        """"Update now": with the updater installed it does the whole job (the program closes first); an older install without it updates here as before."""
+        if self.updater_available():
+            self.hand_over(rel)
+        else:
+            self.install(rel)
+
+    def hand_over(self, rel):
+        """The program closes (open documents are asked about first, the tabs are noted for the next start) and the updater installs the build, starts the
+        program again and waits for its "started fine" note."""
+        lay = updater.installed_layout()
+        if not self.shell.close_for_restart():
+            return
+        try:
+            self.spawn_updater("--update-to", rel["version"], "--wait-pid", str(os.getpid()))
+        except OSError:                                                      # the window is closed already: start the program again rather than leave nothing
+            try:
+                subprocess.Popen(updater.restart_command(), cwd=lay[0] if lay else os.getcwd())
+            except OSError:
+                pass
+        QApplication.quit()
+
+    # ---- download + install (the way before the updater existed; still used by an install that has no updater)
     def install(self, rel):
         dest = os.path.join(tempfile.mkdtemp(prefix="opara_update_"), rel["app"]["name"])
         dlg = QProgressDialog("Downloading the update...", "Cancel", 0, 100, self.shell)

@@ -269,8 +269,8 @@ def is_installed(aid):
 
 
 def is_active(aid):
-    """Installed and its folder is on sys.path (the modules can be imported)."""
-    return is_installed(aid) and installed_path(aid) in sys.path
+    """Installed and its folder is on sys.path (the modules can be imported).  Never in a safe start (the updater's "Start safely")."""
+    return not channel.safe_start() and is_installed(aid) and installed_path(aid) in sys.path
 
 
 PRINTS_FILE = "addon_prints.json"               # {"api", "addons": {id: fingerprint}} of this build's add-ons, written into the program by the build (addon_print.py)
@@ -374,6 +374,8 @@ def _clean_leftovers():
 
 
 def activate():
+    if channel.safe_start():                             # "Start safely": no add-on code is imported in this run
+        return
     sh = channel.shared_dir()                            # code the playground's dev add-ons share
     if sh and sh not in sys.path:
         sys.path.insert(0, sh)
@@ -388,6 +390,8 @@ def activate():
 
 def outdated():
     """Ids of the installed add-ons that are older than this program (they are not updated by themselves)."""
+    if channel.safe_start():
+        return []
     return [a for a in known() if not is_dev(a) and status(a) == "update"]
 
 
@@ -410,6 +414,8 @@ def set_update_prompt_declined(on=True):
 def startup():
     """Called once when the program starts: tidy, put add-ons that ship in the program folder in place (or upgrade them), activate."""
     STARTUP_ERRORS.clear()
+    if channel.safe_start():                             # nothing is installed, upgraded or tidied in a safe start
+        return
     try:
         _clean_leftovers()
         removed = set(_read_state()["removed"])

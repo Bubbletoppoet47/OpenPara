@@ -13,6 +13,10 @@ streams.ensure()          # started by pythonw.exe (no console): sys.stdout / sy
 
 import channel
 import perf
+import runstate
+
+if __name__ == "__main__":
+    runstate.begin()        # run_state.json ("this start is under way", read by the OpenPara Updater), gpd_crash.log, and a message for an error before the window is up
 
 if __name__ == "__main__":
     perf.startup()          # the core limit (Settings > Performance) before numpy and the other libraries are loaded
@@ -446,6 +450,8 @@ class AppShell(QMainWindow):
                                       "installed without your answer.")
             self.watch_upd.toggled.connect(lambda on: self.updates.set_watch(on))
             hm.addAction(self.watch_upd)
+        if self.updates.updater_available():
+            add(hm, "Open the updater (earlier builds, repair)...", lambda: self.updates.open_updater())
         add(hm, "Open the data folder", self.open_data_folder)
         add(hm, "Show the error log...", self.show_error_log)
         self.addon_commands(hm, "help", add)
@@ -1421,6 +1427,11 @@ def main():
         from PyQt6.QtGui import QIcon
         app.setWindowIcon(QIcon(ico))
     install_excepthook()
+    try:
+        import updater
+        updater.seed_tool()                                # an install updated inside the program gets the OpenPara Updater from the program folder
+    except Exception:                                      # noqa: BLE001 - never a reason not to start
+        pass
     pm_app.apply_theme(app)
     _step("Opening the window...", 0.92)
     shell = type("Shell", (*ext.SHELL_MIXINS, AppShell), {}) if ext.SHELL_MIXINS else AppShell     # add-ons may give the window helpers their tabs use
@@ -1431,9 +1442,14 @@ def main():
     w.updates.check_later()
 
     def after_start():
+        if channel.safe_start():                           # the updater's "Start safely": no add-ons, no questions, the last tabs stay in the list for a normal start
+            QMessageBox.information(w, channel.app_name(), "Safe start: every add-on is switched off and nothing was installed or updated in this run.\n\n"
+                                    "To get them back, close the program and start it the normal way.")
+            return
         w.restore_session()                                # the tabs of the last run (after an update) come back first ...
         QTimer.singleShot(2500, lambda: (w.report_addon_errors(), w.offer_first_run(), w.offer_addon_updates()))          # ... then one question after the other, never two at once
     QTimer.singleShot(300, after_start)
+    QTimer.singleShot(4000, runstate.mark_ok)              # the window is up and the event loop has run for a few seconds: "started fine" (the updater waits for this)
     sys.exit(app.exec())
 
 if __name__ == "__main__":

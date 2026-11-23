@@ -58,6 +58,9 @@ jobs:
             Where-Object { $_.Name -notlike "test_*" -and $_.Name -ne "requirements-lock.txt" -and $_.Name -ne "get-pip.py" } | Copy-Item -Destination $app
           Copy-Item docs -Destination "$app\docs" -Recurse
           Copy-Item assets -Destination "$app\assets" -Recurse          # the logo of the start-up card, its fonts and the icons
+          Copy-Item updater_tool -Destination "$app\updater_tool" -Recurse          # the newest OpenPara Updater travels inside the program (it refreshes itself from there)
+          Copy-Item updater_tool -Destination "build\OpenPara\updater_tool" -Recurse          # ... and the installer puts it next to python\ and app\
+          foreach ($f in "updater_tool\openpara_updater.py", "updater_tool\ou_core.py", "updater_tool\ou_window.py") { if (-not (Test-Path "$app\$f") -or -not (Test-Path "build\OpenPara\$f")) { throw "missing from the app: $f" } }
           foreach ($f in "assets\openpara-logo.svg", "assets\fonts\Lora-Variable.ttf") { if (-not (Test-Path "$app\$f")) { throw "missing from the app: $f" } }
           '{"runtime": ' + $env:RUNTIME + ', "version": "' + $env:VERSION + '"}' | Set-Content "$app\runtime.json"
           python tools\build_addons.py --prints "$app\addon_prints.json" --release          # which add-ons changed in this build: only those are offered an update
@@ -88,6 +91,17 @@ jobs:
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "packages ok")) { Report "import of a package failed (exit $LASTEXITCODE)" $out; exit 1 }
+          # 1b. the OpenPara Updater starts with the bundled Python (its files import, its self-test passes) and reads this installation
+          $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_updater"
+          $out = & $py build\OpenPara\updater_tool\openpara_updater.py --selftest 2>&1
+          Write-Host $out
+          Write-Host "exit code: $LASTEXITCODE"
+          if (-not (($out | Out-String) -match "updater tool \d+ ok")) { Report "the updater does not start (exit $LASTEXITCODE)" $out; exit 1 }
+          $env:OPARA_UPDATER_ROOT = (Resolve-Path "build\OpenPara").Path
+          $out = & $py build\OpenPara\updater_tool\openpara_updater.py --cli --report 2>&1
+          Remove-Item Env:OPARA_UPDATER_ROOT
+          Write-Host $out
+          if (-not (($out | Out-String) -match "Installed: \d")) { Report "the updater cannot read the installation (exit $LASTEXITCODE)" $out; exit 1 }
           # 2. the add-ons: build the release files and install them from there (every add-on a normal OpenPara offers)
           New-Item -ItemType Directory -Force dist | Out-Null
           python tools\build_addons.py dist --release          # without the add-ons that are not released yet (addons.NOT_RELEASED)

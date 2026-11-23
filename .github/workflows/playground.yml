@@ -71,6 +71,9 @@ jobs:
           Copy-Item dev_addons -Destination "$app\dev_addons" -Recurse           # the playground's own add-ons: used where they are, updated with the program
           Copy-Item shared -Destination "$app\shared" -Recurse
           Copy-Item assets -Destination "$app\assets" -Recurse          # the logo of the start-up card, its fonts and the icons
+          Copy-Item updater_tool -Destination "$app\updater_tool" -Recurse          # the newest OpenPara Updater travels inside the program (it refreshes itself from there)
+          Copy-Item updater_tool -Destination "build\OpenPara\updater_tool" -Recurse          # ... and the installer puts it next to python\ and app\
+          foreach ($f in "updater_tool\openpara_updater.py", "updater_tool\ou_core.py", "updater_tool\ou_window.py") { if (-not (Test-Path "$app\$f") -or -not (Test-Path "build\OpenPara\$f")) { throw "missing from the app: $f" } }
           foreach ($f in "assets\openpara-logo.svg", "assets\fonts\Lora-Variable.ttf") { if (-not (Test-Path "$app\$f")) { throw "missing from the app: $f" } }
           foreach ($f in 'channel.json', 'dev_addons\dev_host\addon.json', 'shared\boot.py') { if (-not (Test-Path "$app\$f")) { throw "missing from the app: $f" } }
           '{"runtime": ' + $env:RUNTIME + ', "version": "' + $env:VERSION + '"}' | Set-Content "$app\runtime.json"
@@ -104,6 +107,17 @@ jobs:
           Write-Host $out
           Write-Host "exit code: $LASTEXITCODE"
           if (-not (($out | Out-String) -match "packages ok")) { Report "import of a package failed (exit $LASTEXITCODE)" $out; exit 1 }
+          # 1b. the OpenPara Updater starts with the bundled Python (its files import, its self-test passes) and reads this installation
+          $env:OPARA_USER_DIR = Join-Path $env:RUNNER_TEMP "opara_user_updater"
+          $out = & $py build\OpenPara\updater_tool\openpara_updater.py --selftest 2>&1
+          Write-Host $out
+          Write-Host "exit code: $LASTEXITCODE"
+          if (-not (($out | Out-String) -match "updater tool \d+ ok")) { Report "the updater does not start (exit $LASTEXITCODE)" $out; exit 1 }
+          $env:OPARA_UPDATER_ROOT = (Resolve-Path "build\OpenPara").Path
+          $out = & $py build\OpenPara\updater_tool\openpara_updater.py --cli --report 2>&1
+          Remove-Item Env:OPARA_UPDATER_ROOT
+          Write-Host $out
+          if (-not (($out | Out-String) -match "Installed: \d")) { Report "the updater cannot read the installation (exit $LASTEXITCODE)" $out; exit 1 }
           # 2. the add-ons: build the release files and install them from there (Part Generator, Truss Generator)
           New-Item -ItemType Directory -Force dist | Out-Null
           python tools\build_addons.py dist
@@ -177,6 +191,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "dev-$env:VERSION" dist\* --prerelease --target $env:GITHUB_SHA --title "OpenPara Playground $env:VERSION" --notes "Development build $env:VERSION from the dev branch (commit $env:GITHUB_SHA). Install OpenPara-Playground-Setup-$env:VERSION.exe once; an installed Playground offers later builds at start-up (Help > Check for updates)."
-          # keep the newest 10 dev builds
-          $rels = gh release list --limit 100 --json tagName,createdAt | ConvertFrom-Json | Where-Object { $_.tagName -like 'dev-*' } | Sort-Object createdAt -Descending
-          $rels | Select-Object -Skip 10 | ForEach-Object { gh release delete $_.tagName --cleanup-tag --yes }
+          # of the dev builds beyond the newest 10 only the big installer is removed: their program zip (about 4 MB) and add-on zips stay on GitHub, so the
+          # OpenPara Updater can still put any earlier build back (it needs no installer for that)
+          $rels = gh release list --limit 200 --json tagName,createdAt | ConvertFrom-Json | Where-Object { $_.tagName -like 'dev-*' } | Sort-Object createdAt -Descending
+          $rels | Select-Object -Skip 10 | ForEach-Object {
+            $tag = $_.tagName
+            $names = gh release view $tag --json assets --jq '.assets[].name' 2>$null
+            foreach ($n in $names) { if ($n -like '*Setup*.exe') { gh release delete-asset $tag $n --yes } }
+          }

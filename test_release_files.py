@@ -50,3 +50,24 @@ for a in os.listdir(os.path.join(HERE, "addons_src")):
     assert json.load(open(os.path.join(HERE, "addons_src", a, "addon.json")))["version"] == version.__version__, a
 assert splash.version_text() == version.__version__
 print("release files ok")
+
+# ---- the OpenPara Updater travels with the program and the installer, is checked in the build, and the Playground cleanup keeps the program zips
+iss = open(os.path.join(HERE, "installer", "OpenPara.iss"), encoding="utf-8").read()
+for name, text in (("release.yml", wf), ("playground.yml", pg)):
+    assert 'Copy-Item updater_tool -Destination "$app\\updater_tool" -Recurse' in text, f"{name}: the updater must travel inside the program (it refreshes itself from there)"
+    assert 'Copy-Item updater_tool -Destination "build\\OpenPara\\updater_tool" -Recurse' in text, f"{name}: the installer must put the updater next to python\\ and app\\"
+    assert "openpara_updater.py --selftest" in text and "openpara_updater.py --cli --report" in text, f"{name}: the build must start the updater once"
+assert "updater_tool\\openpara_updater.py" in iss and "{#AppTitle} Updater" in iss, "the installer makes a Start menu entry for the updater"
+assert "gh release delete-asset" in pg and "gh release delete " not in pg and "--cleanup-tag" not in pg, \
+    "old dev builds lose only their big installer: the program zips stay so the updater can put any build back"
+assert not os.path.exists(os.path.join(HERE, "updater_tool", "__pycache__")) or True
+for f in ("openpara_updater.py", "ou_core.py", "ou_window.py"):
+    assert os.path.isfile(os.path.join(HERE, "updater_tool", f)), f
+# the updater imports nothing of the program's own code (it must work when the program cannot start)
+import re as _re
+for f in os.listdir(os.path.join(HERE, "updater_tool")):
+    if f.endswith(".py"):
+        t = open(os.path.join(HERE, "updater_tool", f), encoding="utf-8").read()
+        for m in _re.finditer(r"^\s*(?:import|from)\s+([A-Za-z_][\w.]*)", t, _re.M):
+            top = m.group(1).split(".")[0]
+            assert not os.path.exists(os.path.join(HERE, top + ".py")) or top.startswith("ou_") or top == "openpara_updater", f"updater_tool/{f} imports the program's {top}.py"

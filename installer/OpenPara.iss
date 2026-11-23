@@ -46,6 +46,7 @@ Source: "..\build\OpenPara\*"; DestDir: "{app}"; Flags: recursesubdirs createall
 [Icons]
 Name: "{userprograms}\{#AppTitle}"; Filename: "{app}\python\OpenPara.exe"; Parameters: """{app}\app\gpd_app.py"""; WorkingDir: "{app}"; IconFilename: "{app}\app\OpenPara.ico"
 Name: "{userdesktop}\{#AppTitle}"; Filename: "{app}\python\OpenPara.exe"; Parameters: """{app}\app\gpd_app.py"""; WorkingDir: "{app}"; IconFilename: "{app}\app\OpenPara.ico"; Tasks: desktopicon
+Name: "{userprograms}\{#AppTitle} Updater"; Filename: "{app}\python\OpenPara.exe"; Parameters: """{app}\updater_tool\openpara_updater.py"""; WorkingDir: "{app}"; IconFilename: "{app}\app\OpenPara.ico"; Comment: "Update, go back to an earlier build, repair or start safely"
 
 #ifndef Playground
 [Registry]

@@ -183,3 +183,45 @@ def install_app_zip(zip_path, app_dir):
 def restart_command():
     """argv that starts the program again the way it was started."""
     return [sys.executable] + sys.argv
+
+
+# ---------------------------------------------------------------------------------------------------- the OpenPara Updater (updater_tool\\)
+TOOL_NAME = "updater_tool"
+TOOL_SCRIPT = "openpara_updater.py"
+
+
+def tool_script():
+    """Path of the OpenPara Updater's start script (<install folder>\\updater_tool\\openpara_updater.py), or None: a copy that runs from source, or an install
+    from before the updater existed (that one keeps updating inside the program, see update_ui)."""
+    lay = installed_layout()
+    if lay is None:
+        return None
+    p = os.path.join(lay[0], TOOL_NAME, TOOL_SCRIPT)
+    return p if os.path.isfile(p) else None
+
+
+def tool_command(*args):
+    """argv that starts the updater with the program's own Python (None when there is no updater)."""
+    s = tool_script()
+    return None if s is None else [sys.executable, s, *args]
+
+
+def seed_tool():
+    """An install that has no updater yet (it was updated inside the program from a build without it) gets it from the program folder, which carries
+    app\\updater_tool\\.  The installer puts the same folder in place and adds the Start menu entry.  -> True when the folder was put in place."""
+    lay = installed_layout()
+    if lay is None:
+        return False
+    src, dst = os.path.join(lay[1], TOOL_NAME), os.path.join(lay[0], TOOL_NAME)
+    if os.path.isfile(os.path.join(dst, TOOL_SCRIPT)) or not os.path.isfile(os.path.join(src, TOOL_SCRIPT)):
+        return False
+    new = dst + ".new"
+    try:
+        shutil.rmtree(new, ignore_errors=True)
+        shutil.copytree(src, new, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        shutil.rmtree(dst, ignore_errors=True)
+        os.replace(new, dst)
+        return True
+    except OSError:
+        shutil.rmtree(new, ignore_errors=True)
+        return False
