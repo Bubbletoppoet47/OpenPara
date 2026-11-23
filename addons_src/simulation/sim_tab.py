@@ -41,6 +41,13 @@ import units
 
 KINDS = {"beam": ("1D FEA", beam_tab.BeamTab), "fea": ("2D FEA", physics_tab.PhysicsTab), "cfd": ("2D CFD", cfd_tab.CFDTab)}
 SLICE_NEW, SLICE_LAST = "__slice_new__", "__slice_last__"
+
+
+def register_kind(kind, label, tab_class):
+    """Another add-on adds its own kind of simulation window (the project bar, the source, the slices) around its own solver tab.  The tab may
+    offer  sim_part_materials(slice materials or None, the part's material) -> notes,  sim_apply_regions(region -> part index, names, materials)
+    and  signature_extra()  (anything besides supports / loads / inputs that makes the project 'changed')."""
+    KINDS[kind] = (label, tab_class)
 MAIN_PART = "main"                              # the part of a profile sketch that is the frame's own part (the project's source)
 
 
@@ -254,7 +261,8 @@ class SimWindow(QWidget):
         return (repr(getattr(t, "supports", None)), repr(getattr(t, "loads", None)), id(getattr(t, "mesh", None)),
                 id(getattr(t, "result", None)), repr(sorted(ins.items())), repr(getattr(t, "members", None)),
                 repr([bool(f["included"]) for f in t.geom["faces"]]) if getattr(t, "geom", None) else "",
-                repr([(p["id"], p["part"], p["sid"], p["name"]) for p in getattr(t, "profs", [])]))
+                repr([(p["id"], p["part"], p["sid"], p["name"]) for p in getattr(t, "profs", [])]),
+                repr(t.signature_extra()) if hasattr(t, "signature_extra") else "")
 
     def is_dirty(self):
         return self.signature() != self.saved_sig
@@ -630,6 +638,11 @@ class SimWindow(QWidget):
                     notes.append(f"Material from the part: {mat_lib.summary(mat_lib.with_elastic(first))}.")
                 else:
                     notes.append("The part's material has no elastic properties: type E and Poisson's ratio (or choose another material in the part).")
+        elif hasattr(t, "sim_part_materials"):                  # another kind of simulation (2D Thermal ...) takes the materials its own way
+            first = None
+            if self.src["type"] == "part" and self.part_doc() is not None:
+                first = self.part_doc().material
+            notes += t.sim_part_materials(mats, first) or []
         self.tab.picker.refresh()
         self.tab.picker.select(sid)
         self.refresh_study_button()
@@ -660,6 +673,14 @@ class SimWindow(QWidget):
             t.canvas.invalidate()
             if missing:
                 self.status_lbl.setText("No elastic properties for: " + ", ".join(sorted(set(missing))) + ". These regions use the material boxes of the tab.")
+        elif hasattr(t, "sim_apply_regions"):
+            for f in t.geom["faces"]:
+                if rp.get(f["id"]) is None:
+                    f["included"] = False              # inside a hole of a part: no material there
+            t.sim_apply_regions(rp, names, {f: p["bodies"][i][1] for f, i in rp.items() if i is not None})
+            t.fill_regions()
+            t.refresh_lists()
+            t.canvas.invalidate()
         return mats
 
     def original_text(self):

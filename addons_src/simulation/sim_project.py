@@ -29,6 +29,12 @@ LABEL = {"beam": "1D FEA", "fea": "2D FEA", "cfd": "2D CFD", "solid": "3D FEA"}
 VERSION = 1
 
 
+def register_kind(kind, ext, label):
+    """Another add-on (2D Thermal ...) adds its own kind of simulation project: its folder extension and its name."""
+    EXT[kind] = ext
+    LABEL[kind] = label
+
+
 class ProjectError(Exception):
     pass
 

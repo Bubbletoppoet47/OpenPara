@@ -636,6 +636,14 @@ def state_units(st):
     return sysname, sp
 
 
+STATE_CONVERTERS = {"fea": convert_fea_state, "beam": convert_beam_state, "cfd": convert_cfd_state}
+
+
+def register_converter(kind, fn):
+    """Another add-on (2D Thermal ...) says how the saved state of its kind is put into another unit system: fn(state, old, new, convert) -> state."""
+    STATE_CONVERTERS[kind] = fn
+
+
 def to_current_units(kind, st, system, speed):
     """A saved tab state in the program's current units (system + speed unit).  Raises ValueError when the sketch cannot be
     converted safely (a formula that mixes lengths with fixed numbers); the caller then keeps the file's own units."""
@@ -654,6 +662,5 @@ def to_current_units(kind, st, system, speed):
     if st.get("cur_unit"):
         st["cur_unit"] = units.canon(st["cur_unit"])
     if old != system:
-        conv = {"fea": convert_fea_state, "beam": convert_beam_state, "cfd": convert_cfd_state}[kind]
-        st = conv(st, old, system, True)
+        st = STATE_CONVERTERS[kind](st, old, system, True)
     return speed_state(st, old_v, speed)

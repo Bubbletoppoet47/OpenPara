@@ -472,7 +472,7 @@ class PhysCanvas(QWidget):
         if want_field or mesh_only:
             key = (self.field if want_field else "mesh", self.show_mesh, self.show_deformed, round(self.def_scale, 9),
                    round(self.scale, 6), round(self.org.x(), 3), round(self.org.y(), 3), self.width(), self.height(),
-                   id(tab.result), id(tab.mesh), self.export_bg)
+                   id(tab.result), id(tab.mesh), self.export_bg, getattr(tab, "view_token", None))
             if self.anim_frames is not None and want_field:
                 p.drawPixmap(0, 0, self.anim_frames[min(self.anim_idx, len(self.anim_frames) - 1)])
             else:
@@ -758,6 +758,9 @@ class PhysCanvas(QWidget):
 # the tab
 # ----------------------------------------------------------------------------------------------
 class PhysicsTab(QWidget):
+    ANIM_LABEL = "2D FEA"                  # what the animation export calls this tab (the window title and the default file name)
+    ANIM_FILE = "FEA_animation"
+
     def __init__(self, win):
         super().__init__()
         self.win = win
@@ -2398,7 +2401,7 @@ class PhysicsTab(QWidget):
         if not (2 <= n <= 300) or dur <= 0:
             QMessageBox.warning(self, "Export animation", "Use 2 to 300 frames and a positive duration.")
             return None
-        ask = path_fmt or anim_export.ask_path(self, "FEA_animation")
+        ask = path_fmt or anim_export.ask_path(self, self.ANIM_FILE)
         if ask is None:
             return None
         self.anim_timer.stop()
@@ -2423,7 +2426,7 @@ class PhysicsTab(QWidget):
             cv.anim_frames = store[lv]
             cv.repaint()
         try:
-            return anim_export.export(self, "2D FEA", n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=ask,
+            return anim_export.export(self, self.ANIM_LABEL, n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=ask,
                                       set_bg=set_bg)
         finally:
             import meshdraw as md

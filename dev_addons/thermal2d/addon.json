@@ -1,0 +1,27 @@
+{
+ "name": "2D Thermal",
+ "order": 5,
+ "status": "workshopping",
+ "needs": [
+  "simulation"
+ ],
+ "description": "Heat conduction in a sketch or a slice of a part, steady or changing with time (transient), in 2D: fixed temperatures, heat flux, heat generation in a region, a heat flow at a point, convection to a fluid and radiation to the surroundings, a material for every region (about 25 built in, add your own), and optional heat loss from the two flat faces of a plate. Quadratic or linear triangles from gmsh; temperature and heat-flux pictures, an animation of the transient run, probe regions, a node probe, the heat flow through every condition and a heat balance that must close. Temperatures follow the unit system (metric: degC and W, US: degF and Btu). A .gph project folder with its own copy of the part; works with Parametric Studies. Material values are typical room-temperature numbers taken as constant; radiation goes to surroundings only (no view factors between parts).",
+ "extension": "thermal_ext",
+ "tabs": [
+  {
+   "kind": "thermal",
+   "label": "2D Thermal",
+   "short": "2D Thermal",
+   "module": "thermal_tab",
+   "factory": "make_thermal",
+   "args": [
+    "host",
+    "path"
+   ],
+   "project_folder": {
+    "marker": "simulation.json",
+    "format": "openpara-sim-thermal"
+   }
+  }
+ ]
+}
