@@ -149,6 +149,10 @@ ok(wct.sections[0].num.text() == "2s+3" and wct.sections[0].den.text() == "s^2+3
 wc = W.open_cell(byt["LED circuit"].id, "document")
 ok(sorted(p.kind for p in wc.scene.parts()) == sorted(["BAT", "R", "LED", "GND", "VM"]), f"the circuit has its parts ({sorted(p.kind for p in wc.scene.parts())})")
 ok(W.sync_editors() == [], "opening the tools is not a change")
+ok(wsh.wb.cell(nm, 5, 2).is_formula and wsh.wb.cell(nm, 6, 2).is_formula, "the area and the stress are formulas, not numbers")
+wsh.wb.set_input(nm, 3, 2, "20")
+ok(wsh.wb.value(nm, 5, 2) == 200.0 and abs(wsh.wb.value(nm, 6, 2) - 5.0) < 1e-9, "change the width and they follow (A = 200 mm2, stress = 5 MPa)")
+ok(W.sync_editors() == [byt["Load table"].id] and P.is_dirty(), "and the project takes the change")
 
 # loading it again replaces it; with no program window the analyses cannot be set up, and it says so
 W.load_example()
