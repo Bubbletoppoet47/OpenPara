@@ -3,7 +3,9 @@
 What a thermal tab stores is SI and absolute: every condition (kelvin, W/m2, ...), the heat generation of the regions, the materials of the regions and
 the solved fields.  The unit system of the program (File > Units) therefore decides only
   * the sketch length unit: the sketch copy, the mesh and the result's drawing mesh, the probes, the element size and the thickness are scaled;
-  * the family of the numbers in the boxes (metric: degC and W, US: degF and Btu): the boxes in `FAMILY_BOXES` are converted through SI.
+  * the units of the numbers in the boxes (File > Units > Heat transfer: by default degC and W for the metric systems, degF and Btu for the US ones): the
+    boxes in `FAMILY_BOXES` are converted through SI.  A state records the units its boxes are written in ("heat_units"); one saved before that was
+    written in the units its unit system had.
 A relabel (the numbers stay, the unit name changes) keeps what was typed and changes what it means, so the stored SI values are re-read in the new unit
 and the mesh and result, which no longer fit the model, are cleared.
 """
@@ -40,12 +42,13 @@ def convert_state(st, old, new, convert):
     st["inputs"] = dict(st.get("inputs", {}))
     pstore._convert_model(st, old, new, convert)
     st["cur_unit"] = new
-    fo, fn = tu.family_of(old), tu.family_of(new)
+    fo, fn = tu.state_family(st, old), tu.family_of(new)
+    st["heat_units"] = dict(fn.units) if hasattr(fn, "units") else None
     if convert:
         lf = units.length_factor(old, new)
         for n in LENGTH_BOXES:
             pstore._scale_text(st["inputs"], n, lf)
-        if fo.us != fn.us:                                   # the same physical value, written in the other family
+        if fo.key != fn.key:                                 # the same physical value, written in the other units
             for n, q in FAMILY_BOXES.items():
                 txt = str(st["inputs"].get(n, "")).strip()
                 if txt:
@@ -58,7 +61,7 @@ def convert_state(st, old, new, convert):
         st["probes"] = pstore.scale_probes(st.get("probes"), lf)
         return st
     # a relabel: the numbers in the boxes stay; the stored SI values are read again in the new family; the mesh and result do not fit any more
-    if fo.us != fn.us:
+    if fo.key != fn.key:
         for key in ("supports", "loads"):
             out = []
             for it in st.get(key, []):

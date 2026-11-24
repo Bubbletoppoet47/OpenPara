@@ -521,6 +521,12 @@ class SimWindow(QWidget):
             t.import_state(pstore.speed_state(t.export_state(), old_v, new_v))
         self.status_lbl.setText(f"Units: {new_s}, speed in {new_v}." + ((" " + " ".join(msgs)) if msgs else ""))
 
+    def heat_changed(self, old, new):
+        """File > Units > Heat transfer was changed: a solver tab with heat-transfer numbers (2D Thermal) shows and reads them in the new units."""
+        fn = getattr(self.tab, "heat_units_changed", None)
+        if fn is not None:
+            fn()
+
     # ------------------------------------------------------------------ the source
     def source_widget(self):
         """What the solver tabs ask for the sketches, the planes and the solids: the Source loaded from the project's copy (None until imported)."""

@@ -586,6 +586,8 @@ def _balance(mdl, T, storage):
         kind, ci = rec["kind"], rec["index"]
         item = {"index": ci, "kind": kind, "name": rec["name"], "Q": 0.0}
         ed = rec.get("edges")
+        if ed is not None and kind in ("flux", "conv", "rad"):
+            item["area"] = t * float(ed.L.sum())                       # m2: the heat flow over it is the average flux
         if kind == "temp":
             item["Q"] = per_cond.get(ci, 0.0)                          # into the body
             inn += item["Q"]

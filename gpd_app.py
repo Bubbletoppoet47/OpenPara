@@ -116,6 +116,7 @@ class AppShell(QMainWindow):
         import autosave
         self.autosave = autosave.AutoSave(self)           # the AutoSave switch at the top
         unitctl.on_change(self.units_changed)
+        unitctl.on_heat_change(self.heat_changed)
         settings.on_change(self.settings_changed)
         opened = False
         for f in files or []:
@@ -685,6 +686,8 @@ class AppShell(QMainWindow):
         d = units_dialog.UnitsDialog(self)
         if d.exec():
             sysname, speed = d.choice()
+            heat, custom = d.heat_choice()
+            unitctl.set_heat(heat, custom)                 # tells heat_changed() below (first: with 'Follow the unit system' the new system decides next)
             unitctl.set_units(sysname, speed)              # tells units_changed() below
 
     def units_changed(self, old_s, new_s, old_v, new_v):
@@ -698,6 +701,18 @@ class AppShell(QMainWindow):
                     import traceback
                     traceback.print_exc()
         self.statusBar().showMessage(f"Units: {new_s}   speed: {new_v}", 8000)
+
+    def heat_changed(self, old, new):
+        """The heat-transfer units (File > Units) were changed: the thermal tabs show and read their numbers in them."""
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            if hasattr(w, "heat_changed"):
+                try:
+                    w.heat_changed(old, new)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+        self.statusBar().showMessage(f"Heat transfer units: {new[0]}", 8000)
 
     def open_data_folder(self):
         import paths
@@ -1289,6 +1304,7 @@ class AppShell(QMainWindow):
         for i in range(self.tabs.count()):
             self.tabs.widget(i).saved_json = getattr(self.tabs.widget(i), "saved_json", None)
         unitctl.off_change(self.units_changed)
+        unitctl.off_heat_change(self.heat_changed)
         self.save_window()
         self.save_session()
         self._session_on = False                          # the tabs go away with the window: that must not empty the list

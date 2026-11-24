@@ -24,12 +24,14 @@ import json
 import os
 import re
 
+import heatunits
 import paths
 import units
 
 SETTINGS_FILE = "units.json"
-_state = {"system": units.DEFAULT, "speed": units.DEFAULT_SPEED}
+_state = {"system": units.DEFAULT, "speed": units.DEFAULT_SPEED, "heat": heatunits.DEFAULT, "heat_custom": {}}
 _listeners = []
+_heat_listeners = []
 
 # the unit written after a number typed in a formula -> millimetres in one of it
 SUFFIX_MM = {"mm": 1.0, "cm": 10.0, "m": 1000.0, "in": 25.4, "ft": 304.8}
@@ -53,6 +55,7 @@ def load():
     _state["system"] = units.canon(s) if isinstance(s, str) and units.valid(s) else units.DEFAULT
     _state["speed"] = sp if sp in units.SPEEDS else units.DEFAULT_SPEED
     units.set_speed(_state["speed"])
+    _state["heat"], _state["heat_custom"] = heatunits.valid_setting(d.get("heat"), d.get("heat_custom"))
     return dict(_state)
 
 
@@ -108,6 +111,66 @@ def set_units(new_system=None, new_speed=None, notify=True, persist=True):
     return True
 
 
+# ----------------------------------------------------------------------------------------------------- heat transfer units
+def heat():
+    """The name of the heat-transfer unit choice (File > Units): 'Follow the unit system', a preset, or 'Custom'."""
+    return _state["heat"]
+
+
+def heat_custom():
+    """The units of the 'Custom' choice ({} for every other choice)."""
+    return dict(_state["heat_custom"])
+
+
+def heat_setting():
+    """(name, custom units) - what is saved and what a listener gets."""
+    return _state["heat"], dict(_state["heat_custom"])
+
+
+def heat_units(system=None):
+    """The unit of every heat-transfer quantity ({'T': '°C', 'k': 'W/(m K)', ...}) for the choice made and a unit system (default: the current one;
+    only 'Follow the unit system' looks at it)."""
+    return heatunits.resolve(_state["heat"], _state["heat_custom"], system or _state["system"])
+
+
+def on_heat_change(fn):
+    """fn(old_setting, new_setting) is called after the heat-transfer units were changed; a setting is (name, custom units)."""
+    if fn not in _heat_listeners:
+        _heat_listeners.append(fn)
+
+
+def off_heat_change(fn):
+    if fn in _heat_listeners:
+        _heat_listeners.remove(fn)
+
+
+def set_heat(name=None, custom=None, notify=True, persist=True):
+    """Change the heat-transfer units.  `name` is 'Follow the unit system', a preset of heatunits.PRESETS or 'Custom' (then `custom` gives the unit
+    of every quantity).  Returns True when something changed."""
+    old = heat_setting()
+    if name is None:
+        name = old[0]
+    if name not in heatunits.preset_names():
+        raise ValueError(f"unknown heat-transfer unit choice '{name}'")
+    if name == heatunits.CUSTOM:
+        custom = heatunits.clean(custom if custom is not None else heat_units())          # without units: the ones in use now
+    else:
+        custom = {}
+    if (name, custom) == old:
+        return False
+    _state["heat"], _state["heat_custom"] = name, custom
+    if persist:
+        save()
+    if notify:
+        for fn in list(_heat_listeners):
+            try:
+                fn(old, (name, dict(custom)))
+            except Exception:
+                import traceback
+                traceback.print_exc()
+    return True
+
+
 # ----------------------------------------------------------------------------------------------------- lengths
 def length_unit():
     return units.get(_state["system"])["L"]
@@ -119,7 +182,7 @@ def system_code():
 
 
 def system_tip():
-    return f"Units: {_state['system']};  speed in {_state['speed']}.  Change them in File > Units."
+    return f"Units: {_state['system']};  speed in {_state['speed']};  heat transfer: {_state['heat']}.  Change them in File > Units."
 
 
 def mm_per_unit():

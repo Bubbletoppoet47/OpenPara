@@ -295,6 +295,7 @@ class ThermalTab(pt.PhysicsTab):
         self.probe_fos = self.probe_trig = None
         self.deps = pt.dependency_status()
         self.cur_unit = None
+        self.cur_heat = None      # the units (tu.UnitSet) the numbers in the boxes are written in
         self.frame_idx = 0
         self.view_token = 0
         self._flux_cache = {}
@@ -708,13 +709,15 @@ class ThermalTab(pt.PhysicsTab):
         """Metres per sketch unit."""
         return float(units.get(self.unit_name())["L_m"])
 
-    def apply_units(self, name):
-        """Makes `name` the unit system of this tab: the labels and the material boxes follow it."""
-        old_fam = tu.family_of(self.cur_unit) if self.cur_unit else None
+    def apply_units(self, name, reload_editor=True):
+        """Makes `name` the unit system of this tab: the labels and the material boxes follow it.  `reload_editor=False`: the material boxes are
+        not filled again from the selected region (a state is being restored: its boxes were just written)."""
+        old_fam = self.cur_heat
         self.cur_unit = name
         fam = tu.family_of(name)
+        self.cur_heat = fam
         u = units.get(name)
-        if old_fam is not None and old_fam.us != fam.us:     # the numbers typed in the boxes are kept physically
+        if old_fam is not None and old_fam.key != fam.key:   # the numbers typed in the boxes are kept physically
             self.convert_family_boxes(old_fam, fam)
         self.lbl_k.setText(f"Conductivity k ({fam.unit('k')})")
         self.lbl_rho.setText(f"Density ({fam.unit('rho')})")
@@ -726,8 +729,8 @@ class ThermalTab(pt.PhysicsTab):
         self.lbl_Tamb.setText(f"Fluid temperature ({fam.temp})")
         self.lbl_Tsur.setText(f"Surroundings temperature ({fam.temp})")
         self.lbl_qv.setText(f"Heat generation ({fam.unit('qv')})")
-        self.units_note.setText(f"Units: {name}  (change in File > Units); temperatures in {fam.temp}")
-        if hasattr(self, "mat_note") and hasattr(self, "library"):
+        self.units_note.setText(f"Units: {name}  (change in File > Units); heat transfer: {fam.name}, temperatures in {fam.temp}")
+        if reload_editor and hasattr(self, "mat_note") and hasattr(self, "library"):
             self.load_material_editor()                       # the boxes show the selected region's SI values in the family now in use
 
     def convert_family_boxes(self, fo, fn):
@@ -738,6 +741,23 @@ class ThermalTab(pt.PhysicsTab):
                     w.setText(f"{fn.from_si(q, fo.to_si(q, float(w.text()))):.10g}")
                 except ValueError:
                     pass
+
+    def box_units(self):
+        """The units the numbers in the boxes are written in, for the saved state (None with a program that cannot choose them)."""
+        f = self.cur_heat or self.family()
+        return dict(f.units) if hasattr(f, "units") else None
+
+    def heat_units_changed(self):
+        """File > Units > Heat transfer was changed: the numbers in the boxes are converted to the new units (same physical values) and everything
+        that shows a number (labels, conditions, regions, probes, the report, the legend) is drawn in them.  The model, the mesh and the result are
+        SI and do not change."""
+        if self.cur_heat is None or self.family().key == self.cur_heat.key:
+            return
+        if self.model is None:
+            self.apply_units(self.unit_name())
+            return
+        self.import_state(self.export_state())
+        self.status(f"Heat transfer units: {self.cur_heat.name}.")
 
     def convert_input_units(self, new):
         """File > Units changed while nothing is imported: only the boxes hold numbers."""
@@ -1788,7 +1808,16 @@ class ThermalTab(pt.PhysicsTab):
         flows = data.get("flows") or []
         if flows:
             html += R.heading("Heat through each condition", f"({fam.unit('P')}, through the depth; positive = into the body)")
-            html += R.grid(["", "Heat"], [[f["name"], P(f["Q"])] for f in flows])
+
+            def flux_text(f):
+                """The heat flow over the area it goes through = the average heat flux of a flux, convection or radiation condition (blank for a result saved
+                before the area was kept, and for the other kinds)."""
+                a = f.get("area")
+                if not a or f.get("kind") not in ("flux", "conv", "rad"):
+                    return ""
+                qq = "qr" if f["kind"] == "rad" else "q"
+                return f"{R.num(fam.from_si(qq, f['Q'] / a), 4)} {fam.unit(qq)}"
+            html += R.grid(["", "Heat", "Average heat flux"], [[f["name"], P(f["Q"]), flux_text(f)] for f in flows])
         b = data["balance"]
         brow = [("Heat in (conditions and generation)", P(b["in"]), fam.unit("P")), ("Heat out", P(b["out"]), fam.unit("P"))]
         if abs(b["generation"]) > 0:
@@ -1899,7 +1928,8 @@ class ThermalTab(pt.PhysicsTab):
     # ------------------------------------------------------------------------------------------------------------------------------ save / restore
     def export_state(self):
         return {"model_json": self.model.to_json(), "source": getattr(self, "source", ""), "inputs": pstore.get_inputs(self, self.INPUTS),
-                "cur_unit": self.cur_unit, "material": self.mat_combo.currentData(), "faces_included": [bool(f["included"]) for f in self.geom["faces"]],
+                "cur_unit": self.cur_unit, "heat_units": self.box_units(),
+                "material": self.mat_combo.currentData(), "faces_included": [bool(f["included"]) for f in self.geom["faces"]],
                 "supports": self.supports, "loads": self.loads, "mesh": self.mesh, "result": self.result, "probes": [dict(q) for q in self.probes],
                 "probe_fos": None, "probe_trig": None, "profile": None, "field": self.field.currentData(), "sketch_id": getattr(self, "sketch_id", None),
                 "region_mats": getattr(self, "region_mats", {}), "region_mats_all": True, "region_names": getattr(self, "region_names", {}),
@@ -1920,6 +1950,8 @@ class ThermalTab(pt.PhysicsTab):
         self.tr_box.setVisible(self.analysis_combo.currentIndex() == 1)
         self.plate_box.setVisible(self.cb_plate.isChecked())
         self.cur_unit = st.get("cur_unit", self.cur_unit)
+        self.cur_heat = tu.state_family(st, self.cur_unit)       # the boxes hold numbers in the units the state was saved in ...
+        self.apply_units(self.unit_name(), reload_editor=False)  # ... and are converted to the ones chosen now
         if not st.get("region_mats_all"):
             # saved before every region had its own material: the one material of the tab (the boxes and the name) goes to the regions that had none
             try:
