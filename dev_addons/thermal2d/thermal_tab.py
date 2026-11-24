@@ -21,7 +21,7 @@ import time
 
 import numpy as np
 from PyQt6.QtCore import QPointF, QSize, Qt, QTimer
-from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QPen, QPixmap, QPainter
+from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QPen, QPixmap, QPainter, QPolygonF
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
                              QLineEdit, QListWidgetItem, QMessageBox, QPushButton, QSizePolicy, QSlider, QSplitter, QTableWidget, QTableWidgetItem,
                              QVBoxLayout, QWidget, QListWidget)
@@ -36,6 +36,7 @@ import sim_report as R
 import sim_ui
 import sketcher_core as sc
 import thermal_fem as tfem
+import thermal_flow as tflow
 import thermal_mat as tmat
 import thermal_store as tstore
 import thermal_units as tu
@@ -134,9 +135,47 @@ def ask_values(parent, title, note, labels, defaults):
 class ThermalCanvas(pt.PhysCanvas):
     """The 2D FEA drawing with the thermal conditions, the temperature / flux pictures and no deformation."""
 
+    def paint_flow(self, p):
+        """Where the heat goes: tracer particles with trails (moving) or arrows, along the heat flux of the picture shown.  Display only."""
+        tab = self.tab
+        mode = tab.flow_mode()
+        if mode == 0 or tab.result is None:
+            return
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        if mode == 1:
+            tr = tab.flow_tracers
+            if tr is None or tab._flow_key != id(tab.result):
+                return
+            p.setPen(QPen(QColor(255, 255, 255, 190), 1.5))     # drawn as the 2D CFD draws its tracers: white trails, dark dots
+            for trail in tr.trail:
+                if len(trail) > 1:
+                    p.drawPolyline(QPolygonF([self.w2s(*q) for q in trail]))
+            p.setPen(QPen(QColor(10, 10, 10), 3.2))
+            for q in tr.p:
+                p.drawPoint(self.w2s(q[0], q[1]))
+            return
+        a = tab.flow_arrows()
+        if a is None:
+            return
+        pts, d, strength, step = a
+        for (x, y), (dx, dy), st in zip(pts, d, strength):
+            L = max(6.0, min(40.0, step * self.scale * (0.3 + 0.6 * float(st))))
+            c = self.w2s(float(x), float(y))
+            ux, uy = float(dx), -float(dy)                      # the screen's y axis points down
+            tail = QPointF(c.x() - 0.5 * L * ux, c.y() - 0.5 * L * uy)
+            head = QPointF(c.x() + 0.5 * L * ux, c.y() + 0.5 * L * uy)
+            hs = min(5.0, 0.45 * L)
+            tip = QPolygonF([QPointF(head.x() - hs * ux + 0.55 * hs * uy, head.y() - hs * uy - 0.55 * hs * ux), head,
+                             QPointF(head.x() - hs * ux - 0.55 * hs * uy, head.y() - hs * uy + 0.55 * hs * ux)])
+            for col, w in ((QColor(255, 255, 255, 200), 3.6), (QColor(20, 20, 20), 1.5)):
+                p.setPen(QPen(col, w))
+                p.drawLine(tail, head)
+                p.drawPolyline(tip)
+
     def paint_conditions(self, p):
         tab = self.tab
         m = tab.model
+        self.paint_flow(p)
         edge_of = {e["src"]: (e, pts) for e, pts in zip(tab.geom["edges"], tab.geom["polys"])}
         if self.field is None:                               # a region that generates heat is hatched (not over a result picture)
             for f in tab.geom["faces"]:
@@ -508,7 +547,8 @@ class ThermalTab(pt.PhysicsTab):
         lay = sec(6, "Results", True, summary=lambda: self.field.currentText(),
                   help_text="Pick what to colour by. A transient run keeps pictures at equal times: move the slider, or Animate. Probe: an area of the original "
                             "geometry whose average temperature and heat flux are reported. Node probe: click near a node to read every result there. "
-                            "Heat flows are in watts through the depth; a positive flow through a temperature condition means that edge feeds heat into the body.")
+                            "Heat flows are in watts through the depth; a positive flow through a temperature condition means that edge feeds heat into the body. "
+                            "Heat flow: moving tracer particles (as in the 2D CFD) or arrows show where the heat goes (display only; works for a steady result too).")
         self.field = QComboBox()
         self.field.addItem("(none - show the mesh)", None)
         for name, key, _k, _q in FIELDS:
@@ -534,10 +574,31 @@ class ThermalTab(pt.PhysicsTab):
         tl.addWidget(self.time_slider)
         self.time_box.setVisible(False)
         lay.addWidget(self.time_box)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Heat flow"))
+        self.flow_combo = QComboBox()
+        self.flow_combo.addItems(["Off", "Moving tracer particles", "Arrows"])
+        self.flow_combo.setToolTip("Shows where the heat goes, along the heat flux of the picture shown: moving tracer particles, made and drawn like the "
+                                   "tracers of the 2D CFD, or arrows. It works for a steady result and for every picture of a transient run. Display only: "
+                                   "the tracers come in where heat enters the body and move faster where the flux is stronger, but it is not a real speed.")
+        self.flow_combo.currentIndexChanged.connect(self.flow_changed)
+        row.addWidget(self.flow_combo, 1)
+        lay.addLayout(row)
+        self.flow_timer = QTimer(self)
+        self.flow_timer.timeout.connect(self.flow_step)
+        self.flow_field = None                                 # thermal_flow.FluxField of the result on screen, with the flux of the picture shown
+        self.flow_tracers = None
+        self._flow_key = None                                  # id of the result the field was made for
+        self._flow_k = "unset"                                 # the picture (frame) whose flux the field holds
+        self._flow_ref = None                                  # (id of the result, reference flux of the whole run)
+        self._flow_arrows = None                               # ((result id, picture), the arrows)
         self.cb_anim = QCheckBox("Animate")
         self.cb_anim.setToolTip("Plays the pictures of the transient run in order. (A steady result has nothing that changes.)")
         self.cb_anim.toggled.connect(self.anim_toggled)
         lay.addWidget(self.cb_anim)
+        self.steady_note = self.note("Animate plays a transient run. A steady result has nothing that changes in time: use Heat flow above to see where "
+                                     "the heat goes.")
+        lay.addWidget(self.steady_note)
         self.anim_box = QWidget()
         al = QFormLayout(self.anim_box)
         al.setContentsMargins(14, 0, 0, 0)
@@ -1563,10 +1624,106 @@ class ThermalTab(pt.PhysicsTab):
         u = self.time_combo.currentText()
         return f"t = {r['times'][k] / tu.TIME[u]:.4g} {u}"
 
+    # ------------------------------------------------------------------------------------------------------------------------------ heat flow
+    def flow_mode(self):
+        """0 off, 1 moving lines (tracers), 2 arrows."""
+        return self.flow_combo.currentIndex()
+
+    def flow_frame(self):
+        """The picture whose flux the heat flow follows: the one the animation shows while it plays, else the one of the slider (None: steady)."""
+        cv = self.canvas
+        if self.cb_anim.isChecked() and cv.anim_frames is not None and len(cv.anim_frames) > 1:
+            return self.frame_of(cv.anim_idx / (len(cv.anim_frames) - 1))
+        return self.frame_of(None)
+
+    def flow_reference(self):
+        """The reference flux of the whole result (W/m2): one number for the run, so a run that cools down shows weaker and weaker flow."""
+        r = self.result
+        if self._flow_ref is not None and self._flow_ref[0] == id(r):
+            return self._flow_ref[1]
+        n = self.frame_count()
+        if n == 0:
+            ref = tflow.reference_flux(r["qmag"])
+            dT = float(r["Tmax"] - r["Tmin"])
+        else:
+            ks = sorted({int(round(i * (n - 1) / 7.0)) for i in range(8)})
+            ref = max(tflow.reference_flux(tfem.flux_of(r, r["frames"][k])[2]) for k in ks)
+            dT = float(np.ptp(r["frames"]))
+        if dT < 1e-6 * max(abs(float(r["Tmax"])), abs(float(r["Tmin"])), 1.0):            # a millionth of the temperature (kelvin): that is rounding
+            ref = 0.0                                          # noise of a uniform temperature, not a heat flow
+        self._flow_ref = (id(r), ref)
+        return ref
+
+    def flow_prepare(self):
+        """Makes the flux field follow the result and the picture on screen.  -> False when there is no result to follow."""
+        r = self.result
+        if r is None or r.get("mesh") is None:
+            return False
+        if self._flow_key != id(r):
+            mesh = r["mesh"]
+            self.flow_field = tflow.FluxField(mesh["nodes"], mesh["tris"])
+            self.flow_tracers = None
+            self._flow_key, self._flow_k, self._flow_arrows = id(r), "unset", None
+        k = self.flow_frame()
+        if k != self._flow_k:
+            qx, qy = self.flux_for(k)[:2]
+            self.flow_field.set_flux(qx, qy, self.flow_reference())
+            self._flow_k = k
+        return True
+
+    def flow_arrows(self):
+        """The arrows of the picture on screen (thermal_flow.arrow_samples), or None."""
+        if self.result is None or not self.flow_prepare():
+            return None
+        key = (id(self.result), self._flow_k)
+        if self._flow_arrows is None or self._flow_arrows[0] != key:
+            self._flow_arrows = (key, tflow.arrow_samples(self.flow_field))
+        return self._flow_arrows[1]
+
+    def flow_off(self):
+        self.flow_timer.stop()
+        self.flow_combo.blockSignals(True)
+        self.flow_combo.setCurrentIndex(0)
+        self.flow_combo.blockSignals(False)
+        self.canvas.update()
+
+    def flow_changed(self, *_):
+        mode = self.flow_mode()
+        self.flow_timer.stop()
+        if mode == 0:
+            self.canvas.update()
+            return
+        if self.result is None or not self.flow_prepare():
+            QMessageBox.information(self, "Heat flow", "Solve first; the heat flow is drawn from the result.")
+            self.flow_off()
+            return
+        if self.flow_field.qref <= 0:
+            self.status("No heat flows in the picture shown, so there is nothing to draw.")
+        if mode == 1:
+            if self.flow_tracers is None:
+                self.flow_tracers = tflow.Tracers(self.flow_field)
+            self.flow_timer.start(30)
+        self.canvas.update()
+
+    def flow_step(self):
+        if self.flow_mode() != 1:
+            self.flow_timer.stop()
+            return
+        if self.result is None or not self.flow_prepare():
+            self.flow_off()                                    # the result went away
+            return
+        if not self.isVisible():
+            return
+        if self.flow_tracers is None:
+            self.flow_tracers = tflow.Tracers(self.flow_field)
+        self.flow_tracers.step(0.03)
+        self.canvas.update()
+
     def update_time_controls(self):
         n = self.frame_count()
         self.time_box.setVisible(n > 1)
         self.cb_anim.setEnabled(n > 1)
+        self.steady_note.setVisible(n <= 1)
         if n <= 1:
             if self.cb_anim.isChecked():
                 self.cb_anim.setChecked(False)
