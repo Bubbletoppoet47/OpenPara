@@ -388,7 +388,14 @@ def make_row():
                 self.bar.setValue(1000)
                 self.lbl.setText(t.snapshot()[1])
                 gen = self.gen
-                QTimer.singleShot(self.HIDE_MS, lambda: self.hide() if self.gen == gen and self.trk is None else None)
+
+                def hide_later():
+                    try:
+                        if self.gen == gen and self.trk is None:
+                            self.hide()
+                    except RuntimeError:                         # the row was deleted meanwhile (the scratch window of a study case): nothing to hide
+                        pass
+                QTimer.singleShot(self.HIDE_MS, hide_later)
             else:
                 self.hide()
 

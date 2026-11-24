@@ -77,7 +77,7 @@ def stripped_zip(path):
 
 def pack(folder):
     """{relative path: stored file} of a project folder without meshes and results."""
-    files = wp.pack_folder(folder, skip=lambda rel: rel.endswith(".tmp") or rel.endswith(".new"))
+    files = wp.pack_folder(folder, skip=lambda rel: rel.endswith(".tmp") or rel.endswith(".new") or (rel.startswith("study/") and "/cases/" in rel))   # (the full result of every study case is not kept)
     sp = os.path.join(folder, "state.sim")
     if "state.sim" in files and zipfile.is_zipfile(sp):
         files["state.sim"] = wp.pack_bytes(stripped_zip(sp))
@@ -97,6 +97,19 @@ def digests(folder):
             with open(full, "rb") as f:
                 h.update(f.read())
     out["geometry"] = h.hexdigest()
+    h = hashlib.sha1()
+    sd = os.path.join(folder, "study")
+    for root, dirs, fs in os.walk(sd):
+        dirs.sort()
+        for fn in sorted(fs):
+            full = os.path.join(root, fn)
+            rel = os.path.relpath(full, sd).replace(os.sep, "/")
+            if "cases/" in rel or rel.endswith(".tmp"):
+                continue
+            h.update(rel.encode())
+            with open(full, "rb") as f:
+                h.update(f.read())
+    out["study"] = h.hexdigest()                                 # the parametric study kept in the folder: it is saved with the block but never makes the solution out of date
     st = state_object(folder)
     try:
         m = json.load(open(os.path.join(folder, "simulation.json"), encoding="utf-8"))
@@ -291,8 +304,11 @@ class AnalysisAdapter(nodes.Adapter):
         for key in ("geometry", "setup"):
             if d[key] != base.get(key):
                 changed.append(key)
-        if "geometry" in changed or "setup" in changed:
+        study_changed = d.get("study") != base.get("study")
+        if "geometry" in changed or "setup" in changed or study_changed:
             node.data["files"] = pack(folder)
+            if study_changed and not changed:
+                tab.project.changed()                            # (the file needs saving, but no cell of the analysis changed)
         st["base"] = d
         if "geometry" in changed:
             tab.project.set_ready(node.id, "geometry", has_source(folder))
@@ -436,6 +452,29 @@ class AnalysisAdapter(nodes.Adapter):
             node.data["files"] = pack(folder)
             st["base"] = d
 
+    def take_study(self, tab, node):
+        """The parametric study of this analysis was saved in its folder: the block takes it (and the file needs saving).  -> True when it changed."""
+        st = self.state(tab, node)
+        folder = st.get("folder")
+        if not folder or not os.path.isdir(folder):
+            return False
+        d = digests(folder)
+        base = st.get("base") or {}
+        if d.get("study") == base.get("study"):
+            return False
+        node.data["files"] = pack(folder)
+        st["base"] = {**base, "study": d["study"]}
+        tab.project.changed()
+        return True
+
+    def close_studies(self, tab, node):
+        """The tabs of the Parametric Study blocks wired to this analysis close with it (a study needs the analysis's window)."""
+        sa = nodes.adapter_for("study")
+        for k in list(tab.project.outgoing(node.id, "setup")):
+            sn = tab.project.nodes.get(k.b)
+            if sn is not None and sn.kind == "study" and sa is not None:
+                sa.close_editor(tab, sn)
+
     def solve_2d(self, w):
         """A 2D / 1D window holds a solver tab that meshes and solves in a progress dialog of its own (it returns when it is done)."""
         t = getattr(w, "tab", None)
@@ -482,6 +521,7 @@ class AnalysisAdapter(nodes.Adapter):
         h = tab.host
         if w is None:
             return
+        self.close_studies(tab, node)
         try:
             if w.is_dirty():
                 w.save()

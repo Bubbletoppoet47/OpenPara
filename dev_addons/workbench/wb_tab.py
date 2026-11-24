@@ -724,7 +724,7 @@ class WorkbenchTab(QWidget):
 
 def load_adapters():
     """What each kind of block does comes from its own module (a module that cannot be loaded leaves its kinds 'not wired in', the rest works)."""
-    for name in ("wb_parts", "wb_analysis", "wb_tools"):
+    for name in ("wb_parts", "wb_analysis", "wb_tools", "wb_study"):
         try:
             __import__(name)
         except Exception:                                    # noqa: BLE001

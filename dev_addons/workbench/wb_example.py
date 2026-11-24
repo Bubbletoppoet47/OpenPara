@@ -6,10 +6,11 @@
                    Plate stress 2D     2D Static Structural from Plate: fixed on the left edge, 0.5 MPa on the right edge
                    Frame heating       3D Thermal from Frame: 100 C at one end, 20 C at the other
                    Frame check         3D Static Structural from Frame with NO setup: it says what is missing (the example of an incomplete cell)
+    Study          Bar study           Parametric Study of Bar stress (wired from its Setup; a new study runs one design point, as the analysis is)
     Tools          Load table (Sheets, with formulas), LED circuit (Circuits), Plant (Systems and Controls)
 
 Loading does not compute anything: the geometry cells are refreshed (the parts are copied into the analyses) and the setups are made in the usual windows (as a person would),
-then every window is closed again.  Update Project solves the three analyses; change a part and the analyses that use it say 'refresh'.
+then every window is closed again.  Update Project solves the three analyses and runs the study; change a part and the analyses that use it say 'refresh'.
 A kind whose add-on is not installed is left out (and said).  load(tab) -> [what could not be done].
 """
 import json
@@ -164,8 +165,16 @@ def load(tab):
         n = tab.add_block(kind, x, y, title=title)
         tab.scene.make_link(src.id, "geometry", n.id, "geometry")
         made[key] = n
-    for kind, x, y, title, make in (("sheets", 720, 60, "Load table", sheet_blob), ("circuits", 720, 280, "LED circuit", circuit_blob),
-                                    ("controls", 720, 500, "Plant", controls_blob)):
+    nStudy = None
+    if "bar" in made:                                        # a parametric study of the bar analysis (when the add-on for it is there)
+        ok, why = nodes.availability(tab, "study")
+        if ok:
+            nStudy = tab.add_block("study", 720, 60, title="Bar study")
+            tab.scene.make_link(made["bar"].id, "setup", nStudy.id, "setup")
+        else:
+            problems.append(f"Bar study: {why}")
+    for kind, x, y, title, make in (("sheets", 1060, 60, "Load table", sheet_blob), ("circuits", 1060, 280, "LED circuit", circuit_blob),
+                                    ("controls", 1060, 500, "Plant", controls_blob)):
         ok, why = nodes.availability(tab, kind)
         if not ok:
             problems.append(f"{title}: {why}")
@@ -190,7 +199,9 @@ def load(tab):
                 with_editor(tab, made[key], fn)
             except Exception as ex:                          # noqa: BLE001
                 problems.append(f"{title}: its setup could not be made ({type(ex).__name__}: {ex})")
+    if nStudy is not None:                                   # (its Parameters cell takes the setup that was just made: nothing is computed)
+        tab.refresh_project(only=[nStudy.id])
     tab.scene.refresh()
-    tab.say(f"Example loaded: {len(tab.project.nodes)} blocks. Nothing is computed yet: press Update Project and the three analyses are solved." +
+    tab.say(f"Example loaded: {len(tab.project.nodes)} blocks. Nothing is computed yet: press Update Project and the three analyses are solved and the study runs." +
             ("  Left out or not set up: " + "; ".join(problems) if problems else ""))
     return problems

@@ -56,10 +56,11 @@ class ProjectError(Exception):
 
 # ---------------------------------------------------------------------------------------------------------------------------- the kinds of node
 class CellSpec:
-    def __init__(self, key, label, role, provides=(), accepts=()):
+    def __init__(self, key, label, role, provides=(), accepts=(), needs_link=False):
         if role not in ROLES:
             raise ValueError(f"cell role '{role}' is not one of {ROLES}")
         self.key, self.label, self.role = key, label, role
+        self.needs_link = bool(needs_link)                                   # an import cell that has nothing of its own: without a wire it is incomplete
         self.provides, self.accepts = tuple(provides), tuple(accepts)       # kinds of data a link from / to this cell carries ("geometry", "sketch")
 
 
@@ -106,7 +107,9 @@ for _k, _l, _tip, _cells in (
         ("thermal", "2D Thermal", "Heat conduction in a sketch", [_SKETCH]),
         ("cfd", "2D Fluid Flow", "2D CFD of a sketch", [_SKETCH]),
         ("beam", "1D Beam / Truss", "Beams and trusses from the lines of a sketch", [_SKETCH])):
-    register(_k, _l, "Analysis Systems", _cells + [("setup", "Setup", "data"), ("solution", "Solution", "compute"), ("results", "Results", "view")], _tip, "folder")
+    # the Setup of an analysis that a parametric study can run gives "analysis" (to the Parameters cell of a Parametric Study block); 3D Thermal has no study yet
+    _setup = ("setup", "Setup", "data", ("analysis",)) if _k in ("solid", "fea", "thermal", "cfd", "beam") else ("setup", "Setup", "data")
+    register(_k, _l, "Analysis Systems", _cells + [_setup, ("solution", "Solution", "compute"), ("results", "Results", "view")], _tip, "folder")
 # Other tools: one document each.
 for _k, _l, _tip, _st in (
         ("sheets", "Sheets", "A spreadsheet", ".opsheet"), ("pdf", "PDF Editor", "Read, mark up and arrange PDF files", ".oppb"),
@@ -115,8 +118,9 @@ for _k, _l, _tip, _st in (
         ("trainer", "Trainer", "Training of models", "folder"), ("annotator", "Annotator", "Pictures with labels, for training", "folder"),
         ("truss", "Truss Generator", "The members of a truss from a sketch", ".truss")):
     register(_k, _l, "Component Tools", [("document", _l, "data")], _tip, _st)
-register("study", "Parametric Study", "Design Exploration", [("setup", "Parameters", "data"), ("solution", "Study", "compute"), ("results", "Results", "view")],
-         "Runs an analysis again and again with other values of its parameters", "folder")
+# A study takes ONE analysis (a wire from its Setup cell): the study itself is kept in that analysis's project folder (study/), as in the program's own windows.
+register("study", "Parametric Study", "Design Exploration", [("setup", "Parameters", "import", (), ("analysis",), True), ("solution", "Study", "compute"), ("results", "Results", "view")],
+         "Runs an analysis again and again with other values of its parameters", "")
 
 
 # ---------------------------------------------------------------------------------------------------------------------------- the project
@@ -384,7 +388,7 @@ class Project:
         if cs.role == "import":
             k = self.incoming(nid, key)
             if k is None:
-                return OK if c["ready"] else INCOMPLETE
+                return OK if c["ready"] and not cs.needs_link else INCOMPLETE
             if self.status(k.a, k.a_cell) in (INCOMPLETE, FAILED) or not self.cell(k.a, k.a_cell)["ready"]:
                 return INCOMPLETE
             if not c["ready"] or c["seen"].get("link") != self.cell(k.a, k.a_cell)["stamp"]:
@@ -493,6 +497,8 @@ class Project:
         if cs.role == "import":
             k = self.incoming(nid, key)
             if k is None:
+                if cs.needs_link:
+                    return f"{cs.label} of '{n.title}' needs a wire from the {'/'.join(cs.accepts)} it takes."
                 return f"{cs.label} of '{n.title}' has no source: link it to a node, or import one in its editor."
             return f"The source {self.nodes[k.a].cell_name(k.a_cell)} ('{self.nodes[k.a].title}') is not ready."
         i = n.spec.index(key)

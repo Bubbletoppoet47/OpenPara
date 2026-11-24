@@ -11,7 +11,7 @@ tells the window above it through signals (cell double-clicked, menu asked, mess
 import math
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPainterPathStroker, QPen, QPolygonF
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPainterPathStroker, QPen
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsPathItem, QGraphicsScene, QGraphicsView
 
 import wb_icons as ic
@@ -73,9 +73,18 @@ class SystemItem(QGraphicsItem):
         return QRectF(-PORT_R - 4, -4, BLOCK_W + 2 * PORT_R + 8, self.body_h() + CAP_H + 12)
 
     def shape(self):
+        """What a click lands on: the body, the name under it, and each wire dot as it is drawn - whole, so the half of a dot that sticks out of the body is the dot's
+        and not the wire's that arrives under it (a block is above its wires)."""
         p = QPainterPath()
         p.addRect(QRectF(0, 0, BLOCK_W, self.body_h()))
         p.addRect(QRectF(0, self.body_h(), BLOCK_W, CAP_H + 4))
+        r = PORT_R + 1.0                                    # the dot and its outline: no bigger than it looks
+        for i, c in enumerate(self.cells()):
+            cy = self.cell_y(i) + CELL_H / 2
+            if c.provides:
+                p.addEllipse(QPointF(BLOCK_W, cy), r, r)
+            if c.accepts:
+                p.addEllipse(QPointF(0, cy), r, r)
         return p
 
     def cell_y(self, i):
@@ -337,14 +346,7 @@ class LinkItem(QGraphicsPathItem):
         col = SELECTED if self.isSelected() else WIRE
         p.setPen(QPen(col, 3.0 if self.isSelected() else 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(self.path())
-        e, d = self.pts[-1], self.pts[-2]
-        ang = math.atan2(e.y() - d.y(), e.x() - d.x())
-        a = QPolygonF([e, QPointF(e.x() - 9 * math.cos(ang - 0.4), e.y() - 9 * math.sin(ang - 0.4)),
-                       QPointF(e.x() - 9 * math.cos(ang + 0.4), e.y() - 9 * math.sin(ang + 0.4))])
-        p.setBrush(QBrush(col))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawPolygon(a)
+        p.drawPath(self.path())                              # just a wire: no arrowhead (the dots at its ends are drawn by the blocks, above it)
 
     def hoverMoveEvent(self, ev):
         prj = self.scene().project

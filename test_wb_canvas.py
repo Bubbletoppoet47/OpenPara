@@ -207,6 +207,63 @@ ok(len(prj.links) == n_links + 1 and prj.link_type(prj.links[-1]) == "sketch", "
 scene.remove_nodes([F.id])
 ok(len(prj.links) == n_links and len(scene.link_items) == n_links, "removing a block removes its wire items too")
 
+# ----------------------------------------------------------------------------------------------------------------------------------- the dots, and a wire that is only a wire
+# A already feeds B.  The half of A's output dot that sticks out of the block used to belong to the wire passing under it, so a second wire could not be started there.
+scene.clearSelection()
+app.processEvents()
+ia = item(A)
+cyA = ia.cell_y(0) + cv.CELL_H / 2
+ok(cv.PORT_R == 4.5, "the dot is no bigger than before (radius 4.5)")
+ok(ia.shape().contains(QPointF(cv.BLOCK_W + 3, cyA)) and ia.shape().contains(QPointF(cv.BLOCK_W + 5, cyA)), "the whole dot is the block's: the half outside the body too")
+ok(not ia.shape().contains(QPointF(cv.BLOCK_W + 8, cyA)) and not ia.shape().contains(QPointF(cv.BLOCK_W + 3, cyA + 8)), "and no more than the dot (not a larger target)")
+ok(item(B).shape().contains(QPointF(-3, item(B).cell_y(0) + cv.CELL_H / 2)), "the same for an input dot")
+# the wire is still clickable away from the dot
+li0 = scene.link_items[prj.links[0].key()]
+q0, q1 = li0.pts[0], li0.pts[1]
+on_wire = QPointF(q0.x() + (q1.x() - q0.x()) * 0.6, q0.y())
+scene.clearSelection()
+QTest.mouseClick(vp, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, view.mapFromScene(on_wire))
+app.processEvents()
+ok(len(scene.selected_links()) == 1 and not scene.selected_ids(), "a click on the wire away from the dots still selects the wire")
+scene.clearSelection()
+# a second wire from the OUTER half of the used output dot
+tab.add_block("fea", 500, 400)
+H = list(prj.nodes.values())[-1]
+n0 = len(prj.links)
+portA = ia.port_pos("geometry", "out")
+for dx in (0, 2, 4):
+    drag(view.mapFromScene(QPointF(portA.x() + dx, portA.y())), vpt(H.pos[0] + 100, H.pos[1] + cv.HEAD_H + cv.NAME_H + 15))
+    made = len(prj.links) - n0
+    ok(made == 1 and not scene.selected_links() and prj.links[-1].key()[:2] == (A.id, "geometry"), f"pressed {dx} px outside the centre of a used output dot, a second wire is made (links {n0} -> {len(prj.links)})")
+    for k2 in [k3 for k3 in prj.links if k3.b == H.id]:
+        scene.remove_link(k2)
+    app.processEvents()
+ok(len(prj.links) == n0 and prj.links[0].a == A.id, "the first wire is untouched by all of this")
+# one part feeding two analyses, the wires kept side by side (the case that could not be drawn)
+drag(view.mapFromScene(QPointF(portA.x() + 3, portA.y())), vpt(H.pos[0] + 100, H.pos[1] + cv.HEAD_H + cv.NAME_H + 15))
+ok(len(prj.outgoing(A.id, "geometry")) == 2, "A feeds two analyses")
+# from the outer half of an input dot that already has a wire: a wire is started from the input (it says why it cannot end on a cell that has a source), the old wire is not picked
+MSGS.clear()
+tab.line.setText("")
+pB = item(B).port_pos("geometry", "in")
+drag(view.mapFromScene(QPointF(pB.x() - 3, pB.y())), vpt(C.pos[0] + 100, C.pos[1] + cv.HEAD_H + cv.NAME_H + 15))
+ok(not scene.selected_links() and len(prj.links) == n0 + 1, "pressing the outer half of a used input dot does not pick the wire")
+scene.remove_nodes([H.id])
+ok(len(prj.links) == n0, "removing the second analysis removes its wire")
+# no arrowhead: where the arrow used to be (7 px back from the input dot, 2 px beside the wire) there is background, and the wire itself is there
+scene.rebuild()
+scene.clearSelection()
+app.processEvents()
+li0 = scene.link_items[prj.links[0].key()]
+e, d = li0.pts[-1], li0.pts[-2]
+imgw = view.grab().toImage()
+pe = view.mapFromScene(e)
+ok(close(pixel(imgw, pe.x() - 8, pe.y()), (42, 157, 143), 50), f"the wire is drawn up to its input dot ({pixel(imgw, pe.x() - 8, pe.y())})")
+for dy in (-2, 2):
+    c3 = pixel(imgw, pe.x() - 7, pe.y() + dy)
+    ok(not close(c3, (42, 157, 143), 60), f"no arrowhead beside the wire {dy:+d} px, 7 px back from its end ({c3})")
+ok(abs(e.y() - d.y()) < 0.5, "(the last piece of this wire is horizontal, so the check above looks at the right place)")
+
 # ----------------------------------------------------------------------------------------------------------------------------------- dropping a system from the toolbox
 n_before = len(prj.nodes)
 tab.on_dropped("thermal3d", QPointF(*[A.pos[0] + 100, A.pos[1] + cv.HEAD_H + cv.NAME_H + 15]))       # onto the part's cell: placed to the right, wired
