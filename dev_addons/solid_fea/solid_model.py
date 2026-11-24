@@ -154,27 +154,30 @@ def split_of_face(setup, geom, fid):
     return None, None
 
 
-def patch_conditions(setup, geom, fid):
+CONDITION_KINDS = (("Support", "supports"), ("Load", "loads"))          # (name, key in the setup) of the lists of conditions that act on faces; another window passes its own
+
+
+def patch_conditions(setup, geom, fid, kinds=CONDITION_KINDS):
     """Names of the supports and loads that have a patch of the face of `fid` among their faces (they are lost when that face is split again or
-    its split is removed)."""
+    its split is removed).  `kinds` = the lists of conditions of the setup to look in: (name, key) ..."""
     o = geom.get("orig") or geom
     pid = geom["faces"][fid].get("parent")
     out = []
-    for kind, items in (("Support", setup["supports"]), ("Load", setup["loads"])):
+    for kind, items in ((k, setup.get(key) or []) for k, key in kinds):
         for i, it in enumerate(items):
             if any("cell" in s and sg.match_face(o, s["parent"]) == pid for s in it.get("faces", [])):
                 out.append(name_of(kind, i, it))
     return out
 
 
-def set_split(setup, geom, fid, cols, rows):
+def set_split(setup, geom, fid, cols, rows, kinds=CONDITION_KINDS):
     """Cuts the (whole) face of `fid` into cols x rows EQUAL patches in the setup - 1 x 1 removes the split.  Conditions on the patches of that face are
     dropped (those on the whole face stay).  Returns the names of the conditions that were changed or removed."""
     o = geom.get("orig") or geom
     pid = geom["faces"][fid]["parent"]
     i, rec = split_of_face(setup, geom, fid)
-    changed = patch_conditions(setup, geom, fid)
-    for key in ("supports", "loads"):
+    changed = patch_conditions(setup, geom, fid, kinds)
+    for key in [k for _n, k in kinds]:
         keep = []
         for it in setup.get(key) or []:
             if "faces" in it:
