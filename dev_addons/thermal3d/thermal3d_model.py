@@ -151,5 +151,46 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
     res = tf.solve(q, spec_of(r), progress=progress, cancel=cancel)
     res["mesh"] = q
     res["h_used"] = h
+    res["sizes"] = [float(x) for x in fem.element_sizes(geom, h, r.get("mesh"))]          # mm: the element size of every body (one for a single part)
     res["names"] = {k: [c["name"] for c in r[k]] for k in KEYS}
     return res
+
+
+# ---------------------------------------------------------------------------------------------------------------------------- reading a result
+def frame_count(res):
+    """How many temperature pictures a result holds: 1 for a steady one."""
+    fr = res.get("frames")
+    return int(len(fr)) if fr is not None else 1
+
+
+def temperature_of(res, k=None):
+    """The temperature of every node (K) at picture k of a transient result (None = the last); a steady result has the one."""
+    fr = res.get("frames")
+    if fr is None:
+        return res["T"]
+    return fr[len(fr) - 1 if k is None else int(k)]
+
+
+def time_of(res, k=None):
+    """The time (s) of picture k (None = the last); 0 for a steady result."""
+    ts = res.get("times")
+    if ts is None:
+        return 0.0
+    return float(ts[len(ts) - 1 if k is None else int(k)])
+
+
+def flux_of(res, k=None):
+    """(q (ne, 3) at the centre of every element, |q| (ne,)), W/m2, at picture k (None = the last one, the one the result stored)."""
+    fr = res.get("frames")
+    if fr is None or k is None or int(k) >= len(fr) - 1:
+        return res["q"], res["qmag"]
+    return tf.flux_of(res, fr[int(k)])
+
+
+def node_average(res, values):
+    """One value per node from one per element: the mean over the elements the node belongs to (for a picture; a probe)."""
+    conn = np.asarray(res["conn"])
+    n = len(res["nodes"])
+    cnt = np.bincount(conn.ravel(), minlength=n)
+    tot = np.bincount(conn.ravel(), weights=np.repeat(np.asarray(values, float), conn.shape[1]), minlength=n)
+    return tot / np.maximum(cnt, 1)

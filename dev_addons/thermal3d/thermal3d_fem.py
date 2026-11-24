@@ -625,18 +625,18 @@ def _balance(mdl, T, storage):
         fc = rec.get("faces")
         if kind == "temp":
             item["Q"] = per_cond.get(ci, 0.0)                          # into the body
-            inn += item["Q"]
         elif kind in ("flux", "power"):
             item["Q"] = rec["q"] * rec["area"]
-            inn += item["Q"]
         elif kind == "conv" and rec["h"] > 0:
             Tg = fc.interp(T)
             item["Q"] = -rec["h"] * float(np.sum(fc.A * (fc.wg @ (Tg - rec["Tinf"]).T)))      # negative = leaving
-            out += -item["Q"]
         elif kind == "rad" and rec["eps"] > 0:
             Tg = fc.interp(T)
             item["Q"] = -rec["eps"] * SIGMA * float(np.sum(fc.A * (fc.wg @ (Tg ** 4 - rec["Ts"] ** 4).T)))
-            out += -item["Q"]
+        if item["Q"] > 0:                                              # heat in is what comes in through the faces, heat out what goes out (a fixed
+            inn += item["Q"]                                           # temperature can be either, and is counted as what it does)
+        else:
+            out -= item["Q"]
         flows.append(item)
     inn += mdl.generation
     stored = float(np.sum(storage)) if storage is not None else 0.0

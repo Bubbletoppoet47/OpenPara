@@ -1,0 +1,33 @@
+{
+ "name": "3D Thermal",
+ "order": 6,
+ "status": "workshopping",
+ "needs": [
+  "simulation"
+ ],
+ "requires": [
+  {
+   "pip": "pyamg==5.4.1",
+   "import": "pyamg"
+  }
+ ],
+ "description": "Heat conduction in a 3D parametric part or an assembly of parts (each with its own material), steady or changing with time (transient): fixed temperatures, heat flux, a heat flow in watts, heat generation inside a body, convection to a fluid, radiation to the surroundings (nonlinear) and insulated faces, all picked on faces in the view. Quadratic tetrahedra from gmsh; temperature and heat-flux pictures on the surface, a slider and an animation of the transient run, a node probe, the heat through every condition and a heat balance that must close. Temperatures and heat units follow File > Units > Heat transfer. A .gpt project folder with its own copy of the part. Under development: it comes with a TEST EXAMPLE (button Load test example in the tab: four bodies, holes, curved faces, mixed conditions, transient with radiation), a SELF-CHECK that solves problems with known answers and prints PASS or FAIL beside the numbers, and a DIAGNOSTICS REPORT (computer, program, mesh, setup, time of every stage, solver, warnings and errors; also saved as diagnostics.txt in the project folder). Not yet: section planes, heat-flow arrows, thermal stress in 3D FEA, conjugate heat transfer with 3D CFD, view factors between parts.",
+ "extension": "thermal3d_ext",
+ "tabs": [
+  {
+   "kind": "thermal3d",
+   "label": "3D Thermal",
+   "short": "3D Thermal",
+   "module": "thermal3d_tab",
+   "factory": "make_thermal3d",
+   "args": [
+    "host",
+    "path"
+   ],
+   "project_folder": {
+    "marker": "simulation.json",
+    "format": "openpara-sim-thermal3d"
+   }
+  }
+ ]
+}

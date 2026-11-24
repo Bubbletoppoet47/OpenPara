@@ -26,6 +26,7 @@ A window for one kind of physics derives from SolidBase and gives the parts that
 """
 import json
 import os
+import time
 import traceback
 
 import numpy as np
@@ -100,6 +101,10 @@ def QApplication_keyboard():
     return bool(m & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
 
 
+EVENT_LIMIT = 400
+JOB_LIMIT = 60
+
+
 class SolidBase(QWidget):
     kind = "solid"
     label = "3D FEA"
@@ -129,9 +134,12 @@ class SolidBase(QWidget):
         self.sel_faces = []
         self.sel_vertex = None
         self.job = None
+        self.last_tracker = None
         self.saved_sig = None
         self.candidate = None
         self.pending_dims = False
+        self.events = []                        # [(clock time, 'say' | 'error', full text)]: what the window said, for a diagnostics report (the last EVENT_LIMIT)
+        self.job_log = []                       # [{'title', 'seconds', 'ok', 'stages': [(key, size, seconds)]}] of the jobs that ran, the last JOB_LIMIT
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
@@ -947,6 +955,15 @@ class SolidBase(QWidget):
 
     def say(self, text):
         self.status_lbl.setText(text)
+        self.log_event("say", text)
+
+    def log_event(self, level, text):
+        """Keeps what the window said (and every error in full) for the diagnostics report."""
+        if not text:
+            return
+        self.events.append((time.time(), level, str(text)))
+        if len(self.events) > EVENT_LIMIT:
+            del self.events[:len(self.events) - EVENT_LIMIT]
 
     def status(self, text):
         self.say(text)
@@ -1754,21 +1771,27 @@ class SolidBase(QWidget):
         trk = solid_progress.Tracker()
         if plan:
             trk.expect(plan)
+        t0 = time.monotonic()
+        self.last_tracker = trk
         if not self.threaded:
             try:
                 res = fn(trk, lambda: False)
                 trk.finish(True)
+                self.note_job(title, trk, t0, True)
                 done(res)
             except fem.FemError as ex:
                 trk.finish(False)
+                self.note_job(title, trk, t0, False)
                 self.failed(str(ex), False)
             except Exception:
                 trk.finish(False)
+                self.note_job(title, trk, t0, False)
                 self.failed(traceback.format_exc(), False)
             return True
         j = Job(fn, trk)
+        j.title, j.t0 = title, t0
         self.job = j
-        j.note.connect(self.say)
+        j.note.connect(self.job_note)
         j.done.connect(lambda r: self.finished(j, done, r))
         j.failed.connect(lambda m, c: self.finished(j, None, None, m, c))
         self.enable_buttons()
@@ -1782,6 +1805,7 @@ class SolidBase(QWidget):
         ok = done is not None
         if j.tracker is not None:
             j.tracker.finish(ok)
+            self.note_job(getattr(j, "title", "Job"), j.tracker, getattr(j, "t0", time.monotonic()), ok)
         self.prog.end(ok)
         self.enable_buttons()
         if done is not None:
@@ -1789,9 +1813,23 @@ class SolidBase(QWidget):
         else:
             self.failed(msg, cancelled)
 
+    def job_note(self, text):
+        """What a running job reports (the status line); the log keeps each new message once."""
+        self.status_lbl.setText(text)
+        if not self.events or self.events[-1][2] != str(text):
+            self.log_event("note", text)
+
+    def note_job(self, title, trk, t0, ok):
+        """A job is over: its time and the stages it went through (what the diagnostics report prints)."""
+        self.job_log.append({"title": title, "ok": bool(ok), "seconds": time.monotonic() - t0,
+                             "stages": [(k, float(sz), float(sec)) for k, sz, sec in (getattr(trk, "done", None) or [])]})
+        if len(self.job_log) > JOB_LIMIT:
+            del self.job_log[:len(self.job_log) - JOB_LIMIT]
+
     def failed(self, msg, cancelled=False):
         self.say(msg.strip().splitlines()[-1] if msg.strip() else "Failed.")
         self.last_error = msg
+        self.log_event("error", msg)
         self.enable_buttons()
 
     def cancel(self):

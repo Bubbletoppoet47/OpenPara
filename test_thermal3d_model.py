@@ -70,6 +70,7 @@ Tout = 300.0 + 20000.0 / 500.0
 ok(abs(res["T"][res["nodes"][:, 0] > 49.999].mean() - Tout) < 1e-6, f"the cooled end is at T_inf + q / h = {Tout} K: {res['T'][res['nodes'][:, 0] > 49.999].mean():.6f}")
 ok(abs(res["Tmax"] - (Tout + 20000.0 * 0.1 / kal)) < 1e-6, f"and the hot end is hotter by q L / k (k = {kal}): {res['Tmax']:.6f}")
 ok(res["names"]["fluxes"] == ["Heat flux 1"] and res["names"]["convs"] == ["Cooling"] and res["h_used"] == 8.0, "the result knows the names of the conditions and the element size")
+ok(res["sizes"] == [8.0], f"and the size of the elements of its one part: {res['sizes']}")
 ok(len(cache) == 1, "the mesh is kept in the cache")
 res2 = tm.run(g, dict(r, h=8.0, convs=[dict(r["convs"][0], h=1000.0)]), cache)
 ok(res2["mesh"] is res["mesh"] and len(cache) == 1, "a second run with other numbers uses the same mesh")
