@@ -1,0 +1,24 @@
+{
+ "name": "Workbench",
+ "order": 0,
+ "status": "workshopping",
+ "needs": [],
+ "description": "The project schematic: one OpenPara project file (.opara) that holds parts, assemblies, analyses and the other tools as blocks on a canvas, with wires between their cells (the geometry of a part feeding the geometry of an analysis) and a status mark on every cell (up to date, incomplete, refresh needed, update needed, failed). Blocks lock to a grid, a box selects several, a selection moves as one and the wires follow. Opens at the start in the Playground's Full dev mode. Under development: it comes with a LOAD EXAMPLE PROJECT button and a PROJECT REPORT. Results are not saved in the project: opening one never starts a computation, the cells say update needed until you press Update.",
+ "extension": "wb_ext",
+ "tabs": [
+  {
+   "kind": "workbench",
+   "label": "Workbench Project",
+   "short": "Workbench",
+   "module": "wb_tab",
+   "factory": "make_workbench",
+   "args": [
+    "host",
+    "path"
+   ],
+   "file_types": [
+    ".opara"
+   ]
+  }
+ ]
+}

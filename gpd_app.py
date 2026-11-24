@@ -230,7 +230,7 @@ class AppShell(QMainWindow):
         for i in range(self.tabs.count()):
             w = self.tabs.widget(i)
             p = getattr(w, "path", None)
-            if not (isinstance(p, str) and p and os.path.exists(p)):
+            if not (isinstance(p, str) and p and os.path.exists(p)) or getattr(w, "no_session", False):       # (an editor a Workbench project opened lives in its workspace)
                 continue
             p = os.path.abspath(p)
             try:
@@ -609,7 +609,7 @@ class AppShell(QMainWindow):
         """A tab that has a file or a project folder goes to the top of the recent list the first time it is seen with that path (so a new
         document appears when it is first saved, and a project made by an add-on needs nothing from the add-on)."""
         p = getattr(w, "path", None)
-        if not isinstance(p, str) or not p:
+        if not isinstance(p, str) or not p or getattr(w, "no_session", False):
             return
         try:
             key = os.path.normcase(os.path.abspath(p))
@@ -1463,6 +1463,12 @@ def main():
                                     "To get them back, close the program and start it the normal way.")
             return
         w.restore_session()                                # the tabs of the last run (after an update) come back first ...
+        for fn in ext.hooks("shell.start"):                # ... an add-on may put a home tab of its own (the dev Workbench) ...
+            try:
+                fn(w)
+            except Exception:                              # noqa: BLE001 - a home tab that cannot open never stops the start
+                import traceback
+                log_error("An add-on could not open its start tab:\n" + traceback.format_exc())
         QTimer.singleShot(2500, lambda: (w.report_addon_errors(), w.offer_first_run(), w.offer_addon_updates()))          # ... then one question after the other, never two at once
     QTimer.singleShot(300, after_start)
     QTimer.singleShot(4000, runstate.mark_ok)              # the window is up and the event loop has run for a few seconds: "started fine" (the updater waits for this)
