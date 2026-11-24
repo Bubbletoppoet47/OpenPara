@@ -1,5 +1,5 @@
-"""The left panels of 1D FEA, 2D FEA and 2D CFD (Simulation add-on): numbered collapsible sections whose fold state is remembered, stacked icon
-buttons for supports / loads, Mesh / Solve pinned below the scrolling part, and NO hotkeys at all (the keys F X Y B S C P T M D W N R J do nothing)."""
+"""The left panels of 1D FEA, 2D FEA and 2D CFD (Simulation add-on): an Outline (the tree of the sections) with the Details of the selected one below it, stacked icon
+buttons for supports / loads, Solve pinned under them, and NO hotkeys at all (the keys F X Y B S C P T M D W N R J do nothing).  A free Section still folds and remembers it."""
 import os, sys, json, tempfile
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 UD = tempfile.mkdtemp(); os.environ["OPARA_USER_DIR"] = UD
@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt, QEvent
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import QApplication, QPushButton
 app = QApplication([])
-import sim_icons, sim_ui
+import sim_icons, sim_ui, sim_outline
 import physics_tab, beam_tab, cfd_tab
 import sketcher_core as sc
 
@@ -39,23 +39,34 @@ for name, t in tabs.items():
     assert got == want[name], (name, got)
     assert [s.number for s in sorted(t.sections, key=lambda s: s.number)] == list(range(1, len(got) + 1))
     assert not hasattr(t, "handle_key"), name
-    # fold / unfold + summary line while folded
+    # the outline: one node per section, the Details show the selected one only
+    ol = t.outline
+    assert ol.keys() == [x.title for x in sorted(t.sections, key=sim_outline.rank)], (name, ol.keys())
+    for k in ol.keys():
+        assert ol.select(k)
+        app.processEvents()
+        shown = [x.title for x in t.sections if x.isVisibleTo(t)]
+        assert shown == [k], (name, k, shown)
+        assert ol.head.text() == f"Details of “{k}”"
     s = t.sections[0]
-    s.toggle.setChecked(False); app.processEvents()
-    assert not s.frame.isVisible()
-    s.toggle.setChecked(True); app.processEvents()
-    assert s.frame.isVisible()
+    assert not s.toggle.isVisibleTo(t) and not s.sum_lbl.isVisibleTo(t), "no fold bar, no summary line in the Details"
 assert not hasattr(tabs["2D FEA"], "add_traction"), "Traction is gone"
 
-# --- fold state is remembered between runs
-sec = tabs["2D FEA"].sections[1]            # Material and analysis: folded by default
-assert not sec.is_open()
-sec.toggle.setChecked(True)
+# --- a free Section still folds, and its state is remembered between runs
+free = sim_ui.Section("paneltest", 2, "Free section", open_=False)
+free.show(); app.processEvents()
+assert not free.is_open() and not free.frame.isVisible()
+free.toggle.setChecked(True); app.processEvents()
+assert free.frame.isVisible()
 st = json.load(open(os.path.join(UD, sim_ui.STATE_FILE)))
-assert st["fea2d/Material and analysis"] is True
+assert st["paneltest/Free section"] is True
 sim_ui._state = None
-again = physics_tab.PhysicsTab(Win())
-assert [s for s in again.sections if s.title == "Material and analysis"][0].is_open()
+assert sim_ui.Section("paneltest", 2, "Free section", open_=False).is_open()
+# a section that is a page of the Details does not fold and does not write the file
+emb = tabs["2D FEA"].sections[1]
+assert emb.embedded and not emb.toggle.isVisibleTo(tabs["2D FEA"])
+emb.toggle.setChecked(False)
+assert "fea2d/" + emb.title not in json.load(open(os.path.join(UD, sim_ui.STATE_FILE)))
 
 # --- buttons: stacked supports / loads with icons, the big Solve row
 def texts(t, title):
@@ -71,21 +82,25 @@ assert texts(beam, "Joints") == ["Rigid joint", "Pinned joint"]
 for name, t in tabs.items():
     assert not [b for b in t.findChildren(QPushButton) if b.parent() is not None and b.parent().objectName() == "pinned"], "no pinned bar any more"
     assert t.b_solve.text() == "Solve" and t.b_solve.minimumHeight() >= 40
-    col = t.sections[0].parent()
+    col = t.b_solve
+    while col is not None and not (col.objectName() == "simcontent" and col is not t.sections[0].parent()):
+        col = col.parent()
+    assert col is not None and col is not t.sections[0].parent(), "Solve sits in the part that stays under the Outline, not in the Details"
     holder = t.b_solve if t.b_solve.parent() is col else t.b_solve.parent()          # the Solve button, or the row holding it (CFD: Solve + Stop)
     lay = col.layout()
     i = lay.indexOf(holder)
-    assert i >= 0, "Solve sits in the scrolled column"
+    assert i == 0, "Solve is the first thing under the Outline"
     under = {"1D FEA": ["cb_auto"], "2D CFD": ["solve_status"]}.get(name, [])
     under = [getattr(t, a) for a in under]        # what belongs right under the Solve button of a panel
     for k, w in enumerate(under):
         assert lay.itemAt(i + 1 + k).widget() is w, (name, "the Solve bar's own status / choice is right under Solve")
     assert lay.itemAt(i + 1 + len(under)).widget() is t.study_box, "the parametric-study slot is under Solve (and what belongs to it)"
-    assert lay.itemAt(i + 2 + len(under)).widget() is [x for x in t.sections if x.title == "Results"][0], "Solve (and its study slot) sit directly above the Results"
+    assert t.b_solve.isVisible() and t.outline.isVisible(), "Solve is always in view, whatever node is selected"
     pan = col
     while pan is not None and not hasattr(pan, "default_w"):
         pan = pan.parent()
     assert pan is not None and pan.maximumWidth() >= 16000, "the side panel has no maximum width: drag the divider to widen it"
+    assert pan.outline is t.outline and t.outline.split.count() == 2
 mesh_sec = [x for x in fea.sections if x.title == "Mesh"][0]
 assert "Mesh" in texts(fea, "Mesh") and fea.e_h.parent() is not None
 assert mesh_sec.isAncestorOf(fea.e_h) and mesh_sec.isAncestorOf(fea.order_combo) and mesh_sec.isAncestorOf(fea.cb_auto)
@@ -113,9 +128,6 @@ assert fea.canvas.sel == []
 fea.canvas.sel = [("pt", p[0])]
 fea.add_support("fixed")
 assert len(fea.supports) == 1 and "1 support" == fea.count_text(fea.supports, "support")
-sup = [x for x in fea.sections if x.title == "Supports"][0]
-sup.toggle.setChecked(False)
-assert sup.sum_lbl.text() == "1 support", sup.sum_lbl.text()
 
 # --- beam: same, with a frame
 bm = sc.Model()

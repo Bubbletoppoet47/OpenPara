@@ -139,7 +139,7 @@ class ThermalCanvas(pt.PhysCanvas):
         """Where the heat goes: tracer particles with trails (moving) or arrows, along the heat flux of the picture shown.  Display only."""
         tab = self.tab
         mode = tab.flow_mode()
-        if mode == 0 or tab.result is None:
+        if mode == 0 or tab.result is None or not self.shows("result"):
             return
         p.setBrush(Qt.BrushStyle.NoBrush)
         if mode == 1:
@@ -177,11 +177,11 @@ class ThermalCanvas(pt.PhysCanvas):
         m = tab.model
         self.paint_flow(p)
         edge_of = {e["src"]: (e, pts) for e, pts in zip(tab.geom["edges"], tab.geom["polys"])}
-        if self.field is None:                               # a region that generates heat is hatched (not over a result picture)
+        if self.field is None and self.shows("loads"):       # a region that generates heat is hatched (not over a result picture)
             for f in tab.geom["faces"]:
                 if f["included"] and abs((tab.region_q or {}).get(f["id"], 0.0)) > 0:
                     p.fillPath(self.face_path(f), QBrush(QColor(224, 70, 40, 90), Qt.BrushStyle.Dense5Pattern))
-        for ld in tab.loads:
+        for ld in self.items_shown(tab.loads, "loads"):
             kind = ld["kind"]
             if kind == "power":
                 p.setPen(QPen(QColor("#c0182b"), 2))
@@ -679,6 +679,7 @@ class ThermalTab(pt.PhysicsTab):
             lay0.addWidget(s_)
         lay0.addStretch(1)
         panel = sim_ui.make_panel(left, [])
+        sim_ui.outlinize(panel, self, "thermal2d")
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)

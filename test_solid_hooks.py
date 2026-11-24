@@ -65,6 +65,7 @@ left, right, top = face([-1, 0, 0]), face([1, 0, 0]), face([0, 0, 1])
 w.select_faces([left]); w.add_support("fixed")
 w.select_faces([right]); w.add_load("force", {"f": [1000.0, 0.0, 0.0]})
 w.select_faces([])
+w.view_focus("conditions", None, [])                 # the view draws the supports and the loads together (the outline shows one node at a time)
 cf = w.view.cell_face
 
 

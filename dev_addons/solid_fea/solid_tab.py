@@ -146,12 +146,14 @@ class SolidWindow(SolidBase):
             r = sm.resolve(self.geom, self.setup)
         except fem.FemError:
             r = {"supports": [], "loads": []}
-        for s in r["supports"]:
-            for f in s["fids"]:
-                cols[f] = sv.SUPPORT
-        for l in r["loads"]:
-            for f in l.get("fids", []):
-                cols[f] = sv.LOAD
+        for item, s in zip(self.setup["supports"], r["supports"]):
+            if self.cond_wants("Supports", item):
+                for f in s["fids"]:
+                    cols[f] = sv.SUPPORT
+        for item, l in zip(self.setup["loads"], r["loads"]):
+            if self.cond_wants("Loads", item):
+                for f in l.get("fids", []):
+                    cols[f] = sv.LOAD
 
     def use_source_material(self, mat):
         e = mat.get("E_MPa")

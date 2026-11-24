@@ -37,6 +37,7 @@ import sketcher_script as scr
 import sim_icons
 import sim_matdlg
 import sim_ui
+import sim_tags
 import sim_report
 import legend_draw
 
@@ -151,6 +152,26 @@ def polyline_length(pts, closed):
     return sum(math.hypot(P[i + 1][0] - P[i][0], P[i + 1][1] - P[i][1]) for i in range(len(P) - 1))
 
 
+def condition_anchor_2d(tab, item):
+    """Where a support / load of a 2D window sits, for its tag: the point it is on, or the middle of the (first) edge it is on.  (x, y) in sketch units, or None."""
+    m, g = getattr(tab, "model", None), getattr(tab, "geom", None)
+    if m is None or g is None:
+        return None
+    for t in item.get("targets") or []:
+        t = (t[0], t[1])
+        if t[0] == "pt":
+            if t[1] in m.pts:
+                x, y = m.pts[t[1]]
+                return (float(x), float(y))
+            continue
+        for e, pts in zip(g["edges"], g["polys"]):
+            if e["src"] == t:
+                pp = points_along(pts, e["kind"] == "ci", 1)
+                if pp:
+                    return (float(pp[0][0]), float(pp[0][1]))
+    return None
+
+
 def points_along(pts, closed, count):
     """`count` points evenly spaced by arc length along a polyline -> [(x, y, tx, ty)] with (tx, ty) the unit tangent."""
     P = list(pts) + ([pts[0]] if closed else [])
@@ -228,7 +249,7 @@ def field_values(result, key):
 # ----------------------------------------------------------------------------------------------
 # the drawing
 # ----------------------------------------------------------------------------------------------
-class PhysCanvas(QWidget):
+class PhysCanvas(sim_tags.FocusMixin, QWidget):
     export_bg = None                      # None = the normal white; 0 / 255 while the animation export draws a frame on black / white
 
     def bg_color(self):
@@ -467,8 +488,8 @@ class PhysCanvas(QWidget):
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         # 1. regions, or the field / mesh picture
-        want_field = self.field is not None and tab.result is not None and tab.mesh is not None
-        mesh_only = tab.mesh is not None and not want_field and self.show_mesh
+        want_field = self.field is not None and tab.result is not None and tab.mesh is not None and self.shows("result")
+        mesh_only = tab.mesh is not None and not want_field and (self.show_mesh if self.focus is None else self.shows("mesh"))
         if want_field or mesh_only:
             key = (self.field if want_field else "mesh", self.show_mesh, self.show_deformed, round(self.def_scale, 9),
                    round(self.scale, 6), round(self.org.x(), 3), round(self.org.y(), 3), self.width(), self.height(),
@@ -495,8 +516,10 @@ class PhysCanvas(QWidget):
         self.paint_geometry(p)
         self.paint_conditions(p)
         self.paint_fasteners(p)
-        self.paint_probes(p)
+        if self.shows("result"):
+            self.paint_probes(p)
         p.resetTransform()
+        self.paint_tag_chips(p)
         if self.split_mark is not None:                        # the first point picked on a circle
             q = self.w2s(*self.split_mark)
             p.setPen(QPen(QColor("#f08a24"), 2))
@@ -514,7 +537,7 @@ class PhysCanvas(QWidget):
     def paint_geometry(self, p):
         tab = self.tab
         sel = set(self.sel)
-        supp = {t for s in tab.supports for t in s["targets"]}
+        supp = {t for s in self.items_shown(tab.supports, "supports") for t in s["targets"]}
         for e, pts in zip(tab.geom["edges"], tab.geom["polys"]):
             pen_col = QColor("#1f3d7a")
             width = 1.8
@@ -622,7 +645,7 @@ class PhysCanvas(QWidget):
         p.setPen(QPen(QColor("#c0182b"), 2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         edge_of = {e["src"]: (e, pts) for e, pts in zip(tab.geom["edges"], tab.geom["polys"])}
-        for ld in tab.loads:
+        for ld in self.items_shown(tab.loads, "loads"):
             for kind, i in ld["targets"]:
                 if ld["kind"] == "force" and kind == "pt":
                     s = self.w2s(*m.pts[i])
@@ -667,7 +690,7 @@ class PhysCanvas(QWidget):
         """Bolt / screw heads (a bar of the head width on the edge, an arrow toward the head side) and contact arrows."""
         tab = self.tab
         m = tab.model
-        for sup in tab.supports:
+        for sup in self.items_shown(tab.supports, "supports"):
             if sup["mode"] not in ("bolt", "screw", "contact"):
                 continue
             if sup["mode"] == "contact":
@@ -1140,6 +1163,7 @@ class PhysicsTab(QWidget):
             lay0.addWidget(s_)
         lay0.addStretch(1)
         panel = sim_ui.make_panel(left, [])
+        sim_ui.outlinize(panel, self, "fea2d")         # the sections become an Outline with the Details of the selected one below it
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
@@ -1534,6 +1558,9 @@ class PhysicsTab(QWidget):
         k = item["kind"]
         return {"force": lambda: f"{item['fx']:.10g}, {item['fy']:.10g}", "pressure": lambda: f"{item['p']:.10g}",
                 "traction": lambda: f"{item['tx']:.10g}, {item['ty']:.10g}"}.get(k, lambda: "")()
+
+    def condition_anchor(self, item):
+        return condition_anchor_2d(self, item)
 
     def refresh_lists(self):
         self.refresh_sections()
@@ -2425,6 +2452,8 @@ class PhysicsTab(QWidget):
                 store[lv] = [cv.render_picture(True, k / (n - 1)) for k in range(n)]
             cv.anim_frames = store[lv]
             cv.repaint()
+        shown = cv.forced()                                         # the frames show the result, whatever node of the outline is selected
+        shown.__enter__()
         try:
             return anim_export.export(self, self.ANIM_LABEL, n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=ask,
                                       set_bg=set_bg)
@@ -2434,7 +2463,7 @@ class PhysicsTab(QWidget):
             cv.export_bg = None
             cv.anim_frames = store[255]
             cv.anim_idx = keep
-            cv.update()
+            shown.__exit__()
 
     # --- reading the inputs
     def read_material(self):

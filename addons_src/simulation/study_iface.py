@@ -90,7 +90,9 @@ class StudyAdapter:
         """A tab of the same kind (never shown) in the given state: the case is set up and read from it."""
         t = self.tab
         host = ScratchHost(t.win)
-        s = type(t)(host)
+        import sim_ui
+        with sim_ui.plain_panels():                      # nobody sees this tab: no Outline for it
+            s = type(t)(host)
         host._restoring = True
         try:
             s.import_state(state if state is not None else self.base_state())

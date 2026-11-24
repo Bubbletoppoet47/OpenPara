@@ -10,6 +10,7 @@ from PyQt6.QtGui import QImage, QPainter
 
 import legend_draw
 import result_style
+import sim_tags
 
 try:
     import pyvista as pv
@@ -104,6 +105,7 @@ class SolidView:
         self.probe_mode = False
         self.on_probe = None                       # fn((x, y, z)) while probe_mode is on
         self.mesh_actor = None
+        self._focus_mesh_of = None
         self.res = None                            # the result surface on show (see show_result)
         self.legend_spec = None                    # {"title", "labels", "subtitle"} of the colour legend on show
         self.legend = None                         # the legend picture in the corner: {"rep", "widget", "w", "h"}
@@ -111,6 +113,12 @@ class SolidView:
         self.axes_on = False
         self.lines = {}                            # name -> actor of a line overlay (see set_lines)
         self.line_data = {}                        # name -> its segments (kept for the tests and when there is no 3D view)
+        self.focus = None                          # what the selected node of the outline shows (sim_outline.FOCUS_OF); None: the view shows what it always did
+        self.mesh_source = None                    # fn() -> (nodes, cells) of the mesh to draw while the focus is "mesh", or None (set by the window)
+        self.focus_mesh_actor = None
+        self.tags = []                             # the lettered tags (sim_tags) to draw now
+        self.tag_names = []                        # names of the point-label actors of the tags on the model
+        self.tag_logo = None                       # the list of the tags in the upper-left corner: {"rep", "widget", "w", "h"}
         if QtInteractor is None:
             return
         try:
@@ -124,7 +132,7 @@ class SolidView:
             self.widget = None
             return
         self.axes_on = draw_axes(self.plotter)
-        self._resized = _Resized(self.place_legend)
+        self._resized = _Resized(self.place_all)
         self.plotter.installEventFilter(self._resized)
 
     # ------------------------------------------------------------------ the part
@@ -149,6 +157,7 @@ class SolidView:
         self.actor = self.plotter.add_mesh(self.poly, scalars="rgb", rgb=True, show_edges=False, pickable=True, reset_camera=False)
         if not keep_camera:
             self.plotter.reset_camera()
+        self.apply_focus()
         self.plotter.render()
 
     def set_lines(self, name, segs, color=(0.1, 0.12, 0.2), width=1.5):
@@ -350,6 +359,7 @@ class SolidView:
         self.set_legend(None)
         if self.actor is not None:
             self.actor.SetVisibility(True)
+        self.apply_focus()
 
     def _rgb(self, values):
         """Node values -> colours of the surface points: lo..hi along the shared colour scheme (flipped for a safety factor); a missing value is grey."""
@@ -389,7 +399,7 @@ class SolidView:
         if self.actor is not None:
             self.actor.SetVisibility(False)
         self.set_legend(legend)
-        self.plotter.render()
+        self.apply_focus()
         return True
 
     def set_ramp(self, ramp, values):
@@ -415,8 +425,134 @@ class SolidView:
         self.mesh_actor = self.plotter.add_mesh(_surface(g), color=GREY, show_edges=True, edge_color=(0.35, 0.38, 0.42), reset_camera=False)
         if self.actor is not None:
             self.actor.SetVisibility(False)
-        self.plotter.render()
+        self.apply_focus()
         return True
+
+    # ------------------------------------------------------------------ what the selected node of the outline shows
+    def set_focus(self, focus, tags=()):
+        """focus: a word of sim_outline.FOCUS_OF (None: as before the outline).  tags: the lettered tags to draw (sim_tags)."""
+        self.focus = focus
+        self.tags = list(tags)
+        self.apply_focus()
+
+    def apply_focus(self):
+        """The part, the mesh, the result and the legend show or hide as the focus says: the bare part for the pages about the part, only the mesh for Mesh, only the result
+        for Results; the tags of the conditions go with Supports / Loads."""
+        f = self.focus
+        if self.plotter is None:
+            return
+        try:
+            self._set_focus_mesh(f == "mesh")
+            if self.result_actor is not None:
+                self.result_actor.SetVisibility(f in (None, "results"))
+            if self.mesh_actor is not None:
+                self.mesh_actor.SetVisibility(f is None)
+            if self.actor is not None:
+                if f is None:
+                    show = self.result_actor is None and self.mesh_actor is None
+                elif f == "results":
+                    show = self.result_actor is None
+                elif f == "mesh":
+                    show = self.focus_mesh_actor is None
+                else:
+                    show = True
+                self.actor.SetVisibility(show)
+            if self.legend is not None:
+                try:
+                    self.legend["widget"].SetEnabled(f in (None, "results"))
+                except Exception:                                        # noqa: BLE001
+                    pass
+            self._put_tags()
+            self.plotter.render()
+        except Exception:                                                # noqa: BLE001 - a view that cannot draw must not break the window
+            pass
+
+    def _set_focus_mesh(self, on):
+        data = self.mesh_source() if (on and callable(self.mesh_source)) else None
+        if data is None:
+            if self.focus_mesh_actor is not None:
+                self.plotter.remove_actor(self.focus_mesh_actor)
+                self.focus_mesh_actor = None
+                self._focus_mesh_of = None
+            return
+        if self.focus_mesh_actor is not None and self._focus_mesh_of is not None and self._focus_mesh_of[0] is data[0] and self._focus_mesh_of[1] is data[1]:
+            return
+        if self.focus_mesh_actor is not None:
+            self.plotter.remove_actor(self.focus_mesh_actor)
+        nodes, conn = data
+        self.focus_mesh_actor = self.plotter.add_mesh(_surface(_grid(nodes, conn)), color=GREY, show_edges=True, edge_color=(0.35, 0.38, 0.42), reset_camera=False,
+                                                      pickable=False)
+        self._focus_mesh_of = data
+
+    def _put_tags(self):
+        """The chips on the model (a point label at the condition, with the colour and the letter of its tag) and the list in the upper-left corner."""
+        for n in self.tag_names:
+            try:
+                self.plotter.remove_actor(n)
+            except Exception:                                            # noqa: BLE001
+                pass
+        self.tag_names = []
+        for t in self.tags:
+            a = t.get("anchor")
+            if a is None or len(a) != 3:
+                continue
+            name = f"tag_{t['letter']}"
+            try:
+                self.plotter.add_point_labels(np.array([a], float), [t["letter"]], name=name, font_size=14, bold=True, text_color="white", shape="rounded_rect",
+                                              shape_color=t["colour"], shape_opacity=1.0, show_points=False, always_visible=True, pickable=False, margin=3,
+                                              reset_camera=False, render=False)
+                self.tag_names.append(name)
+            except Exception:                                            # noqa: BLE001
+                break
+        self._put_tag_list()
+
+    def _put_tag_list(self):
+        if not self.tags:
+            if self.tag_logo is not None:
+                try:
+                    self.tag_logo["widget"].Off()
+                except Exception:                                        # noqa: BLE001
+                    pass
+                self.tag_logo = None
+            return
+        import vtk
+        from vtk.util import numpy_support
+        img, h = sim_tags.corner_image(self.tags, self.dpr())
+        arr = np.ascontiguousarray(qimage_array(img)[::-1])
+        im = vtk.vtkImageData()
+        im.SetDimensions(arr.shape[1], arr.shape[0], 1)
+        im.GetPointData().SetScalars(numpy_support.numpy_to_vtk(arr.reshape(-1, 4), deep=True, array_type=vtk.VTK_UNSIGNED_CHAR))
+        if self.tag_logo is None:
+            rep = vtk.vtkLogoRepresentation()
+            rep.SetShowBorder(0)
+            rep.ProportionalResizeOff()
+            rep.GetImageProperty().SetOpacity(1.0)
+            widget = vtk.vtkLogoWidget()
+            widget.SetInteractor(self.plotter.iren.interactor)
+            widget.SetRepresentation(rep)
+            widget.SelectableOff()
+            widget.ResizableOff()
+            widget.ProcessEventsOff()
+            widget.On()
+            self.tag_logo = {"rep": rep, "widget": widget}
+        self.tag_logo["rep"].SetImage(im)
+        self.tag_logo["w"], self.tag_logo["h"] = arr.shape[1], arr.shape[0]
+        self.place_tag_list()
+
+    def place_tag_list(self):
+        if self.plotter is None or self.tag_logo is None:
+            return
+        W, H = self.plotter.window_size
+        if W < 10 or H < 10:
+            return
+        fw, fh = min(1.0, self.tag_logo["w"] / W), min(1.0, self.tag_logo["h"] / H)
+        rep = self.tag_logo["rep"]
+        rep.SetPosition(0.0, 1.0 - fh)
+        rep.SetPosition2(fw, fh)
+
+    def place_all(self):
+        self.place_legend()
+        self.place_tag_list()
 
     # ------------------------------------------------------------------ animation pictures
     def export_session(self, max_px=1280):

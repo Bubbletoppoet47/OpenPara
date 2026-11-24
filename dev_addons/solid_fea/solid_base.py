@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, Q
 
 import ext
 import sim_project
+import sim_tags
 import sim_ui
 import sim_source
 import solid_asm as sasm
@@ -176,6 +177,7 @@ class SolidBase(QWidget):
         split.setStretchFactor(0, 0)
         self.view = self.make_view()
         self.view.on_pick = self.picked
+        self.view.mesh_source = self.focus_mesh
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
@@ -198,6 +200,7 @@ class SolidBase(QWidget):
         self.build_mesh_section()
         self.build_results_section()
         self.finish_panel()
+        sim_ui.outlinize(self.panel, self, self.kind)        # the sections become an Outline with the Details of the selected one below it
 
     def build_geometry_section(self):
         # --- 1 geometry
@@ -1745,6 +1748,70 @@ class SolidBase(QWidget):
         if height != "keep" and rec["rows"] > 1 and (ask or height is not None):
             rs[ri] = None if height is None else float(format(l_in(height), ".12g"))
         return self.apply_sizes(pid, cs, rs)
+
+    # ------------------------------------------------------------------ the outline: what the view shows for the selected node / row
+    focus = None                                  # a word of sim_outline.FOCUS_OF (None: before the outline has said anything)
+    focus_item = None                             # the support / load of the selected row
+
+    def focus_mesh(self):
+        """The mesh the view draws for the node Mesh: (nodes, cells), or None before the part is meshed."""
+        q = self.mesh_q
+        if q is None:
+            return None
+        return (q["nodes"], q.get("viewcells") or q["tets"])
+
+    def view_focus(self, focus, item, tags):
+        """The outline selected a node (and maybe a row): the view shows only what that is about."""
+        self.focus, self.focus_item = focus, item
+        self.view.set_focus(focus, tags)
+        self.colour()
+
+    def cond_wants(self, group, item):
+        """Is this support / load / condition drawn (its faces coloured) for the node that is selected?"""
+        f = self.focus
+        if f is None:
+            return True
+        if f != "conditions" and f != group.lower():
+            return False
+        return self.focus_item is None or self.focus_item is item
+
+    def condition_anchor(self, item):
+        """Where a support / load sits, for its tag: the centre of its (first) face or its vertex.  (x, y, z) in the part's units, or None."""
+        for f in item.get("faces") or []:
+            c = f.get("center")
+            if c is not None and len(c) == 3:
+                return tuple(float(x) for x in c)
+        v = item.get("vertex")
+        if v and v.get("point") is not None:
+            return tuple(float(x) for x in v["point"])
+        return None
+
+    def select_face_size(self, r):
+        """A row of the local sizes under Mesh was clicked: its row in the table, and its faces on the part."""
+        try:
+            self.face_table.selectRow(r)
+            sizes = smesh.complete(self.setup.get("mesh"))["face_sizes"]
+            ids = sg.match_faces(self.geom, sizes[r]["face"]) if self.geom is not None and 0 <= r < len(sizes) else None
+            if ids:
+                self.select_faces(list(ids))
+        except Exception:                                  # noqa: BLE001 - a row that cannot be shown is still selected
+            pass
+
+    def outline_items(self):
+        """The rows under the nodes of the outline: the conditions (lettered tags) and, under Mesh, the local element sizes."""
+        import sim_outline
+        items = sim_outline.generic_items(self, self.outline.nodes)
+        try:
+            sizes = smesh.complete(self.setup.get("mesh"))["face_sizes"]
+        except Exception:                                  # noqa: BLE001
+            sizes = []
+        if sizes and "Mesh" in self.outline.nodes:
+            rows = []
+            for r, x in enumerate(sizes):
+                tag = {"kind": "size", "colour": sim_tags.colour_of("size"), "item": x, "select": (lambda r=r: self.select_face_size(r))}
+                rows.append((f"{self.face_group_label(x['face'])}: {format(l_out(x['h']), '.6g')} {UD()['L']}", tag))
+            items["Mesh"] = rows
+        return items
 
     def colour(self):
         if self.geom is None:

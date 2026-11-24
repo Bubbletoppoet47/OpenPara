@@ -167,6 +167,7 @@ w = solid_tab.SolidWindow(threaded=False)
 w.resize(1300, 1700); w.show()
 assert w.create_project(os.path.join(T, "bar_mo")) and w.import_file(part_file), MSGS
 mesh_sec = next(x for x in w.sections if x.title == "Mesh")
+w.outline.select("Mesh"); app.processEvents()                          # the options are the Details of the Mesh node
 assert mesh_sec.isAncestorOf(w.cb_adv) and w.cb_adv.text() == "Advanced mesh options" and not w.cb_adv.isChecked()
 assert not w.adv_box.isVisibleTo(w), "the options are hidden until the box is ticked"
 w.cb_adv.setChecked(True); app.processEvents()

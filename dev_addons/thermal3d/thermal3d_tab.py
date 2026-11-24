@@ -306,6 +306,8 @@ class ThermalWindow(SolidBase):
     def condition_colours(self, cols):
         for key in tm.KEYS:
             for i, c in enumerate(self.setup.get(key) or []):
+                if not self.cond_wants("Conditions", c):
+                    continue
                 try:
                     fids = sm._fids(self.geom, c["faces"], sm.name_of(tm.NAMES[key], i, c))
                 except fem.FemError:

@@ -70,7 +70,11 @@ g = w.geom
 names = [b["name"] for b in g["bodies"]]
 assert len(g["bonds"]) == 1 and abs(g["bonds"][0]["area"] - 400) < 1e-3 and not g["floating"], (g["bonds"], g["floating"], names)
 assert w.body_table.rowCount() == 2
-assert not w.dims.isVisibleTo(w) and w.b_split.isVisibleTo(w) and w.asm_box.isVisibleTo(w) and w.body_table.isVisibleTo(w)
+w.outline.select("Geometry"); app.processEvents()                    # these widgets are the Details of the Geometry node
+assert not w.dims.isVisibleTo(w) and w.b_split.isVisibleTo(w) and w.asm_box.isVisibleTo(w)
+w.outline.select("Material and analysis"); app.processEvents()          # the table of the bodies (with their materials) is in this node
+assert w.body_table.isVisibleTo(w)
+w.outline.select("Geometry"); app.processEvents()
 assert "bonded" in w.asm_lbl.text() and "stack" in w.geo_lbl.text() and "2 bodies" in w.geo_lbl.text()
 # the faces between the bodies are not listed for picking and are not drawn
 hidden = [i for i in range(w.faces.count()) if w.faces.item(i).isHidden()]

@@ -432,7 +432,7 @@ class CFDCanvas(pt.PhysCanvas):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if self.pan_from is not None:
             p.translate(self.pan_off)
-        data = tab.field_data() if tab.mesh is not None else None
+        data = tab.field_data() if (tab.mesh is not None and self.shows("result")) else None
         legend = None
         if tab.mesh is not None and data is not None:
             vk = self.view_key()
@@ -471,7 +471,11 @@ class CFDCanvas(pt.PhysCanvas):
     def paint_overlay(self, p, data, stale):
         tab = self.tab
         mesh = tab.mesh
-        if mesh is not None and (tab.cb_mesh.isChecked() or data is None) and not stale:
+        if self.focus is None:
+            want_mesh = tab.cb_mesh.isChecked() or data is None
+        else:
+            want_mesh = self.shows("mesh") or (self.shows("result") and data is not None and tab.cb_mesh.isChecked())
+        if mesh is not None and want_mesh and not stale:
             if self.mesh_pix is None or self.mesh_key != self.view_key():
                 self.build_mesh_pix()
             p.drawPixmap(0, 0, self.mesh_pix)
@@ -488,7 +492,7 @@ class CFDCanvas(pt.PhysCanvas):
             if e["src"] in self.sel:
                 p.setPen(QPen(QColor("#ff8c00"), 4.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
                 p.drawPolyline(poly)
-        if mesh is not None:
+        if mesh is not None and self.focus in (None, "domain", "mesh"):
             x0, y0, x1, y1 = mesh["box"]
             p.setPen(QPen(QColor("#555555"), 1.2, Qt.PenStyle.DashLine))
             a, b = self.w2s(x0, y1), self.w2s(x1, y0)
@@ -501,7 +505,7 @@ class CFDCanvas(pt.PhysCanvas):
             for side, (mx, my, dx, dy) in mids.items():
                 s = self.w2s(mx, my)
                 p.drawText(int(s.x() + dx), int(s.y() + dy), kinds[side])
-        if self.particles is not None and tab.cb_tracers.isChecked():
+        if self.particles is not None and tab.cb_tracers.isChecked() and self.shows("result"):
             P = self.particles
             p.setPen(QPen(QColor(255, 255, 255, 190), 1.5))
             for trail in P["trail"]:
@@ -809,6 +813,7 @@ class CFDTab(QWidget):
         lay0.addStretch(1)
 
         scroll = sim_ui.make_panel(left, [], 340)
+        sim_ui.outlinize(scroll, self, "cfd2d")
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
@@ -1655,6 +1660,8 @@ class CFDTab(QWidget):
             cv.export_bg = level
             cv.base = None                                      # the field picture starts from the new background
             cv.repaint()
+        shown = cv.forced()                                         # the frames show the result, whatever node of the outline is selected
+        shown.__enter__()
         try:
             return anim_export.export(self, "CFD", n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=path_fmt, set_bg=set_bg)
         finally:
@@ -1663,6 +1670,7 @@ class CFDTab(QWidget):
             cv.export_bg = None
             cv.base = None
             self.slider.setValue(keep)
+            shown.__exit__()
 
     def play_step(self):
         n = self.slider.maximum() + 1

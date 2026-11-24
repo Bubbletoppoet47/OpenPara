@@ -20,6 +20,7 @@ FOS_LOW, FOS_HIGH = 0.5, 3.0              # the factor-of-safety colours: red at
 
 
 import legend_draw
+import sim_tags
 
 
 def beam1d_max():
@@ -40,7 +41,7 @@ def _wheel_step():
         return 1.08
 
 
-class BeamCanvas(QWidget):
+class BeamCanvas(sim_tags.FocusMixin, QWidget):
     export_bg = None                      # None = the normal white; 0 / 255 while the animation export draws a frame on black / white
 
     def bg_color(self):
@@ -255,10 +256,10 @@ class BeamCanvas(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if self.pan_from is not None:
             p.translate(self.pan_off)
-        res = tab.result
+        res = tab.result if self.shows("result") else None
         mode = tab.view_mode()
         self.paint_members(p, res, mode)
-        if tab.cb_mesh.isChecked():
+        if (tab.cb_mesh.isChecked() and self.focus is None) or self.focus == "mesh":
             self.paint_mesh(p, res)
         if res is not None and mode in DIAGRAM_MODES:
             self.paint_diagram(p, res, mode)
@@ -268,6 +269,7 @@ class BeamCanvas(QWidget):
         self.paint_loads(p)
         self.paint_joints(p)
         p.resetTransform()
+        self.paint_tag_chips(p)
         if self.box is not None:
             p.setPen(QPen(QColor("#3a7bd5"), 1, Qt.PenStyle.DashLine))
             p.setBrush(QColor(58, 123, 213, 30))
@@ -407,7 +409,7 @@ class BeamCanvas(QWidget):
     def paint_joints(self, p):
         tab = self.tab
         sel = set(self.sel)
-        tie_pts = tab.tie_pids() if hasattr(tab, "tie_pids") else set()
+        tie_pts = tab.tie_pids() if (hasattr(tab, "tie_pids") and self.focus in (None, "ties", "joints")) else set()
         for pid in tab.node_ids():
             s = self.w2s(*tab.model.pts[pid])
             if pid in tie_pts:
@@ -445,7 +447,7 @@ class BeamCanvas(QWidget):
         tab = self.tab
         nodes = set(tab.node_ids())
         col = QColor("#1a9641")
-        for sp_ in tab.supports:
+        for sp_ in self.items_shown(tab.supports, "supports"):
             for pid in sp_["targets"]:
                 if pid not in nodes:
                     continue
@@ -485,7 +487,7 @@ class BeamCanvas(QWidget):
         col = QColor("#c0392b")
         p.setFont(QFont("Arial", 8))
         by_lid = {m["lid"]: m for m in tab.members}
-        for ld in tab.loads:
+        for ld in self.items_shown(tab.loads, "loads"):
             if ld["kind"] == "force":
                 fx, fy = ld["fx"], ld["fy"]
                 n = math.hypot(fx, fy)

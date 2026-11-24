@@ -187,6 +187,7 @@ for name, hint in HINT.items():
 assert first_label_text(beam, "Joints") == HINT["1D FEA"]
 assert btn_texts(beam, "Joints") == ["Rigid joint", "Pinned joint"]
 # Joints are stacked buttons like the supports: one under the other
+beam.outline.select("Joints"); app.processEvents()
 j1, j2 = [b for b in sec(beam, "Joints").frame.findChildren(QPushButton)]
 assert j1.mapTo(beam, j1.rect().topLeft()).y() < j2.mapTo(beam, j2.rect().topLeft()).y() and abs(j1.x() - j2.x()) < 3, "stacked, not side by side"
 
@@ -196,6 +197,7 @@ for name in ("1D FEA", "2D FEA", "3D FEA"):
     assert t.cond_table.columnCount() == 4 and [t.cond_table.horizontalHeaderItem(i).text() for i in range(4)] == ["Name", "Type", "Applied to", "Value"], name
     assert sec(t, "Loads").isAncestorOf(t.cond_table), name
     assert btn_texts(t, "Loads")[-2:] == ["Edit selected...", "Remove selected"], (name, btn_texts(t, "Loads"))
+solid.outline.select("Loads"); app.processEvents()
 assert not solid.sup_list.isVisibleTo(solid) and not solid.load_list.isVisibleTo(solid), "3D: the two plain lists are hidden; the table shows both"
 
 # ---- 1D: edit / remove through the table
@@ -318,11 +320,11 @@ cfd.worker = object(); cfd.enable_buttons()
 assert cfd.b_stop.isEnabled() and cfd.b_stop.text() == "Stop", "the Solve bar's Stop is the one that is enabled while a solve runs (it used to be replaced by the animation's)"
 cfd.worker = None; cfd.enable_buttons()
 assert not cfd.b_stop.isEnabled() and cfd.b_play_stop is not cfd.b_stop and cfd.b_play_stop.text() == "Stop"
-col = sec(cfd, "Geometry").parent().layout()
+col = cfd.solve_row.parent().layout()
 holder = cfd.solve_row
 i = col.indexOf(holder)
 assert col.itemAt(i + 1).widget() is cfd.solve_status and cfd.solve_status.isAncestorOf(cfd.bar) and cfd.solve_status.isAncestorOf(cfd.plot) and cfd.solve_status.isAncestorOf(cfd.prog_lbl)
-col = sec(beam, "Geometry").parent().layout()
+col = beam.b_solve.parent().layout()
 i = col.indexOf(beam.b_solve)
 assert col.itemAt(i + 1).widget() is beam.cb_auto and beam.cb_auto.text() == "Solve automatically after every change"
 # Solve and Stop / Cancel have the same height
@@ -342,6 +344,7 @@ for name, field in (("1D FEA", "view_combo"), ("2D FEA", "field_combo"), ("3D FE
         continue
     assert sec(t, "Results").isAncestorOf(fld), (name, field)
 res_cfd = sec(cfd, "Results")
+cfd.outline.select("Results"); app.processEvents()
 ys = {n: getattr(cfd, n).mapTo(cfd, getattr(cfd, n).rect().topLeft()).y() for n in ("field", "cb_mesh", "slider", "cb_tracers", "b_send", "b_play", "res_lbl")}
 assert ys["field"] < ys["cb_mesh"] < ys["slider"] < ys["cb_tracers"] < ys["b_send"] < ys["b_play"], ys
 
@@ -354,7 +357,7 @@ for t in tabs.values():
     assert pan is not None and pan.objectName() == "simpanel" and "QPushButton" in pan.styleSheet(), "the panel has the soft look"
     sb = [b for b in t.findChildren(QPushButton) if b.property("simrole") == "solve"][0]
     assert sb.styleSheet() == sim_style.SOLVE
-    img = pan.scroll.widget().grab().toImage()
+    img = pan.outline.holder.grab().toImage()
     ratio = img.devicePixelRatio()
     assert ratio == SCALE, (ratio, SCALE)
     c = img.pixelColor(2, img.height() - 3)                      # the bare bottom of the panel: the face colour

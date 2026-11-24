@@ -452,6 +452,7 @@ class BeamTab(QWidget):
             lay0.addWidget(s_)
         lay0.addStretch(1)
         scroll = sim_ui.make_panel(left, [], 340)
+        sim_ui.outlinize(scroll, self, "beam1d")
 
         self.mem_table = QTableWidget(0, len(HEADERS))
         self.mem_table.setHorizontalHeaderLabels(HEADERS)
@@ -1358,13 +1359,15 @@ class BeamTab(QWidget):
         def set_bg(level):
             cv.export_bg = level
             cv.repaint()
+        shown = cv.forced()                                         # the frames show the result, whatever node of the outline is selected
+        shown.__enter__()
         try:
             return anim_export.export(self, "1D FEA", n, grab, n / dur, self.loop_combo.currentIndex(), say=self.status, path_fmt=path_fmt,
                                       set_bg=set_bg)
         finally:
             cv.export_bg = None
             cv.ramp = 1.0
-            cv.update()
+            shown.__exit__()
 
     def need_points(self, what):
         pts = self.sel_points()
@@ -1654,6 +1657,23 @@ class BeamTab(QWidget):
                 pass
 
     # --- the conditions table
+    def condition_anchor(self, item):
+        """Where a support / load sits, for its tag: the joint, or the middle of the (first) member."""
+        m = self.model
+        if m is None or not item.get("targets"):
+            return None
+        t = item["targets"][0]
+        if item.get("kind") in LINE_KINDS:
+            mem = self.member_by_lid(t)
+            if mem is None:
+                return None
+            a, b = m.pts[mem["a"]], m.pts[mem["b"]]
+            return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+        if t in m.pts:
+            x, y = m.pts[t]
+            return (float(x), float(y))
+        return None
+
     def target_names(self, item, is_sup):
         if not is_sup and item["kind"] in LINE_KINDS:
             return ", ".join((self.member_by_lid(t) or {"name": f"line {t}"})["name"] for t in item["targets"])

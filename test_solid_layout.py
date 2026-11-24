@@ -95,6 +95,7 @@ for wid in (w.cb_field, w.cmap_combo, w.cb_def, w.e_scale, w.cb_edges, w.cb_anim
 assert [w.cb_field.itemData(i) for i in range(w.cb_field.count())] == ["umag", "ux", "uy", "uz", "vm", "fos"] and w.cb_field.currentData() == "umag"
 assert w.cb_field.itemText(0).startswith("Displacement magnitude (") and "MPa" in w.cb_field.itemText(4)
 assert w.e_scale.text() == "" and w.e_scale.placeholderText() == "auto" and w.cb_def.isChecked() and not w.cb_edges.isChecked()
+w.outline.select("Results")
 assert not w.anim_box.isVisibleTo(w) and w.cb_anim.text() == "Animate"
 w.cb_anim.setChecked(True); assert w.anim_box.isVisibleTo(w)
 assert [w.loop_combo.itemText(i) for i in range(3)] == ["Once", "Loop", "Back and forth"] and w.e_frames.text() == "30" and w.e_dur.text() == "3"

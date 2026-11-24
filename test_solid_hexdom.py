@@ -348,6 +348,7 @@ assert w.run_mesh() and w.mesh_q["quality"]["hexes"] > 0
 cn = w.mesh_q["quality"]
 assert "hexahedra" in w.mesh_lbl.text() and f"{cn['hexes']:,} hexahedra" in w.mesh_lbl.text() and f"{cn['elements']:,} elements" in w.mesh_lbl.text(), w.mesh_lbl.text()
 ql_text = w.quality_lbl.text()
+w.outline.select("Mesh"); app.processEvents()
 assert w.quality_box.isVisibleTo(w) and f"Hexahedra {cn['hexes']:,}" in ql_text and "% of the volume" in ql_text and "pyramids" in ql_text and "radius ratio" in ql_text, ql_text
 assert w.run_solve() and w.result["counts"]["hexes"] == cn["hexes"] and "Hexahedra" in w.res_lbl.text() and "Pyramids" in w.res_lbl.text(), w.res_lbl.text()
 assert w.result["viewcells"] is not None and w.result["n_elements"] == cn["elements"]

@@ -438,7 +438,11 @@ def hatch_points(tab):
     """The pixels of the drawing that have the colour of the insulation hatch (#5b6770, within a few levels), as (x, y) screen points."""
     tab.canvas.resize(700, 420)
     tab.canvas.fit()
-    img = tab.canvas.grab().toImage()
+    tags, tab.canvas.tag_list = tab.canvas.tag_list, ()          # the lettered tags (an insulated one is the same grey as the hatch) are not what is counted
+    try:
+        img = tab.canvas.grab().toImage()
+    finally:
+        tab.canvas.tag_list = tags
     ref, pts = QColor("#5b6770"), []
     for y in range(img.height()):
         for x in range(img.width()):
@@ -467,6 +471,7 @@ add(t, "add_temperature", [("ln", left_)], 100.0)
 add(t, "add_temperature", [("ln", right_)], 20.0)
 assert t.uncovered_edges() == sorted(("ln", x) for x in bottom + top)
 assert t.cond_note.text() == "6 edges of the model have no condition and are insulated (no heat through them): " + t.names(t.uncovered_edges()) + ".", t.cond_note.text()
+t.outline.select("Conditions"); app.processEvents()                     # the drawing shows the conditions only under their node
 n0 = hatch_pixels(t)
 assert n0 == 0, "no hatch on the drawing before an edge is set to Insulated"
 t.canvas.sel = [("ln", x) for x in bottom]

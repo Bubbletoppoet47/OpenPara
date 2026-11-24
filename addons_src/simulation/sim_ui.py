@@ -7,6 +7,7 @@ sim_ui.py - the shared building blocks of the left panels of 1D FEA, 2D FEA and 
   help_button  a small "?" that opens a pop-up with a long note, so the panel itself stays short
   make_panel   puts the scrolling sections and the pinned bar (Mesh / Solve ...) into one widget
   soften       gives a finished panel the soft bevel look of sim_style (make_panel does it; call it again when sections are added later)
+  outlinize    turns a finished panel into the ANSYS-style column: an Outline (tree) on top and the Details of the selected item below (sim_outline); the sections become its pages
 
 Whether a section is folded is remembered between runs (sim_panels.json in the user folder).
 """
@@ -118,6 +119,9 @@ class Section(QWidget):
         outer.setSpacing(2)
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
+        self.head_lay = head
+        self.embedded = False                 # True once the section is a page of an Outline's Details (embed)
+        self.on_reveal = None
         self.toggle = QPushButton()
         self.toggle.setCheckable(True)
         self.toggle.setFlat(True)
@@ -143,7 +147,22 @@ class Section(QWidget):
         self.toggle.setChecked(remembered(self.key, open_))
         self.set_open(self.toggle.isChecked(), save=False)
 
+    def embed(self, on_reveal=None):
+        """The section becomes a page of the Details of an Outline: no fold bar, no one-line summary, always open (its '?' stays).  Asking it to open (a window revealing it)
+        selects its node in the outline."""
+        self.embedded = True
+        self.on_reveal = on_reveal
+        self.toggle.hide()
+        self.sum_lbl.hide()
+        self.frame.show()
+        if self.help is not None:
+            self.head_lay.insertStretch(0, 1)
+
     def set_open(self, on, save=True):
+        if self.embedded:
+            if on and callable(self.on_reveal):
+                self.on_reveal()
+            return
         self.frame.setVisible(on)
         self.toggle.setText(f"{'▾' if on else '▸'}  {self.number}   {self.title}")
         self.refresh_summary()
@@ -269,6 +288,60 @@ def soften(panel):
         if tb.text() == "?":
             tb.setStyleSheet(sim_style.HELP)
     return panel
+
+
+_PLAIN = [0]
+
+
+class plain_panels:
+    """`with plain_panels():` the windows made meanwhile (the hidden scratch window a study builds for every case, which nobody ever sees) get no Outline: their sections stay where
+    make_panel put them.  Building the tree for each of hundreds of cases doubled the time of a study."""
+
+    def __enter__(self):
+        _PLAIN[0] += 1
+        return self
+
+    def __exit__(self, *a):
+        _PLAIN[0] -= 1
+
+
+def outlinize(panel, window=None, kind="sim"):
+    """Makes the finished panel of a window (make_panel, with all its Sections in) the ANSYS-style column: the Sections move into an Outline (a tree of them, in the order a model is
+    built) with the Details of the selected one below it, and what else was in the panel (the Solve button, the progress bar, the study button) stays under them, always in
+    view.  -> the sim_outline.Outline, or None when the panel has no sections.  `window` may offer outline_items / outline_marks / outline_selected (see sim_outline)."""
+    if _PLAIN[0]:
+        return None
+    scroll = getattr(panel, "scroll", None)
+    content = scroll.widget() if scroll is not None else None
+    if content is None:
+        return None
+    secs = content.findChildren(Section)
+    if not secs:
+        return None
+    import sim_outline
+    ol = sim_outline.Outline(kind)
+    lay = content.layout()
+    for s_ in sorted(secs, key=sim_outline.rank):
+        if lay is not None:
+            lay.removeWidget(s_)
+        ol.add_section(s_)
+    pl = panel.layout()
+    scroll.takeWidget()
+    pl.removeWidget(scroll)
+    scroll.hide()
+    content.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+    pl.insertWidget(0, ol, 1)
+    pl.insertWidget(1, content, 0)
+    content.show()
+    panel.default_w = max(getattr(panel, "default_w", 400), 420)
+    panel.outline = ol
+    soften(panel)
+    ol.select(next(iter(ol.keys())))
+    ol.touched = False
+    if window is not None:
+        window.outline = ol
+        ol.attach(window)
+    return ol
 
 
 def soften_area(widget, tabs=False):

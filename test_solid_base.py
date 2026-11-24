@@ -106,6 +106,7 @@ ok(abs(w.setup["h"] - 6.0 * 1e-3 / units.get(unitctl.system())["L_m"] * 1e3 / 1e
 ok(w.run_mesh() and w.mesh_q is not None and "tetrahedra" in w.mesh_lbl.text(), f"the part is meshed: {w.mesh_lbl.text()}")
 ok(w.shown and w.shown[-1] is True, "the window is asked to draw the mesh (show_field(mesh_only=True))")
 ok(w.size_table.item(0, 2).text() not in ("", None), "the size table shows how many elements the part got")
+w.outline.select("Mesh")
 w.cb_adv.setChecked(True)
 ok(w.adv_box.isVisibleTo(w) and w.setup["mesh"]["advanced"], "the advanced mesh options open")
 w.select_faces([w.geom["faces"][0]["id"]])

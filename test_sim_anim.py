@@ -70,6 +70,7 @@ assert t.canvas.anim_idx == 0 or True
 
 # ---------------- 2D CFD: the saved time frames
 c = cfd_tab.CFDTab(Win()); c.resize(900, 600); c.show(); app.processEvents()
+c.outline.select("Results")
 assert c.e_dur.text() == "3" and [c.loop_combo.itemText(i) for i in range(3)] == ["Once", "Loop", "Back and forth"] and c.anim_box.isVisibleTo(c)
 c.slider.setRange(0, 4); c.slider.setValue(2); c.e_dur.setText("1")
 out = c.export_animation(path_fmt=(os.path.join(OUT, "cfd.gif"), "gif"))
@@ -92,6 +93,7 @@ assert c.b_export.text() == "Export animation..."
 
 # ---------------- 1D FEA: the new load ramp
 b = beam_tab.BeamTab(Win()); b.resize(1100, 700); b.show(); app.processEvents()
+b.outline.select("Results")
 assert b.cb_anim.text() == "Animate" and not b.anim_box.isVisibleTo(b)
 b.cb_anim.setChecked(True); assert b.anim_box.isVisibleTo(b)
 assert [b.loop_combo.itemText(i) for i in range(3)] == ["Once", "Loop", "Back and forth"] and b.e_frames.text() == "30" and b.e_dur.text() == "3"
