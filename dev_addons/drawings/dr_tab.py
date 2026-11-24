@@ -1,0 +1,551 @@
+"""
+dr_tab.py - the Drawings tab: a ribbon (View Layout, Annotation, Sketch), the Outline + Details column on the left (the Model View and Projected View panels open in its place), the
+sheet in the middle (a white sheet on a grey canvas) and a status line.  It looks and behaves like the Part window.
+
+Files: .opdraw (JSON: the sheet, the copies of the models, the views and what is drawn on them).  Export > PDF writes the sheet at its true paper size.
+In a Workbench block ("Drawing") the models are not added by hand: the parts and assemblies wired into the block are the models (sync_models).
+"""
+import json
+import os
+
+from PyQt6.QtCore import QSize, Qt, QTimer
+from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QScrollArea, QSplitter, QStackedWidget, QTabWidget, QToolButton, QVBoxLayout, QWidget)
+
+import dr_canvas as C
+import dr_geom as G
+import dr_icons as I
+import dr_model as M
+import dr_panels as PN
+import dr_pdf
+import dr_sheet as S
+import ui_kit
+
+FILTER = "Drawing (*.opdraw);;All files (*)"
+RIBBON_QSS = "QToolButton{font-size:11px; padding:2px;} QToolButton:disabled{color:#a0a0a0;} QToolButton:checked{background:#cfe3fb; border:1px solid #6aa0e0;}"
+UNDO_LIMIT = 60
+
+
+class DrawingTab(QWidget):
+    ASK_SHEET = True                                  # a new drawing asks for its sheet when it first shows (a test turns this off)
+
+    def __init__(self, path=None):
+        super().__init__()
+        self.host = None
+        self.path = None
+        self.kind = "drawing"
+        self.title_text = "Drawing"
+        self.models_from_wires = False                # a Drawing block of the Workbench: the wired parts and assemblies are the models
+        self.d = M.Drawing()
+        self.undo_stack, self.redo_stack = [], []
+        self.state = self.d.snapshot()
+        self.version, self.saved_version = 0, 0
+        self.cmd = None                               # "model" | "projected" | None
+        self.asked = bool(path)
+        self.act = {}
+        self.build_ui()
+        if path:
+            self.open_path(path)
+        self.after_change()
+
+    # ------------------------------------------------------------------------------------------------------------------------ the window
+    def build_ui(self):
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        self.canvas = C.SheetCanvas(self.d)
+        # ---- the ribbon (the look of the Part window: a tab strip under big buttons)
+        self.ribbon = QTabWidget()
+        self.ribbon.setFixedHeight(104)
+        self.ribbon.setDocumentMode(True)
+        self.ribbon.setTabPosition(QTabWidget.TabPosition.South)
+        self.ribbon.addTab(self.ribbon_page([
+            ("model", "dr_model_view", "Model\nView", "Put a view of a part or an assembly on the sheet", lambda: self.open_command("model")),
+            ("projected", "dr_proj_view", "Projected\nView", "A view projected from another one: pick the view, move to a side, click", lambda: self.open_command("projected")),
+            "|",
+            ("sheet", "dr_sheet", "Sheet\nSetup", "The size of the sheet (standard sizes), landscape or portrait, third or first angle", lambda: self.sheet_dialog()),
+            ("fit", "dr_fit", "Fit to\nWindow", "Show the whole sheet", lambda: self.canvas.fit()),
+            "|",
+            ("refresh", "dr_refresh", "Refresh\nViews", "Draw the lines of every view again from its model", lambda: self.refresh_views()),
+            ("delete", "dr_delete", "Delete\nView", "Delete the selected view (and the views projected from it)", lambda: self.delete_view(self.canvas.sel)),
+            "|",
+            ("save", "dr_save", "Save", "Save the drawing (.opdraw)", lambda: self.save()),
+            ("pdf", "dr_pdf", "Export\nPDF", "Write the sheet as a PDF at its true paper size", lambda: self.export_pdf_dialog()),
+            "|",
+            ("undo", "dr_undo", "Undo", "Undo the last change", lambda: self.do_undo()),
+            ("redo", "dr_redo", "Redo", "Redo", lambda: self.do_redo()),
+        ]), "View Layout")
+        self.ribbon.addTab(self.ribbon_page([
+            (None, "dr_dim", "Smart\nDimension", "Dimension what you click: a length, a diameter, a radius, an angle", None),
+            (None, "dr_note", "Note", "Text on the sheet, with or without a leader", None),
+            (None, "dr_balloon", "Balloon", "A circle with a number and a leader", None),
+            "|",
+            (None, "dr_center_mark", "Center\nMark", "A cross at the middle of a circle or an arc", None),
+            (None, "dr_centerline", "Centerline", "A dash-dot line along the axis between two lines", None),
+            "|",
+            (None, "dr_note_pattern", "Linear Note\nPattern", "Repeat a note along a line", None),
+        ]), "Annotation")
+        self.ribbon.addTab(self.ribbon_page([
+            (None, "dr_select", "Select", "Pick and move things", None),
+            (None, "dr_draw_line", "Line", "Draw a line on the sheet", None),
+            (None, "dr_draw_rect", "Rectangle", "Draw a rectangle on the sheet", None),
+            (None, "dr_draw_circle", "Circle", "Draw a circle on the sheet", None),
+            (None, "dr_draw_arc", "Arc", "Draw an arc on the sheet", None),
+        ]), "Sketch")
+        self.ribbon.setCurrentIndex(0)
+        # ---- the left column: Outline + Details, and the property panel of the command that is open
+        self.left = QTabWidget()
+        self.left.setTabPosition(QTabWidget.TabPosition.North)
+        self.left.setIconSize(QSize(26, 26))
+        self.outline = PN.OutlinePanel(self)
+        self.left.addTab(self.outline, I.icon("dr_sheet", 26), "")
+        self.left.setTabToolTip(0, "Outline: the sheet, the models and the views, with their details")
+        self.props = QStackedWidget()
+        self.model_panel = PN.ModelViewPanel(self)
+        self.proj_panel = PN.ProjectedPanel(self)
+        self.props.addWidget(QLabel("  Pick a command from the ribbon."))
+        self.props.addWidget(self.model_panel)
+        self.props.addWidget(self.proj_panel)
+        self.left.addTab(self.props, I.icon("dr_model_view", 26), "")
+        self.left.setTabToolTip(1, "Properties of the command that is open")
+        self.left.setMinimumWidth(340)
+        self.left.setMaximumWidth(460)
+        root.addWidget(self.left, 0)
+        # ---- the sheet
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(0)
+        rl.addWidget(self.ribbon)
+        bar = QWidget()
+        bar.setObjectName("hintbar")
+        bar.setStyleSheet("#hintbar{background:#cfd9ea; border:none;}")          # the strip above the sheet: the same blue as the Part window's, it says what to do next
+        bl = QHBoxLayout(bar)
+        bl.setContentsMargins(8, 3, 8, 3)
+        self.hint_lbl = QLabel("")
+        self.hint_lbl.setStyleSheet("color:#1d2a44;")
+        bl.addWidget(self.hint_lbl, 1)
+        bar.setFixedHeight(26)
+        rl.addWidget(bar)
+        rl.addWidget(self.canvas, 1)
+        foot = QWidget()
+        fl = QHBoxLayout(foot)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.setSpacing(0)
+        self.status = ui_kit.StatusLine("")
+        fl.addWidget(self.status, 1)
+        self.sheet_lbl = QLabel("")
+        self.sheet_lbl.setStyleSheet("color:#6a7790; padding:2px 8px;")
+        self.coord_lbl = QLabel("")
+        self.coord_lbl.setStyleSheet("color:#6a7790; padding:2px 8px;")
+        self.coord_lbl.setMinimumWidth(150)
+        fl.addWidget(self.sheet_lbl)
+        fl.addWidget(self.coord_lbl)
+        rl.addWidget(foot)
+        root.addWidget(right, 1)
+        self.canvas.selection_changed.connect(self.on_selection)
+        self.canvas.changed.connect(self.on_canvas_changed)
+        self.canvas.hint.connect(self.set_hint)
+        self.canvas.coords.connect(lambda x, y: self.coord_lbl.setText(f"x {x:.1f}   y {y:.1f} mm"))
+        self.canvas.placing.connect(lambda on: self.model_panel.clear_pick() if not on else None)
+        for seq, fn in (("Ctrl+Z", self.do_undo), ("Ctrl+Y", self.do_redo), ("Ctrl+Shift+Z", self.do_redo)):
+            QShortcut(QKeySequence(seq), self, activated=fn, context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.set_hint("Open Model View to put a view of a part or an assembly on the sheet.")
+
+    def ribbon_page(self, items):
+        page = QWidget()
+        lay = QHBoxLayout(page)
+        lay.setContentsMargins(6, 2, 6, 2)
+        lay.setSpacing(2)
+        for it in items:
+            if it == "|":
+                f = QFrame()
+                f.setFrameShape(QFrame.Shape.VLine)
+                f.setFrameShadow(QFrame.Shadow.Sunken)
+                lay.addWidget(f)
+                continue
+            key, icon_key, text, tip, fn = it
+            b = QToolButton()
+            b.setText(text)
+            b.setIcon(I.icon(icon_key, 36))
+            b.setIconSize(QSize(36, 36))
+            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            b.setToolTip(tip or text.replace("\n", " "))
+            b.setAutoRaise(True)
+            b.setMinimumWidth(66)
+            b.setMinimumHeight(70)
+            b.setStyleSheet(RIBBON_QSS)
+            if fn is None:
+                b.setEnabled(False)
+                b.setToolTip((tip or text.replace("\n", " ")) + " (not built yet)")
+            else:
+                b.clicked.connect(lambda _c=False, f=fn: f())
+            if key:
+                self.act[key] = b
+            lay.addWidget(b)
+        lay.addStretch(1)
+        sc = QScrollArea()
+        sc.setWidget(page)
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.Shape.NoFrame)
+        sc.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        return sc
+
+    def set_hint(self, text):
+        self.hint_lbl.setText(text or ("Select a view to move it, or open a command from the ribbon." if self.d.views else
+                                       "Open Model View to put a view of a part or an assembly on the sheet."))
+
+    # ------------------------------------------------------------------------------------------------------------------------ the document, undo, dirty
+    def commit(self, what=""):
+        """The document changed (a person did something): it can be undone, the file is dirty, everything that shows it is brought up to date."""
+        self.undo_stack.append(self.state)
+        del self.undo_stack[:-UNDO_LIMIT]
+        self.redo_stack.clear()
+        self.state = self.d.snapshot()
+        self.version += 1
+        self.after_change()
+
+    def after_change(self, reset=False):
+        self.outline.rebuild()
+        self.model_panel.refresh()
+        self.canvas.refresh(reset=reset)
+        w, h = self.d.sheet_dims()
+        s = S.size(self.d.sheet["size"])[1].split("  ")[0]
+        self.sheet_lbl.setText(f"{s}   {'landscape' if self.d.sheet['landscape'] else 'portrait'}   {'1st' if self.d.sheet['first_angle'] else '3rd'} angle" +
+                               (f"   {M.scale_text(self.d.scale)}" if self.d.views else ""))
+        for k in ("undo", "redo"):
+            if k in self.act:
+                self.act[k].setEnabled(bool(self.undo_stack if k == "undo" else self.redo_stack))
+        if "delete" in self.act:
+            self.act["delete"].setEnabled(self.canvas.sel is not None)
+
+    def do_undo(self):
+        if self.canvas.mode != "select":
+            self.canvas.end_place()
+        if not self.undo_stack:
+            return False
+        self.redo_stack.append(self.state)
+        self.state = self.undo_stack.pop()
+        self.d.restore(self.state)
+        self.version += 1
+        self.after_change(reset=True)
+        return True
+
+    def do_redo(self):
+        if self.canvas.mode != "select" or not self.redo_stack:
+            return False
+        self.undo_stack.append(self.state)
+        self.state = self.redo_stack.pop()
+        self.d.restore(self.state)
+        self.version += 1
+        self.after_change(reset=True)
+        return True
+
+    def is_dirty(self):
+        return self.version != self.saved_version
+
+    def title(self):
+        return os.path.basename(self.path) if self.path else self.title_text
+
+    def can_close(self):
+        return True
+
+    def shutdown(self):
+        self.canvas.end_place(emit=False)
+
+    def guard(self, fn, *args, **kw):
+        """Runs an edit of the document; a message that says what is wrong (a model that cannot be built, a scale that is not a number) goes to the status line.  -> (True, result)."""
+        try:
+            return True, fn(*args, **kw)
+        except (M.DrawingError, G.GeometryError) as ex:
+            self.status.say(str(ex), "bad")
+            return False, None
+
+    # ------------------------------------------------------------------------------------------------------------------------ the shell's questions
+    def keyPressEvent(self, ev):
+        if ev.key() == Qt.Key.Key_S and ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.save()
+            ev.accept()
+            return
+        super().keyPressEvent(ev)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        if self.ASK_SHEET and not self.asked:
+            self.asked = True
+            QTimer.singleShot(0, lambda: self.sheet_dialog(first=True))
+
+    # ------------------------------------------------------------------------------------------------------------------------ files
+    def open_path(self, path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                d = M.Drawing.from_json(f.read())
+        except (OSError, M.DrawingError) as ex:
+            self.status.say(f"Couldn't open {os.path.basename(path)}: {ex}", "bad")
+            return False
+        self.d = d
+        self.canvas.d = d
+        self.canvas.r.d = d
+        self.canvas.r.cache.clear()
+        self.path = path
+        self.asked = True
+        self.undo_stack, self.redo_stack = [], []
+        self.state = d.snapshot()
+        self.version = self.saved_version = 0
+        self.after_change(reset=True)
+        self.canvas.fit()
+        self.status.say(f"Opened {path}", "good")
+        return True
+
+    def save(self, as_new=False):
+        self.canvas.end_place()
+        if not self.path or as_new:
+            p, _ = QFileDialog.getSaveFileName(self, "Save drawing", self.path or "drawing" + M.EXT, FILTER)
+            if not p:
+                return False
+            if not p.lower().endswith(M.EXT):
+                p += M.EXT
+            self.path = p
+        return self.save_to(self.path)
+
+    def save_to(self, path):
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.d.to_json())
+        except OSError as ex:
+            self.status.say(f"Couldn't save: {ex}", "bad")
+            return False
+        self.path = path
+        self.saved_version = self.version
+        self.status.say(f"Saved {path}", "good")
+        return True
+
+    def export_pdf_dialog(self):
+        base = os.path.splitext(self.title())[0] + ".pdf"
+        p, _ = QFileDialog.getSaveFileName(self, "Export PDF", base, "PDF (*.pdf)")
+        if not p:
+            return None
+        if not p.lower().endswith(".pdf"):
+            p += ".pdf"
+        return self.export_pdf(p)
+
+    def export_pdf(self, path):
+        self.canvas.end_place()
+        try:
+            dr_pdf.export_pdf(self.d, path)
+        except OSError as ex:
+            self.status.say(f"Couldn't export: {ex}", "bad")
+            return None
+        w, h = self.d.sheet_dims()
+        self.status.say(f"Exported {path}  ({S.inch_text(w, h)} sheet, vector lines)", "good")
+        return path
+
+    # ------------------------------------------------------------------------------------------------------------------------ the sheet
+    def sheet_dialog(self, first=False):
+        dlg = PN.NewDrawingDialog(self.d.sheet, self, title="New drawing" if first else "Sheet setup", ok_text="Create" if first else "OK")
+        if dlg.exec():
+            r = dlg.result_sheet()
+            if first:                                      # the start of the drawing: nothing to undo back to (but a sheet that is not the default is a change to keep)
+                differs = r != self.d.sheet
+                self.d.set_sheet(r["size"], r["landscape"], r["first_angle"])
+                self.state = self.d.snapshot()
+                if differs:
+                    self.version += 1
+                self.after_change()
+                self.canvas.fit()
+            else:
+                self.set_sheet(r["size"], r["landscape"], r["first_angle"])
+
+    def set_sheet(self, size, landscape, first_angle):
+        old = dict(self.d.sheet)
+        ok, _ = self.guard(self.d.set_sheet, size, landscape, first_angle)
+        if not ok:
+            return False
+        if old == self.d.sheet:
+            return True
+        self.canvas.r.cache.clear()
+        self.commit("sheet")
+        self.canvas.fit()
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------------ models
+    def source_text(self, m):
+        if m.get("file"):
+            return f"The file {os.path.basename(m['file'])}"
+        if m.get("src"):
+            return "A block of the Workbench project, wired into this one"
+        return "A copy kept in this drawing"
+
+    def add_model_file(self, path=None):
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, "Add a part or an assembly", "", "Part or assembly (*.gpd *.gpa);;All files (*)")
+            if not path:
+                return None
+        name = os.path.splitext(os.path.basename(path))[0]
+        try:
+            if path.lower().endswith(".gpa"):
+                import asm_embed
+                text, _warns = asm_embed.self_contained_text(path)
+                data, kind = json.loads(text), "assembly"
+            else:
+                with open(path, encoding="utf-8") as f:
+                    data, kind = json.load(f), "part"
+        except Exception as ex:                                  # noqa: BLE001 (a file that is not a part or an assembly)
+            self.status.say(f"Couldn't read {os.path.basename(path)}: {ex}", "bad")
+            return None
+        mid = self.d.add_model(name, kind, data)
+        self.d.model(mid)["file"] = path
+        self.commit("model")
+        self.status.say(f"Added {name}.", "good")
+        return mid
+
+    def sync_models(self, items):
+        """A Drawing block of the Workbench: `items` = [{"src", "name", "kind", "data"}], what is wired into the block now (Drawing.sync_models).  A change is one undo step.
+        -> {"added", "refreshed", "removed", "failed": [(name, message)]}."""
+        out = self.d.sync_models(items)
+        if out["added"] or out["refreshed"] or out["removed"]:
+            self.canvas.r.cache.clear()
+            self.commit("models")
+        return out
+
+    def remove_model(self, mid):
+        if mid is None:
+            return
+        ok, _ = self.guard(self.d.remove_model, mid)
+        if ok:
+            self.canvas.r.cache.clear()
+            self.commit("remove model")
+
+    def refresh_views(self):
+        n = 0
+        for v in [v for v in self.d.views if v["kind"] == "model"]:
+            ok, _ = self.guard(self.d.reproject, v)
+            n += 1 if ok else 0
+        self.canvas.r.cache.clear()
+        self.commit("refresh")
+        self.status.say(f"Drew {n} view{'s' if n != 1 else ''} again from the models." if n else "There is no view to refresh.")
+
+    # ------------------------------------------------------------------------------------------------------------------------ commands (Model View, Projected View)
+    def open_command(self, name):
+        self.canvas.end_place(emit=False)
+        self.cmd = name
+        if name == "model":
+            if not self.d.models:
+                self.status.say("There is no part or assembly in the drawing yet. " + ("Wire one into this block in the Workbench." if self.models_from_wires else
+                                                                                       "Use Add from file to bring one in."), "warn")
+            self.model_panel.refresh()
+            self.props.setCurrentWidget(self.model_panel)
+            self.left.setCurrentIndex(1)
+            self.set_hint("Pick a part or assembly, then an orientation; the view follows the pointer: click on the sheet to put it down.")
+        else:
+            self.props.setCurrentWidget(self.proj_panel)
+            self.left.setCurrentIndex(1)
+            sel = self.canvas.sel
+            view = next((v for v in self.d.views if v["id"] == sel), None)
+            self.proj_panel.set_parent(view)
+            if view is not None:
+                self.start_projected(view["id"])
+            else:
+                self.set_hint("Click the view on the sheet that the new view is projected from.")
+        for k in ("model", "projected"):
+            self.act[k].setDown(False)
+
+    def finish_command(self, ok=True):
+        self.canvas.end_place()
+        self.cmd = None
+        self.model_panel.clear_pick()
+        self.props.setCurrentIndex(0)
+        self.left.setCurrentIndex(0)
+        self.set_hint("")
+
+    def start_model_view(self, mid, orient, style, scale_text):
+        self.canvas.end_place(emit=False)
+        scale = None
+        if scale_text:
+            ok, scale = self.guard(M.parse_scale, scale_text)
+            if not ok:
+                return None
+        x, y = self.canvas.cursor_mm or (self.d.sheet_dims()[0] / 2.0, self.d.sheet_dims()[1] / 2.0)
+        ok, v = self.guard(self.d.add_view, mid, orient, (x, y), scale, style)
+        if not ok:
+            return None
+        self.canvas.begin_model(v["id"])
+        self.after_change()
+        self.canvas.setFocus()
+        return v["id"]
+
+    def start_projected(self, parent_id):
+        self.canvas.proj_style = self.proj_panel.style_choice()
+        self.proj_panel.set_parent(self.d.view(parent_id))
+        self.canvas.begin_projected(parent_id)
+        self.canvas.setFocus()
+
+    def on_selection(self, vid):
+        self.outline.select_view(vid)
+        if "delete" in self.act:
+            self.act["delete"].setEnabled(vid is not None)
+        if self.cmd == "projected" and vid and self.canvas.mode == "select":
+            self.start_projected(vid)
+
+    def on_canvas_changed(self, what):
+        if what in ("place", "move", "delete"):
+            self.commit(what)
+        elif what == "place_end":
+            self.after_change()
+
+    # ------------------------------------------------------------------------------------------------------------------------ what the Details change
+    def select_view(self, vid):
+        self.canvas.set_selected(vid)
+
+    def rename_view(self, vid, name):
+        name = (name or "").strip()
+        v = self.d.view(vid)
+        if not name or name == v["name"]:
+            return
+        v["name"] = name
+        self.commit("rename")
+
+    def delete_view(self, vid):
+        if not vid:
+            return
+        if self.canvas.mode != "select":
+            self.canvas.end_place()
+        ok, _ = self.guard(self.d.remove_view, vid)
+        if ok:
+            self.canvas.sel = None
+            self.canvas.r.cache.pop(vid, None)
+            self.commit("delete")
+
+    def set_view_style(self, vid, style):
+        if self.d.view(vid)["style"] == style:
+            return
+        ok, _ = self.guard(self.d.set_style, vid, style)
+        if ok:
+            self.commit("style")
+
+    def set_view_orient(self, vid, name):
+        v = self.d.view(vid)
+        if v["orient"] == name:
+            return
+        ok, _ = self.guard(self.d.set_orient, vid, name)
+        if ok:
+            self.canvas.r.cache.clear()
+            self.commit("orientation")
+
+    def set_view_scale(self, vid, text):
+        try:
+            s = M.parse_scale(text)
+        except M.DrawingError as ex:
+            self.status.say(str(ex), "bad")
+            self.after_change()
+            return
+        if abs(self.d.view(vid)["scale"] - s) < 1e-12:
+            return
+        ok, _ = self.guard(self.d.set_scale, vid, s)
+        if ok:
+            self.canvas.r.cache.clear()
+            self.commit("scale")
+
+
+def make_tab(path=None):
+    return DrawingTab(path)

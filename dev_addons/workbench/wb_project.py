@@ -135,6 +135,11 @@ register("study", "Parametric Study", "Design Exploration",
 register("sheets", "Sheets", "Component Tools",
          [CellSpec("studies", "Study Results", "import", (), ("study",), False, True, (), optional=True), ("document", "Sheets", "data")],
          "A spreadsheet; the results of the Parametric Studies wired into it can be imported onto its sheets", ".opsheet")
+# A drawing takes the Parts and Assemblies wired into its Models cell as the things it shows (any number): they are the "Part / Assembly to Insert" of its Model View, and a change in
+# one of them is a refresh of the cell (the views are drawn again).  Without a wire there is nothing to draw: the cell says incomplete.
+register("drawing", "Drawing", "Component Tools",
+         [CellSpec("models", "Models", "import", (), ("geometry",), True, True), ("document", "Drawing", "data")],
+         "A drawing of the parts and assemblies wired into it: views on a standard sheet, exported as a PDF", ".opdraw")
 
 
 # ---------------------------------------------------------------------------------------------------------------------------- the project

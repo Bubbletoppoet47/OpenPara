@@ -30,9 +30,10 @@ Not wired yet (listed in the toolbox as "Not wired"): PDF editor, Visualize, Mot
 
 ## Files
 
-`wb_project.py` (the project, its cells and their statuses, the file; no Qt), `wb_canvas.py` (the schematic), `wb_tab.py` (the tab, toolbar, toolbox, menus), `wb_nodes.py` (what each kind of block does), `wb_parts.py` (Part and Assembly), `wb_analysis.py` (the analyses), `wb_tools.py` (Sheets, Controls, Circuits, Truss), `wb_import.py`, `wb_example.py`, `wb_icons.py`, `wb_ext.py`.
-Tests (repository root): `test_wb_project.py`, `test_wb_canvas.py`, `test_wb_shell.py`, `test_wb_parts.py`, `test_wb_analysis.py`, `test_wb_2d.py`, `test_wb_tools.py`, `test_wb_import.py`, `test_wb_example.py`, `test_asm_embed.py`.
+`wb_project.py` (the project, its cells and their statuses, the file; no Qt), `wb_canvas.py` (the schematic), `wb_tab.py` (the tab, toolbar, toolbox, menus), `wb_nodes.py` (what each kind of block does), `wb_parts.py` (Part and Assembly), `wb_analysis.py` (the analyses), `wb_tools.py` (Sheets, Controls, Circuits, Truss, Drawing), `wb_import.py`, `wb_example.py`, `wb_icons.py`, `wb_ext.py`.
+Tests (repository root): `test_wb_project.py`, `test_wb_canvas.py`, `test_wb_shell.py`, `test_wb_parts.py`, `test_wb_analysis.py`, `test_wb_2d.py`, `test_wb_tools.py`, `test_wb_drawing.py`, `test_wb_import.py`, `test_wb_example.py`, `test_asm_embed.py`.
 
 Nothing here has been tried on real Windows: everything so far ran headless. The OpenGL views cannot draw there, so how the editors look inside the tabs has not been seen.
 - **Layout**: blocks never overlap and keep a gap of 40 (a dragged block stops at its neighbour and slides along it; a new block goes to the nearest free place; a file from before the rule is moved apart when opened). Wires are horizontal and vertical pieces that run round the blocks (`wb_route.py`), never behind them.
 - **Study -> Sheets**: the Results cell of a Parametric Study can be wired into the Study Results cell of a Sheets block. In that block's Sheets window, Data > Import study offers only the wired studies; Refresh / Update Project reads the imported tables again.
+- **Drawing block** (Component Tools): its Models cell takes Part / Assembly blocks by wire; Open Drawing shows the sheet, model and projected views, scales, display styles and PDF export (`dev_addons/drawings`). Refresh / Update Project re-projects the views from the wired models and says which ones could not be rebuilt.

@@ -1,0 +1,22 @@
+{
+ "name": "Drawings",
+ "order": 8,
+ "status": "workshopping",
+ "description": "Engineering drawings of parts and assemblies: a sheet in a standard size (ANSI A-E, ISO A4-A0), model views from the six standard directions and the three axonometric ones, projected views that stay aligned with their parent, a scale for every view, display styles, and PDF export at true paper size. Looks and works like the Part window.",
+ "tabs": [
+  {
+   "kind": "drawing",
+   "label": "Drawing",
+   "short": "Drawing",
+   "module": "dr_tab",
+   "factory": "make_tab",
+   "args": [
+    "path"
+   ],
+   "set_host": true,
+   "file_types": [
+    ".opdraw"
+   ]
+  }
+ ]
+}

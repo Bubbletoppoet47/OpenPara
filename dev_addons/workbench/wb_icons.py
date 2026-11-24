@@ -214,9 +214,18 @@ def _g_study(p):
         p.drawEllipse(QPointF(x, y), 2.3, 2.3)
 
 
+def _g_drawing(p):
+    p.setPen(_pen(NAVY, 1.5))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRect(QRectF(5, 3.5, 14, 17))
+    p.setPen(_pen(GREY, 1.5))
+    p.drawRect(QRectF(8, 6.5, 8, 5))
+    p.drawRect(QRectF(8, 13.5, 8, 4))
+
+
 KIND_GLYPH = {"part": _g_part, "assembly": _g_assembly, "solid": _g_solid, "thermal3d": _g_thermal3d, "fea": _g_fea, "thermal": _g_thermal, "cfd": _g_cfd,
               "beam": _g_beam, "sheets": _g_sheets, "pdf": _g_pdf, "controls": _g_controls, "circuits": _g_circuits, "visualize": _g_visualize, "motor": _g_motor,
-              "trainer": _g_trainer, "annotator": _g_annotator, "truss": _g_truss, "study": _g_study}
+              "trainer": _g_trainer, "annotator": _g_annotator, "truss": _g_truss, "study": _g_study, "drawing": _g_drawing}
 
 
 def _g_unknown(p):

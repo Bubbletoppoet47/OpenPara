@@ -15,7 +15,7 @@ import wb_parts
 import wb_project as wp
 
 # (block kind, tab kind of the add-on, extension, add-on, the document is a folder)
-TOOLS = (("sheets", "sheets", ".opsheet", "Sheets", False), ("controls", "controls", ".opctl", "Systems and Controls", False), ("circuits", "circuits", ".opcirc", "Circuits", False),
+TOOLS = (("sheets", "sheets", ".opsheet", "Sheets", False), ("drawing", "drawing", ".opdraw", "Drawings", False), ("controls", "controls", ".opctl", "Systems and Controls", False), ("circuits", "circuits", ".opcirc", "Circuits", False),
          ("truss", "truss", ".truss", "Truss Generator", True))
 
 
@@ -280,5 +280,75 @@ class SheetsAdapter(FileToolAdapter):
         return done, notes
 
 
+class DrawingAdapter(FileToolAdapter):
+    """Drawing: the Parts and Assemblies wired into the Models cell are the models of the drawing (a copy of each is kept in it); the Drawing window of the block does not add models
+    by itself, and Refresh of the cell takes what changed in the wired blocks (the views are drawn again, in the open window and in a drawing that is closed)."""
+
+    def model_items(self, tab, node):
+        """[{"src": block id, "name", "kind", "data"}] of the wired Part and Assembly blocks that have content (the open editors are read back first)."""
+        tab.sync_editors()
+        prj = tab.project
+        out = []
+        for k in prj.incoming_all(node.id, "models"):
+            n = prj.nodes.get(k.a)
+            if n is None or n.kind not in ("part", "assembly") or any(it["src"] == n.id for it in out):
+                continue
+            data = n.data.get("doc" if n.kind == "part" else "asm")
+            if data is not None:
+                out.append({"src": n.id, "name": n.title, "kind": n.kind, "data": data})
+        return out
+
+    def open_cell(self, tab, node, key):
+        w = super().open_cell(tab, node, key)
+        if w is not None and hasattr(w, "sync_models"):
+            w.models_from_wires = True
+            out = w.sync_models(self.model_items(tab, node))
+            note = self.say_of(out)
+            if note:
+                tab.note(f"{node.label} {node.title}: {note}")
+            w.model_panel.refresh()
+        return w
+
+    @staticmethod
+    def say_of(out):
+        bits = [f"{k} {', '.join(out[k])}" for k in ("added", "refreshed", "removed") if out.get(k)]
+        bits += [f"{n}: {why}" for n, why in out.get("failed", [])]
+        return "; ".join(bits)
+
+    def refresh(self, tab, node, key):
+        if key != "models":
+            return None
+        items = self.model_items(tab, node)
+        w = tab.editor_of(node.id)
+        if w is not None and hasattr(w, "sync_models"):
+            out = w.sync_models(items)
+        else:
+            out = self.refresh_file(tab, node, items)
+        if out["failed"]:
+            return "; ".join(f"{n}: {why}" for n, why in out["failed"])
+        return None
+
+    def refresh_file(self, tab, node, items):
+        """The models of a drawing that is not open are brought up to date and the drawing is saved back into the block."""
+        none = {"added": [], "refreshed": [], "removed": [], "failed": []}
+        if not node.data.get(self.slot):
+            return none                                          # never opened: the models are taken when it is
+        import dr_model
+        f = os.path.join(nodes.workspace_of(tab, node), "refresh" + self.ext)
+        self.write(node, f)
+        try:
+            with open(f, encoding="utf-8") as fh:
+                d = dr_model.Drawing.from_json(fh.read())
+            out = d.sync_models(items)
+            if out["added"] or out["refreshed"] or out["removed"]:
+                with open(f, "w", encoding="utf-8") as fh:
+                    fh.write(d.to_json())
+                node.data[self.slot] = self.pack(f)
+                tab.project.touch(node.id, self.first_cell)
+        finally:
+            self.remove(f)
+        return out
+
+
 for _k, _t, _e, _a, _f in TOOLS:
-    nodes.register(SheetsAdapter(_k, _t, _e, _a, _f) if _k == "sheets" else FileToolAdapter(_k, _t, _e, _a, _f))
+    nodes.register(SheetsAdapter(_k, _t, _e, _a, _f) if _k == "sheets" else DrawingAdapter(_k, _t, _e, _a, _f) if _k == "drawing" else FileToolAdapter(_k, _t, _e, _a, _f))
