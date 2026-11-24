@@ -69,6 +69,12 @@ byt = {n.title: n for n in P.nodes.values()}
 ok(sorted(byt) == sorted(["Bar", "Plate", "Frame", "Bar stress", "Plate stress 2D", "Frame heating", "Frame check (needs a setup)", "Bar study", "Load table", "LED circuit", "Plant"]),
    f"eleven blocks ({sorted(byt)})")
 ok(len(P.links) == 5 and sum(k.a_cell == "geometry" and k.b_cell == "geometry" for k in P.links) == 4, f"four wires, geometry to geometry, and one from a setup to the study ({len(P.links)})")
+import wb_canvas as _cv
+import wb_route as _wr
+_its = list(W.scene.items_by_id.values())
+ok(len(_its) == 11 and all(_cv.clear_of(a.keep(), [b.keep() for b in _its if b is not a]) for a in _its), "the blocks of the example keep the gap from each other")
+_rects = W.scene.keep_rects()
+ok(len(W.scene.link_items) == 5 and all(_wr.crossings([(q.x(), q.y()) for q in l.pts], _rects) == [] for l in W.scene.link_items.values()), "and none of its five wires runs behind a block")
 src_of = {P.node(k.b).title: P.node(k.a).title for k in P.links if k.b_cell == "geometry"}
 ok([(P.node(k.a).title, k.a_cell, P.node(k.b).title, k.b_cell) for k in P.links if k.b_cell == "setup"] == [("Bar stress", "setup", "Bar study", "setup")], "the study takes the Setup of Bar stress")
 ok(src_of == {"Bar stress": "Bar", "Plate stress 2D": "Plate", "Frame heating": "Frame", "Frame check (needs a setup)": "Frame"}, f"each analysis is wired to its part ({src_of})")
@@ -83,7 +89,8 @@ def st(title):
 
 for title in ("Bar", "Plate", "Frame"):
     ok(st(title) == {"geometry": wp.OK}, f"{title}: ok ({st(title)})")
-for title in ("Load table", "LED circuit", "Plant"):
+ok(st("Load table") == {"studies": wp.OK, "document": wp.OK}, f"Load table: its document is ok, and its Study Results cell needs no wire ({st('Load table')})")
+for title in ("LED circuit", "Plant"):
     ok(st(title) == {"document": wp.OK}, f"{title}: ok ({st(title)})")
 for title in ("Bar stress", "Plate stress 2D", "Frame heating"):
     ok(st(title) == {"geometry": wp.OK, "setup": wp.OK, "solution": wp.UPDATE, "results": wp.INCOMPLETE}, f"{title}: geometry and setup ok, the solution waits for Update ({st(title)})")

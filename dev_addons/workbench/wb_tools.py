@@ -159,5 +159,126 @@ class FileToolAdapter(nodes.Adapter):
         return p
 
 
+class StudySource:
+    """What a Sheets block may import: ONLY the Parametric Studies wired into its Study Results cell (a study is never imported from anywhere else in a block).  Each is a copy
+    of the study as its block keeps it, in the workspace of the Sheets block (the study window may be open on its own folder, which is never touched)."""
+
+    def __init__(self, tab, node):
+        self.tab, self.node = tab, node
+        self.cache = {}
+
+    def reset(self):
+        """The next copies are taken from the studies as their blocks keep them now (what was done in a study window is read back first)."""
+        self.cache = {}
+        self.tab.sync_editors()
+
+    def blocks(self):
+        prj = self.tab.project
+        out = []
+        for k in prj.incoming_all(self.node.id, "studies"):
+            n = prj.nodes.get(k.a)
+            if n is not None and n.kind == "study" and n not in out:
+                out.append(n)
+        return out
+
+    def folder_of(self, study):
+        return os.path.join(nodes.workspace_of(self.tab, self.node), "studies", f"{nodes.safe_stem(study.title)}-{study.id}.study")
+
+    def take(self, study):
+        """The study as its block keeps it, written into its folder.  -> the folder, or None when the block has nothing saved of it yet."""
+        f = self.folder_of(study)
+        shutil.rmtree(f, ignore_errors=True)
+        files = study.data.get("files")
+        if not files:
+            return None
+        wp.unpack_folder(files, f)
+        return f
+
+    def projects(self):
+        """[(name, folder)] of the wired studies that have something saved: a fresh copy each time."""
+        self.reset()
+        out = []
+        for st in self.blocks():
+            f = self.take(st)
+            if f:
+                self.cache[st.id] = f
+                out.append((st.title, f))
+        return out
+
+    def path_of(self, nid):
+        """The folder of the wired study `nid` in this session, or None when that study is not wired into the block (any more)."""
+        st = next((b for b in self.blocks() if b.id == nid), None)
+        if st is None:
+            return None
+        if nid not in self.cache:
+            f = self.take(st)
+            if f is None:
+                return None
+            self.cache[nid] = f
+        return self.cache[nid]
+
+    def node_of(self, project):
+        """The id of the study block a folder is the copy of, or None."""
+        return next((b.id for b in self.blocks() if os.path.normpath(self.folder_of(b)) == os.path.normpath(str(project))), None)
+
+    def name_of(self, project, sub, default):
+        nid = self.node_of(project)
+        st = self.tab.project.nodes.get(nid) if nid else None
+        base = os.path.basename(str(project).rstrip("/\\"))
+        return default.replace(base, st.title, 1) if st is not None and base and default.startswith(base) else default
+
+    def nothing_to_import(self):
+        bl = self.blocks()
+        if not bl:
+            return "No Parametric Study is wired into this block. In the Workbench, wire the Results cell of a study into the Study Results cell of this Sheets block."
+        return "The wired study has nothing saved yet: open it (double-click its Results cell) and run it, or use Update Project; then import."
+
+
+class SheetsAdapter(FileToolAdapter):
+    """Sheets: the Study Results cell takes the studies wired into it; in the Sheets window only these can be imported, and Refresh of the cell reads the imported tables again."""
+
+    def open_cell(self, tab, node, key):
+        w = super().open_cell(tab, node, key)
+        if w is not None and hasattr(w, "attach_study_source"):
+            w.attach_study_source(StudySource(tab, node))
+        return w
+
+    def refresh(self, tab, node, key):
+        if key != "studies":
+            return None
+        w = tab.editor_of(node.id)
+        if w is not None and hasattr(w, "study_refresh_all"):
+            if getattr(w, "study_source", None) is None:
+                w.attach_study_source(StudySource(tab, node))
+            done, notes = w.study_refresh_all()
+        else:
+            done, notes = self.refresh_file(tab, node, StudySource(tab, node))
+        if notes:
+            tab.note(f"{node.label} {node.title}: " + " ".join(notes))
+        return None
+
+    def refresh_file(self, tab, node, src):
+        """The imported tables of a document that is not open are read again from the wired studies, and the document is saved back into the block."""
+        if not node.data.get(self.slot):
+            return 0, []
+        try:
+            import sh_book
+            import sh_study
+        except ImportError:
+            return 0, ["The Sheets add-on is not available here: the imported tables were not read again."]
+        f = os.path.join(nodes.workspace_of(tab, node), "refresh" + self.ext)
+        self.write(node, f)
+        try:
+            wb = sh_book.Workbook.load(f)
+            done, notes = sh_study.refresh_all(wb, lambda ln: src.path_of(ln["wb"]), lambda ln: bool(ln.get("wb")))
+            if done:
+                wb.save(f)
+                node.data[self.slot] = self.pack(f)
+                tab.project.touch(node.id, self.first_cell)
+        finally:
+            self.remove(f)
+        return done, notes
+
+
 for _k, _t, _e, _a, _f in TOOLS:
-    nodes.register(FileToolAdapter(_k, _t, _e, _a, _f))
+    nodes.register(SheetsAdapter(_k, _t, _e, _a, _f) if _k == "sheets" else FileToolAdapter(_k, _t, _e, _a, _f))

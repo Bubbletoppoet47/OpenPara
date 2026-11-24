@@ -676,23 +676,25 @@ def _num(text):
 class StudyImportDialog(QDialog):
     """Pick a parametric study: from the project folders of the studies that are open, or any project folder.  `result()` = (project, sub, new_sheet)."""
 
-    def __init__(self, open_projects=(), parent=None):
+    def __init__(self, open_projects=(), parent=None, browse=True):
         super().__init__(parent)
         self.setWindowTitle("Import a study")
         self.setMinimumWidth(460)
         lay = QVBoxLayout(self)
-        lay.addWidget(muted("Brings the table of a finished parametric study (1D, 2D, 3D FEA or CFD) onto a sheet. Refresh from study reads it again."))
+        lay.addWidget(muted("Brings the table of a finished parametric study (1D, 2D, 3D FEA or CFD) onto a sheet. Refresh from study reads it again." if browse else
+                            "Brings the table of a parametric study wired into this block onto a sheet. Only the studies wired into the Study Results cell can be imported."))
         form = QFormLayout()
         self.project = QComboBox()
         self.project.setEditable(False)
         for name, path in open_projects:
             self.project.addItem(name, path)
-        browse = QPushButton("Browse...")
-        browse.clicked.connect(lambda _c=False: self.browse())
         row = QHBoxLayout()
         row.addWidget(self.project, 1)
-        row.addWidget(browse)
-        form.addRow("Project", row)
+        if browse:
+            browse_btn = QPushButton("Browse...")
+            browse_btn.clicked.connect(lambda _c=False: self.browse())
+            row.addWidget(browse_btn)
+        form.addRow("Project" if browse else "Study block", row)
         self.study = QComboBox()
         form.addRow("Study", self.study)
         lay.addLayout(form)

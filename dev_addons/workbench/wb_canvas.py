@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import QGraphicsItem, QGraphicsPathItem, QGraphicsScene, QG
 
 import wb_icons as ic
 import wb_project as wp
+import wb_route as wr
 
 GRID = 20.0
 BLOCK_W = 200.0
@@ -25,6 +26,7 @@ NAME_H = 40.0
 CELL_H = 30.0
 CAP_H = 26.0
 GUTTER = 18.0
+GAP = wr.GAP                                                # two blocks are never closer than this (body and name counted): there is always a channel for the wires
 PORT_R = 5.0
 PORT_HIT = 10.0
 MIME = "opara-wb-kind:"
@@ -36,6 +38,37 @@ DOT = QColor("#d5dde8")
 
 def snap(v):
     return round(v / GRID) * GRID
+
+
+def clear_of(r, others, gap=None):
+    """True when the rectangle r is at least `gap` (the mandatory space between blocks) away from every rectangle of `others` (touching at exactly `gap` is fine)."""
+    g = GAP if gap is None else gap
+    e = 1e-6
+    for o in others:
+        if r.left() < o.right() + g - e and r.right() > o.left() - g + e and r.top() < o.bottom() + g - e and r.bottom() > o.top() - g + e:
+            return False
+    return True
+
+
+_OFFSETS = None
+
+
+def offsets():
+    """Grid steps around a point, the nearest first (to look for the free place nearest to where a block was put)."""
+    global _OFFSETS
+    if _OFFSETS is None:
+        r = 50
+        _OFFSETS = sorted(((i * GRID, j * GRID) for i in range(-r, r + 1) for j in range(-r, r + 1)), key=lambda d: (d[0] ** 2 + d[1] ** 2, abs(d[1]), d[1], abs(d[0]), d[0]))
+    return _OFFSETS
+
+
+def nearest_free(x, y, h, others):
+    """(x, y) moved to the nearest grid place where a block of height h (body and name) keeps the gap to every rectangle of `others`."""
+    x, y = snap(x), snap(y)
+    for dx, dy in offsets():
+        if clear_of(QRectF(x + dx, y + dy, BLOCK_W, h), others):
+            return x + dx, y + dy
+    return x, y
 
 
 def _font(px, bold=False):
@@ -73,6 +106,7 @@ class SystemItem(QGraphicsItem):
         self.hover = None                                   # the key of the cell under the mouse, "name" or "caption"
         self.links = []                                     # the LinkItems on this block
         self._linking = False
+        self._grab = None                                   # a move with the mouse: where it started, and the last place that was free
         self.setCursor(Qt.CursorShape.ArrowCursor)
 
     # ---- the shape
@@ -85,6 +119,10 @@ class SystemItem(QGraphicsItem):
 
     def body_h(self):
         return HEAD_H + NAME_H + max(1, len(self.cells())) * CELL_H
+
+    def keep(self):
+        """The area the block holds on the canvas (scene coordinates): its body and its name under it.  Two blocks keep GAP between these areas."""
+        return QRectF(self.pos().x(), self.pos().y(), BLOCK_W, self.body_h() + CAP_H)
 
     def boundingRect(self):
         return QRectF(-PORT_R - 4, -4, BLOCK_W + 2 * PORT_R + 8, self.body_h() + CAP_H + 12)
@@ -292,10 +330,18 @@ class SystemItem(QGraphicsItem):
                 ev.accept()
                 return
         super().mousePressEvent(ev)
+        if ev.button() == Qt.MouseButton.LeftButton and self.isSelected():
+            movers = [it for it in self.scene().selectedItems() if isinstance(it, SystemItem)]
+            self._grab = {"press": ev.scenePos(), "start": {it: QPointF(it.pos()) for it in movers}, "last": (0.0, 0.0)}
 
     def mouseMoveEvent(self, ev):
         if self._linking:
             self.scene().drag_link(ev.scenePos())
+            return
+        g = self._grab
+        if g is not None and ev.buttons() & Qt.MouseButton.LeftButton:
+            d = ev.scenePos() - g["press"]
+            g["last"] = self.scene().drag_blocks(g["start"], snap(d.x()), snap(d.y()), g["last"])
             return
         super().mouseMoveEvent(ev)
 
@@ -304,7 +350,11 @@ class SystemItem(QGraphicsItem):
             self._linking = False
             self.scene().end_link(ev.scenePos())
             return
+        was = self._grab
+        self._grab = None
         super().mouseReleaseEvent(ev)
+        if was is not None and was["last"] != (0.0, 0.0):
+            self.scene().blocks_dropped()
 
     def mouseDoubleClickEvent(self, ev):
         w = self.where(ev.pos())
@@ -317,18 +367,22 @@ class SystemItem(QGraphicsItem):
     def itemChange(self, change, value):
         sc = self.scene()
         if sc is not None and change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
-            return QPointF(snap(value.x()), snap(value.y()))
+            x, y = snap(value.x()), snap(value.y())
+            if not sc.free_move and not sc._building:                   # a block is never put on another (or closer than the gap): it goes to the nearest free place
+                others = [o.keep() for o in sc.items_by_id.values() if o is not self]
+                if not clear_of(QRectF(x, y, BLOCK_W, self.body_h() + CAP_H), others):
+                    x, y = nearest_free(x, y, self.body_h() + CAP_H, others)
+            return QPointF(x, y)
         if sc is not None and change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
-            for l in self.links:
-                l.update_path()
+            sc.moved_links(self.links)
             sc.item_moved(self)
         return super().itemChange(change, value)
 
 
 # ---------------------------------------------------------------------------------------------------------------------------- a wire
 def route(p0, p1, a_bottom, b_bottom):
-    """The corners of a wire from the right edge of a cell (p0) to the left edge of another (p1): straight across with one bend when the target is to the right, else
-    out, down under both blocks, back and in.  Always horizontal and vertical segments."""
+    """The plain route of a wire (used only when the router has no road, that is while two blocks are on top of each other): straight across with one bend when the target is to
+    the right, else out, down under both blocks, back and in."""
     x0, y0, x1, y1 = p0.x(), p0.y(), p1.x(), p1.y()
     if x1 >= x0 + 2 * GRID:
         xm = min(max(snap((x0 + x1) / 2), x0 + GRID / 2), x1 - GRID / 2)
@@ -354,10 +408,18 @@ class LinkItem(QGraphicsPathItem):
             if self in it.links:
                 it.links.remove(self)
 
-    def update_path(self):
+    def update_path(self, rects=None):
+        """The wire finds its road around the blocks (wb_route): `rects` are the keep-out areas of all the blocks as (left, top, right, bottom)."""
         p0 = self.a_item.port_pos(self.link.a_cell, "out")
         p1 = self.b_item.port_pos(self.link.b_cell, "in")
-        self.pts = route(p0, p1, self.a_item.pos().y() + self.a_item.body_h(), self.b_item.pos().y() + self.b_item.body_h())
+        sc = self.scene()
+        if rects is None:
+            rects = sc.keep_rects() if sc is not None else []
+        road = wr.route((p0.x(), p0.y()), (p1.x(), p1.y()), rects) if rects else None
+        if road is not None:
+            self.pts = [QPointF(x, y) for x, y in road]
+        else:
+            self.pts = route(p0, p1, self.a_item.pos().y() + self.a_item.body_h(), self.b_item.pos().y() + self.b_item.body_h())
         path = QPainterPath(self.pts[0])
         for q in self.pts[1:]:
             path.lineTo(q)
@@ -401,6 +463,8 @@ class SchematicScene(QGraphicsScene):
         self.link_items = {}
         self.drag = None                                    # a wire being drawn
         self._building = False
+        self.free_move = False                              # True while blocks are put in place by the canvas itself (they were checked already)
+        self._batch = None                                  # while blocks are dragged: the wires to route once, after all of them moved
         self.setSceneRect(QRectF(-1000, -800, 4000, 3000))
         self.rebuild()
 
@@ -417,7 +481,9 @@ class SchematicScene(QGraphicsScene):
                 self._add_link_item(k)
         finally:
             self._building = False
+        self.moved_apart = self.separate_all()
         self.fit_rect()
+        self.reroute_all()
 
     def _add_item(self, node):
         it = SystemItem(node.id)
@@ -436,6 +502,7 @@ class SchematicScene(QGraphicsScene):
         li = LinkItem(k, a, b)
         self.addItem(li)
         self.link_items[k.key()] = li
+        li.update_path()
         return li
 
     def fit_rect(self):
@@ -449,25 +516,121 @@ class SchematicScene(QGraphicsScene):
             it.update()
         self.update()
 
+    # ---- the space between blocks, and the roads of the wires
+    def keep_rects(self, exclude=()):
+        """The keep-out areas of the blocks, as (left, top, right, bottom)."""
+        out = []
+        for it in self.items_by_id.values():
+            if it not in exclude:
+                r = it.keep()
+                out.append((r.left(), r.top(), r.right(), r.bottom()))
+        return out
+
+    def _keeps(self, exclude=()):
+        return [it.keep() for it in self.items_by_id.values() if it not in exclude]
+
+    def reroute_all(self):
+        """Every wire finds its road again (a block was put somewhere, added or taken away)."""
+        rects = self.keep_rects()
+        for li in self.link_items.values():
+            li.update_path(rects)
+        self.update()
+
+    def moved_links(self, links):
+        """The wires of a block that moved: at once, or (while blocks are dragged) once for all of them after the move."""
+        if self._batch is not None:
+            self._batch.update(links)
+            return
+        if links:
+            rects = self.keep_rects()
+            for l in links:
+                l.update_path(rects)
+
+    def drag_blocks(self, start, dx, dy, last):
+        """Moves the dragged blocks (`start` = {item: place when the mouse went down}) by (dx, dy), as far as they can go: a block never enters the area of another or comes closer
+        than the gap, it stops at it and slides along it.  -> the (dx, dy) it reached."""
+        movers = list(start)
+        others = self._keeps(exclude=movers)
+
+        def free(ax, ay):
+            return all(clear_of(QRectF(start[it].x() + ax, start[it].y() + ay, BLOCK_W, it.body_h() + CAP_H), others) for it in movers)
+        cx, cy = last
+        if not free(cx, cy):                                # (the blocks were on top of something already: they may only move away)
+            cx, cy = 0.0, 0.0
+        for _ in range(4000):
+            moved = False
+            if cx != dx:
+                nx = cx + (GRID if dx > cx else -GRID)
+                if free(nx, cy):
+                    cx, moved = nx, True
+            if cy != dy:
+                ny = cy + (GRID if dy > cy else -GRID)
+                if free(cx, ny):
+                    cy, moved = ny, True
+            if not moved or (cx == dx and cy == dy):
+                break
+        self._batch = set()
+        self.free_move = True
+        try:
+            for it in movers:
+                it.setPos(QPointF(start[it].x() + cx, start[it].y() + cy))
+        finally:
+            self.free_move = False
+            links, self._batch = self._batch, None
+        self.moved_links(list(links))
+        return (cx, cy)
+
+    def blocks_dropped(self):
+        """The mouse let go of the blocks: all the wires find their road again."""
+        self.reroute_all()
+
+    def move_group(self, items, dx, dy):
+        """The blocks (a selection) one step in a direction (keys); they stop at a neighbour."""
+        start = {it: QPointF(it.pos()) for it in items}
+        r = self.drag_blocks(start, dx, dy, (0.0, 0.0))
+        self.reroute_all()
+        return r
+
+    def find_free(self, x, y, h, exclude=()):
+        """The nearest free place for a block of height h (body and name) at or near (x, y)."""
+        return nearest_free(x, y, h, self._keeps(exclude))
+
+    def separate_all(self):
+        """Blocks that sit on each other or closer than the gap (a file made before the rule) are moved apart, each to the nearest free place; the blocks at the top left stay.
+        -> the ids of the blocks that moved."""
+        placed, moved = [], []
+        order = sorted(self.items_by_id.values(), key=lambda it: (it.pos().y(), it.pos().x(), it.nid))
+        was = self._building
+        self._building = True
+        try:
+            for it in order:
+                r = it.keep()
+                if not clear_of(r, placed):
+                    x, y = nearest_free(r.x(), r.y(), r.height(), placed)
+                    it.setPos(QPointF(x, y))
+                    self.project.move_node(it.nid, x, y)
+                    r = it.keep()
+                    moved.append(it.nid)
+                placed.append(r)
+        finally:
+            self._building = was
+        return moved
+
     # ---- what changes the project
     def item_moved(self, item):
         if self._building:
             return
         self.project.move_node(item.nid, item.pos().x(), item.pos().y())
         self.fit_rect()
+        if self._batch is None:
+            self.reroute_all()                              # (a block put somewhere by a program: the other wires may have to go around it)
         self.edited.emit()
 
     def free_pos(self, x, y, kind=None):
-        """The nearest free place at or below (x, y) for a new block (blocks never start on top of each other)."""
+        """The nearest free place at or near (x, y) for a new block (blocks never start on top of each other, and keep the gap)."""
         sp = wp.spec_of(kind) if kind else None
         h = HEAD_H + NAME_H + CELL_H * max(1, len(sp.cells) if sp else 1) + CAP_H
-        x, y = snap(x), snap(y)
-        for _ in range(400):
-            r = QRectF(x - 8, y - 8, BLOCK_W + 16, h + 16)
-            if not any(r.intersects(QRectF(it.pos().x(), it.pos().y(), BLOCK_W, it.body_h() + CAP_H)) for it in self.items_by_id.values()):
-                break
-            y += GRID
-        return x, y
+        return nearest_free(x, y, h, self._keeps())
 
     def add_node(self, kind, x=None, y=None, title=None, data=None, select=True):
         if x is None:
@@ -479,6 +642,7 @@ class SchematicScene(QGraphicsScene):
             self.clearSelection()
             it.setSelected(True)
         self.fit_rect()
+        self.reroute_all()
         self.edited.emit()
         return n
 
@@ -491,6 +655,7 @@ class SchematicScene(QGraphicsScene):
                 self._drop_link_item(li)
             self.removeItem(it)
             self.project.remove_node(nid)
+        self.reroute_all()
         self.edited.emit()
         self.refresh()
 
@@ -720,9 +885,9 @@ class SchematicView(QGraphicsView):
         if e.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down) and self.scene().selectedItems():
             dx = {Qt.Key.Key_Left: -GRID, Qt.Key.Key_Right: GRID}.get(e.key(), 0.0)
             dy = {Qt.Key.Key_Up: -GRID, Qt.Key.Key_Down: GRID}.get(e.key(), 0.0)
-            for it in self.scene().selectedItems():
-                if isinstance(it, SystemItem):
-                    it.setPos(it.pos() + QPointF(dx, dy))
+            movers = [it for it in self.scene().selectedItems() if isinstance(it, SystemItem)]
+            if movers:
+                self.scene().move_group(movers, dx, dy)
             return
         super().keyPressEvent(e)
 

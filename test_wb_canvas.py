@@ -104,7 +104,7 @@ ok(A.pos == [100.0, 100.0] and C.pos == [100.0, 300.0], f"positions are put on t
 ok(item(A).body_h() == cv.HEAD_H + cv.NAME_H + cv.CELL_H and item(B).body_h() == cv.HEAD_H + cv.NAME_H + 4 * cv.CELL_H, "a block is as high as its cells")
 tab.add_block("part", 100, 100)                                                  # on top of A
 D = list(prj.nodes.values())[-1]
-ok(D.pos[0] == 100.0 and D.pos[1] > 100.0 and not item(D).sceneBoundingRect().intersects(item(A).sceneBoundingRect().adjusted(2, 2, -2, -2)), "a new block never starts on top of another")
+ok(cv.clear_of(item(D).keep(), [item(n).keep() for n in (A, B, C)]) and abs(D.pos[0] - 100) + abs(D.pos[1] - 100) <= 500, f"a new block never starts on top of another: it goes to the nearest place that keeps the gap ({D.pos})")
 scene.remove_nodes([D.id])
 tb.on_double(tb.item_of("thermal3d"), 0)
 E = list(prj.nodes.values())[-1]
@@ -126,7 +126,7 @@ k = prj.link(A.id, "geometry", B.id, "geometry")
 scene._add_link_item(k)
 scene.refresh()
 li = scene.link_items[k.key()]
-ok(len(li.pts) == 4 and li.pts[0] == item(A).port_pos("geometry", "out") and li.pts[-1] == item(B).port_pos("geometry", "in"), "a wire runs from the right edge of the cell to the left edge of the other")
+ok(len(li.pts) <= 4 and li.pts[0] == item(A).port_pos("geometry", "out") and li.pts[-1] == item(B).port_pos("geometry", "in"), "a wire runs from the right edge of the cell to the left edge of the other")
 ok(all(abs(a.x() - b.x()) < 1e-6 or abs(a.y() - b.y()) < 1e-6 for a, b in zip(li.pts, li.pts[1:])), "the wire is horizontal and vertical segments only")
 # move B far to the lower left: the wire goes round
 before = list(li.pts)
@@ -138,7 +138,7 @@ ok(all(abs(a.x() - b.x()) < 1e-6 or abs(a.y() - b.y()) < 1e-6 for a, b in zip(li
 ok(li.pts != before, "the route changed")
 # and back
 drag(vpt(B.pos[0] + 100, B.pos[1] + 10), vpt(500 + 100, 100 + 10))
-ok(B.pos == [500.0, 100.0] and len(li.pts) == 4, f"back in place the wire is simple again ({B.pos})")
+ok(B.pos == [500.0, 100.0] and len(li.pts) <= 4, f"back in place the wire is simple again ({B.pos}, {len(li.pts)} points)")
 
 # ----------------------------------------------------------------------------------------------------------------------------------- selecting with a box, moving the selection
 scene.clearSelection()

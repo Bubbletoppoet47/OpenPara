@@ -56,13 +56,14 @@ class ProjectError(Exception):
 
 # ---------------------------------------------------------------------------------------------------------------------------- the kinds of node
 class CellSpec:
-    def __init__(self, key, label, role, provides=(), accepts=(), needs_link=False, many=False, needs_any=()):
+    def __init__(self, key, label, role, provides=(), accepts=(), needs_link=False, many=False, needs_any=(), optional=False):
         if role not in ROLES:
             raise ValueError(f"cell role '{role}' is not one of {ROLES}")
         self.key, self.label, self.role = key, label, role
         self.needs_link = bool(needs_link)                                   # an import cell that has nothing of its own: without a wire it is incomplete
         self.many = bool(many)                                               # an import cell that takes any number of wires (the profiles of a beam, the inputs of a study)
         self.needs_any = tuple(needs_any)                                    # an import cell that is incomplete unless at least one of its wires comes from a cell that gives one of these kinds
+        self.optional = bool(optional)                                       # an import cell that is fine with no wire at all (the block works without it): Sheets takes studies, but needs none
         self.provides, self.accepts = tuple(provides), tuple(accepts)       # kinds of data a link from / to this cell carries ("geometry", "sketch")
 
 
@@ -127,8 +128,13 @@ for _k, _l, _tip, _st in (
 # A study takes any number of wires into its Parameters cell: the dimensions of Parts (they change the geometry of every analysis that works on that Part) and the Setup of analyses
 # (their own inputs; the outputs recorded come from every analysis wired).  It needs at least one analysis.  The study itself is kept in the study block.
 register("study", "Parametric Study", "Design Exploration",
-         [CellSpec("setup", "Parameters", "import", (), ("analysis", "dimensions"), True, True, ("analysis",)), ("solution", "Study", "compute"), ("results", "Results", "view")],
+         [CellSpec("setup", "Parameters", "import", (), ("analysis", "dimensions"), True, True, ("analysis",)), ("solution", "Study", "compute"), ("results", "Results", "view", ("study",))],
          "Runs the analyses wired into it again and again with other values of their inputs and of the dimensions of the parts they use", "")
+# Sheets takes the results of any number of Parametric Studies into its Study Results cell: in the Sheets window only THESE studies can be imported (a study is never imported from
+# anywhere else in a workbench block); the cell is optional, a spreadsheet needs no study.
+register("sheets", "Sheets", "Component Tools",
+         [CellSpec("studies", "Study Results", "import", (), ("study",), False, True, (), optional=True), ("document", "Sheets", "data")],
+         "A spreadsheet; the results of the Parametric Studies wired into it can be imported onto its sheets", ".opsheet")
 
 
 # ---------------------------------------------------------------------------------------------------------------------------- the project
@@ -265,8 +271,18 @@ class Project:
         """What an import cell depends on right now: the stamp of the cell its wire comes from ({"link": stamp}), or of every one of its wires ({"links": {"A:cell": stamp}})."""
         ks = self.incoming_all(nid, key)
         if self.node(nid).spec.cell(key).many:
-            return {"links": {f"{k.a}:{k.a_cell}": self.cell(k.a, k.a_cell)["stamp"] for k in ks}} if ks else {}
-        return {"link": self.cell(ks[0].a, ks[0].a_cell)["stamp"]} if ks else {}
+            return {"links": {f"{k.a}:{k.a_cell}": self.cell(*self.source_cell(k.a, k.a_cell))["stamp"] for k in ks}} if ks else {}
+        return {"link": self.cell(*self.source_cell(ks[0].a, ks[0].a_cell))["stamp"]} if ks else {}
+
+    def source_cell(self, nid, key):
+        """(node, cell key) of the cell whose state a wire that leaves (nid, key) carries: a result cell only SHOWS what the compute cell before it made (it has no stamp of its own
+        that changes with a run), so a wire from it follows that cell."""
+        sp = self.node(nid).spec
+        cs = sp.cell(key)
+        i = sp.index(key)
+        if cs.role == "view" and i > 0:
+            return nid, sp.cells[i - 1].key
+        return nid, key
 
     def outgoing(self, nid, key=None):
         return [k for k in self.links if k.a == nid and (key is None or k.a_cell == key)]
@@ -408,11 +424,11 @@ class Project:
         if cs.role == "import":
             ks = self.incoming_all(nid, key)
             if not ks:
-                return OK if c["ready"] and not cs.needs_link else INCOMPLETE
+                return OK if (c["ready"] or cs.optional) and not cs.needs_link else INCOMPLETE
             if cs.needs_any and not self.has_wire_of(ks, cs.needs_any):
                 return INCOMPLETE
             for k in ks:
-                if self.status(k.a, k.a_cell) in (INCOMPLETE, FAILED) or not self.cell(k.a, k.a_cell)["ready"]:
+                if self.status(k.a, k.a_cell) in (INCOMPLETE, FAILED) or not self.cell(*self.source_cell(k.a, k.a_cell))["ready"]:
                     return INCOMPLETE
             if not c["ready"] or c["seen"] != self.link_stamps(nid, key):
                 return REFRESH

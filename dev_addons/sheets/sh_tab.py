@@ -55,6 +55,7 @@ class SheetsTab(QWidget):
         start_standards()
         self.host = None
         self.path = None
+        self.study_source = None               # in a Workbench block: what says which studies may be imported (the ones wired into the block); None = any study (a Sheets tab of its own)
         self.title_text = "Sheets"
         self.wb = B.Workbook()
         self.saved_version = self.wb.version
@@ -1175,6 +1176,8 @@ class SheetsTab(QWidget):
 
     # ------------------------------------------------------------------ studies
     def open_study_projects(self):
+        if self.study_source is not None:                      # a Workbench block: only the studies wired into it
+            return list(self.study_source.projects())
         out = []
         host = self.host
         tabs = getattr(host, "tabs", None)
@@ -1190,11 +1193,21 @@ class SheetsTab(QWidget):
     def study_import(self, choice=None):
         """Import study: `choice` = (project, sub, new_sheet) skips the window (tests)."""
         if choice is None:
-            dlg = D.StudyImportDialog(self.open_study_projects(), self)
+            if self.study_source is not None:
+                found = [(n, p) for n, p in self.open_study_projects() if sh_study.studies(p)]
+                if not found:
+                    self.status.say(self.study_source.nothing_to_import(), "warn")
+                    return None
+                dlg = D.StudyImportDialog(found, self, browse=False)
+            else:
+                dlg = D.StudyImportDialog(self.open_study_projects(), self)
             if not dlg.exec():
                 return None
             choice = dlg.result_choice()
         project, sub, new_sheet = choice
+        if self.study_source is not None and self.study_source.node_of(project) is None:
+            self.status.say("Only a study wired into this block can be imported here: wire its Results cell into the Study Results cell of the block.", "bad")
+            return None
         g = self.grid
         try:
             if new_sheet:
@@ -1206,6 +1219,9 @@ class SheetsTab(QWidget):
         except sh_study.StudyError as ex:
             self.status.say(str(ex), "bad")
             return None
+        if self.study_source is not None:                      # the block remembers WHICH study it came from (the folder changes from one session to the next)
+            link["wb"] = self.study_source.node_of(project)
+            link["name"] = self.study_source.name_of(project, sub, link["name"])
         r0, c0 = link["origin"]
         g.select(r0, c0, r0 + link["rows"], c0 + link["cols"] - 1, active=(r0, c0))
         self.status.say(f"Imported {link['name']}: {link['rows']} row(s). " + " ".join(notes), "good")
@@ -1278,7 +1294,40 @@ class SheetsTab(QWidget):
         self.update_help()
         return ln
 
+    def attach_study_source(self, source):
+        """The tab belongs to a Workbench block: `source` says which studies it may import (projects(), node_of(), name_of(), nothing_to_import(), path_of(node id)).  The imported
+        blocks that came from a study of the block are pointed at that study's folder of this session."""
+        self.study_source = source
+        self.sync_study_paths()
+
+    def sync_study_paths(self, fresh=False):
+        """fresh=True: the studies of the block are copied again first (what the study blocks keep NOW is read)."""
+        if self.study_source is None:
+            return
+        if fresh and hasattr(self.study_source, "reset"):
+            self.study_source.reset()
+        for s in self.wb.sheets:
+            for ln in s.links:
+                if ln.get("wb"):
+                    p = self.study_source.path_of(ln["wb"])
+                    if p:
+                        ln["project"] = p
+
+    def study_refresh_all(self):
+        """Every imported block of the tab is read again, without questions (the Workbench does it when the block takes new results).  -> (blocks read, [what was not done])."""
+        if self.study_source is not None:                      # (only the blocks that came from a study of this block; others are left alone)
+            if hasattr(self.study_source, "reset"):
+                self.study_source.reset()
+            done, notes = sh_study.refresh_all(self.wb, lambda ln: self.study_source.path_of(ln["wb"]), lambda ln: bool(ln.get("wb")))
+        else:
+            done, notes = sh_study.refresh_all(self.wb)
+        if done:
+            self.mark_extra()
+            self.grid.viewport().update()
+        return done, notes
+
     def study_refresh(self, force=False):
+        self.sync_study_paths(fresh=True)
         g = self.grid
         s = g.sheet_obj()
         if not s.links:

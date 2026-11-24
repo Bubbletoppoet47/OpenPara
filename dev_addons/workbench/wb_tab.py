@@ -313,7 +313,12 @@ class WorkbenchTab(QWidget):
         p = wp.Project.read(path)
         self.close_editors()
         self.set_project(p)
-        self.say(f"Opened {path}: {len(p.nodes)} systems. Nothing was computed: cells that need it say so.")
+        moved = list(getattr(self.scene, "moved_apart", []) or [])
+        note = ""
+        if moved:
+            letters = ", ".join(p.nodes[i].label for i in moved if i in p.nodes)
+            note = f" {len(moved)} system{'s' if len(moved) != 1 else ''} ({letters}) sat on or too close to another and {'were' if len(moved) != 1 else 'was'} moved apart; save to keep that."
+        self.say(f"Opened {path}: {len(p.nodes)} systems. Nothing was computed: cells that need it say so.{note}")
         return p
 
     def new_project(self):

@@ -244,6 +244,34 @@ def refresh(wb, sheet, link, force=False):
     return True, notes
 
 
+def refresh_all(wb, resolve=None, select=None):
+    """Reads every imported study of the workbook again (the Workbench does it when a Sheets block takes new results).  `resolve(link)` gives the folder a link reads from now (a
+    link that came from a Workbench block names the block, and its folder changes from one session to the next) or None when the study is no longer there; `select(link)` False
+    leaves a link alone.  -> (the blocks read, [what was not done and why])."""
+    done, notes = 0, []
+    for s in list(wb.sheets):
+        for ln in list(s.links):
+            name = ln.get("name", "study")
+            if select is not None and not select(ln):
+                continue
+            if resolve is not None:
+                path = resolve(ln)
+                if path is None:
+                    notes.append(f"{name}: its study is no longer wired into the block.")
+                    continue
+                ln["project"] = path
+            try:
+                ok, why = refresh(wb, s.name, ln)
+            except StudyError as ex:
+                notes.append(f"{name}: {ex}")
+                continue
+            if ok:
+                done += 1
+            else:
+                notes.append(f"{name}: {why[0]}")
+    return done, notes
+
+
 def is_stale(link):
     """True when the study has been saved again since the block was read."""
     return stamp(link["project"], link.get("sub", "")) > link.get("stamp", 0.0) + 0.5
