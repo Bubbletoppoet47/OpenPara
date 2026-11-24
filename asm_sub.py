@@ -54,7 +54,7 @@ class Loader:
 
 
 def install_loader(window_cls):
-    for name in ("abs", "wire", "part_base", "part_doc", "solid_of"):
+    for name in ("abs", "wire", "part_base", "part_doc", "solid_of", "embedded_base"):
         setattr(Loader, name, getattr(window_cls, name))
 
 
@@ -162,13 +162,22 @@ def combine(items):
     return {"volume": V, "area": A, "com": com, "mass": M, "ic": icm, "io": io, "pm": w, "axes": v.T}
 
 
-def sub_doc(ctx, p, cfg=None):
-    """The SubDoc of the assembly file p in configuration cfg (None = as saved).  None when it cannot be loaded (missing, or a loop)."""
-    p = os.path.normcase(os.path.abspath(p))
+def _ident(p):
+    """What an assembly is called in the loop check: its normalised path (an embedded one keeps its "embedded:" name)."""
+    return p if am.is_embedded(p) else os.path.normcase(os.path.abspath(p))
+
+
+def sub_doc(ctx, p, cfg=None, text=None):
+    """The SubDoc of the assembly file p in configuration cfg (None = as saved).  None when it cannot be loaded (missing, or a loop).
+    text: the assembly's JSON when it is not in a file but embedded in the assembly that uses it (p is then its "embedded:<key>/<name>.gpa" path)."""
+    virtual = am.is_embedded(p)
+    if not virtual:
+        p = os.path.normcase(os.path.abspath(p))
     stack = tuple(getattr(ctx, "stack", ()))
-    if p in stack or (getattr(ctx, "path", None) and os.path.normcase(os.path.abspath(ctx.path)) == p):
+    if p in stack or (not virtual and getattr(ctx, "path", None) and os.path.normcase(os.path.abspath(ctx.path)) == p):
         raise SubLoop(p)
-    text = _text(ctx, p)
+    if text is None:
+        text = _text(ctx, p)
     if text is None:
         return None
     cache = ctx.__dict__.setdefault("sub_cache", {})
@@ -176,7 +185,7 @@ def sub_doc(ctx, p, cfg=None):
     if key in cache:
         return cache[key]
     import asm_patterns
-    L = Loader(p, getattr(ctx, "shell", None), stack + ((os.path.normcase(os.path.abspath(ctx.path)),) if getattr(ctx, "path", None) else ()) + (p,))
+    L = Loader(p, getattr(ctx, "shell", None), stack + ((_ident(ctx.path),) if getattr(ctx, "path", None) else ()) + (p,))
     L.path = p
     a = am.Assembly.from_json(text)
     L.asm = a

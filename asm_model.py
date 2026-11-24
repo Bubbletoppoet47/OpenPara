@@ -25,6 +25,17 @@ LINELIKE = ("axis", "circle", "line")
 BASE_N = {"Front": (0.0, -1.0, 0.0), "Top": (0.0, 0.0, 1.0), "Right": (1.0, 0.0, 0.0)}
 
 
+EMBED = "embedded:"                      # a component whose path starts with this lives INSIDE the assembly file: "embedded:<key>/<name>.gpd" (see asm_embed.py)
+
+
+def is_embedded(path):
+    return str(path).startswith(EMBED)
+
+
+def embed_key(path):
+    return str(path)[len(EMBED):].split("/", 1)[0]
+
+
 class MateError(Exception):
     pass
 
@@ -380,6 +391,7 @@ class Assembly:
         self.status = {}                   # mate id -> "ok" | "error: ..."
         self.dof = {}                      # component id -> degrees of freedom left
         self.solid_fn = None               # function(component) -> (build123d solid or None) in the part's own coordinates
+        self.parts = {}                    # embedded copies of parts / assemblies: key -> {"kind": "part" | "assembly", "name", "doc" | "asm": the file's JSON as an object}
         self.sims = []                     # linked simulation files (sim_links.py)
         self.renders = []                  # linked render projects (.gpr)
         self.refs = []                     # reference planes / axes of the assembly (see ref_entity)
@@ -600,9 +612,26 @@ class Assembly:
 
     # ------------------------------------------------------------------ files
     def to_json(self):
-        return json.dumps({"version": 1, "components": [c for c in self.components if not c.get("derived")], "mates": self.mates,
-                           "counter": self.counter,
-                           "patterns": self.patterns, "params": self.params, "kinds": self.param_kinds, "exprs": self.exprs, "cfg": self.cfg_snapshot(), "refs": self.refs, "world_show": self.world_show, "sims": self.sims, "renders": self.renders}, indent=1)
+        d = {"version": 1, "components": [c for c in self.components if not c.get("derived")], "mates": self.mates,
+             "counter": self.counter,
+             "patterns": self.patterns, "params": self.params, "kinds": self.param_kinds, "exprs": self.exprs, "cfg": self.cfg_snapshot(), "refs": self.refs, "world_show": self.world_show, "sims": self.sims, "renders": self.renders}
+        used = {embed_key(c["path"]) for c in d["components"] if is_embedded(c["path"])}
+        if used:                                                 # (an assembly with no embedded component writes exactly what it always did)
+            d["parts"] = {k: v for k, v in self.parts.items() if k in used}
+        return json.dumps(d, indent=1)
+
+    def embed_part(self, name, kind, obj):
+        """Keeps a copy of a part (kind "part", obj = the part file's JSON as an object) or of an assembly (kind "assembly") inside this assembly; -> the path a component
+        takes to use it.  The same content under the same name is stored once (two instances of one part stay instances of one part)."""
+        for k, v in self.parts.items():
+            if v.get("kind") == kind and v.get("name") == name and v.get("asm" if kind == "assembly" else "doc") == obj:
+                return f"{EMBED}{k}/{name}{'.gpa' if kind == 'assembly' else '.gpd'}"
+        i = 1
+        while f"P{i}" in self.parts:
+            i += 1
+        k = f"P{i}"
+        self.parts[k] = {"kind": kind, "name": name, ("asm" if kind == "assembly" else "doc"): obj}
+        return f"{EMBED}{k}/{name}{'.gpa' if kind == 'assembly' else '.gpd'}"
 
     @classmethod
     def from_json(cls, text):
@@ -616,6 +645,7 @@ class Assembly:
         a.sims = d.get("sims") or []
         a.renders = d.get("renders") or []
         a.world_show = {**a.world_show, **d.get("world_show", {})}
+        a.parts = d.get("parts") or {}
         return a
 
     # ------------------------------------------------------------------ geometry of the references

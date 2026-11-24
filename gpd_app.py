@@ -230,7 +230,7 @@ class AppShell(QMainWindow):
         for i in range(self.tabs.count()):
             w = self.tabs.widget(i)
             p = getattr(w, "path", None)
-            if not (isinstance(p, str) and p and os.path.exists(p)) or getattr(w, "no_session", False):       # (an editor a Workbench project opened lives in its workspace)
+            if not (isinstance(p, str) and p and os.path.exists(p)) or getattr(w, "no_session", False) or is_workspace_path(p):       # (an editor a Workbench project opened lives in its workspace)
                 continue
             p = os.path.abspath(p)
             try:
@@ -609,7 +609,7 @@ class AppShell(QMainWindow):
         """A tab that has a file or a project folder goes to the top of the recent list the first time it is seen with that path (so a new
         document appears when it is first saved, and a project made by an add-on needs nothing from the add-on)."""
         p = getattr(w, "path", None)
-        if not isinstance(p, str) or not p or getattr(w, "no_session", False):
+        if not isinstance(p, str) or not p or getattr(w, "no_session", False) or is_workspace_path(p):
             return
         try:
             key = os.path.normcase(os.path.abspath(p))
@@ -1212,8 +1212,8 @@ class AppShell(QMainWindow):
         if not self.confirm_close(w):
             return False
         p = getattr(w, "path", None)
-        if isinstance(p, str) and p and os.path.exists(p):
-            self.closed.append(p)                         # Window > Reopen closed tab
+        if isinstance(p, str) and p and os.path.exists(p) and not getattr(w, "no_session", False) and not is_workspace_path(p):
+            self.closed.append(p)                         # Window > Reopen closed tab (not an editor a Workbench project made: its file is a temporary one)
             del self.closed[:-20]
         self.tabs.removeTab(i)
         if hasattr(w, "shutdown"):
@@ -1312,6 +1312,17 @@ class AppShell(QMainWindow):
 
 
 ERROR_LOG = "gpd_error.log"
+
+
+WORKSPACE_PREFIXES = ("opara_emb_", "opara_wb_")      # the temporary folders of an assembly's Edit Component and of a Workbench project
+
+
+def is_workspace_path(p):
+    """True for a file in one of those temporary folders: it is not the person's file, so it is never listed as recent or brought back with the session."""
+    try:
+        return any(seg.startswith(WORKSPACE_PREFIXES) for seg in os.path.abspath(p).replace("\\", "/").split("/"))
+    except Exception:                                 # noqa: BLE001
+        return False
 
 
 def log_error(text):

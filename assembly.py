@@ -10,6 +10,7 @@ assembly.py - the assembly workspace (one tab of the program).
 """
 import ast
 import copy
+import json
 import math
 import os
 import traceback
@@ -199,6 +200,7 @@ class DragHook(QObject):
 
 
 class AssemblyWindow(QMainWindow):
+    embed = False                     # True (the Workbench sets it): a component that is inserted is COPIED into the assembly, and an old file with paths is read as copies
     ribbon_page = pm_app.MainWindow.ribbon_page
     add_sim = pm_app.MainWindow.add_sim
     add_render = pm_app.MainWindow.add_render
@@ -230,6 +232,8 @@ class AssemblyWindow(QMainWindow):
         self.pick_filter = {"face": True, "edge": True, "vertex": True}     # what a click in the mate / reference tools may pick
         self.hover_key, self.hover_actor = None, None
         self.mesh_cache = {}              # (part path, id(solid)) -> (mesh, edge polylines, local bbox centre)
+        self.embed_edit = {}              # embedded part key -> the temporary file it is being edited in (Edit Component), see sync_embedded
+        self.embed_dir = None
         self.part_cache = {}              # absolute path -> (mtime, Document)
         self.doc_memo = {}                # (part path, configuration) -> Document, cleared when parts may have changed
         self.busy = False
@@ -433,10 +437,39 @@ class AssemblyWindow(QMainWindow):
         a.part_cfg_fn = lambda c: (lambda d: d.cfg["active"] if d is not None else None)(self.part_base(c))
         a.part_cfgs_fn = lambda c: (lambda d: list(d.cfg["names"]) if d is not None else [])(self.part_base(c))
 
+    def embedded_base(self, c):
+        """The Document of a component that lives inside the assembly file (asm_embed.py): built from the stored copy, or the live Document of the tab it is being edited in."""
+        key = am.embed_key(c["path"])
+        ent = self.asm.parts.get(key)
+        if ent is None:
+            return None
+        if ent.get("kind") == "assembly":
+            try:
+                return asm_sub.sub_doc(self, c["path"], None, text=json.dumps(ent["asm"]))
+            except asm_sub.SubLoop:
+                return None
+        ed = getattr(self, "embed_edit", {}).get(key)
+        if ed and getattr(self, "shell", None) is not None:
+            d = self.shell.part_doc(ed)
+            if d is not None:
+                return d
+        hit = self.part_cache.get(("embedded", key))
+        if hit is None or hit[0] is not ent["doc"]:
+            try:
+                d = pm.Document.from_json(json.dumps(ent["doc"]))
+                d.rebuild()
+            except Exception:
+                return None
+            hit = (ent["doc"], d)
+            self.part_cache[("embedded", key)] = hit
+        return hit[1]
+
     def part_base(self, c):
         """The part's Document as it is in its own tab / file (whatever configuration is active there)."""
         if c.get("derived"):
             c = self.asm.comp(c["derived"]["src"]) or c
+        if am.is_embedded(c["path"]):
+            return self.embedded_base(c)
         p = self.abs(c["path"])
         if p.lower().endswith(".gpa"):
             try:
@@ -471,6 +504,14 @@ class AssemblyWindow(QMainWindow):
         key = (c["path"], c.get("config"))
         if key in self.doc_memo:
             return self.doc_memo[key]
+        if c["path"].lower().endswith(".gpa") and am.is_embedded(c["path"]):
+            ent = self.asm.parts.get(am.embed_key(c["path"]))
+            try:
+                doc = asm_sub.sub_doc(self, c["path"], c.get("config"), text=json.dumps(ent["asm"])) if ent is not None else None
+            except asm_sub.SubLoop:
+                doc = None
+            self.doc_memo[key] = doc
+            return doc
         if c["path"].lower().endswith(".gpa"):
             try:
                 doc = asm_sub.sub_doc(self, self.abs(c["path"]), c.get("config"))
@@ -502,6 +543,7 @@ class AssemblyWindow(QMainWindow):
 
     # ------------------------------------------------------------------ files / undo
     def snapshot(self):
+        self.sync_embedded()
         self.undo.append((self.asm.to_json(), self.sel_comp))
         del self.undo[:-60]
         self.redo.clear()
@@ -539,9 +581,15 @@ class AssemblyWindow(QMainWindow):
             self.asm = am.Assembly.from_json(open(p, encoding="utf-8").read())
             self.wire(self.asm)
             self.doc_memo.clear()
+            self.part_cache.clear()
             self.path = p
             self.undo, self.redo = [], []
             self.sel_comp = None
+            if self.embed:                                  # an old file with paths: its parts are copied into the assembly (the files are not touched)
+                import asm_embed
+                warns = asm_embed.embed_references(self.asm, os.path.dirname(os.path.abspath(p)))
+                if warns:
+                    self.say(" ".join(warns[:3]))
             self.solve_all()
             self.saved_json = self.asm.to_json()
         except Exception as ex:
@@ -556,8 +604,11 @@ class AssemblyWindow(QMainWindow):
                 return False
             self.path = p if p.endswith(".gpa") else p + ".gpa"
         sim_links.rebase(self, old_base)
+        self.sync_embedded()
         base = os.path.dirname(self.path)
         for c in self.asm.components:                    # paths inside the file are relative to the assembly when they can be
+            if am.is_embedded(c["path"]):
+                continue
             try:
                 ap = self.abs(c["path"]) if not os.path.isabs(c["path"]) else c["path"]
                 c["path"] = os.path.relpath(ap, base)
@@ -571,7 +622,58 @@ class AssemblyWindow(QMainWindow):
         return True
 
     def is_dirty(self):
+        self.sync_embedded()
         return self.asm.to_json() != getattr(self, "saved_json", am.Assembly().to_json())
+
+    # ------------------------------------------------------------------ components that live inside the file (asm_embed.py)
+    def sync_embedded(self):
+        """A component being edited (Edit Component on an embedded one) is a tab of its own: what is in that tab goes back into the assembly's copy.  -> True when a copy changed."""
+        changed = False
+        for key, tmp in list(self.embed_edit.items()):
+            ent = self.asm.parts.get(key)
+            if ent is None:
+                self.embed_edit.pop(key, None)
+                continue
+            d = self.shell.part_doc(tmp) if self.shell is not None else None
+            try:
+                if d is not None:
+                    text = d.to_json()                        # the tab is open: its Document, edited or not
+                elif os.path.isfile(tmp):
+                    text = open(tmp, encoding="utf-8").read()   # the tab was closed: what was saved last
+                else:
+                    continue
+                obj = json.loads(text)
+            except Exception:
+                continue
+            field = "asm" if ent.get("kind") == "assembly" else "doc"
+            if obj != ent.get(field):
+                ent[field] = obj
+                changed = True
+        if changed:
+            self.doc_memo.clear()
+            self.part_cache = {k: v for k, v in self.part_cache.items() if not (isinstance(k, tuple) and k and k[0] == "embedded")}
+        return changed
+
+    def embed_component(self, item):
+        """A part or assembly becomes a copy inside this assembly and a component of it.  item: a file path, or {"name", "kind": "part" | "assembly", "text": its JSON} (a
+        part of the project the Workbench holds).  -> the component, or None (the reason is said)."""
+        import asm_embed
+        try:
+            if isinstance(item, dict):
+                vpath = self.asm.embed_part(item["name"], item["kind"], json.loads(item["text"]))
+            else:
+                vpath, warns = asm_embed.embed_file(self.asm, item)
+                if warns:
+                    self.say(" ".join(warns[:3]))
+        except (asm_embed.EmbedError, ValueError, KeyError) as ex:
+            self.say(str(ex))
+            return None
+        return self.asm.add_component(vpath, fixed=not self.asm.components)
+
+    def shutdown(self):
+        import shutil
+        if self.embed_dir:
+            shutil.rmtree(self.embed_dir, ignore_errors=True)
 
     # ------------------------------------------------------------------ the scene
     def solve_all(self):
@@ -1268,6 +1370,9 @@ class AssemblyWindow(QMainWindow):
 
     # ------------------------------------------------------------------ component commands
     def insert_dialog(self):
+        hook = getattr(self, "insert_hook", None)            # the Workbench offers the parts of its project first (and "Browse for a file...")
+        if hook is not None and hook(self):
+            return
         files, _ = QFileDialog.getOpenFileNames(self, "Insert components", os.path.dirname(self.path) if self.path else "", "Parts and assemblies (*.gpd *.gpa);;Part (*.gpd);;Assembly (*.gpa)")
         if files:
             self.insert_files(files)
@@ -1275,19 +1380,25 @@ class AssemblyWindow(QMainWindow):
     def insert_files(self, files):
         self.snapshot()
         for f in files:
-            if f.lower().endswith(".gpa"):
-                if self.path and os.path.normcase(os.path.abspath(f)) == os.path.normcase(os.path.abspath(self.path)):
-                    self.say("An assembly cannot contain itself.")
+            label = f["name"] if isinstance(f, dict) else os.path.basename(f)
+            if self.embed or isinstance(f, dict):
+                c = self.embed_component(f)                  # a copy goes into the assembly: no path, no loop
+                if c is None:
                     continue
-                try:
-                    ok = asm_sub.sub_doc(self, f, None) is not None
-                except asm_sub.SubLoop:
-                    self.say(f"{os.path.basename(f)} contains this assembly - inserting it would make a loop.")
-                    continue
-                if not ok:
-                    self.say(f"{os.path.basename(f)} could not be opened.")
-                    continue
-            c = self.asm.add_component(f, fixed=not self.asm.components)
+            else:
+                if f.lower().endswith(".gpa"):
+                    if self.path and os.path.normcase(os.path.abspath(f)) == os.path.normcase(os.path.abspath(self.path)):
+                        self.say("An assembly cannot contain itself.")
+                        continue
+                    try:
+                        ok = asm_sub.sub_doc(self, f, None) is not None
+                    except asm_sub.SubLoop:
+                        self.say(f"{os.path.basename(f)} contains this assembly - inserting it would make a loop.")
+                        continue
+                    if not ok:
+                        self.say(f"{os.path.basename(f)} could not be opened.")
+                        continue
+                c = self.asm.add_component(f, fixed=not self.asm.components)
             try:                                    # a part / assembly with several configurations gets its choosing column at once
                 if len(self.asm.part_cfgs_fn(c) or []) > 1:
                     self.asm.cfg_add_col("c:" + c["id"])
@@ -1295,7 +1406,7 @@ class AssemblyWindow(QMainWindow):
                 pass
             d = self.part_doc(c)
             if d is None or d.solid is None:
-                self.say(f"{os.path.basename(f)} has no solid yet (or could not be opened).")
+                self.say(f"{label} has no solid yet (or could not be opened).")
             else:
                 if len(self.asm.components) > 1:
                     bb = d.solid.bounding_box()
@@ -1525,10 +1636,44 @@ class AssemblyWindow(QMainWindow):
         if self.shell is None:
             self.say("Edit Component works inside the full program window.")
             return
+        if am.is_embedded(c["path"]):
+            return self.edit_embedded(c)
         self.shell.open_part(self.abs(c["path"]))
+
+    def edit_embedded(self, c):
+        """Edit Component on a copy that lives inside this assembly: the copy is written to a temporary file and opened in a tab of its own; the assembly sees the edits at once
+        (embedded_base reads the tab's Document) and keeps them (sync_embedded).  Only this assembly's copy changes."""
+        import tempfile
+        key = am.embed_key(c["path"])
+        ent = self.asm.parts.get(key)
+        if ent is None:
+            self.say("That component's copy is missing from the assembly.")
+            return None
+        self.sync_embedded()
+        tmp = self.embed_edit.get(key)
+        if tmp and self.shell.find_tab(tmp) is not None:
+            i = self.shell.find_tab(tmp)
+            self.shell.tabs.setCurrentIndex(i)
+            return self.shell.tabs.widget(i)
+        if self.embed_dir is None:
+            self.embed_dir = tempfile.mkdtemp(prefix="opara_emb_")
+        is_asm = ent.get("kind") == "assembly"
+        tmp = os.path.join(self.embed_dir, f"{key}_{ent.get('name') or 'part'}{'.gpa' if is_asm else '.gpd'}")
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps(ent["asm" if is_asm else "doc"], indent=1))
+        self.embed_edit[key] = tmp
+        w = self.shell.open_part(tmp)
+        if w is not None:
+            w.no_session = True                              # it lives in a temporary folder: not in the session, not in the recent list
+            w.depends_on = lambda: self                      # closing the assembly closes it
+            w.title = lambda n=c["name"]: f"{n} (in the assembly)"
+            if hasattr(w, "asm"):
+                w.embed = True                               # an assembly copy edited in its own window keeps its parts inside it too
+        return w
 
     def refresh_parts(self):
         """Called when this tab is shown again: pick up edited parts."""
+        self.sync_embedded()
         self.asm._cache.clear()
         self.doc_memo.clear()
         self.__dict__.pop("sub_cache", None)
