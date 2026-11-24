@@ -27,7 +27,8 @@
    "project_folder": {
     "marker": "simulation.json",
     "format": "openpara-sim-solid"
-   }
+   },
+   "home": "workbench"
   }
  ]
 }

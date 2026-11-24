@@ -56,11 +56,13 @@ class ProjectError(Exception):
 
 # ---------------------------------------------------------------------------------------------------------------------------- the kinds of node
 class CellSpec:
-    def __init__(self, key, label, role, provides=(), accepts=(), needs_link=False):
+    def __init__(self, key, label, role, provides=(), accepts=(), needs_link=False, many=False, needs_any=()):
         if role not in ROLES:
             raise ValueError(f"cell role '{role}' is not one of {ROLES}")
         self.key, self.label, self.role = key, label, role
         self.needs_link = bool(needs_link)                                   # an import cell that has nothing of its own: without a wire it is incomplete
+        self.many = bool(many)                                               # an import cell that takes any number of wires (the profiles of a beam, the inputs of a study)
+        self.needs_any = tuple(needs_any)                                    # an import cell that is incomplete unless at least one of its wires comes from a cell that gives one of these kinds
         self.provides, self.accepts = tuple(provides), tuple(accepts)       # kinds of data a link from / to this cell carries ("geometry", "sketch")
 
 
@@ -94,19 +96,23 @@ def spec_of(kind):
 
 
 # Geometry: a part gives its solid (to 3D analyses) and its sketches (to 2D / 1D analyses); an assembly gives its solid.
-register("part", "Part", "Geometry", [("geometry", "Part", "data", ("geometry", "sketch"))], "One parametric part: sketches and features", ".gpd")
+register("part", "Part", "Geometry", [("geometry", "Part", "data", ("geometry", "sketch", "profile", "dimensions"))],
+         "One parametric part: sketches, features and profile sketches; its dimensions can be varied by a Parametric Study", ".gpd")
 register("assembly", "Assembly", "Geometry", [("geometry", "Assembly", "data", ("geometry",))],
          "Parts put together with mates; its components are its own copies", ".gpa")
 # Analysis systems: the first cell takes the geometry (a link, or imported inside the analysis), then the setup, the solution and the results.
-_SOLID = ("geometry", "Geometry", "import", (), ("geometry",))
-_SKETCH = ("geometry", "Sketch", "import", (), ("sketch",))
+# The geometry of an analysis comes ONLY from a wire (needs_link): without one the cell says incomplete and the window is empty.  A 1D Beam / Truss also takes any number of Parts
+# as the source of its profile sketches (cross-sections).
+_SOLID = ("geometry", "Geometry", "import", (), ("geometry",), True)
+_SKETCH = ("geometry", "Sketch", "import", (), ("sketch",), True)
+_PROFILE = ("profile", "Profile", "import", (), ("profile",), False, True)
 for _k, _l, _tip, _cells in (
         ("solid", "3D Static Structural", "3D FEA: stress and displacement of a part or an assembly", [_SOLID]),
         ("thermal3d", "3D Thermal", "Heat conduction in a part or an assembly", [_SOLID]),
         ("fea", "2D Static Structural", "2D FEA of a sketch", [_SKETCH]),
         ("thermal", "2D Thermal", "Heat conduction in a sketch", [_SKETCH]),
         ("cfd", "2D Fluid Flow", "2D CFD of a sketch", [_SKETCH]),
-        ("beam", "1D Beam / Truss", "Beams and trusses from the lines of a sketch", [_SKETCH])):
+        ("beam", "1D Beam / Truss", "Beams and trusses from the lines of a sketch, with the profiles of their cross-sections", [_SKETCH, _PROFILE])):
     # the Setup of an analysis that a parametric study can run gives "analysis" (to the Parameters cell of a Parametric Study block); 3D Thermal has no study yet
     _setup = ("setup", "Setup", "data", ("analysis",)) if _k in ("solid", "fea", "thermal", "cfd", "beam") else ("setup", "Setup", "data")
     register(_k, _l, "Analysis Systems", _cells + [_setup, ("solution", "Solution", "compute"), ("results", "Results", "view")], _tip, "folder")
@@ -118,9 +124,11 @@ for _k, _l, _tip, _st in (
         ("trainer", "Trainer", "Training of models", "folder"), ("annotator", "Annotator", "Pictures with labels, for training", "folder"),
         ("truss", "Truss Generator", "The members of a truss from a sketch", ".truss")):
     register(_k, _l, "Component Tools", [("document", _l, "data")], _tip, _st)
-# A study takes ONE analysis (a wire from its Setup cell): the study itself is kept in that analysis's project folder (study/), as in the program's own windows.
-register("study", "Parametric Study", "Design Exploration", [("setup", "Parameters", "import", (), ("analysis",), True), ("solution", "Study", "compute"), ("results", "Results", "view")],
-         "Runs an analysis again and again with other values of its parameters", "")
+# A study takes any number of wires into its Parameters cell: the dimensions of Parts (they change the geometry of every analysis that works on that Part) and the Setup of analyses
+# (their own inputs; the outputs recorded come from every analysis wired).  It needs at least one analysis.  The study itself is kept in the study block.
+register("study", "Parametric Study", "Design Exploration",
+         [CellSpec("setup", "Parameters", "import", (), ("analysis", "dimensions"), True, True, ("analysis",)), ("solution", "Study", "compute"), ("results", "Results", "view")],
+         "Runs the analyses wired into it again and again with other values of their inputs and of the dimensions of the parts they use", "")
 
 
 # ---------------------------------------------------------------------------------------------------------------------------- the project
@@ -249,6 +257,17 @@ class Project:
     def incoming(self, nid, key):
         return next((k for k in self.links if k.b == nid and k.b_cell == key), None)
 
+    def incoming_all(self, nid, key):
+        """Every wire into a cell, in the order they were made (a cell that takes one wire has at most one)."""
+        return [k for k in self.links if k.b == nid and k.b_cell == key]
+
+    def link_stamps(self, nid, key):
+        """What an import cell depends on right now: the stamp of the cell its wire comes from ({"link": stamp}), or of every one of its wires ({"links": {"A:cell": stamp}})."""
+        ks = self.incoming_all(nid, key)
+        if self.node(nid).spec.cell(key).many:
+            return {"links": {f"{k.a}:{k.a_cell}": self.cell(k.a, k.a_cell)["stamp"] for k in ks}} if ks else {}
+        return {"link": self.cell(ks[0].a, ks[0].a_cell)["stamp"]} if ks else {}
+
     def outgoing(self, nid, key=None):
         return [k for k in self.links if k.a == nid and (key is None or k.a_cell == key)]
 
@@ -271,7 +290,10 @@ class Project:
             return f"{nb.cell_name(b_cell)} ({cb.label}) does not take anything from another node."
         if not set(ca.provides) & set(cb.accepts):
             return (f"{na.cell_name(a_cell)} gives {' / '.join(ca.provides)}, but {nb.cell_name(b_cell)} takes {' / '.join(cb.accepts)}.")
-        if self.incoming(b, b_cell) is not None:
+        if cb.many:
+            if any(k.a == a and k.a_cell == a_cell for k in self.incoming_all(b, b_cell)):
+                return f"{na.cell_name(a_cell)} is wired into {nb.cell_name(b_cell)} already."
+        elif self.incoming(b, b_cell) is not None:
             return f"{nb.cell_name(b_cell)} already has a source: remove that link first."
         if self.reaches(b, a):
             return "That link would make a loop: the first node already depends on the second."
@@ -334,8 +356,7 @@ class Project:
     def mark_refreshed(self, nid, key):
         """An import cell has taken the data of its source (or of its own, when it has no link)."""
         n, c = self.node(nid), self.cell(nid, key)
-        k = self.incoming(nid, key)
-        c["seen"] = {"link": self.cell(k.a, k.a_cell)["stamp"]} if k else {}
+        c["seen"] = self.link_stamps(nid, key)
         c["stamp"] += 1
         c["ready"] = True
         c["failed"], c["failed_deps"] = "", {}
@@ -362,8 +383,7 @@ class Project:
         """What the cell depends on right now: the source stamp of an import cell, the stamps of the cells before a compute cell."""
         n = self.node(nid)
         if n.spec.cell(key).role == "import":
-            k = self.incoming(nid, key)
-            return {"link": self.cell(k.a, k.a_cell)["stamp"]} if k else {}
+            return self.link_stamps(nid, key)
         return self.dep_stamps(nid, key)
 
     def dep_stamps(self, nid, key):
@@ -386,12 +406,15 @@ class Project:
         if cs.role == "data":
             return OK if c["ready"] else INCOMPLETE
         if cs.role == "import":
-            k = self.incoming(nid, key)
-            if k is None:
+            ks = self.incoming_all(nid, key)
+            if not ks:
                 return OK if c["ready"] and not cs.needs_link else INCOMPLETE
-            if self.status(k.a, k.a_cell) in (INCOMPLETE, FAILED) or not self.cell(k.a, k.a_cell)["ready"]:
+            if cs.needs_any and not self.has_wire_of(ks, cs.needs_any):
                 return INCOMPLETE
-            if not c["ready"] or c["seen"].get("link") != self.cell(k.a, k.a_cell)["stamp"]:
+            for k in ks:
+                if self.status(k.a, k.a_cell) in (INCOMPLETE, FAILED) or not self.cell(k.a, k.a_cell)["ready"]:
+                    return INCOMPLETE
+            if not c["ready"] or c["seen"] != self.link_stamps(nid, key):
                 return REFRESH
             return OK
         i = sp.index(key)
@@ -410,6 +433,15 @@ class Project:
         if any(s in (REFRESH, UPDATE) for s in before):
             return UPDATE
         return OK
+
+    def has_wire_of(self, links, kinds):
+        """True when one of the wires comes from a cell that gives one of `kinds`."""
+        for k in links:
+            n = self.nodes.get(k.a)
+            c = n.spec.cell(k.a_cell) if n is not None and n.spec is not None else None
+            if c is not None and set(c.provides) & set(kinds):
+                return True
+        return False
 
     def statuses(self, nid):
         n = self.node(nid)
@@ -495,11 +527,14 @@ class Project:
         if cs.role == "data":
             return f"{cs.label} of '{n.title}' is not set up yet."
         if cs.role == "import":
-            k = self.incoming(nid, key)
-            if k is None:
+            ks = self.incoming_all(nid, key)
+            if not ks:
                 if cs.needs_link:
                     return f"{cs.label} of '{n.title}' needs a wire from the {'/'.join(cs.accepts)} it takes."
                 return f"{cs.label} of '{n.title}' has no source: link it to a node, or import one in its editor."
+            if cs.needs_any and not self.has_wire_of(ks, cs.needs_any):
+                return f"{cs.label} of '{n.title}' needs a wire from the Setup cell of an analysis: a study records the outputs of the analyses it runs."
+            k = next((x for x in ks if self.status(x.a, x.a_cell) in (INCOMPLETE, FAILED) or not self.cell(x.a, x.a_cell)["ready"]), ks[0])
             return f"The source {self.nodes[k.a].cell_name(k.a_cell)} ('{self.nodes[k.a].title}') is not ready."
         i = n.spec.index(key)
         for p in n.spec.cells[:i]:
@@ -537,9 +572,10 @@ class Project:
                     why = f"{na.cell_name(k.a_cell)} -> {nb.cell_name(k.b_cell)} carries nothing both ends know"
             if why:
                 out.append(why[0].upper() + why[1:] + ".")
-            if (k.b, k.b_cell) in seen:
-                out.append(f"{k.b}.{k.b_cell} has more than one source.")
-            seen.add((k.b, k.b_cell))
+            many = na is not None and nb is not None and nb.spec is not None and nb.spec.cell(k.b_cell) is not None and nb.spec.cell(k.b_cell).many
+            if (k.b, k.b_cell, k.a, k.a_cell) in seen if many else (k.b, k.b_cell) in seen:
+                out.append(f"{k.b}.{k.b_cell} has more than one source." if not many else f"{k.a}.{k.a_cell} is wired into {k.b}.{k.b_cell} twice.")
+            seen.add((k.b, k.b_cell, k.a, k.a_cell) if many else (k.b, k.b_cell))
         if any(k.a in self.nodes and k.b in self.nodes and self.reaches(k.b, k.a) for k in self.links):
             out.append("The links make a loop.")
         return out

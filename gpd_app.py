@@ -383,7 +383,8 @@ class AppShell(QMainWindow):
         add(fm, "New Assembly", self.new_assembly, "Ctrl+Shift+N")
         kinds = addons.tab_kinds()
         for kind, spec in kinds.items():
-            add(fm, "New " + spec.get("label", kind), lambda k=kind: self.new_addon_tab(k))
+            if not addons.lives_in_workbench(kind):                                     # (a simulation is made in the Workbench)
+                add(fm, "New " + spec.get("label", kind), lambda k=kind: self.new_addon_tab(k))
         self.addon_commands(fm, "file.new", add)                                     # what add-ons put with the New entries
         fm.addSeparator()
         add(fm, "Open...", self.open_dialog, "Ctrl+O")
@@ -404,15 +405,11 @@ class AppShell(QMainWindow):
         fm.addSeparator()
         self.acts["close"] = add(fm, "Close Tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
         add(fm, "Exit", self.close)
-        self.add_acts = {}
-        if ext.present("simulation") or ext.present("render") or ext.commands("add"):          # only when an add-on has something to add
+        if ext.present("render") or ext.commands("add"):                       # only when an add-on has something to add
             am = mb.addMenu("&Add")
             if ext.present("render"):
                 add(am, "Visualize: Preview / Render (lit view, pictures and videos)", lambda: self.add_render())
                 am.addSeparator()
-            if ext.present("simulation"):
-                for kind, text in (("beam", "1D FEA (frames and trusses) - of a part"), ("fea", "2D FEA"), ("cfd", "2D CFD")):
-                    self.add_acts[kind] = add(am, text, lambda k=kind: self.add_sim(k))
             if ext.commands("add") and am.actions():
                 am.addSeparator()
             self.addon_commands(am, "add", add)
@@ -556,6 +553,8 @@ class AppShell(QMainWindow):
                {"text": "Open...", "fn": self.open_dialog, "tip": "A part, an assembly, a STEP file or a file of an add-on  (Ctrl+O)"},
                {"text": "Open Project Folder...", "fn": self.open_project_folder_dialog, "tip": "The project folder of a simulation, a truss or another add-on"}]
         for kind, spec in addons.tab_kinds().items():
+            if addons.lives_in_workbench(kind):
+                continue
             out.append({"text": "New " + spec.get("label", kind), "fn": lambda k=kind: self.new_addon_tab(k), "group": "addon",
                         "tip": addons.info(spec["aid"])["name"] + " add-on"})
         for c in ext.commands("file.new"):
@@ -920,28 +919,6 @@ class AppShell(QMainWindow):
         import addons_dialog
         addons_dialog.AddonsDialog(self).exec()
 
-    def add_sim(self, kind):
-        """A 1D FEA / 2D FEA / 2D CFD container for the part or assembly that is on screen."""
-        if not self.need_addon("simulation", "A simulation"):
-            return None
-        import sim_tab
-        src = self.cur()
-        if isinstance(src, sim_tab.SimWindow):                # from a simulation: another new one, offering the same original when it is open
-            p = src.src.get("path")
-            i = self.find_tab(p) if p else None
-            src = self.tabs.widget(i) if i is not None else None
-            if src is None:
-                return self.add_tab(sim_tab.SimWindow(kind, shell=self))
-        is_asm = src is not None and hasattr(src, "asm")
-        is_part = isinstance(src, pm_app.MainWindow)
-        if not (is_asm or is_part):
-            QMessageBox.information(self, "Add", "Open a part or an assembly first: a simulation works on its sketch or on a slice of it.")
-            return None
-        if kind == "beam" and is_asm:
-            QMessageBox.information(self, "Add", "1D FEA works on a sketch of a part. An assembly can only be used for 2D, through a slice.")
-            return None
-        return self.add_tab(sim_tab.SimWindow(kind, shell=self, src_tab=src))
-
     def add_render(self):
         """A Visualize tab for the part or assembly that is on screen, saved or not (or for the model of the Visualize tab that is on screen).
         With nothing to show - no part on screen, or a part without a solid yet - the tab opens on its guidance page, which offers the import."""
@@ -1001,6 +978,30 @@ class AppShell(QMainWindow):
             w.title = lambda w=w, name=name: os.path.basename(w.path.rstrip("/\\")) if getattr(w, "path", None) else name
         return self.add_tab(w)
 
+    def workbench_tab(self, ask=True):
+        """The Workbench project that takes what is opened: the one on screen, else the first one open; with none open (and ask) a new one after a question.
+        -> the tab or None."""
+        import wb_tab
+        cur = self.tabs.currentWidget()
+        if isinstance(cur, wb_tab.WorkbenchTab):
+            return cur
+        for i in range(self.tabs.count()):
+            if isinstance(self.tabs.widget(i), wb_tab.WorkbenchTab):
+                return self.tabs.widget(i)
+        if not ask:
+            return None
+        r = QMessageBox.question(self, "Workbench", "Simulations and their files live in a Workbench project, and none is open.\n\nStart a new Workbench project and put it in?")
+        return self.new_addon_tab("workbench", None) if r == QMessageBox.StandardButton.Yes else None
+
+    def open_in_workbench(self, path):
+        """A simulation file or project folder that is opened (File > Open, a drop, Open Recent) becomes a block of the Workbench project (wb_import): its setup and
+        results, nothing else - the geometry comes from a wire.  -> the Workbench tab, or None when it was not taken."""
+        w = self.workbench_tab()
+        if w is None:
+            return None
+        self.tabs.setCurrentWidget(w)
+        return w if w.import_file(path) is not None else None
+
     def open_project_folder_dialog(self):
         import recent
         folder = QFileDialog.getExistingDirectory(self, "Open Project Folder", recent.last_folder())
@@ -1025,6 +1026,8 @@ class AppShell(QMainWindow):
                 if i is not None:
                     self.tabs.setCurrentIndex(i)
                     return self.tabs.widget(i)
+                if addons.in_workbench(kind) and not is_workspace_path(folder):
+                    return self.open_in_workbench(folder)
                 return self.new_addon_tab(kind, folder)
         aid = addons.project_hint(folder)
         if aid and not self._project_hint_busy:

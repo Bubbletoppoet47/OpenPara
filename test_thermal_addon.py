@@ -1,4 +1,4 @@
-"""The 2D Thermal dev add-on, loaded the real way (development add-on folder, next to the shipped Simulation add-on): File > New 2D Thermal, the extension
+"""The 2D Thermal dev add-on, loaded the real way (development add-on folder, next to the shipped Simulation add-on): the extension
 registers the .gph project kind at start-up, Open Project Folder finds a thermal project by its marker and opens it in the thermal window, and a project
 saved from one shell opens in another."""
 import faulthandler; faulthandler.dump_traceback_later(280, exit=True)
@@ -31,7 +31,7 @@ assert sp.EXT["thermal"] == ".gph" and sp.kind_of_folder(os.path.join(UD, "nothi
 
 sh = gpd_app.AppShell()
 labels = [a.text() for a in sh.menuBar().actions()[0].menu().actions()]
-assert "New 2D Thermal" in labels, labels
+assert "New 2D Thermal" not in labels, labels                      # (a simulation is made as a block of the Workbench: no File > New for it)
 import thermal_tab as tt, sim_tab
 w = sh.new_addon_tab("thermal")
 assert isinstance(w, sim_tab.SimWindow) and w.kind == "thermal" and isinstance(w.tab, tt.ThermalTab) and sh.tabs.tabText(sh.tabs.count() - 1).startswith("2D Thermal")

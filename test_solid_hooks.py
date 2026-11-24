@@ -45,7 +45,7 @@ w = solid_tab.SolidWindow(threaded=False)
 ok("dims" in w.setup and w.setup["dims"] == {} and "supports" in w.setup and "adapt" in w.setup, "a new 3D FEA setup has the geometry keys and the elasticity ones")
 ok(all(s_.key.startswith("solid/") for s_ in w.sections) and len(w.sections) == 6, "the six sections are kept under the window's own name")
 ok(w.create_project(os.path.join(T, "bar_hooks")), "project made")
-ok(w.src_lbl.text().startswith("<b>3D FEA</b> project <b>bar_hooks.gpv</b>"), f"the project bar names the window: {w.src_lbl.text()[:60]}")
+ok(w.src_lbl.text().startswith("<b>3D FEA</b>") and "project" not in w.src_lbl.text(), f"the bar names the window and says nothing more until a geometry is wired in: {w.src_lbl.text()[:60]}")
 
 # --- the part's own material fills the boxes (the default material is another one: nothing here is the default)
 ASKED.clear()

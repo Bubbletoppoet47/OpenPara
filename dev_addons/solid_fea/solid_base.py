@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, Q
                              QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem,
                              QVBoxLayout, QWidget)
 
+import addons
 import ext
 import sim_project
 import sim_tags
@@ -137,7 +138,6 @@ class SolidBase(QWidget):
         self.job = None
         self.last_tracker = None
         self.saved_sig = None
-        self.candidate = None
         self.pending_dims = False
         self.events = []                        # [(clock time, 'say' | 'error', full text)]: what the window said, for a diagnostics report (the last EVENT_LIMIT)
         self.job_log = []                       # [{'title', 'seconds', 'ok', 'stages': [(key, size, seconds)]}] of the jobs that ran, the last JOB_LIMIT
@@ -148,17 +148,9 @@ class SolidBase(QWidget):
         self.src_lbl = QLabel()
         self.src_lbl.setWordWrap(True)
         bar.addWidget(self.src_lbl, 1)
-        self.b_new = QPushButton("New project...")
-        self.b_new.clicked.connect(self.new_project)
-        self.b_import = QPushButton("Import source...")
-        self.b_import.setToolTip("Copies a part into the project folder (an open part tab, or a .gpd file). The simulation works on the copy.")
-        self.b_import.clicked.connect(self.import_source)
-        self.b_refresh = QPushButton("Update from original")
-        self.b_refresh.clicked.connect(self.refresh)
         self.b_save = QPushButton("Save")
         self.b_save.clicked.connect(lambda: self.save())
-        for b in (self.b_new, self.b_import, self.b_refresh, self.b_save):
-            bar.addWidget(b)
+        bar.addWidget(self.b_save)
         lay.addLayout(bar)
         self.status_lbl = QLabel("")
         self.status_lbl.setStyleSheet("color:#707070;")
@@ -205,7 +197,7 @@ class SolidBase(QWidget):
     def build_geometry_section(self):
         # --- 1 geometry
         v = self.sec(1, "Geometry", True, summary=lambda: self.geo_lbl.text().split("\n")[0][:90])
-        self.geo_lbl = QLabel("No part yet: press Import source...")
+        self.geo_lbl = QLabel("No geometry.")
         self.geo_lbl.setWordWrap(True)
         v.addWidget(self.geo_lbl)
         self.asm_box = QWidget()                                     # an assembly: what is bonded to what, what is wrong, the bond distance
@@ -1008,8 +1000,6 @@ class SolidBase(QWidget):
     def enable_buttons(self):
         have = self.geom is not None
         busy = self.job is not None
-        self.b_import.setEnabled(self.project_ok() and not busy)
-        self.b_refresh.setEnabled(self.source is not None and not busy)
         self.b_save.setEnabled(have)
         self.b_mesh.setEnabled(have and not busy)
         self.b_solve.setEnabled(have and not busy)
@@ -1027,12 +1017,8 @@ class SolidBase(QWidget):
         return bool(self.path) and sim_project.kind_of_folder(self.path) == self.kind
 
     def show_source(self):
-        if not self.project_ok():
-            self.src_lbl.setText(f"<b>{self.label}</b> - press <b>New project...</b>: the project is a folder ({sim_project.ext_of(self.kind)}) with its own copy of the "
-                                 "part or assembly.")
-            return
-        if self.source is None:
-            self.src_lbl.setText(f"<b>{self.label}</b> project <b>{self.title()}</b> - press <b>Import source...</b> to copy a part or an assembly into it.")
+        if not self.project_ok() or self.source is None:
+            self.src_lbl.setText(f"<b>{self.label}</b>")              # nothing wired into the Geometry cell: nothing to say (the cell shows '?')
             return
         what = "assembly" if self.src.get("type") == "asm" else "part"
         self.src_lbl.setText(f"<b>{self.label}</b> of the {what} <b>{self.src.get('name') or '?'}</b> (the copy in the project)")
@@ -1053,83 +1039,18 @@ class SolidBase(QWidget):
         self.path = os.path.abspath(path)
         self.show_source()
         self.say(f"Project folder {self.path} made.")
-        c = self.candidate
-        if c is not None:
-            try:
-                c.title()
-                return self.import_tab(c)
-            except RuntimeError:
-                pass
         self.enable_buttons()
         return True
 
-    def open_tabs(self):
-        out = []
-        if self.shell is None:
-            return out
-        for i in range(self.shell.tabs.count()):
-            w = self.shell.tabs.widget(i)
-            if hasattr(w, "asm"):
-                out.append(("assembly - " + w.title(), w))
-            elif getattr(w, "doc", None) is not None and hasattr(w.doc, "features"):
-                out.append(("part - " + w.title(), w))
-        return out
-
-    def import_source(self):
-        if not self.project_ok() and not self.new_project():
-            return False
-        if self.source is not None and self.candidate is not None:
-            pass
-        from PyQt6.QtWidgets import QDialog as _D
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Import source")
-        lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel("Copy this part or assembly into the project (an assembly is solved as fully bonded parts):"))
-        lst = QListWidget()
-        tabs = self.open_tabs()
-        for text, _w in tabs:
-            lst.addItem(text)
-        if tabs:
-            lst.setCurrentRow(0)
-        lay.addWidget(lst)
-        pick = {"file": None}
-        b_file = QPushButton("Browse for a .gpd or .gpa file...")
-        lay.addWidget(b_file)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        lay.addWidget(bb)
-        bb.accepted.connect(dlg.accept)
-        bb.rejected.connect(dlg.reject)
-
-        def browse():
-            f, _ = QFileDialog.getOpenFileName(dlg, "Part or assembly to copy", os.path.dirname(self.src.get("path") or ""), "Part or assembly (*.gpd *.gpa)")
-            if f:
-                pick["file"] = f
-                dlg.accept()
-        b_file.clicked.connect(browse)
-        if not dlg.exec():
-            return False
-        if pick["file"]:
-            return self.import_file(pick["file"])
-        row = lst.currentRow()
-        return self.import_tab(tabs[row][1]) if row >= 0 else False
-
-    def import_tab(self, w):
-        p = getattr(w, "path", None)
-        if hasattr(w, "asm"):
-            if not p:
-                QMessageBox.information(self, "Import source", "Save the assembly once first: its parts are found from its file.")
-                return False
-            return self.do_import(p, w.asm.to_json(), name=os.path.splitext(os.path.basename(p))[0])
-        return self.do_import(p, w.doc.to_json(), name=(os.path.splitext(os.path.basename(p))[0] if p else w.title()))
-
     def import_file(self, path):
+        """Copies a part / assembly FILE into the project (no dialog: the Workbench copies the wired block in, see wb_analysis.refresh; tests use this)."""
         return self.do_import(path, None)
 
     def do_import(self, orig, text, name=None):
         if not self.project_ok():
             return False
         if self.geom is not None and self.has_conditions():
-            if QMessageBox.question(self, "Import source", "Importing a source replaces the copy in the project. Supports and loads are kept when "
+            if QMessageBox.question(self, "Geometry", "Importing a source replaces the copy in the project. Supports and loads are kept when "
                                     "their faces are found in the new part; the mesh and result are cleared. Continue?") != QMessageBox.StandardButton.Yes:
                 return False
         try:
@@ -1137,7 +1058,7 @@ class SolidBase(QWidget):
             m, missing_parts = sim_project.import_source(self.path, orig_path=fake, text=text, name=name)
             src = sim_source.open_source(sim_project.source_file(self.path, m))
         except (sim_project.ProjectError, sim_source.SourceError) as ex:
-            QMessageBox.warning(self, "Import source", str(ex))
+            QMessageBox.warning(self, "Geometry", str(ex))
             return False
         self.source = src
         self.src = {"type": src.type, "path": orig, "name": m["source"]["name"]}
@@ -2039,7 +1960,7 @@ class SolidBase(QWidget):
         return w
 
     def refresh_study_button(self):
-        on = bool(ext.hooks("sim_study"))
+        on = bool(ext.hooks("sim_study")) and not addons.in_workbench(self.kind)        # (with the Workbench a study is a block of it, wired to this analysis)
         self.study_box.setVisible(on)
         if not on:
             return
@@ -2057,7 +1978,7 @@ class SolidBase(QWidget):
             QMessageBox.information(self, "Parametric study", "The Parametric Studies add-on is not loaded. Install or enable it, then restart.")
             return None
         if not self.project_ok() or self.geom is None:
-            QMessageBox.information(self, "Parametric study", "Press 'New project...' and import a part first: the study is saved in the project.")
+            QMessageBox.information(self, "Parametric study", "This simulation has no geometry yet: wire a Part into its Geometry cell first.")
             return None
         if self.is_dirty():
             if not self.save():

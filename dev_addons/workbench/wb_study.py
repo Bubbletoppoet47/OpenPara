@@ -1,42 +1,34 @@
 """wb_study.py - the Parametric Study block of the workbench.
 
-A study runs an analysis again and again with other values of its inputs (the Parametric Studies add-on: study/ in the analysis's project folder).  In the workbench a study
-block is wired to ONE analysis: the wire comes from the analysis's Setup cell into the study's Parameters cell.  Double-click opens the study window of that analysis (the analysis's
-own tab is opened behind it when it is not open: the study works on it).
+A study runs analyses again and again with other values of their inputs (the Parametric Studies add-on).  In the workbench a study block takes ANY NUMBER of wires into its
+Parameters cell:  the Setup of an analysis (its inputs, and the outputs that are recorded) and the Part cell of a Part (its dimensions; a change of a dimension flows through every
+analysis that works on that Part).  It needs at least one analysis.  wb_multi.py has the details.
 
-The cells:   Parameters (import)  the inputs and outputs of the wired analysis; Refresh reads them again.  It says "refresh" when the Setup of the analysis changed.
+The cells:   Parameters (import)  the inputs and outputs of everything wired in; Refresh reads them again.  It says "refresh" when a wired block changed.
              Study (compute)      Update runs every design point of the table (the window asks first when there are many) and waits for the end.
              Results (view)       opens the study window.
-Where the study is kept: in the project folder of the analysis, as everywhere else in the program (study/study.json, the table of design points and the outputs of every case).  The
-analysis block takes it into the project file with the rest of its folder - WITHOUT the full result of each case (study/cases/), which Update works out again.  So removing the
-study block does not delete the study (wire a new block to the analysis to see it again), and a study made in the analysis's own tab is saved too.
+Where the study is kept: in the block (the folder study/: the table of design points, the outputs of every case, the studies of the picker), WITHOUT the full result of each case
+(study/cases/), which Update works out again.  The analyses are opened behind the study window (it runs them).
 """
 import hashlib
 import json
 import os
+import shutil
 import time
 
 import wb_nodes as nodes
+import wb_project as wp
 
 WAIT_LIMIT = 4 * 3600.0                                       # seconds an Update waits for a study to finish
+NEEDS = "Wire the Setup cell of an analysis into Parameters first: a study runs the analyses wired into it again and again."
 
 
-def analysis_of(tab, node):
-    """(analysis node, its adapter), or the text that says what is missing."""
-    k = tab.project.incoming(node.id, "setup")
-    if k is None:
-        return "Wire the Setup cell of an analysis into Parameters first: a study runs one analysis again and again."
-    src = tab.project.node(k.a)
-    a = nodes.adapter_for(src.kind)
-    if a is None or not hasattr(a, "open_editor"):
-        return f"'{src.title}' cannot be opened here."
-    return src, a
+def pack(folder):
+    """{relative path: stored file} of the study folder without the full result of each case."""
+    return wp.pack_folder(folder, skip=lambda rel: rel.endswith(".tmp") or rel.endswith(".new") or (rel.startswith("study/") and "/cases/" in rel))
 
 
-def definition_digest(folder):
-    """A fingerprint of what the person set up in a study (the inputs that vary, the design points, the outputs, the early-exit conditions, the list of studies), NOT of what a run
-    recorded (the cases, run_meta) or of what the window remembers (the last fill): a run must not make its own study say 'update'."""
-    h = hashlib.sha1()
+def walk_study(folder):
     sd = os.path.join(folder, "study")
     for root, dirs, fs in os.walk(sd):
         dirs.sort()
@@ -45,17 +37,38 @@ def definition_digest(folder):
             rel = os.path.relpath(full, sd).replace(os.sep, "/")
             if "cases/" in rel or rel.endswith(".tmp"):
                 continue
-            try:
-                with open(full, "rb") as f:
-                    raw = f.read()
-                if fn == "study.json":
-                    j = json.loads(raw.decode("utf-8"))
-                    for k in ("cases", "run_meta", "fill"):
-                        j.pop(k, None)
-                    raw = json.dumps(j, sort_keys=True).encode("utf-8")
-            except (OSError, ValueError):
-                raw = b""
-            h.update(rel.encode() + b"\0" + raw + b"\1")
+            yield full, fn, rel
+
+
+def files_digest(folder):
+    """A fingerprint of everything the block keeps of the study (the definition AND what a run recorded; not the full result of each case)."""
+    h = hashlib.sha1()
+    for full, _fn, rel in walk_study(folder):
+        try:
+            with open(full, "rb") as f:
+                raw = f.read()
+        except OSError:
+            raw = b""
+        h.update(rel.encode() + b"\0" + raw + b"\1")
+    return h.hexdigest()
+
+
+def definition_digest(folder):
+    """A fingerprint of what the person set up in a study (the inputs that vary, the design points, the outputs, the early-exit conditions, the list of studies), NOT of what a run
+    recorded (the cases, run_meta) or of what the window remembers (the last fill): a run must not make its own study say 'update'."""
+    h = hashlib.sha1()
+    for full, fn, rel in walk_study(folder):
+        try:
+            with open(full, "rb") as f:
+                raw = f.read()
+            if fn == "study.json":
+                j = json.loads(raw.decode("utf-8"))
+                for k in ("cases", "run_meta", "fill"):
+                    j.pop(k, None)
+                raw = json.dumps(j, sort_keys=True).encode("utf-8")
+        except (OSError, ValueError):
+            raw = b""
+        h.update(rel.encode() + b"\0" + raw + b"\1")
     return h.hexdigest()
 
 
@@ -73,46 +86,69 @@ class StudyAdapter(nodes.Adapter):
             return False, "This block needs the add-on 'Parametric Studies', which is not installed or is switched off (Add-ons)."
         return True, ""
 
+    # ---- the folder in the workspace
+    def state(self, tab, node):
+        return tab.node_state.setdefault(node.id, {})
+
+    def folder_of(self, tab, node):
+        return os.path.join(nodes.workspace_of(tab, node), nodes.safe_stem(node.title) + ".study")
+
+    def materialize(self, tab, node):
+        """Writes the block's study folder to the workspace (an empty one when it has none yet); -> the folder."""
+        st = self.state(tab, node)
+        f = self.folder_of(tab, node)
+        shutil.rmtree(f, ignore_errors=True)
+        files = node.data.get("files")
+        if files:
+            wp.unpack_folder(files, f)
+        else:
+            os.makedirs(f, exist_ok=True)
+        st["folder"] = f
+        return f
+
     def remember(self, tab, node):
         """Notes the study as it is now: what is set up from here on that differs makes the Study cell say update."""
-        got = analysis_of(tab, node)
-        if isinstance(got, str):
-            return
-        src = got[0]
-        folder = tab.node_state.get(src.id, {}).get("folder")
-        if folder:
-            tab.node_state.setdefault(node.id, {})["def"] = definition_digest(folder)
+        st = self.state(tab, node)
+        folder = st.get("folder")
+        if folder and os.path.isdir(folder):
+            st["def"] = definition_digest(folder)
 
     # ---- opening
+    def wired(self, tab, node):
+        return tab.project.has_wire_of(tab.project.incoming_all(node.id, "setup"), ("analysis",))
+
     def open_study(self, tab, node, front=True):
-        """The study window of the wired analysis (made when it is not open).  -> the widget, or None (the reason is said)."""
+        """The study window of the block (made when it is not open; it opens the analyses wired in behind it).  -> the widget, or None (the reason is said)."""
         w = tab.editor_of(node.id)
         h = tab.host
         if w is not None:
             if front and h is not None and hasattr(h, "tabs"):
                 h.tabs.setCurrentWidget(w)
             return w
-        got = analysis_of(tab, node)
-        if isinstance(got, str):
-            tab.say(got)
+        if not self.wired(tab, node):
+            tab.say(NEEDS)
             return None
-        src, a = got
+        import study_tab
+        import wb_multi
         front_w = h.tabs.currentWidget() if h is not None and hasattr(h, "tabs") else None
-        sim = tab.editor_of(src.id)
-        if sim is None:
-            sim = a.open_editor(tab, src, front=False)
-        if sim is None:
+        tab.sync_editors()
+        f = self.materialize(tab, node)
+        host = wb_multi.StudyHost(tab, node, f)
+        try:
+            w = study_tab.StudyTab(host, threaded=True)
+        except Exception as ex:                                   # noqa: BLE001
+            tab.say(f"The study could not be opened: {type(ex).__name__}: {ex}")
             return None
-        if not callable(getattr(sim, "open_study", None)):
-            tab.say(f"'{src.title}' has no parametric study.")
-            return None
-        w = sim.open_study()                                      # saves the analysis when it changed, and makes or shows its study tab
-        if w is None:
-            return None
-        tab.adopt_editor(node, w)
+        if not os.path.isfile(os.path.join(f, "study", "study.json")):
+            w.save()
+        w.host_ = host
+        tab.show_editor(node, w)
+        self.state(tab, node)["base"] = files_digest(f)
         self.remember(tab, node)
-        if not front and front_w is not None and h is not None:
+        if not front and front_w is not None and h is not None and hasattr(h, "tabs"):
             h.tabs.setCurrentWidget(front_w)
+        elif front and h is not None and hasattr(h, "tabs"):
+            h.tabs.setCurrentWidget(w)
         return w
 
     def open_cell(self, tab, node, key):
@@ -120,7 +156,7 @@ class StudyAdapter(nodes.Adapter):
 
     # ---- reading back
     def sync(self, tab, node):
-        """What was done in the study window is saved into the analysis's folder, and the analysis block takes it."""
+        """What was done in the study window is saved into the study folder, and the block takes it."""
         w = tab.editor_of(node.id)
         if w is None:
             return None
@@ -130,27 +166,27 @@ class StudyAdapter(nodes.Adapter):
         except Exception as ex:                                   # noqa: BLE001
             tab.say(f"'{node.title}' could not be saved into the project: {ex}")
             return None
-        got = analysis_of(tab, node)
-        if isinstance(got, str):
+        st = self.state(tab, node)
+        folder = st.get("folder")
+        if not folder or not os.path.isdir(folder):
             return None
-        src, a = got
-        if hasattr(a, "take_study"):
-            a.take_study(tab, src)
-        folder = tab.node_state.get(src.id, {}).get("folder")
-        st = tab.node_state.setdefault(node.id, {})
-        if folder:
-            d = definition_digest(folder)
-            old = st.get("def")
-            st["def"] = d
-            if old is not None and d != old:
-                return "setup"                                     # the study was set up differently: what it recorded is out of date
+        d = files_digest(folder)
+        if d != st.get("base"):
+            node.data["files"] = pack(folder)
+            st["base"] = d
+            tab.project.changed()                                 # (the file needs saving; whether a cell changed is told below)
+        dd = definition_digest(folder)
+        old = st.get("def")
+        st["def"] = dd
+        if old is not None and dd != old:
+            return "setup"                                        # the study was set up differently: what it recorded is out of date
         return None
 
     def refresh(self, tab, node, key):
-        """Parameters: the window reads the inputs and outputs of the analysis again."""
+        """Parameters: the window reads the inputs and outputs of everything wired in again."""
         if key != "setup":
             return None
-        if tab.project.incoming(node.id, "setup") is None:
+        if not tab.project.incoming_all(node.id, "setup"):
             return "There is no wire into this cell: nothing to refresh from."
         w = tab.editor_of(node.id)
         if w is not None:
@@ -176,7 +212,7 @@ class StudyAdapter(nodes.Adapter):
             if not w.data.rows:
                 return "The table of design points is empty: add rows in the study first."
             if w.run_all() is False and not w.running():
-                return "The study did not start (it asked first, and was not confirmed, or the analysis is not ready)."
+                return "The study did not start (it asked first, and was not confirmed, or an analysis is not ready)."
             t0 = time.monotonic()
             while w.running():
                 QApplication.processEvents()
@@ -203,6 +239,10 @@ class StudyAdapter(nodes.Adapter):
                 w.save()
         except Exception:                                         # noqa: BLE001
             pass
+        try:
+            self.sync(tab, node)
+        except Exception:                                         # noqa: BLE001
+            pass
         if h is not None and hasattr(h, "tabs"):
             i = h.tabs.indexOf(w)
             if i >= 0:
@@ -211,6 +251,7 @@ class StudyAdapter(nodes.Adapter):
 
     def closed(self, tab, node):
         self.close_editor(tab, node)
+        tab.node_state.pop(node.id, None)
 
 
 nodes.register(StudyAdapter())

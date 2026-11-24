@@ -123,7 +123,8 @@ os.makedirs(os.path.dirname(pa))
 make_part(pa)
 for kind in ("fea", "beam", "cfd"):
     w = sim_tab.SimWindow(kind)
-    assert not w.b_import.isEnabled() and not w.b_refresh.isEnabled(), "nothing can be imported before the project exists"
+    assert not any(hasattr(w, a) for a in ("b_import", "b_refresh", "b_new")) and not hasattr(w, "import_source"), "there is no Import source: the geometry comes from a wire"
+    assert w.stack.currentWidget() is w.empty and not w.empty.buttons and not w.empty.title.text() and w.empty.text.isHidden(), "no geometry: an empty page, no instructions"
     assert not w.project_ok() and w.source_widget() is None and [i for i, _n in w.source_items() if not str(i).startswith("__")] == []
     assert w.create_project(os.path.join(T, f"tab_{kind}"))
     assert w.path.endswith(sp.ext_of(kind)) and w.project_ok()

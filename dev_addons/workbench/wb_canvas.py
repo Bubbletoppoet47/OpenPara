@@ -3,7 +3,8 @@
 It behaves like the Circuits tab: blocks go anywhere and lock to a grid of 20; click and drag on empty canvas to draw a box that selects every block it touches (Ctrl+click
 adds one), and a selection moves as one; a wire stays on its two cells and finds its way again when a block is moved far away.  A block looks like a system of ANSYS
 Workbench: a bar with its letter, the name of the system, then its cells in rows (picture, name, and the mark that says whether the cell is up to date), and its own name
-under it.  The pictures are drawn here in OpenPara's colours.
+under it.  The look is that of Sheets: grey bevelled bar, the letter in a chip of the colour of the group, a gutter with the numbers of the rows, the pictures of the program's icon
+kit (wb_kit.py), navy wires with no arrowheads that run behind the dots.
 
 The canvas never changes the data of a node: it changes the Project (wb_project) - the places of the blocks, their names, the nodes that are added or removed, the links - and
 tells the window above it through signals (cell double-clicked, menu asked, message, edited).
@@ -24,12 +25,12 @@ NAME_H = 40.0
 CELL_H = 30.0
 CAP_H = 26.0
 GUTTER = 18.0
-PORT_R = 4.5
+PORT_R = 5.0
 PORT_HIT = 10.0
 MIME = "opara-wb-kind:"
-WIRE = QColor("#2a9d8f")
-SELECTED = QColor("#e76f51")
-BG = QColor("#fbfcfe")
+WIRE = QColor("#1f3a6e")                                    # a wire: navy, 2 px, no arrowhead
+SELECTED = QColor("#2f6fed")                                # a selected block or wire: blue
+BG = QColor("#ffffff")
 DOT = QColor("#d5dde8")
 
 
@@ -42,6 +43,22 @@ def _font(px, bold=False):
     f.setPixelSize(px)
     f.setBold(bold)
     return f
+
+
+def paint_dot(p, c, used, hot=False):
+    """The dot where a wire meets a cell: a navy disc in a white ring in a navy outline; hollow (a white disc) while nothing is wired; blue and larger while a wire being drawn
+    can end on it."""
+    p.save()
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    p.setPen(Qt.PenStyle.NoPen)
+    g = 1.5 if hot else 0.0
+    p.setBrush(SELECTED if hot else WIRE)
+    p.drawEllipse(c, PORT_R + 1 + g, PORT_R + 1 + g)
+    p.setBrush(QColor("#ffffff"))
+    p.drawEllipse(c, PORT_R + g, PORT_R + g)
+    p.setBrush(WIRE if used else QColor("#ffffff"))
+    p.drawEllipse(c, PORT_R - 2 + g, PORT_R - 2 + g)
+    p.restore()
 
 
 # ---------------------------------------------------------------------------------------------------------------------------- a block
@@ -126,6 +143,8 @@ class SystemItem(QGraphicsItem):
 
     # ---- the look
     def paint(self, p, opt, widget=None):
+        """The look of Sheets ("quiet header"): a grey bar with the letter of the system in a chip of the colour of its group, a gutter with the number of each row, the pictures of the
+        program's icon kit, a thin grey outline; a selected block has a blue ring round it.  The dots of the wires are drawn last, above the block and the wires."""
         sc = self.scene()
         prj = sc.project
         node = prj.nodes[self.nid]
@@ -137,77 +156,90 @@ class SystemItem(QGraphicsItem):
         sel = self.isSelected()
         grp = ic.GROUP_COLOR.get(sp.group, ic.GREY) if sp else ic.GREY
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(20, 40, 80, 30))
-        p.drawRoundedRect(body.translated(3, 4), 7, 7)
+        for dy, grow, a in ((2.0, 1.0, 14), (1.0, 0.5, 26)):                                     # a soft shadow below
+            p.setBrush(QColor(16, 32, 77, a))
+            p.drawRoundedRect(body.translated(0, dy).adjusted(-grow, -grow, grow, grow), 3 + grow, 3 + grow)
         clip = QPainterPath()
-        clip.addRoundedRect(body, 7, 7)
+        clip.addRoundedRect(body, 3, 3)
         p.save()
         p.setClipPath(clip)
         p.fillRect(body, QColor("#ffffff"))
-        p.fillRect(QRectF(0, 0, BLOCK_W, HEAD_H), grp)                                           # the bar with the letter
-        p.fillRect(QRectF(0, HEAD_H, GUTTER, H - HEAD_H), QColor("#eef2f9"))                    # the numbers of the rows
+        p.fillRect(QRectF(0, 0, BLOCK_W, HEAD_H), ic.HEAD)                                       # the bar
+        p.fillRect(QRectF(1, 1, BLOCK_W - 2, 1), QColor(255, 255, 255, 120))                     # its raised edge: light above (inside the outline), dark below
+        p.fillRect(QRectF(0, HEAD_H - 1, BLOCK_W, 1), QColor(0, 0, 0, 64))
+        p.fillRect(QRectF(0, HEAD_H, GUTTER, H - HEAD_H), QColor("#e9edf5"))                    # the numbers of the rows
+        p.fillRect(QRectF(GUTTER - 1, HEAD_H, 1, H - HEAD_H), QColor("#dde2ec"))
         p.restore()
+        # the bar: the letter in a chip of the colour of the group, the group on the right
+        f = _font(12, True)
+        fm = QFontMetrics(f)
+        chip = QRectF(4, 2, max(16.0, fm.horizontalAdvance(node.label) + 8.0), 16)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(grp)
+        p.drawRoundedRect(chip, 3, 3)
         p.setPen(QColor("#ffffff"))
-        p.setFont(_font(13, True))
-        p.drawText(QRectF(8, 0, 40, HEAD_H), int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), node.label)
-        p.setFont(_font(10))
-        p.setPen(QColor(255, 255, 255, 215))
-        p.drawText(QRectF(40, 0, BLOCK_W - 48, HEAD_H), int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight), sp.group if sp else "")
+        p.setFont(f)
+        p.drawText(chip, int(Qt.AlignmentFlag.AlignCenter), node.label)
+        g = _font(11)
+        g.setWeight(QFont.Weight.Medium)
+        p.setFont(g)
+        p.setPen(ic.INK)
+        p.drawText(QRectF(chip.right() + 6, 0, BLOCK_W - chip.right() - 14, HEAD_H), int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight), sp.group if sp else "")
         # the name of the system
         top = HEAD_H
-        p.setPen(QColor("#6a7790"))
+        p.setPen(QColor("#5a6577"))
         p.setFont(_font(10))
-        p.drawText(QRectF(0, top, GUTTER, NAME_H), int(Qt.AlignmentFlag.AlignCenter), "1")
+        p.drawText(QRectF(0, top, GUTTER - 1, NAME_H), int(Qt.AlignmentFlag.AlignCenter), "1")
         if self.hover == "name":
             p.fillRect(QRectF(GUTTER, top, BLOCK_W - GUTTER, NAME_H), QColor("#e6efff"))
-        ic.paint_kind(p, node.kind, QRectF(GUTTER + 8, top + 6, 28, 28))
-        p.setPen(QColor("#12223f"))
-        p.setFont(_font(12, True))
+        ic.paint_kind(p, node.kind, QRectF(GUTTER + 8, top + 7, 26, 26))
+        p.setPen(ic.INK)
+        p.setFont(_font(13, True))
         label = sp.label if sp else f"Unknown: {node.kind}"
         p.drawText(QRectF(GUTTER + 44, top, BLOCK_W - GUTTER - 50, NAME_H), int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
-                   QFontMetrics(_font(12, True)).elidedText(label, Qt.TextElideMode.ElideRight, int(BLOCK_W - GUTTER - 52)))
+                   QFontMetrics(_font(13, True)).elidedText(label, Qt.TextElideMode.ElideRight, int(BLOCK_W - GUTTER - 52)))
         # the cells
         sts = prj.statuses(self.nid)
         for i, c in enumerate(self.cells()):
             y = self.cell_y(i)
-            p.setPen(QPen(QColor("#dfe6f1"), 1))
-            p.drawLine(QPointF(0, y), QPointF(BLOCK_W, y))
-            bg = QColor("#e6efff") if self.hover == c.key else (QColor("#f4f8fe") if i % 2 else QColor("#ffffff"))
-            p.fillRect(QRectF(GUTTER, y + 0.5, BLOCK_W - GUTTER, CELL_H - 0.5), bg)
-            p.setPen(QColor("#6a7790"))
+            p.fillRect(QRectF(0, y, BLOCK_W, 1), QColor("#dde2ec"))
+            bg = QColor("#e6efff") if self.hover == c.key else (QColor("#f5f7fb") if i % 2 else QColor("#ffffff"))
+            p.fillRect(QRectF(GUTTER, y + 1, BLOCK_W - GUTTER, CELL_H - 1), bg)
+            p.setPen(QColor("#5a6577"))
             p.setFont(_font(10))
-            p.drawText(QRectF(0, y, GUTTER, CELL_H), int(Qt.AlignmentFlag.AlignCenter), str(i + 2))
-            ic.paint_cell(p, c.key, QRectF(GUTTER + 8, y + 6, 18, 18))
-            p.setPen(QColor("#1f2a3c"))
-            p.setFont(_font(12))
-            p.drawText(QRectF(GUTTER + 34, y, BLOCK_W - GUTTER - 64, CELL_H), int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), c.label)
-            ic.paint_status(p, sts.get(c.key, wp.INCOMPLETE), QPointF(BLOCK_W - 16, y + CELL_H / 2), 8.0)
+            p.drawText(QRectF(0, y, GUTTER - 1, CELL_H), int(Qt.AlignmentFlag.AlignCenter), str(i + 2))
+            ic.paint_cell(p, c.key, QRectF(GUTTER + 10, y + 6, 18, 18), node.kind)
+            p.setPen(ic.INK)
+            p.setFont(_font(13))
+            p.drawText(QRectF(GUTTER + 36, y, BLOCK_W - GUTTER - 66, CELL_H), int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+                       QFontMetrics(_font(13)).elidedText(c.label, Qt.TextElideMode.ElideRight, int(BLOCK_W - GUTTER - 68)))
+            ic.paint_status(p, sts.get(c.key, wp.INCOMPLETE), QPointF(BLOCK_W - 17, y + CELL_H / 2), 8.0)
         if sp is None:
-            p.setPen(QColor("#6a7790"))
+            p.setPen(QColor("#5a6577"))
             p.setFont(_font(11))
             p.drawText(QRectF(GUTTER + 8, self.cell_y(0), BLOCK_W - GUTTER - 16, CELL_H), int(Qt.AlignmentFlag.AlignVCenter), "This program cannot open it")
-        # the outline
+        # the outline, and the blue ring of a selected block
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(ic.ORANGE if sel else QColor("#8fa3c4"), 2.4 if sel else 1.4))
-        p.drawRoundedRect(body, 7, 7)
-        # the wire ports
+        p.setPen(QPen(ic.EDGE, 1.0))
+        p.drawRoundedRect(body.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3)
+        if sel:
+            p.setPen(QPen(SELECTED, 2.0))
+            p.drawRoundedRect(body.adjusted(-3, -3, 3, 3), 5, 5)
+        # the wire dots: navy with a white ring (hollow when nothing is wired), blue and larger when a wire being drawn can end there
         drag = sc.drag
         for i, c in enumerate(self.cells()):
             cy = self.cell_y(i) + CELL_H / 2
             for side, kinds in (("out", c.provides), ("in", c.accepts)):
                 if not kinds:
                     continue
-                used = (prj.outgoing(self.nid, c.key) if side == "out" else [prj.incoming(self.nid, c.key)])
-                used = [u for u in used if u is not None]
+                used = prj.outgoing(self.nid, c.key) if side == "out" else prj.incoming_all(self.nid, c.key)
                 hot = drag is not None and drag.get("targets") and (self.nid, c.key, side) in drag["targets"]
-                p.setBrush(QBrush(WIRE if used else QColor("#ffffff")))
-                p.setPen(QPen(ic.ORANGE if hot else WIRE, 2.4 if hot else 1.5))
-                p.drawEllipse(QPointF(BLOCK_W if side == "out" else 0, cy), PORT_R + (1.5 if hot else 0), PORT_R + (1.5 if hot else 0))
+                paint_dot(p, QPointF(BLOCK_W if side == "out" else 0, cy), bool(used), bool(hot))
         # the name under the block
-        p.setPen(QColor("#1d3557"))
-        p.setFont(_font(12, True))
+        p.setPen(ic.INK)
+        p.setFont(_font(13, True))
         p.drawText(QRectF(0, H + 4, BLOCK_W, CAP_H - 4), int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop),
-                   QFontMetrics(_font(12, True)).elidedText(node.title, Qt.TextElideMode.ElideMiddle, int(BLOCK_W - 6)))
+                   QFontMetrics(_font(13, True)).elidedText(node.title, Qt.TextElideMode.ElideMiddle, int(BLOCK_W - 6)))
 
     # ---- the mouse
     def hoverMoveEvent(self, ev):
@@ -239,8 +271,7 @@ class SystemItem(QGraphicsItem):
             return ""
         st = prj.status(self.nid, w)
         t = f"{node.cell_name(w)}  {cs.label}\n{wp.STATUS_TEXT[st]}"
-        k = prj.incoming(self.nid, w)
-        if k is not None:
+        for k in prj.incoming_all(self.nid, w):
             src = prj.nodes[k.a]
             t += f"\nTakes the {prj.link_type(k)} of {src.cell_name(k.a_cell)} ({src.title})"
         n = len(prj.outgoing(self.nid, w))
@@ -344,7 +375,7 @@ class LinkItem(QGraphicsPathItem):
     def paint(self, p, opt, widget=None):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         col = SELECTED if self.isSelected() else WIRE
-        p.setPen(QPen(col, 3.0 if self.isSelected() else 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setPen(QPen(col, 3.0 if self.isSelected() else 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap, Qt.PenJoinStyle.MiterJoin))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(self.path())                              # just a wire: no arrowhead (the dots at its ends are drawn by the blocks, above it)
 
@@ -500,7 +531,7 @@ class SchematicScene(QGraphicsScene):
         if n is None or n.spec is None:
             return None
         for c in n.spec.cells:
-            if side == "in" and set(c.accepts) & set(provides) and self.project.incoming(nid, c.key) is None:
+            if side == "in" and set(c.accepts) & set(provides) and (c.many or self.project.incoming(nid, c.key) is None):
                 return c.key
             if side == "out" and set(c.provides) & set(provides):
                 return c.key
@@ -603,7 +634,7 @@ class SchematicScene(QGraphicsScene):
         path.lineTo(QPointF(mx, a.y()))
         path.lineTo(QPointF(mx, b.y()))
         path.lineTo(b)
-        p.setPen(QPen(ic.ORANGE, 2.2, Qt.PenStyle.DashLine))
+        p.setPen(QPen(SELECTED, 2.0, Qt.PenStyle.DashLine))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(path)
 
@@ -611,6 +642,7 @@ class SchematicScene(QGraphicsScene):
 # ---------------------------------------------------------------------------------------------------------------------------- the view
 class SchematicView(QGraphicsView):
     dropped = pyqtSignal(str, QPointF)         # a kind of node was dropped from the toolbox: kind, scene point
+    filesDropped = pyqtSignal(list, QPointF)   # files or folders were dropped from a file manager: their paths, scene point
     deleteAsked = pyqtSignal()                 # Delete was pressed
     renameAsked = pyqtSignal()                 # F2 was pressed
 
@@ -629,13 +661,22 @@ class SchematicView(QGraphicsView):
         self.centerOn(300, 150)
 
     def dragEnterEvent(self, e):
-        if e.mimeData().hasText() and e.mimeData().text().startswith(MIME):
+        m = e.mimeData()
+        if m.hasUrls() or (m.hasText() and m.text().startswith(MIME)):
             e.acceptProposedAction()
 
     dragMoveEvent = dragEnterEvent
 
     def dropEvent(self, e):
-        t = e.mimeData().text()
+        m = e.mimeData()
+        if m.hasUrls():                                      # parts, assemblies, simulation folders ... from a folder on the computer: they become blocks
+            paths = [u.toLocalFile() for u in m.urls() if u.isLocalFile() and u.toLocalFile()]
+            if paths:
+                self.filesDropped.emit(paths, self.mapToScene(e.position().toPoint()))
+                e.acceptProposedAction()
+                self.setFocus()
+                return
+        t = m.text()
         if t.startswith(MIME):
             self.dropped.emit(t[len(MIME):], self.mapToScene(e.position().toPoint()))
             e.acceptProposedAction()

@@ -1,11 +1,11 @@
 """
 sim_tab.py - the 1D FEA, 2D FEA and 2D CFD containers (a "simulation" document tab, saved as a PROJECT FOLDER: .gpb / .gpf / .gpc).
 
-A simulation is a project folder (sim_project.py).  New project makes the folder; Import copies a part or an assembly INTO it (source/), and
-the simulation only ever works on that copy (sim_source.py), so the original can be moved or deleted.  What it solves is a snapshot of
+A simulation is a project folder (sim_project.py) made by the Workbench: a wire from a Part / Assembly block copies that geometry INTO it (source/), and
+the simulation only ever works on that copy (sim_source.py).  There is no other way in.  What it solves is a snapshot of
   * a part:      one of its sketches, or a slice - a plane that cuts the part (a base plane, a reference plane, with an offset)
   * an assembly: only a slice (a plane cuts all its parts; touching parts are bonded)
-"Update from original" copies the original again into the project and takes the snapshot again; that clears the mesh and result.
+Refresh in the Workbench copies the wired block again into the project and takes the snapshot again; that clears the mesh and result.
 1D FEA only: the cross-section of a member can be a PROFILE SKETCH - another sketch of the same part, or a sketch of another part, which is
 copied into the project too (profiles/, see sim_project.py), so a profile never depends on its original either.
 The material of the part (Material in its tree) fills the material boxes by itself; in an assembly slice every region uses the material
@@ -20,6 +20,7 @@ import numpy as np
 from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox, QPushButton, QStackedWidget,
                              QVBoxLayout, QWidget)
 
+import addons
 import beam_tab
 import cfd_tab
 import ext
@@ -119,16 +120,14 @@ class SimWindow(QWidget):
     plotter = None
     nav = None
 
-    def __init__(self, kind, shell=None, src_tab=None, path=None):
+    def __init__(self, kind, shell=None, path=None):
         super().__init__()
         self.kind = kind
         self.label, cls = KINDS[kind]
         self.shell = shell
-        self.candidate = src_tab                  # an open part / assembly tab that Import offers first (the ribbon button of that tab)
-        self.path = path                          # the project folder (None until New project / Open project)
+        self.path = path                          # the project folder (the Workbench makes it; None only in a window made for a test)
         self.source = None                        # the sim_source.Source loaded from the project's copy
-        self.src = {"type": "asm" if (src_tab is not None and hasattr(src_tab, "asm")) else "part", "path": getattr(src_tab, "path", None),
-                    "name": src_tab.title() if src_tab is not None else ""}
+        self.src = {"type": "part", "path": None, "name": ""}
         self.meta = {"sid": None, "slice": None}
         self.pending = None
         self.units_note = ""
@@ -144,27 +143,12 @@ class SimWindow(QWidget):
         self.src_lbl.setWordWrap(True)
         self.src_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
         bar.addWidget(self.src_lbl, 1)
-        self.b_new = QPushButton("New project...")
-        self.b_new.setToolTip(f"Makes the project folder of this simulation ({sim_project.ext_of(kind)}). The source is copied into it, so the "
-                              "simulation never depends on the original part.")
-        self.b_new.clicked.connect(self.new_project)
-        bar.addWidget(self.b_new)
-        self.b_import = QPushButton("Import source...")
-        self.b_import.setToolTip("Copies a part or an assembly into the project folder (an open tab, or a .gpd / .gpa file). The simulation "
-                                 "works on the copy; the original can be moved or deleted.")
-        self.b_import.clicked.connect(self.import_source)
-        bar.addWidget(self.b_import)
-        self.b_refresh = QPushButton("Update from original")
-        self.b_refresh.setToolTip("Copies the original part / assembly into the project again (as it is now) and takes the sketch or the slice "
-                                  "again. This clears the mesh and result, because the geometry may have changed.")
-        self.b_refresh.clicked.connect(self.refresh)
-        bar.addWidget(self.b_refresh)
         lay.addLayout(bar)
         self.status_lbl = QLabel("")
         self.status_lbl.setStyleSheet("color:#707070;")
         self.tab = cls(self.host)
         self.tab.picker.on_import = self.on_imported
-        self.empty = ui_kit.EmptyState("", "", [("New project...", self.new_project), ("Import source...", self.import_source)])
+        self.empty = ui_kit.EmptyState("", "")                 # no wire into the Geometry cell: nothing to show, and nothing to tell (the cell says '?')
         self.stack = QStackedWidget()                        # the guidance while there is nothing to work on; the solver tab once there is
         self.stack.addWidget(self.empty)
         self.stack.addWidget(self.tab)
@@ -186,33 +170,14 @@ class SimWindow(QWidget):
         return f"{self.label} - {os.path.splitext(self.src.get('name') or 'new')[0]}"
 
     def show_source(self):
+        """The solver tab once the project holds a copy of the geometry (the Workbench copies the wired Part / Assembly into it); until then an empty
+        page: there is nothing to say, the Geometry cell of the block shows '?' and the wire is what is missing."""
         have = self.project_ok()
         self.refresh_study_button()
         working = have and self.source is not None
-        # one place for each command: while the guidance page is up IT has New project / Import source, so the bar does not repeat them;
-        # once there is something to work on the bar has Import source (another part) and Update from original
-        self.b_new.setVisible(False)
-        self.b_import.setVisible(working)
-        self.b_refresh.setVisible(working)
-        self.b_import.setEnabled(have)
-        self.b_refresh.setEnabled(self.source is not None)
-        what = "a part" if self.kind == "beam" else "a part or an assembly"
         self.stack.setCurrentWidget(self.tab if working else self.empty)
-        if not have:
-            self.src_lbl.setText("No project yet")
-            self.empty.set_text(f"Start a {self.label} project",
-                                f"A simulation is a project folder with its own copy of {what}, so it never depends on the original. "
-                                f"Make the folder, then import {what} into it.")
-            self.empty.buttons[0].setVisible(True)
-            self.empty.buttons[1].setStyleSheet("")
-            return
-        if self.source is None:
-            self.src_lbl.setText(f"Project <b>{os.path.basename(self.path.rstrip('/' + chr(92)))}</b> - nothing imported yet")
-            self.empty.set_text(f"Import {what}",
-                                f"The project folder is made. Import {what} - from a tab that is open, or from a file. The simulation works on "
-                                "its own copy; you then choose the sketch" + (" of the part." if self.kind == "beam" else " or the slice to analyse."))
-            self.empty.buttons[0].setVisible(False)
-            ui_kit.primary(self.empty.buttons[1])
+        if not working:
+            self.src_lbl.setText("")
             return
         kind = "assembly" if self.src["type"] == "asm" else "part"
         rule = ("slice only (a plane through the parts; touching parts are bonded)" if kind == "assembly" else
@@ -222,7 +187,7 @@ class SimWindow(QWidget):
 
     def refresh_study_button(self):
         """The parametric-study button under Solve: only when the Parametric Studies add-on is installed."""
-        on = bool(ext.hooks("sim_study"))
+        on = bool(ext.hooks("sim_study")) and not addons.in_workbench(self.kind)         # (with the Workbench a study is a block of it, wired to this analysis)
         self.tab.study_box.setVisible(on)
         if not on:
             return
@@ -237,8 +202,7 @@ class SimWindow(QWidget):
             QMessageBox.information(self, "Parametric study", "The Parametric Studies add-on is not loaded. Install or enable it, then restart.")
             return None
         if not self.project_ok():
-            QMessageBox.information(self, "Parametric study", "This simulation has no project folder yet. Press 'New project...', import a part, "
-                                    "choose a sketch or a slice and press Import. The study is saved in that project.")
+            QMessageBox.information(self, "Parametric study", "This simulation has no project folder yet. The study is saved in that project.")
             return None
         # a study opens as soon as there is a project folder: the study tab itself says what is still missing (a sketch, supports...) and only a
         # run needs it
@@ -269,7 +233,7 @@ class SimWindow(QWidget):
 
     # ------------------------------------------------------------------ the project folder
     def new_project(self):
-        """Asks where to put the project folder, makes it, and offers the import of the source."""
+        """Asks where to put the project folder (Save As of a window that has none) and makes it."""
         folder = os.path.dirname(self.src["path"]) if self.src.get("path") else ""
         start = sim_project.default_name(self.kind, self.src.get("name") or self.label, folder or os.getcwd())
         ext = sim_project.ext_of(self.kind)
@@ -291,8 +255,6 @@ class SimWindow(QWidget):
         self.show_source()
         self.say(f"Project folder {self.path} made.")
         self.retitle()
-        if self.candidate is not None and self.candidate_ok():
-            return self.import_tab(self.candidate)
         return True
 
     def retitle(self):
@@ -313,88 +275,8 @@ class SimWindow(QWidget):
         except (AttributeError, RuntimeError):
             pass
 
-    def candidate_ok(self):
-        c = self.candidate
-        try:                                             # the part's tab may have been closed since: Qt has deleted it, touching it raises
-            c.title()
-            if self.shell is not None and self.shell.tabs.indexOf(c) < 0:
-                return False
-        except RuntimeError:
-            return False
-        return self.kind != "beam" or not hasattr(c, "asm")
-
-    def open_tabs(self):
-        """[(label, tab)] of the open parts and assemblies the source can come from."""
-        out = []
-        if self.shell is None:
-            return out
-        for i in range(self.shell.tabs.count()):
-            w = self.shell.tabs.widget(i)
-            if hasattr(w, "asm") or (getattr(w, "doc", None) is not None and hasattr(w.doc, "features")):
-                if self.kind == "beam" and hasattr(w, "asm"):
-                    continue
-                out.append((("assembly - " if hasattr(w, "asm") else "part - ") + w.title(), w))
-        return out
-
-    def import_source(self):
-        """Choose what to copy into the project: an open part / assembly tab, or a file."""
-        if not self.project_ok():
-            if not self.new_project():
-                return False
-            if self.source is not None:
-                return True
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Import source")
-        lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel("Copy this into the project (the simulation then works on the copy):"))
-        lst = QListWidget()
-        tabs = self.open_tabs()
-        for text, w in tabs:
-            lst.addItem(text)
-        if self.candidate is not None:
-            for i, (_t, w) in enumerate(tabs):
-                if w is self.candidate:
-                    lst.setCurrentRow(i)
-        elif tabs:
-            lst.setCurrentRow(0)
-        lay.addWidget(lst)
-        pick = {"file": None}
-        b_file = QPushButton("Browse for a .gpd / .gpa file...")
-        lay.addWidget(b_file)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        lay.addWidget(bb)
-        bb.accepted.connect(dlg.accept)
-        bb.rejected.connect(dlg.reject)
-
-        def browse():
-            filt = "Part (*.gpd)" if self.kind == "beam" else "Part or assembly (*.gpd *.gpa)"
-            f, _ = QFileDialog.getOpenFileName(dlg, "Part or assembly to copy", os.path.dirname(self.src.get("path") or ""), filt)
-            if f:
-                pick["file"] = f
-                dlg.accept()
-        b_file.clicked.connect(browse)
-        if not dlg.exec():
-            return False
-        if pick["file"]:
-            return self.import_file(pick["file"])
-        row = lst.currentRow()
-        if row < 0:
-            return False
-        return self.import_tab(tabs[row][1])
-
-    def import_tab(self, w):
-        """Copies an open part / assembly tab into the project: its live state (unsaved edits included) and, for an assembly, its part files."""
-        p = getattr(w, "path", None)
-        if hasattr(w, "asm"):
-            text = w.asm.to_json()
-            if not p:
-                QMessageBox.information(self, "Import source", "Save the assembly once first: its parts are found from its file.")
-                return False
-        else:
-            text = w.doc.to_json()
-        return self.do_import(p, text, name=(os.path.splitext(os.path.basename(p))[0] if p else w.title()), ext=".gpa" if hasattr(w, "asm") else ".gpd")
-
     def import_file(self, path):
+        """Copies a part / assembly FILE into the project (no dialog: the Workbench copies the wired block in, see wb_analysis.refresh; tests use this)."""
         return self.do_import(path, None)
 
     def do_import(self, orig, text, name=None, ext=None):
@@ -403,7 +285,7 @@ class SimWindow(QWidget):
             return False
         t = self.tab
         if getattr(t, "model", None) is not None and (t.result is not None or getattr(t, "mesh", None) is not None or getattr(t, "supports", None) or getattr(t, "loads", None)):
-            if QMessageBox.question(self, "Import source", "Importing a source replaces the copy in the project and clears the supports, loads, mesh and "
+            if QMessageBox.question(self, "Geometry", "Importing a source replaces the copy in the project and clears the supports, loads, mesh and "
                                     "result of this simulation. Continue?") != QMessageBox.StandardButton.Yes:
                 return False
         try:
@@ -411,10 +293,10 @@ class SimWindow(QWidget):
             m, missing = sim_project.import_source(self.path, orig_path=fake, text=text, name=name)
             self.source = sim_source.open_source(sim_project.source_file(self.path, m))
         except (sim_project.ProjectError, sim_source.SourceError) as ex:
-            QMessageBox.warning(self, "Import source", str(ex))
+            QMessageBox.warning(self, "Geometry", str(ex))
             return False
         if self.kind == "beam" and self.source.type == "asm":
-            QMessageBox.information(self, "Import source", "1D FEA works on a sketch of a part. An assembly can only be used for 2D, through a slice.")
+            QMessageBox.information(self, "Geometry", "1D FEA works on a sketch of a part. An assembly can only be used for 2D, through a slice.")
             self.source = None
             return False
         self.src = {"type": self.source.type, "path": orig, "name": m["source"]["name"]}
@@ -456,7 +338,7 @@ class SimWindow(QWidget):
         if kind is None:
             raise ValueError("not a simulation project folder")
         m = sim_project.read(folder)
-        w = cls(kind, shell=shell, src_tab=None, path=folder)
+        w = cls(kind, shell=shell, path=folder)
         s = m.get("source") or {}
         w.src = {"type": s.get("type", "part"), "path": s.get("orig"), "name": s.get("name", "")}
         w.meta = m.get("meta") or {"sid": None, "slice": None}
@@ -705,17 +587,15 @@ class SimWindow(QWidget):
         return p, None
 
     def refresh(self):
-        """Update from original: copy it into the project again, then take the same sketch or slice again."""
+        """Copies the original into the project again (the Workbench gives the wired block as the original: original_text), then takes the same sketch or
+        slice again."""
         if self.source is None:
-            self.say("Nothing imported yet: press Import source...")
+            self.say("There is no geometry in this simulation yet.")
             return
         sid = self.meta.get("sid")
         p, text = self.original_text()
         if text is None and (not p or not os.path.isfile(p)):
-            ok = QMessageBox.question(self, "Update from original", "The original file cannot be found any more (it was moved or deleted). The copy in the "
-                                      "project is kept and still works.\n\nChoose another file to copy instead?") == QMessageBox.StandardButton.Yes
-            if ok:
-                self.import_source()
+            self.say("The original cannot be found: the copy in the project is kept and still works.")
             return
         if self.tab.result is not None or getattr(self.tab, "mesh", None) is not None:
             if QMessageBox.question(self, "Update from original", "Copying the original again clears the supports, loads, mesh and result of this "
@@ -761,7 +641,7 @@ class SimWindow(QWidget):
         try:
             if part == MAIN_PART:
                 if self.source is None or self.source.type != "part":
-                    raise ValueError("The project has no part yet (Import source...).")
+                    raise ValueError("The project has no part yet: wire a Part into the Geometry cell.")
                 return sim_source.open_source(sim_project.source_file(self.path)) if fresh else self.source
             path = sim_project.profile_file(self.path, part)
             if not path or not os.path.isfile(path):
@@ -784,19 +664,15 @@ class SimWindow(QWidget):
         return profile_sketch.read(src.doc, sid, unit)
 
     def profile_choices(self):
-        """[(label, spec)] of the parts a profile sketch can be taken from: the frame's part, the profile parts already in the project, the
-        open part tabs.  spec: (MAIN_PART,) | ("have", key) | ("tab", tab widget) | ("file", path)."""
+        """[(label, spec)] of the parts a profile sketch can be taken from: the frame's part and the profile parts that are in the project (the Workbench puts
+        there every Part wired into the Profile cell).  spec: (MAIN_PART,) | ("have", key).  add_profile_from also takes ("tab", tab) and ("file", path): no
+        window offers them, they are for code and tests."""
         out = []
         if self.source is not None and self.source.type == "part":
-            out.append((f"{self.src.get('name') or 'part'}  (the frame's part, already in the project)", (MAIN_PART,)))
+            out.append((f"{self.src.get('name') or 'part'}  (the frame's part)", (MAIN_PART,)))
         have = sim_project.profile_parts(self.path) if self.project_ok() else []
         for e in have:
-            out.append((f"{e['name']}  (profile part, already in the project)", ("have", e["key"])))
-        if self.shell is not None:
-            for i in range(self.shell.tabs.count()):
-                w = self.shell.tabs.widget(i)
-                if not hasattr(w, "asm") and getattr(w, "doc", None) is not None and hasattr(w.doc, "features"):
-                    out.append((f"{w.title()}  (open part tab: copied into the project)", ("tab", w)))
+            out.append((f"{e['name']}  (profile part)", ("have", e["key"])))
         return out
 
     def profile_spec_doc(self, spec):
@@ -867,7 +743,7 @@ class SimWindow(QWidget):
     def pick_profile_sketch(self):
         """The window that adds a profile sketch: the part, then one of its sketches (with what it gives).  -> the entry of add_profile_from, or None."""
         if not self.project_ok() or self.source is None:
-            QMessageBox.information(self, "Profile sketch", "Make the project and import the frame's part first.")
+            QMessageBox.information(self, "Profile sketch", "This block has no geometry yet: wire a Part into its Sketch cell first.")
             return None
         dlg = QDialog(self)
         dlg.setWindowTitle("Add a profile sketch")
@@ -875,7 +751,7 @@ class SimWindow(QWidget):
         lay = QVBoxLayout(dlg)
         note = QLabel("A profile sketch is the cross-section of a member, drawn at its true size as closed outlines (a loop inside another is a "
                       "hole). Up in the sketch is the direction the member bends in; you can flip or turn it for each member. The part it is "
-                      "in is copied into the project, so the profile never depends on the original.")
+                      "in is a Part block wired into the Profile cell of this block, so a change to it comes in with Refresh.")
         note.setWordWrap(True)
         note.setStyleSheet("color:#555555; font-size:11px;")
         lay.addWidget(note)
@@ -886,8 +762,6 @@ class SimWindow(QWidget):
         for text, _spec in choices:
             combo.addItem(text)
         row.addWidget(combo, 1)
-        b_file = QPushButton("Browse for a .gpd file...")
-        row.addWidget(b_file)
         lay.addLayout(row)
         lay.addWidget(QLabel("Sketch of that part"))
         lst = QListWidget()
@@ -924,7 +798,7 @@ class SimWindow(QWidget):
             state["doc"], state["sids"] = None, []
             i = combo.currentIndex()
             if not (0 <= i < len(choices)):
-                info.setText("Choose a part: one that is open, or browse for a file.")
+                info.setText("There is no part to take a profile from: wire a Part into the Profile cell of this block.")
                 ok.setEnabled(False)
                 return
             spec = choices[i][1]
@@ -945,13 +819,6 @@ class SimWindow(QWidget):
                 info.setText("This part has no " + ("other " if frame else "") + "sketch. Draw the cross-section as a sketch in the part first.")
                 ok.setEnabled(False)
 
-        def browse():
-            f, _ = QFileDialog.getOpenFileName(dlg, "Part with the profile sketch", os.path.dirname(self.src.get("path") or ""), "Part (*.gpd)")
-            if f:
-                choices.append((f"{os.path.basename(f)}  (file: copied into the project)", ("file", f)))
-                combo.addItem(choices[-1][0])
-                combo.setCurrentIndex(combo.count() - 1)
-        b_file.clicked.connect(browse)
         combo.currentIndexChanged.connect(show_part)
         lst.currentRowChanged.connect(show_sketch)
         show_part()

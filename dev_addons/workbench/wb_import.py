@@ -123,7 +123,7 @@ def import_analysis(tab, folder, x=None, y=None):
     tab.project.set_ready(n.id, "setup", a.setup_is_ready(None, folder))
     notes = []
     if not wb_analysis.has_source(folder):
-        notes.append("It has no part or assembly in it yet: open it and import one.")
+        notes.append("It has no geometry yet: wire a Part or an Assembly into its Geometry cell.")
     return [n], notes
 
 

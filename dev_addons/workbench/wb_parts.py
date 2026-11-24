@@ -172,20 +172,39 @@ class PartAdapter(DocAdapter):
         return w.doc.to_json()
 
     def ready_of(self, tab, node, w, obj):
-        """A part is ready when it has a solid: the live Document says; a part that is not open is built once from its text."""
+        """A part is ready when it has a solid, or is only sketches (a frame, a profile: what a 1D analysis takes): the live Document says; a part that is not open is built
+        once from its text."""
         if w is not None and getattr(w, "doc", None) is not None:
-            return w.doc.solid is not None
-        return solid_of_text(json.dumps(obj)) is not None
+            return part_ready(w.doc)
+        return doc_of_text(json.dumps(obj)) is not None and part_ready(doc_of_text(json.dumps(obj)))
 
 
-def solid_of_text(text):
+SKETCH_ONLY = ("sketch", "refplane", "refaxis", "refpoint")
+
+
+def part_ready(d):
+    """True when the Document has a solid, or has nothing but sketches (and reference geometry) and at least one of them has something drawn in it."""
+    if d.solid is not None:
+        return True
+    feats = [f for f in d.features if not f.get("suppressed")]
+    if not feats or any(f.get("kind") not in SKETCH_ONLY for f in feats):
+        return False
+    return any(f.get("kind") == "sketch" and d.models.get(f["id"]) is not None and (d.models[f["id"]].pts or d.models[f["id"]].lns) for f in feats)
+
+
+def doc_of_text(text):
     import pm_model as pm
     try:
         d = pm.Document.from_json(text)
         d.rebuild()
-        return d.solid
+        return d
     except Exception:                                            # noqa: BLE001
         return None
+
+
+def solid_of_text(text):
+    d = doc_of_text(text)
+    return d.solid if d is not None else None
 
 
 class AssemblyAdapter(DocAdapter):

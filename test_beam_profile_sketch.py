@@ -180,7 +180,7 @@ assert not os.path.isdir(os.path.join(w.path, "profiles")), "a sketch of the fra
 hat = t.add_prof(w.add_profile_from(("file", hat_gpd), hat_sid))
 assert hat["part"] == "hat.gpd" and hat["part_name"] == "hat" and os.path.isfile(os.path.join(w.path, "profiles", "hat.gpd")) and hat["id"] == 2
 assert t.add_prof(w.add_profile_from(("have", "hat.gpd"), hat_sid)) is hat and len(t.profs) == 2, "the same sketch is not added twice"
-assert any("hat" in lab and "already in the project" in lab for lab, _s in w.profile_choices())
+assert any("hat" in lab and "profile part" in lab for lab, _s in w.profile_choices())
 try:
     w.add_profile_from(("have", "hat.gpd"), "no-such-sketch"); raise SystemExit("a sketch that is not there must be refused")
 except ValueError:
@@ -409,8 +409,8 @@ w5 = sim_tab.SimWindow("beam", shell=FakeShell([ft]))
 assert w5.create_project(os.path.join(T, "live")) and w5.import_file(frame_gpd)
 w5.tab.picker.refresh(); w5.tab.picker.select(fid); w5.tab.picker.go()
 ch = w5.profile_choices()
-assert [sp_[0] for _l, sp_ in ch] == ["main", "tab"] and "open part tab" in ch[1][0], ch
-live = w5.tab.add_prof(w5.add_profile_from(ch[1][1], hat_sid))
+assert [sp_[0] for _l, sp_ in ch] == ["main"], ("the window offers the frame's part and the parts in the project, not the open tabs", ch)
+live = w5.tab.add_prof(w5.add_profile_from(("tab", ft), hat_sid))
 assert close(hgt(live), 90.0) and live["part"] == "hat.gpd", "the open tab's state is copied, unsaved edits included"
 assert close(hgt({"outline": ps.read(sim_source.PartSource(hat_gpd).doc, hat_sid)[0]}), 60.0), "the file itself still has the saved size"
 ft.doc.cfg_write(hkey, 100.0); ft.doc.rebuild()

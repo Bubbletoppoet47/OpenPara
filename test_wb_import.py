@@ -187,8 +187,8 @@ ok(man["source"]["orig"] is None, "without the path of the part on this computer
 ok(src not in json.dumps(n3.data) and T not in json.dumps(n3.data), "nor any other path of the folders it was read from")
 ok(json.loads(open(os.path.join(f3, "simulation.json")).read())["source"]["orig"] == os.path.abspath(part_for_sim), "(the folder itself still has it: it is not touched)")
 ok(blob(f3) == before_f3, "the analysis folder is not touched")
-ok(P.status(n3.id, "geometry") == wp.OK and P.status(n3.id, "setup") == wp.OK, f"geometry and setup are ok ({P.status(n3.id, 'geometry')}, {P.status(n3.id, 'setup')})")
-ok(P.status(n3.id, "solution") == wp.UPDATE, f"the solution says update: nothing was computed ({P.status(n3.id, 'solution')})")
+ok(P.status(n3.id, "geometry") == wp.INCOMPLETE and P.status(n3.id, "setup") == wp.OK, f"the setup comes in ok; the geometry waits for a wire from a Geometry block ({P.status(n3.id, 'geometry')}, {P.status(n3.id, 'setup')})")
+ok(P.status(n3.id, "solution") == wp.INCOMPLETE and not any(x.kind in ("part", "assembly") for x in P.nodes.values() if x.title == "Bar test"), f"nothing was computed, and no Part block was made for it ({P.status(n3.id, 'solution')})")
 w3 = W.open_cell(n3.id, "setup")
 import solid_tab
 ok(isinstance(w3, solid_tab.SolidWindow) and w3.geom is not None and abs(w3.geom["volume"] - 10000) < 1e-6, "it opens in the 3D window with the part (volume 10000)")
@@ -216,7 +216,7 @@ ok(n2 is not None and n2.kind == "fea", "a .gpf folder becomes a 2D Static Struc
 small = len(wp.unpack_bytes(n2.data["files"]["state.sim"]))
 ok(small < big / 3, f"its mesh and result are left out ({small} against {big} bytes)")
 ok(P.status(n2.id, "setup") == wp.OK and P.status(n2.id, "geometry") == wp.INCOMPLETE, "the setup is ready; no sketch yet (incomplete)")
-ok("no part or assembly" in say().lower(), f"and it says so ({say()[-80:]})")
+ok("no geometry yet" in say().lower(), f"and it says so ({say()[-80:]})")
 
 # not an analysis
 os.makedirs(os.path.join(src, "plain"))
@@ -329,7 +329,7 @@ W.load(fp)
 P = W.project
 st = {n.title: [P.status(n.id, k) for k in n.cells] for n in P.nodes.values()}
 ok(st["Bar"] == [wp.OK] and st["Frame"] == [wp.OK], f"parts and assemblies come back ok ({st['Bar']}, {st['Frame']})")
-ok(st["Bar test"][:2] == [wp.OK, wp.OK] and wp.UPDATE in st["Bar test"], f"the analysis comes back ready to be updated, not computed ({st['Bar test']})")
+ok(st["Bar test"][:2] == [wp.INCOMPLETE, wp.OK] and wp.UPDATE not in st["Bar test"], f"the analysis comes back with its setup, still waiting for a geometry wire, and not computed ({st['Bar test']})")
 ok(not P.is_dirty(), "opening is not a change")
 
 print()

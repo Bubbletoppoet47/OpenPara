@@ -202,7 +202,6 @@ class DragHook(QObject):
 class AssemblyWindow(QMainWindow):
     embed = False                     # True (the Workbench sets it): a component that is inserted is COPIED into the assembly, and an old file with paths is read as copies
     ribbon_page = pm_app.MainWindow.ribbon_page
-    add_sim = pm_app.MainWindow.add_sim
     add_render = pm_app.MainWindow.add_render
     make_menu = pm_app.MainWindow.make_menu
 
@@ -279,10 +278,6 @@ class AssemblyWindow(QMainWindow):
             ("mass", "⚖", "Mass\nProperties", "Mass, center of mass and moments of inertia of the whole assembly", lambda: self.mass_open()),
             ("measure", "↔", "Measure", "Minimum, center and maximum distance between two points, edges, faces or pipes: click two items in the view", lambda: self.measure_toggle()),
         ]), "Evaluate")
-        import ext
-        if ext.present("simulation"):
-            self.ribbon.addTab(self.ribbon_page([("sim_fea", "▦", "2D FEA", "Plane stress / strain FEA of a slice through this assembly", lambda: self.add_sim("fea")),
-                                        ("sim_cfd", "≋", "2D CFD", "Flow around a slice through this assembly", lambda: self.add_sim("cfd"))]), "Simulation")
         import addons
         if addons.offered("render"):                        # where this copy offers Visualize: without the add-on the button offers to install it
             self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "Preview / Render", "Visualize this assembly: Previs, a live lit Preview, and ray-traced pictures and videos", lambda: self.add_render())]), "Visualize")

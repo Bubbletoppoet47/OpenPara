@@ -2,7 +2,7 @@
 solid_tab.py - the 3D FEA window (project folder .gpv): a parametric part, or an ASSEMBLY - fully bonded (faces within the bond distance are joined);
 every body keeps its own material.  Linear elastic, quadratic tetrahedra (or a hex-dominant mesh for a single part).
 
-Project bar:  New project / Import source / Update from original / Save   (the same project folder machinery as the 1D / 2D simulations:
+Project bar:  the name of what it works on, and Save   (the same project folder machinery as the 1D / 2D simulations: the Workbench copies the wired block in;
               the part is COPIED into  source/  and the simulation only uses the copy)
 Left panel:   the sections of 1D FEA: Geometry (part dimensions you can edit), Material, Supports, Loads, Mesh, then Solve, [parametric study] and
               Results (result, Colours, deformed shape, scale, Animate with Play / Export, the Probe)

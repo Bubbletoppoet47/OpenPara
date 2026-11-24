@@ -232,10 +232,11 @@ def _same_file(a, b):
     return bool(a) and bool(b) and os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
-def import_profile_part(folder, orig_path=None, text=None, name=None, key=None):
+def import_profile_part(folder, orig_path=None, text=None, name=None, key=None, extra=None):
     """Copies a part (.gpd) into profiles/ for its profile sketches.  A part that is already there (the same original file, or `key`) is
     replaced by the new copy and keeps its key, so the profile sketches taken from it stay linked.  `text` = the live state of the part when
-    it is open with unsaved edits.  -> (manifest, the entry of the part)."""
+    it is open with unsaved edits.  `extra` = more fields for the entry (the Workbench marks the parts it put there with the block they came from).
+    -> (manifest, the entry of the part)."""
     m = read(folder)
     if text is None:
         if not orig_path or not os.path.isfile(orig_path):
@@ -266,6 +267,7 @@ def import_profile_part(folder, orig_path=None, text=None, name=None, key=None):
     os.replace(tmp, os.path.join(dest, fname))
     entry = {"key": fname, "name": name, "file": f"{PROFILE_DIR}/{fname}",
              "orig": os.path.abspath(orig_path) if orig_path else (old or {}).get("orig"), "imported": time.strftime("%Y-%m-%d %H:%M:%S")}
+    entry.update(extra or {})
     m["profiles"] = [e for e in parts if e["key"] != fname] + [entry]
     write(folder, m)
     return m, entry

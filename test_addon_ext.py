@@ -29,7 +29,7 @@ import partgen
 kind = next(iter(partgen.PART_TYPES))
 assert ext.present("partgen") and ext.feature("partgen") is not None
 w = pm_app.MainWindow()
-assert "Part Features" in tabs(w) and "Simulation" in tabs(w) and "Visualize" not in tabs(w), tabs(w)     # Visualize is not released yet (addons.NOT_RELEASED)
+assert "Part Features" in tabs(w) and "Simulation" not in tabs(w) and "Visualize" not in tabs(w), tabs(w)     # (a simulation is made in the Workbench: no ribbon page of its own)     # Visualize is not released yet (addons.NOT_RELEASED)
 d = pm.Document()
 f = d.add(pm.new_feature("partgen", gen=kind, params={}, place={"plane": "Top"}))
 d.rebuild()

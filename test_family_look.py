@@ -162,14 +162,11 @@ assert r.save() and r.title() == os.path.splitext(os.path.basename(r.path))[0], 
 sims = {}
 for kind in ("beam", "fea", "cfd"):
     sh.tabs.setCurrentWidget(ptab)
-    w = sh.add_sim(kind); settle()
-    assert w.title() == f"{w.label} - roof", w.title()
-    assert w.stack.currentWidget() is w.empty and "Start a" in w.empty.title.text(), "no project yet: the tab says how to begin"
-    assert [b.text() for b in w.empty.buttons if not b.isHidden()] == ["New project...", "Import source..."] and w.src_lbl.text() == "No project yet"
-    assert w.b_new.isHidden() and w.b_import.isHidden() and w.b_refresh.isHidden(), "the guidance has the commands: the bar does not repeat them"
-    assert w.create_project(os.path.join(UD, "p_" + kind)); settle()
-    assert w.stack.currentWidget() is w.tab and "roof" in w.src_lbl.text(), "the part on screen was imported: the solver tab is shown"
-    assert w.b_new.isHidden() and not w.b_import.isHidden() and not w.b_refresh.isHidden(), "working: the bar has Import source and Update from original"
+    w = sim_tab.SimWindow(kind, shell=sh); sh.add_tab(w); settle()
+    assert w.stack.currentWidget() is w.empty and not w.empty.buttons and not w.empty.title.text() and w.src_lbl.text() == "", "no geometry: an empty page, nothing said"
+    assert not any(hasattr(w, a) for a in ("b_new", "b_import", "b_refresh")), "no Import source: the geometry comes from a wire in the Workbench"
+    assert w.create_project(os.path.join(UD, "p_" + kind)) and w.import_file(part); settle()
+    assert w.stack.currentWidget() is w.tab and "roof" in w.src_lbl.text(), "the part was copied in: the solver tab is shown"
     assert w.title() == "p_" + kind and sh.tabs.tabText(sh.tabs.indexOf(w)).startswith("p_" + kind), "the tab is renamed at once"
     w.tab.picker.refresh(); w.tab.picker.select(s["id"]); w.tab.picker.go(); settle(); settle()
     assert not icon_of(w).isNull() and sh.tab_kind(w) == kind
@@ -178,11 +175,9 @@ for kind in ("beam", "fea", "cfd"):
     panel = next(x for x in w.tab.findChildren(QScrollArea) if x.widget() is not None and x.widget().height() > 200)
     assert fits(panel), (kind, panel.viewport().width(), panel.widget().minimumSizeHint().width())
     sims[kind] = w
-# a project folder with nothing in it yet (made from File > New ...): only the import is offered
+# a project folder with nothing in it yet (no wire): an empty page
 lone = sim_tab.SimWindow("fea", shell=sh); sh.add_tab(lone)
-assert lone.create_project(os.path.join(UD, "p_lone")) and lone.stack.currentWidget() is lone.empty
-assert [b.text() for b in lone.empty.buttons if not b.isHidden()] == ["Import source..."] and "Import" in lone.empty.title.text()
-assert lone.b_new.isHidden() and lone.b_import.isHidden() and lone.b_refresh.isHidden()
+assert lone.create_project(os.path.join(UD, "p_lone")) and lone.stack.currentWidget() is lone.empty and not lone.empty.buttons
 sh.close_tab(sh.tabs.indexOf(lone))
 tip = sh.tabs.tabToolTip(sh.tabs.indexOf(sims["beam"]))
 sh.refresh_titles()

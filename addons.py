@@ -492,6 +492,17 @@ def tab_kinds():
     return out
 
 
+def lives_in_workbench(kind):
+    """True when documents of this tab kind are made in a Workbench project (its manifest says  "home": "workbench"): the program has no File > New and no ribbon
+    button for it - a simulation gets its geometry by a wire from a Part or Assembly block."""
+    return (tab_kinds().get(kind) or {}).get("home") == "workbench"
+
+
+def in_workbench(kind):
+    """lives_in_workbench and the Workbench add-on is active: a file or project folder of this kind that is opened goes into the Workbench as a block."""
+    return lives_in_workbench(kind) and "workbench" in tab_kinds()
+
+
 # ---------------------------------------------------------------- getting an add-on
 
 def release_base():

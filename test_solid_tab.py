@@ -28,7 +28,7 @@ assert d.solid is not None
 part = os.path.join(T, "bar.gpd"); open(part, "w").write(d.to_json())
 
 w = solid_tab.SolidWindow(threaded=False)
-assert not w.b_import.isEnabled() and not w.b_save.isEnabled() and not w.b_solve.isEnabled()
+assert not hasattr(w, "b_import") and not w.b_save.isEnabled() and not w.b_solve.isEnabled()
 assert w.create_project(os.path.join(T, "bar_study")) and w.path.endswith(".gpv") and sp.kind_of_folder(w.path) == "solid"
 assert w.import_file(part), MSGS
 g = w.geom

@@ -12,8 +12,8 @@ import sys
 import tempfile
 import time
 
-from PyQt6.QtCore import QMimeData, QPointF, QSize, Qt, QTimer
-from PyQt6.QtGui import QAction, QDrag, QFont
+from PyQt6.QtCore import QMimeData, QPointF, QRectF, QSize, Qt, QTimer
+from PyQt6.QtGui import QAction, QColor, QDrag, QFont, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QToolBar,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -26,6 +26,47 @@ FILTER = "OpenPara project (*.opara);;All files (*)"
 STATUS_NAMES = {wp.OK: "up to date", wp.INCOMPLETE: "incomplete", wp.REFRESH: "refresh required", wp.UPDATE: "update required", wp.FAILED: "failed"}
 
 
+# ---------------------------------------------------------------------------------------------------------------------------- the look (Sheets: grey bars, navy ink)
+BAR_H = 40                                                  # the height of the header of the toolbox and of the bar above the schematic
+BAR_CSS = "background: #f0f0f0; border: 0; border-bottom: 1px solid #d3d8e2;"
+TOOLBOX_CSS = """
+QTreeWidget { background: #ffffff; border: 0; border-right: 1px solid #c9d0dc; color: #10204d; font-size: 13px; outline: 0; }
+QTreeWidget::item { height: 22px; }
+QTreeWidget::item:hover { background: #eef2f9; }
+QTreeWidget::item:selected { background: #dfe8f8; color: #10204d; }
+"""
+BAR_BUTTONS_CSS = """
+QToolBar#wbBar { %s spacing: 6px; }
+QToolBar#wbBar QToolButton { font-size: 13px; font-weight: 500; color: #10204d; background: transparent; border: 1px solid transparent; border-radius: 3px; padding: 4px 8px; }
+QToolBar#wbBar QToolButton:hover { background: #e3e7ef; border-color: #c9d0dc; }
+QToolBar#wbBar QToolButton:pressed { background: #d6dce8; }
+QToolBar#wbBar::separator { width: 1px; background: #d3d8e2; margin: 10px 4px; }
+""" % BAR_CSS
+HEADER_CSS = "padding: 0 12px; color: #5a6577; font-size: 13px; font-weight: 600; " + BAR_CSS
+STRIP_CSS = "padding: 0 16px; color: #10204d; font-size: 12px; font-weight: 600; background: #e9edf5; border: 0; border-bottom: 1px solid #d3d8e2;"
+CHIP_CSS = "background: #10204d; color: #ffffff; font-size: 11px; font-weight: 600; border-radius: 9px; padding: 2px 10px;"
+
+
+def swatch(color, px=18):
+    """The little square of the colour of a group in front of its name in the toolbox (a raised edge: light above and to the left, dark below and to the right)."""
+    r = 2
+    pm = QPixmap(px * 2, px * 2)
+    pm.setDevicePixelRatio(2)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    box = QRectF((px - 10) / 2.0, (px - 10) / 2.0, 10, 10)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(color))
+    p.drawRoundedRect(box, r, r)
+    p.fillRect(QRectF(box.left() + 1, box.top() + 0.5, box.width() - 3, 1), QColor(255, 255, 255, 90))
+    p.fillRect(QRectF(box.left() + 0.5, box.top() + 1, 1, box.height() - 3), QColor(255, 255, 255, 90))
+    p.fillRect(QRectF(box.left() + 2, box.bottom() - 1.5, box.width() - 3, 1), QColor(0, 0, 0, 64))
+    p.fillRect(QRectF(box.right() - 1.5, box.top() + 2, 1, box.height() - 3), QColor(0, 0, 0, 64))
+    p.end()
+    return QIcon(pm)
+
+
 # ---------------------------------------------------------------------------------------------------------------------------- the toolbox
 class Toolbox(QTreeWidget):
     """The kinds of block, in groups.  Drag one onto the schematic (onto a cell that can feed it, and it is wired at once), or double-click it."""
@@ -34,7 +75,8 @@ class Toolbox(QTreeWidget):
         super().__init__()
         self.tab = tab
         self.setHeaderHidden(True)
-        self.setIconSize(QSize(22, 22))
+        self.setIconSize(QSize(18, 18))
+        self.setStyleSheet(TOOLBOX_CSS)
         self.setDragEnabled(True)
         self.setRootIsDecorated(True)
         self.setIndentation(12)
@@ -52,12 +94,14 @@ class Toolbox(QTreeWidget):
             f = QFont(self.font())
             f.setBold(True)
             g.setFont(0, f)
+            g.setIcon(0, swatch(ic.GROUP_COLOR.get(grp, ic.GREY)))
+            g.setSizeHint(0, QSize(0, 24))
             g.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.addTopLevelItem(g)
             for sp in kinds:
                 ok, why = nodes.availability(self.tab, sp.kind)
                 it = QTreeWidgetItem([sp.label])
-                it.setIcon(0, ic.kind_icon(sp.kind))
+                it.setIcon(0, ic.kind_icon(sp.kind, 18))
                 it.setData(0, Qt.ItemDataRole.UserRole, sp.kind)
                 it.setToolTip(0, sp.tip + ("" if ok else f"\n\n{why}"))
                 fl = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsDragEnabled
@@ -114,13 +158,15 @@ class WorkbenchTab(QWidget):
         self.line = QLabel("")
         self.line.setWordWrap(True)
         self.line.setObjectName("wbLine")
-        self.line.setStyleSheet("#wbLine { padding: 5px 10px; color: #4a5872; background: #ffffff; border-top: 1px solid #d5dbe6; }")
+        self.line.setStyleSheet("#wbLine { padding: 5px 12px; color: #5a6577; font-size: 12px; background: #f0f0f0; border-top: 1px solid #d3d8e2; }")
         self.build_ui()
+        self.update_header()
         self.scene.activated.connect(self.on_activated)
         self.scene.menuAsked.connect(self.on_menu)
         self.scene.message.connect(self.say)
         self.scene.edited.connect(self.on_edited)
         self.view.dropped.connect(self.on_dropped)
+        self.view.filesDropped.connect(lambda paths, pos: QTimer.singleShot(0, lambda: self.on_files_dropped(paths, pos)))      # (after the drop is over: a message may be shown)
         self.view.deleteAsked.connect(self.delete_selected)
         self.view.renameAsked.connect(self.rename_selected)
         self.scene.selectionChanged.connect(self.on_selection)
@@ -129,9 +175,25 @@ class WorkbenchTab(QWidget):
     # ---- the window
     def build_ui(self):
         bar = QToolBar()
+        bar.setObjectName("wbBar")
         bar.setIconSize(QSize(18, 18))
         bar.setMovable(False)
+        bar.setFixedHeight(BAR_H)
+        bar.setStyleSheet(BAR_BUTTONS_CSS)
         self.acts = {}
+        lead = QWidget()
+        lead.setFixedWidth(6)                                # (the bar's own padding would squeeze its buttons, so the space before the chip is a widget)
+        bar.addWidget(lead)
+        chip = QLabel("Workbench")
+        chip.setObjectName("wbChip")
+        chip.setStyleSheet("#wbChip { %s }" % CHIP_CSS)
+        chip.setFixedHeight(20)
+        bar.addWidget(chip)
+        self.file_label = QLabel("")
+        self.file_label.setObjectName("wbFile")
+        self.file_label.setStyleSheet("#wbFile { color: #5a6577; font-size: 13px; margin: 0 10px 0 4px; }")
+        self.file_label.setFixedHeight(24)
+        bar.addWidget(self.file_label)
 
         def act(key, text, fn, tip, shortcut=None):
             a = QAction(text, self)
@@ -160,8 +222,10 @@ class WorkbenchTab(QWidget):
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(0)
-        t = QLabel("  Toolbox")
-        t.setStyleSheet("padding: 6px; font-weight: 600; color: #4a5872; background: #eef2f9; border-bottom: 1px solid #d5dbe6;")
+        t = QLabel("Toolbox")
+        t.setObjectName("wbToolboxHead")
+        t.setFixedHeight(BAR_H)
+        t.setStyleSheet("#wbToolboxHead { %s }" % HEADER_CSS)
         lv.addWidget(t)
         lv.addWidget(self.toolbox)
         right = QWidget()
@@ -169,8 +233,10 @@ class WorkbenchTab(QWidget):
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(0)
         rv.addWidget(bar)
-        h = QLabel("  Project Schematic")
-        h.setStyleSheet("padding: 6px; font-weight: 600; color: #4a5872; background: #eef2f9; border-bottom: 1px solid #d5dbe6;")
+        h = QLabel("Project Schematic")
+        h.setObjectName("wbStrip")
+        h.setFixedHeight(28)
+        h.setStyleSheet("#wbStrip { %s }" % STRIP_CSS)
         rv.addWidget(h)
         rv.addWidget(self.view, 1)
         rv.addWidget(self.line)
@@ -178,11 +244,16 @@ class WorkbenchTab(QWidget):
         sp.addWidget(left)
         sp.addWidget(right)
         sp.setStretchFactor(1, 1)
-        sp.setSizes([230, 1000])
+        sp.setSizes([232, 1000])
         sp.setChildrenCollapsible(False)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(sp)
+
+    def update_header(self):
+        """The name of the project file in the bar (a star when there is something to save)."""
+        name = os.path.basename(self.path) if self.path else (self.project.name if self.project.name != "Project" else "Untitled project")
+        self.file_label.setText(name + (" *" if self.project.is_dirty() else ""))
 
     def say(self, text):
         self.line.setText(str(text))
@@ -209,6 +280,7 @@ class WorkbenchTab(QWidget):
     def refresh_parts(self):
         """The program calls this when the tab is shown again: what was edited in the blocks' editors is read back."""
         self.sync_editors()
+        self.update_header()
 
     def can_close(self):
         return not self.busy_now
@@ -229,6 +301,7 @@ class WorkbenchTab(QWidget):
         self.scene.project = p
         self.path = p.path
         self.scene.rebuild()
+        self.update_header()
         v = p.view
         self.view.resetTransform()
         if abs(v.get("zoom", 1.0) - 1.0) > 1e-6:
@@ -279,6 +352,7 @@ class WorkbenchTab(QWidget):
             QMessageBox.warning(self, "Save project", f"The project could not be saved: {ex}")
             return False
         self.path = self.project.path
+        self.update_header()
         self.say(f"Saved {self.path}")
         return True
 
@@ -306,6 +380,11 @@ class WorkbenchTab(QWidget):
             self.say(f"Added {n.label} {n.title}. {why}")
         return n
 
+    def on_files_dropped(self, paths, pos):
+        """Files and folders dropped on the canvas become blocks at the drop point, side by side: a part, an assembly, an analysis project (its setup and results only: it
+        has no geometry until it is wired), a tool file or another project.  -> the nodes made."""
+        return self.import_many(paths, pos.x(), pos.y())
+
     def on_dropped(self, kind, pos):
         """A kind was dropped from the toolbox: onto a cell that can feed it, the new block is put to the right and wired; else where it was dropped."""
         sp = wp.spec_of(kind)
@@ -324,6 +403,7 @@ class WorkbenchTab(QWidget):
 
     def on_edited(self):
         self.scene.refresh()
+        self.update_header()
 
     def on_selection(self):
         try:
@@ -641,11 +721,11 @@ class WorkbenchTab(QWidget):
         d = QFileDialog.getExistingDirectory(self, "Import an analysis project or Truss folder", os.path.dirname(self.path) if self.path else "")
         return self.import_many([d] if d else [])
 
-    def import_many(self, paths):
-        """Imports every path; what could not be imported is listed with its reason in one message.  -> the nodes made."""
+    def import_many(self, paths, x=None, y=None):
+        """Imports every path (side by side from x, y when they are given); what could not be imported is listed with its reason in one message.  -> the nodes made."""
         out, bad = [], []
-        for f in paths:
-            n = self.import_file(f)
+        for i, f in enumerate(paths):
+            n = self.import_file(f, None if x is None else x + i * (cv.BLOCK_W + 2 * cv.GRID), y)
             if n is not None:
                 out.append(n)
             else:
@@ -654,14 +734,14 @@ class WorkbenchTab(QWidget):
             QMessageBox.warning(self, "Import", "Not imported:\n\n" + "\n\n".join(bad))
         return out
 
-    def import_file(self, path):
+    def import_file(self, path, x=None, y=None):
         """A part, an assembly or a project of the old kind becomes a block (wb_import).  -> the node or None (the reason is said)."""
         try:
             import wb_import
         except ImportError:
             self.say("Importing is not available in this version of the workbench.")
             return None
-        return wb_import.import_path(self, path)
+        return wb_import.import_path(self, path, x, y)
 
     # ---- the example and the report
     def load_example(self):

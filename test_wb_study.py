@@ -1,7 +1,8 @@
-"""The Parametric Study block of the Workbench in the real program window.  A study block takes ONE analysis (a wire from the analysis's Setup cell into its Parameters cell): what
-can be wired and what is said when it cannot, double-click opens the study window of that analysis (the analysis opens behind it), the table of design points is made there, the
-analysis block takes the study into the project (never making its solution out of date), Update Project runs every design point and waits, saving the project keeps the table but not the full result of each
-case, the project opens again with the study there, and removing the analysis closes its study.   python test_wb_study.py"""
+"""The Parametric Study block of the Workbench in the real program window, with ONE analysis and the Part it works on (test_wb_multi.py has several analyses): what can be wired and what
+is said when it cannot, double-click opens the study window (the analysis opens behind it), the table of design points is made there (an input of the analysis, and a dimension of the
+Part: a change of the geometry flows through the analysis), the study block keeps the study (never making the analysis's solution out of date), Update Project runs every design point and
+waits, saving the project keeps the table but not the full result of each case, the project opens again with the study there, and removing the analysis closes its study.
+python test_wb_study.py"""
 import atexit
 import faulthandler
 faulthandler.dump_traceback_later(560, exit=True)
@@ -100,15 +101,16 @@ for k in ("solid", "fea", "thermal", "cfd", "beam"):
 ok(not wp.spec_of("thermal3d").cell("setup").provides, "3D Thermal gives none (it has no parametric study yet)")
 sp_ = wp.spec_of("study")
 ok([c.key for c in sp_.cells] == ["setup", "solution", "results"] and [c.role for c in sp_.cells] == ["import", "compute", "view"], "a study has Parameters (import), Study (compute), Results (view)")
-ok(sp_.cell("setup").accepts == ("analysis",) and sp_.standalone == "", "Parameters takes an analysis; the block is not saved on its own")
+ok(sp_.cell("setup").accepts == ("analysis", "dimensions") and sp_.cell("setup").many and sp_.standalone == "", "Parameters takes analyses and dimensions of parts, any number; the block is not saved on its own")
 
 P = W.project
 nBar = W.add_block("part", 40, 60, title="Bar", data={"doc": bar_json(10)})
 nA = W.add_block("solid", 400, 60, title="Bar analysis")
 nT = W.add_block("thermal3d", 400, 300, title="Heat")
 nS = W.add_block("study", 760, 60, title="Bar study")
-ok(P.why_not_link(nBar.id, "geometry", nS.id, "setup") is not None and "takes analysis" in P.why_not_link(nBar.id, "geometry", nS.id, "setup"),
-   f"a part cannot feed a study ({P.why_not_link(nBar.id, 'geometry', nS.id, 'setup')})")
+ok(P.why_not_link(nBar.id, "geometry", nS.id, "setup") is None, "a part can feed a study (its dimensions)")
+ok(wp.spec_of("assembly") and "dimensions" not in wp.spec_of("assembly").cell("geometry").provides and "takes analysis / dimensions" in (P.why_not_link(
+    W.add_block("assembly", 40, 700, title="Asm").id, "geometry", nS.id, "setup") or ""), "an assembly cannot (it has no dimensions a study can vary)")
 ok("does not give" in (P.why_not_link(nT.id, "setup", nS.id, "setup") or ""), f"3D Thermal cannot feed one ({P.why_not_link(nT.id, 'setup', nS.id, 'setup')})")
 ok(P.why_not_link(nA.id, "setup", nS.id, "setup") is None, "a 3D analysis's Setup can")
 ok(P.why_not_link(nS.id, "setup", nA.id, "geometry") is not None, "and nothing flows back out of a study")
@@ -140,10 +142,11 @@ ok(P.status(nA.id, "setup") == wp.OK, "the analysis has its setup")
 # the wire
 W.scene.make_link(nA.id, "setup", nS.id, "setup")
 ok(P.status(nS.id, "setup") == wp.REFRESH, f"a wire to a ready analysis: Parameters says refresh ({P.status(nS.id, 'setup')})")
-ok(P.why_not_link(nA.id, "setup", nS.id, "setup") is not None and "already has a source" in P.why_not_link(nA.id, "setup", nS.id, "setup"), "one analysis per study")
+ok("already" in (P.why_not_link(nA.id, "setup", nS.id, "setup") or ""), f"the same analysis twice is refused ({P.why_not_link(nA.id, 'setup', nS.id, 'setup')})")
 nA2 = W.add_block("solid", 400, 520, title="Other analysis")
-ok("already has a source" in (P.why_not_link(nA2.id, "setup", nS.id, "setup") or ""), "a second analysis into the same study is refused")
+ok(P.why_not_link(nA2.id, "setup", nS.id, "setup") is None, "a second analysis into the same study is fine")
 W.scene.remove_nodes([nA2.id])
+ok(W.scene.make_link(nBar.id, "geometry", nS.id, "setup") is not None, "so is the Part the analysis works on")
 tabs_before = shell.tabs.count()
 done, failed = W.refresh_project()
 ok(not failed and P.status(nS.id, "setup") == wp.OK, f"Refresh Project did the Parameters cell ({failed})")
@@ -163,7 +166,7 @@ ok(isinstance(st, study_tab.StudyTab) and W.editor_of(nS.id) is st, "double-clic
 ok(shell.tabs.indexOf(st) >= 0 and shell.tabs.currentWidget() is st and W.editor_of(nA.id) is w, "in a tab of the program window, in front; the analysis is still its own tab")
 ok(shell.tabs.tabText(shell.tabs.indexOf(st)).startswith(f"{nS.label} Bar study"), f"named after the block ({shell.tabs.tabText(shell.tabs.indexOf(st))})")
 ok(W.open_cell(nS.id, "results") is st and shell.tabs.count() == tabs_before + 1, "a second double-click shows the same window")
-ok(st.sw is w, "it works on the analysis's own window")
+ok(st.sw.node is nS and W.editor_of(nA.id) is w, "it works on the block's own folder and the analysis's own window")
 fold = W.node_state[nA.id]["folder"]
 ok(not any(os.path.abspath(i["path"]) == os.path.abspath(fold) for i in recent.items()), "nothing of this goes in the recent list")
 
@@ -180,7 +183,7 @@ st.fill_outputs()
 s_set, s_sol = stamp(P, nA.id, "setup"), stamp(P, nA.id, "solution")
 ch = W.sync_editors()
 ok(nS.id in ch and P.status(nS.id, "solution") == wp.UPDATE, f"a study set up differently says update ({P.status(nS.id, 'solution')})")
-ok("study/study.json" in nA.data["files"], f"the analysis block took the study into its data ({[k for k in nA.data['files'] if k.startswith('study')]})")
+ok("study/study.json" in nS.data["files"] and not any(k.startswith("study/") for k in nA.data["files"]), f"the study block took the study into its data, the analysis did not ({[k for k in nS.data['files'] if k.startswith('study')]})")
 ok(stamp(P, nA.id, "setup") == s_set and stamp(P, nA.id, "solution") == s_sol, "a study is not a change of the analysis: nothing there becomes out of date")
 ok(P.status(nS.id, "setup") == wp.OK, "and the study's Parameters stay ok")
 ok(P.is_dirty(), "the project needs saving")
@@ -194,8 +197,22 @@ us = [c["outputs"][umax_id] for c in st.data.cases]
 ok(abs(us[1] - 0.005) / 0.005 < 0.04 and abs(us[0] * 2 - us[1]) / us[1] < 0.02 and abs(us[2] * 2 / 3 - us[1]) / us[1] < 0.02, f"the displacement follows the force, as a bar must ({us})")
 ok(P.status(nS.id, "solution") == wp.OK and all(P.status(nS.id, k) == wp.OK for k in ("setup", "solution", "results")), f"every cell of the study is ok ({P.statuses(nS.id)})")
 ok(W.update_project()[0] == 0, "a second Update has nothing to do")
-ok("study/study.json" in nA.data["files"] and not any("/cases/" in k for k in nA.data["files"]), "the project holds the table, but not the full result of each case")
+ok("study/study.json" in nS.data["files"] and not any("/cases/" in k for k in nS.data["files"]), "the project holds the table, but not the full result of each case")
 ok(any(c.get("file") for c in st.data.cases) or True, "(the cases were written next to the study)")
+
+# a dimension of the Part flows through the analysis: the bar is twice as deep, so its displacement is half
+pg = [k for k in st.desc if k.startswith(f"{nBar.label}/") and k.endswith("g:H")]
+ok(len(pg) == 1 and st.desc[pg[0]]["now"] == "10", f"the Part's depth H is an input of the study ({pg})")
+st.items[pg[0]].setCheckState(0, Qt.CheckState.Checked)
+st.data.rows[0][pg[0]] = "20"
+st.rebuild_design()
+st.mark()
+W.sync_editors()
+ok(P.status(nS.id, "solution") == wp.UPDATE, "a changed table says update")
+done, failed = W.update_project(only={nS.id})
+ok(not failed and len(st.data.cases) == 3 and all(c["status"] == "ok" for c in st.data.cases), f"Update ran it again ({failed})")
+us2 = [c["outputs"][umax_id] for c in st.data.cases]
+ok(abs(us2[0] * 2 - us[0]) / us[0] < 0.04 and abs(us2[1] - us[1]) / us[1] < 0.02, f"the first row (H = 20) gives half the displacement of before, the others are as they were ({us2[0]:.5g} against {us[0]:.5g}; {us2[1]:.5g} against {us[1]:.5g})")
 
 # the analysis changes: the study follows
 w.set_size("5")

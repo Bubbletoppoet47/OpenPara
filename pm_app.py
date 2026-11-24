@@ -182,11 +182,6 @@ class MainWindow(QMainWindow):
             ("section", "◫", "Section\nProperties", "Area, centroid and area moments of inertia of a cut through the part: the Front, Top or Right plane, a reference plane, or a flat face you click", lambda: self.section_open()),
             ("measure", "↔", "Measure", "Measure points, edges and faces: click one or two items in the view", lambda: self.measure_toggle()),
         ]), "Evaluate")
-        import ext
-        if ext.present("simulation"):
-            self.ribbon.addTab(self.ribbon_page([("sim_beam", "┼", "1D FEA\n(frames)", "Frames and trusses from a sketch of this part", lambda: self.add_sim("beam")),
-                                        ("sim_fea", "▦", "2D FEA", "Plane stress / strain FEA of a sketch or a slice of this part", lambda: self.add_sim("fea")),
-                                        ("sim_cfd", "≋", "2D CFD", "Flow around a sketch or a slice of this part", lambda: self.add_sim("cfd"))]), "Simulation")
         import addons
         if addons.offered("render"):                        # where this copy offers Visualize: without the add-on the button offers to install it
             self.ribbon.addTab(self.ribbon_page([("render_new", "◉", "Preview / Render", "Visualize this part: Previs, a live lit Preview, and ray-traced pictures and videos", lambda: self.add_render())]), "Visualize")
@@ -363,11 +358,6 @@ class MainWindow(QMainWindow):
             QShortcut(QKeySequence(key_), self, activated=lambda: self.ed.finish_spline() if (self.ed is not None and self.ed.active
                                                                                               and self.ed.tool == "spline") else None)
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self.delete_key)
-
-    def add_sim(self, kind):
-        sh = self.window()
-        if hasattr(sh, "add_sim"):
-            sh.add_sim(kind)
 
     def add_render(self):
         sh = self.window()

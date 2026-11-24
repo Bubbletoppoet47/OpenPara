@@ -309,6 +309,40 @@ class RefineDialog(QDialog):
         return self.name.text().strip() or "Mesh refinement", self.start.text().strip(), self.factor.text().strip(), self.levels.value()
 
 
+def geo_candidates(sw):
+    """[(cfg key, label, now)] of the part copied into the simulation project of `sw` (only for a simulation of a sketch of a part, or a 3D one): what a study can change in it."""
+    src = getattr(sw, "source", None)
+    sid = sw.meta.get("sid") if isinstance(getattr(sw, "meta", None), dict) else None
+    solid = getattr(sw, "study_geometry", False)                        # a 3D part simulation: the whole part is its geometry
+    if src is None or getattr(src, "type", "") != "part" or (not solid and (not sid or str(sid).startswith("__"))):
+        return []
+    try:
+        return list(src.doc.cfg_candidates())
+    except Exception:
+        return []
+
+
+def geometry_state(sw, adapter, vals):
+    """The saved state of the simulation tab of `sw` with its part after changing the dimensions `vals` ({cfg key: text}); a fresh copy of the project's part is changed."""
+    import sim_project
+    import sim_source
+    from study_iface import parse_bool
+    sid = sw.meta.get("sid")
+    src = sim_source.open_source(sim_project.source_file(sw.path))
+    vals = {k: (parse_bool(v) if k.startswith("s:") else v) for k, v in vals.items()}
+    if hasattr(adapter, "geometry_state"):                       # the simulation turns the changed part into its own state
+        return adapter.geometry_state(src, vals)
+    src.set_values(vals)
+    m = src.doc.models.get(sid)
+    if m is None:
+        raise ValueError("The sketch of the simulation is not in the part any more.")
+    st = adapter.base_state()
+    if "model_json" not in st:
+        raise ValueError("This simulation cannot take a changed sketch.")
+    st["model_json"] = m.to_json()
+    return st
+
+
 class StudyTab(QWidget):
     def __init__(self, sw, threaded=True):
         super().__init__()
@@ -348,6 +382,9 @@ class StudyTab(QWidget):
         self.b_sim = QPushButton("Go to the simulation")
         self.b_sim.setToolTip("Shows the simulation tab this study belongs to.")
         self.b_sim.clicked.connect(self.goto_sim)
+        if callable(getattr(sw, "goto", None)):                           # a study of several blocks: they are in the Workbench
+            self.b_sim.setText("Go to the Workbench")
+            self.b_sim.setToolTip("Shows the Workbench project this study belongs to.")
         topbar.addWidget(self.b_sim)
 
         # ---- the studies of this project: one at a time (an extra row under the bar)
@@ -596,6 +633,24 @@ class StudyTab(QWidget):
         sim_ui.soften_area(self.header)
         sim_ui.soften_area(self.right, tabs=True)
         self.soft = True
+        self.outline = None
+        if hasattr(sim_ui, "outlinize"):                        # the same column as the FEA windows: an Outline of the steps, the Details of the selected one below it,
+            self.outline = sim_ui.outlinize(self.panel, self, "study")           # and the Run buttons pinned under both (as Solve is)
+
+    def outline_marks(self):
+        """The marks of the Outline: a check when the step is done, a question mark when the study needs something from it."""
+        have_in = bool(self.cols())
+        have_out = any(o in {x["id"] for x in getattr(self, "outs", [])} for o in self.data.out_checked)
+        marks = {}
+        for sc_ in self.sections:
+            t = sc_.title
+            if t == "Inputs to vary":
+                marks[t] = "ok" if have_in else "incomplete"
+            elif t == "Outputs to record":
+                marks[t] = "ok" if have_out else "incomplete"
+            else:
+                marks[t] = "ok" if self.data.exit_conds else ""
+        return marks
 
     # ------------------------------------------------------------------ small helpers
     @staticmethod
@@ -605,6 +660,9 @@ class StudyTab(QWidget):
         return lb
 
     def goto_sim(self):
+        if callable(getattr(self.sw, "goto", None)):               # a study of several blocks (the Workbench): its host shows where they are
+            self.sw.goto()
+            return
         sh = getattr(self.sw, "shell", None)
         if sh is not None and sh.is_open(self.sw):
             sh.tabs.setCurrentWidget(self.sw)
@@ -646,17 +704,8 @@ class StudyTab(QWidget):
     # ------------------------------------------------------------------ the inputs
     def geo_params(self):
         """The dimensions of the part copied into the project (only for a simulation of a sketch of a part)."""
-        src = getattr(self.sw, "source", None)
-        sid = self.sw.meta.get("sid") if isinstance(getattr(self.sw, "meta", None), dict) else None
-        solid = getattr(self.sw, "study_geometry", False)                        # a 3D part simulation: the whole part is its geometry
-        if src is None or getattr(src, "type", "") != "part" or (not solid and (not sid or str(sid).startswith("__"))):
-            return []
         out = []
-        try:
-            cands = src.doc.cfg_candidates()
-        except Exception:
-            return []
-        for key, label, now in cands:
+        for key, label, now in geo_candidates(self.sw):
             is_bool = key.startswith("s:")
             out.append({"id": core.GEO + key, "group": "Part dimensions (changes the geometry)", "label": "Part: " + label,
                         "kind": "bool" if is_bool else "text", "choices": None,
@@ -672,8 +721,8 @@ class StudyTab(QWidget):
             self.outs = list(self.adapter.outputs())
             ready = self.adapter.ready()
             pname = os.path.splitext(os.path.basename(str(self.path_).rstrip("/\\")))[0]
-            self.head.setText(f"<b>{self.adapter.label}</b> study of the project <b>{pname}</b>"
-                              + (f"<br><span style='color:#a05000'>{ready}</span>" if ready else ""))
+            head = self.adapter.heading() if hasattr(self.adapter, "heading") else f"<b>{self.adapter.label}</b> study of the project <b>{pname}</b>"
+            self.head.setText(head + (f"<br><span style='color:#a05000'>{ready}</span>" if ready else ""))
             self.refresh_sections()
             self.tree.blockSignals(True)
             self.tree.clear()
@@ -1022,30 +1071,11 @@ class StudyTab(QWidget):
         key = tuple(sorted(geo.items()))
         if key in self.geo_cache:
             return self.geo_cache[key]
-        import sim_project
-        import sim_source
-        sid = self.sw.meta.get("sid")
-        src = sim_source.open_source(sim_project.source_file(self.sw.path))
         vals = {}
         for pid, v in geo.items():
             d = self.desc.get(pid)
-            k = d["geo"] if d else pid[len(core.GEO):]
-            if k.startswith("s:"):
-                from study_iface import parse_bool
-                v = parse_bool(v)
-            vals[k] = v
-        if hasattr(self.adapter, "geometry_state"):                       # the simulation turns the changed part into its own state
-            st = self.adapter.geometry_state(src, vals)
-            self.geo_cache[key] = st
-            return st
-        src.set_values(vals)
-        m = src.doc.models.get(sid)
-        if m is None:
-            raise ValueError("The sketch of the simulation is not in the part any more.")
-        st = self.adapter.base_state()
-        if "model_json" not in st:
-            raise ValueError("This simulation cannot take a changed sketch.")
-        st["model_json"] = m.to_json()
+            vals[d["geo"] if d else pid[len(core.GEO):]] = v
+        st = geometry_state(self.sw, self.adapter, vals)
         self.geo_cache[key] = st
         return st
 

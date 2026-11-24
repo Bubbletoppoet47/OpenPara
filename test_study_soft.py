@@ -69,6 +69,19 @@ for title, first in (("Inputs to vary", "Tick the inputs"), ("Outputs to record"
     assert isinstance(lab, QLabel) and lab.text().startswith(first) and lab.wordWrap(), (title, lab)
     assert body.itemAt(1).widget() is not None and not isinstance(body.itemAt(1).widget(), QLabel), "the table follows the hint"
 
+# ------------------------------------------------------------------ the column of the FEA windows: an Outline of the steps with the Details of the selected one below it
+ol = tab.outline
+assert ol is not None and ol.keys() == ["Inputs to vary", "Outputs to record", "Stop early when"], "the sections are the nodes of an Outline"
+lay_ = tab.panel.layout()
+assert lay_.indexOf(ol) == 0 and lay_.indexOf(tab.runbar) == lay_.count() - 1, "the Outline is on top and the Run bar stays pinned under everything"
+assert ol.current == ("Inputs to vary", None) and sections["Inputs to vary"].isVisibleTo(tab) and not sections["Outputs to record"].isVisibleTo(tab), "the Details show the selected step only"
+assert ol.head.text() == "Details of “Inputs to vary”"
+ol.select("Outputs to record"); flush()
+assert sections["Outputs to record"].isVisibleTo(tab) and not sections["Inputs to vary"].isVisibleTo(tab) and ol.head.text() == "Details of “Outputs to record”"
+ol.select("Inputs to vary"); flush()
+ol.sync()
+assert ol.marks.get("Inputs to vary") == "incomplete" and ol.marks.get("Outputs to record") == "ok", f"no input ticked yet: a question mark ({ol.marks})"
+
 # ------------------------------------------------------------------ the Run bar is the Solve bar of this tab
 assert tab.b_all.property("simrole") == "solve" and tab.b_stop.property("simrole") == "solveside"
 assert tab.b_all.height() >= 44 and tab.b_stop.height() >= 44 and abs(tab.b_all.height() - tab.b_stop.height()) <= 2, (tab.b_all.height(), tab.b_stop.height())
@@ -83,6 +96,9 @@ for pid in (dim, "fea.load0.p"):
     tab.items[pid].setCheckState(0, Qt.CheckState.Checked)
 assert tab.fill_grid({dim: "100, 150", "fea.load0.p": "0.5, 1.0"}) and len(tab.data.rows) == 4
 tab.data.out_checked = ["fea.status", "fea.umax", "fea.vm", "fea.fos_y"]; tab.fill_outputs()
+ol.sync()
+assert ol.marks["Inputs to vary"] == "ok", "an input is ticked: a check"
+ol.select("Stop early when"); flush()
 tab.add_exit()
 assert len(tab.data.exit_conds) == 1
 tab.data.exit_conds[0].update({"key": "fea.fos_y", "op": "<", "value": "1.5"}); tab.fill_exit_table(); flush()

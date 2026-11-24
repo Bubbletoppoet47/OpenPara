@@ -15,7 +15,7 @@ os.environ["OPARA_USER_DIR"] = UDIR
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, "dev_addons", "workbench"), os.path.join(HERE, "shared")]
 from PyQt6.QtCore import QPoint, QPointF, Qt
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QImage, QPainter
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QDialog, QFileDialog, QInputDialog, QMessageBox
 
@@ -213,7 +213,7 @@ scene.clearSelection()
 app.processEvents()
 ia = item(A)
 cyA = ia.cell_y(0) + cv.CELL_H / 2
-ok(cv.PORT_R == 4.5, "the dot is no bigger than before (radius 4.5)")
+ok(cv.PORT_R == 5.0, "the dot has a radius of 5 (and a 1 px outline: 6 to the eye and to the mouse)")
 ok(ia.shape().contains(QPointF(cv.BLOCK_W + 3, cyA)) and ia.shape().contains(QPointF(cv.BLOCK_W + 5, cyA)), "the whole dot is the block's: the half outside the body too")
 ok(not ia.shape().contains(QPointF(cv.BLOCK_W + 8, cyA)) and not ia.shape().contains(QPointF(cv.BLOCK_W + 3, cyA + 8)), "and no more than the dot (not a larger target)")
 ok(item(B).shape().contains(QPointF(-3, item(B).cell_y(0) + cv.CELL_H / 2)), "the same for an input dot")
@@ -258,10 +258,16 @@ li0 = scene.link_items[prj.links[0].key()]
 e, d = li0.pts[-1], li0.pts[-2]
 imgw = view.grab().toImage()
 pe = view.mapFromScene(e)
-ok(close(pixel(imgw, pe.x() - 8, pe.y()), (42, 157, 143), 50), f"the wire is drawn up to its input dot ({pixel(imgw, pe.x() - 8, pe.y())})")
+NAVY_W = (31, 58, 110)
+ok(close(pixel(imgw, pe.x() - 8, pe.y()), NAVY_W, 30), f"the wire is drawn up to its input dot, in navy ({pixel(imgw, pe.x() - 8, pe.y())})")
 for dy in (-2, 2):
     c3 = pixel(imgw, pe.x() - 7, pe.y() + dy)
-    ok(not close(c3, (42, 157, 143), 60), f"no arrowhead beside the wire {dy:+d} px, 7 px back from its end ({c3})")
+    ok(not close(c3, NAVY_W, 60), f"no arrowhead beside the wire {dy:+d} px, 7 px back from its end ({c3})")
+# the wire runs BEHIND the dot: inside the white ring of the dot (4 px from its centre) the wire does not show through
+c4 = pixel(imgw, pe.x() - 4, pe.y())
+ok(close(c4, (255, 255, 255), 30), f"the dot has a white ring and the wire does not cross it ({c4})")
+c5 = pixel(imgw, pe.x(), pe.y())
+ok(close(c5, NAVY_W, 30), f"a dot with a wire on it is navy in the middle ({c5})")
 ok(abs(e.y() - d.y()) < 0.5, "(the last piece of this wire is horizontal, so the check above looks at the right place)")
 
 # ----------------------------------------------------------------------------------------------------------------------------------- dropping a system from the toolbox
@@ -477,32 +483,83 @@ img.save("/tmp/wb_shots/schematic.png")
 ok(img.width() > 400 and img.height() > 300, f"the window can be drawn ({img.width()}x{img.height()})")
 a_head = view.mapFromScene(QPointF(A.pos[0] + 120, A.pos[1] + 10))
 col = pixel(img, a_head.x(), a_head.y())
-ok(close(col, (42, 157, 143), 30), f"the bar of a geometry block is teal ({col})")
+ok(close(col, (203, 211, 224), 12), f"the bar of a block is the light grey of the kit ({col})")
 b_head = view.mapFromScene(QPointF(B.pos[0] + 60, B.pos[1] + 10))
 col = pixel(img, b_head.x(), b_head.y())
-ok(close(col, (43, 125, 233), 30), f"the bar of an analysis block is blue ({col})")
+ok(close(col, (203, 211, 224), 12), f"and the same on every kind of block ({col})")
+chipA = view.mapFromScene(QPointF(A.pos[0] + 6, A.pos[1] + 5))
+chipB = view.mapFromScene(QPointF(B.pos[0] + 6, B.pos[1] + 5))
+col = pixel(img, chipA.x(), chipA.y())
+ok(close(col, (11, 122, 112), 12), f"the letter of a geometry block sits in a teal chip ({col})")
+col = pixel(img, chipB.x(), chipB.y())
+ok(close(col, (106, 63, 184), 12), f"that of an analysis in a purple chip ({col})")
+o_a = view.mapFromScene(QPointF(A.pos[0] + 120, A.pos[1]))
+ct, cb, cm = pixel(img, o_a.x(), o_a.y() + 1), pixel(img, o_a.x(), o_a.y() + int(cv.HEAD_H) - 1), pixel(img, o_a.x(), o_a.y() + 10)
+ok(ct[0] > cm[0] and cb[0] < cm[0] - 30, f"the bar is bevelled: a lighter line above, a darker one below ({ct} / {cm} / {cb})")
+gut = view.mapFromScene(QPointF(A.pos[0] + 3, A.pos[1] + cv.HEAD_H + cv.NAME_H + 5))
+col = pixel(img, gut.x(), gut.y())
+ok(close(col, (233, 237, 245), 8), f"the numbers of the rows stand in a grey gutter ({col})")
+edge = view.mapFromScene(QPointF(A.pos[0], A.pos[1] + 60))
+col = pixel(img, edge.x(), edge.y())
+ok(close(col, (135, 147, 173), 25), f"the block has a thin grey-blue outline ({col})")
 # the wire between A and B: the middle of its first horizontal segment
 li = scene.link_items[prj.links[0].key()]
 mid = QPointF((li.pts[0].x() + li.pts[1].x()) / 2 + 3, li.pts[0].y())
 q = view.mapFromScene(mid)
 col = pixel(img, q.x(), q.y())
-ok(close(col, (42, 157, 143), 45), f"the wire is drawn in the wire colour ({col})")
-# the status mark of the geometry cell of A (ready: green)
-mark = view.mapFromScene(item(A).mapToScene(QPointF(cv.BLOCK_W - 16, cv.HEAD_H + cv.NAME_H + cv.CELL_H / 2)))
-col = pixel(img, mark.x() - 4, mark.y() + 3)
-ok(close(col, (46, 158, 91), 40), f"a cell that is up to date has a green mark ({col})")
+ok(close(col, (31, 58, 110), 30), f"the wire is navy ({col})")
+ok(close(pixel(img, q.x(), q.y() - 1), (31, 58, 110), 30) or close(pixel(img, q.x(), q.y() + 1), (31, 58, 110), 30), "and two pixels thick")
+
+
+def mark_box(node, i):
+    """The view rectangle of the status mark of cell i of a block."""
+    c = item(node).mapToScene(QPointF(cv.BLOCK_W - 17, cv.HEAD_H + cv.NAME_H + i * cv.CELL_H + cv.CELL_H / 2))
+    q = view.mapFromScene(c)
+    return int(q.x()) - 9, int(q.y()) - 9, 18, 18
+
+
+def count(image, box, pred):
+    x0, y0, w, h = box
+    return sum(1 for x in range(x0, x0 + w) for y in range(y0, y0 + h) if pred(*pixel(image, x, y)))
+
+
+green = lambda r, g, b: g > r + 30 and g > b + 10
+blue = lambda r, g, b: b > r + 50 and b > g + 30
+amber = lambda r, g, b: r > b + 90 and r > 150 and g > 90
+red = lambda r, g, b: r > g + 70 and r > b + 70
+# the status mark of the geometry cell of A (ready: a green check in a white disc, drawn by the icon kit)
+ok(count(img, mark_box(A, 0), green) >= 8, f"a cell that is up to date has a green check ({count(img, mark_box(A, 0), green)} green pixels)")
+ok(count(img, mark_box(A, 0), lambda r, g, b: r > 245 and g > 245 and b > 245) >= 30, "in a white disc")
+ink_n = count(img, mark_box(A, 0), lambda r, g, b: close((r, g, b), (16, 32, 77), 40))
+ok(ink_n >= 20, f"with the navy outline of the kit ({ink_n} ink pixels)")
 # the geometry cell of C is ready as well; the status marks of an incomplete cell are blue
 inc = [c for c in prj.nodes.values() if prj.status(c.id, "setup") == wp.INCOMPLETE]
 ok(inc != [], "some cell is incomplete in the example")
+# every status has its own mark, and they are drawn in different colours
+shots = {}
+for st_, pred in (("ok", green), ("incomplete", blue), ("update", amber), ("failed", red)):
+    im = QImage(40, 40, QImage.Format.Format_ARGB32)
+    im.fill(QColor("#ffffff"))
+    pp = QPainter(im)
+    ic.paint_status(pp, st_, QPointF(20, 20), 8.0)
+    pp.end()
+    shots[st_] = count(im, (0, 0, 40, 40), pred)
+ok(all(v >= 6 for v in shots.values()), f"the five kinds of mark show their colours: green check, blue question mark, amber bolt, red cross ({shots})")
+im = QImage(40, 40, QImage.Format.Format_ARGB32)
+im.fill(QColor("#ffffff"))
+pp = QPainter(im)
+ic.paint_status(pp, "refresh", QPointF(20, 20), 8.0)
+pp.end()
+ok(count(im, (0, 0, 40, 40), lambda r, g, b: (r, g, b) != (255, 255, 255)) > 100, "and the refresh mark draws as well")
 # selection outline
 item(C).setSelected(True)
 app.processEvents()
 img2 = view.grab().toImage()
-cx = view.mapFromScene(QPointF(C.pos[0], C.pos[1] + 50))
+cx = view.mapFromScene(QPointF(C.pos[0] - 3, C.pos[1] + 50))
 col = pixel(img2, cx.x(), cx.y())
-ok(col[0] > 190 and col[1] < 160 and col[2] < 140, f"a selected block has an orange outline ({col})")
+ok(close(col, (47, 111, 237), 40), f"a selected block has a blue ring round it ({col})")
 col = pixel(img, cx.x(), cx.y())
-ok(not (col[0] > 190 and col[1] < 160), f"and an unselected one does not ({col})")
+ok(not close(col, (47, 111, 237), 60), f"and an unselected one does not ({col})")
 img2.save("/tmp/wb_shots/selected.png")
 
 shutil.rmtree(T, ignore_errors=True)

@@ -30,12 +30,12 @@ d.add(pm.new_feature("extrude", sketch=s["id"], depth="8")); d.rebuild()
 part = os.path.join(UD, "bar.gpd"); open(part, "w").write(d.to_json())
 sh = gpd_app.AppShell([part])
 labels = [a.text() for a in sh.menuBar().actions()[0].menu().actions()]
-assert "New 3D FEA" in labels and "New 2D FEA" in labels, labels
+assert "New 3D FEA" not in labels and "New 2D FEA" not in labels, ("a simulation is made in the Workbench: no File > New for it", labels)
 w = sh.new_addon_tab("solid")
 assert isinstance(w, solid_tab.SolidWindow) and w.kind == "solid"
 w.threaded = False
 assert w.create_project(os.path.join(UD, "p1"))
-assert w.import_tab(sh.tabs.widget(0)), "an open part tab can be copied in (unsaved edits included)"
+assert w.import_file(part), "the part is copied in (no dialog: the Workbench copies the wired block in)"
 assert w.geom is not None and abs(w.geom["volume"] - 60 * 10 * 8) < 1e-3 and w.save()
 folder = w.path
 sh.close_tab(sh.tabs.indexOf(w))

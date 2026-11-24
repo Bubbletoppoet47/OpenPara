@@ -29,19 +29,19 @@ sh = gpd_app.AppShell([part])
 f = sh.open_filter()
 assert "*.gps" not in f and "*.gpd" in f and "*.gpa" in f, f
 labels = [a.text() for a in sh.menuBar().actions()[0].menu().actions()]
-for lab in ("New 1D FEA", "New 2D FEA", "New 2D CFD", "Open Project Folder..."):
-    assert lab in labels, (lab, labels)
+assert "Open Project Folder..." in labels, labels
+assert not any(l in labels for l in ("New 1D FEA", "New 2D FEA", "New 2D CFD")), ("a simulation is made in the Workbench: no File > New for it", labels)
+assert not [a.text() for m in sh.menuBar().actions() if m.text() == "&Add" for a in m.menu().actions() if "FEA" in a.text() or "CFD" in a.text()], "no Add > simulation"
 
 # File > New 2D FEA: an empty simulation (no project yet)
 w = sh.new_addon_tab("fea")
 assert isinstance(w, sim_tab.SimWindow) and w.kind == "fea" and not w.project_ok() and w.source is None
 sh.close_tab(sh.tabs.indexOf(w))
 
-# the ribbon: a simulation of the part on screen -> New project imports the live part (unsaved edits included)
-w = sh.add_sim("fea")
-assert isinstance(w, sim_tab.SimWindow) and w.candidate is sh.tabs.widget(0)
+# a simulation project as the Workbench makes it: the geometry is copied into the folder (File > New has none of its own)
+w = sim_tab.SimWindow("fea", shell=sh); sh.add_tab(w)
 proj = os.path.join(UD, "bracket_study")
-assert w.create_project(proj) and w.project_ok() and w.source is not None and w.source.type == "part"
+assert w.create_project(proj) and w.project_ok() and w.source is None and w.import_file(part) and w.source is not None and w.source.type == "part"
 assert w.path.endswith(".gpf") and abs(w.source.doc.solid.volume - 40 * 20 * 10) < 1e-3
 w.tab.picker.refresh()
 sid = next(i for i, n in w.source_items() if not str(i).startswith("__"))

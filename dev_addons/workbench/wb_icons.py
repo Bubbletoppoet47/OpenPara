@@ -1,7 +1,10 @@
-"""wb_icons.py - the little pictures of the workbench, drawn with QPainter (no picture files): one for every kind of block, one for every kind of cell, and the
-five status marks (up to date, incomplete, refresh, update, failed).  Everything is drawn in a 24 x 24 box that is scaled to the rectangle asked for."""
+"""wb_icons.py - the little pictures of the workbench: one for every kind of block, one for every kind of cell, and the five status marks (up to date, incomplete, refresh,
+update, failed).  They are drawn by the program's icon kit (wb_kit.py), the look of Sheets; a core with no icon kit gets the pictures drawn below with QPainter instead (a 24 x 24
+box that is scaled to the rectangle asked for)."""
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+
+import wb_kit as kit
 
 NAVY = QColor("#1d3557")
 BLUE = QColor("#2b7de9")
@@ -12,7 +15,12 @@ GREEN = QColor("#2e9e5b")
 RED = QColor("#d62828")
 GREY = QColor("#6a7790")
 PALE = QColor("#e6efff")
-GROUP_COLOR = {"Analysis Systems": BLUE, "Geometry": TEAL, "Component Tools": QColor("#7b5ea7"), "Design Exploration": QColor("#c77d0a")}
+GROUP_COLOR = {"Analysis Systems": QColor("#6a3fb8"), "Geometry": QColor("#0b7a70"), "Component Tools": QColor("#2a7a4f"), "Design Exploration": QColor("#2a62d4")}   # the letter chip, the toolbox swatch
+INK = QColor("#10204d")                                      # the ink of the icon kit: text, outlines
+HEAD = QColor("#cbd3e0")                                     # the grey of the bar of a block (the body colour of the kit)
+EDGE = QColor("#8793ad")
+WIRE_NAVY = QColor("#1f3a6e")
+SELECT_BLUE = QColor("#2f6fed")
 
 
 def _pen(c, w=1.5):
@@ -223,6 +231,8 @@ def _g_unknown(p):
 
 def paint_kind(p, kind, rect):
     """The picture of a kind of block in `rect` (a QRectF)."""
+    if kind in kit.KIND and kit.ready() and kit.draw(p, kit.KIND[kind], rect):
+        return
     p.save()
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     p.translate(rect.topLeft())
@@ -272,7 +282,10 @@ def _c_document(p):
 CELL_GLYPH = {"geometry": _c_geometry, "setup": _c_setup, "solution": _c_solution, "results": _c_results, "document": _c_document}
 
 
-def paint_cell(p, key, rect):
+def paint_cell(p, key, rect, kind=None):
+    """The picture of a cell (`key`) of a block of kind `kind` in `rect`."""
+    if kit.ready() and kit.draw(p, kit.cell_key(kind, key), rect):
+        return
     p.save()
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     p.translate(rect.topLeft())
@@ -284,6 +297,8 @@ def paint_cell(p, key, rect):
 # ---------------------------------------------------------------------------------------------------------------------------- the status marks
 def paint_status(p, status, center, r=8.0):
     """The mark of a cell: green check (up to date), blue ? (incomplete), green circling arrows (refresh), amber lightning bolt (update), red cross (failed)."""
+    if kit.ready() and kit.draw(p, kit.STATUS.get(status, "wb_failed"), QRectF(QPointF(center) - QPointF(r * 1.125, r * 1.125), QPointF(center) + QPointF(r * 1.125, r * 1.125))):
+        return
     p.save()
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     c = QPointF(center)
@@ -338,6 +353,10 @@ def paint_status(p, status, center, r=8.0):
 
 def kind_icon(kind, size=22):
     """A QIcon of a kind of block (for the toolbox and the tab strip)."""
+    if kind in kit.KIND and kit.ready():
+        ic = kit.icon(kit.KIND[kind], size)
+        if ic is not None:
+            return ic
     img = QImage(size * 2, size * 2, QImage.Format.Format_ARGB32_Premultiplied)
     img.fill(0)
     p = QPainter(img)

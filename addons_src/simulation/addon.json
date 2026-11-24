@@ -23,7 +23,8 @@
    "project_folder": {
     "marker": "simulation.json",
     "format": "openpara-sim-beam"
-   }
+   },
+   "home": "workbench"
   },
   {
    "kind": "fea",
@@ -38,7 +39,8 @@
    "project_folder": {
     "marker": "simulation.json",
     "format": "openpara-sim-fea"
-   }
+   },
+   "home": "workbench"
   },
   {
    "kind": "cfd",
@@ -53,7 +55,8 @@
    "project_folder": {
     "marker": "simulation.json",
     "format": "openpara-sim-cfd"
-   }
+   },
+   "home": "workbench"
   }
  ]
 }

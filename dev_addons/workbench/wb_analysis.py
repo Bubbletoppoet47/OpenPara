@@ -317,6 +317,11 @@ class AnalysisAdapter(nodes.Adapter):
         keys = [k for k in changed if k]
         return keys or None
 
+    def created(self, tab, node):
+        """A 1D Beam / Truss starts with its Profile cell ready: profiles are optional (the frame's own sketches work without any wire)."""
+        if node.spec is not None and node.spec.cell("profile") is not None:
+            tab.project.set_ready(node.id, "profile", True)
+
     # ---- refresh: the geometry from the wire
     def source_of(self, tab, node, key):
         """(name, text or flat file path, kind) of the block the geometry cell is wired to, or an error text."""
@@ -330,7 +335,54 @@ class AnalysisAdapter(nodes.Adapter):
             return src, src.data["asm"]
         return src, None
 
+    def refresh_profiles(self, tab, node):
+        """Every Part wired into the Profile cell is copied into the project's profiles/ (again, when it is there already: the profile sketches taken from it stay linked
+        and are worked out again); a part whose wire is gone leaves the project.  -> None, or the text of what went wrong."""
+        prj = tab.project
+        wired = []
+        for k in prj.incoming_all(node.id, "profile"):
+            src = prj.node(k.a)
+            if src.kind != "part" or src.data.get("doc") is None:
+                return f"'{src.title}' is empty: there is no part to take profile sketches from."
+            wired.append(src)
+        sp = sim_project()
+        tab.sync_editors()
+        reopen = tab.editor_of(node.id) is not None
+        if reopen:
+            self.close_editor(tab, node)
+        f = self.materialize(tab, node)
+        w = None
+        err = None
+        try:
+            have = {e["wb"]: e for e in sp.profile_parts(f) if e.get("wb")}
+            for src in wired:
+                old = have.pop(src.id, None)
+                sp.import_profile_part(f, text=json.dumps(src.data["doc"]), name=src.title, key=old["key"] if old else None, extra={"wb": src.id})
+            for e in have.values():
+                sp.remove_profile_part(f, e["key"])
+            if has_source(f):                                    # the profile sketches of the members are worked out again from the new copies
+                w = self.window(tab, f, threaded=False)
+                notes = w.tab.refresh_profs() if hasattr(w.tab, "refresh_profs") else []
+                w.save()
+                if notes:
+                    tab.note(f"{node.label} {node.title}: " + " ".join(notes))
+        except Exception as ex:                                  # noqa: BLE001
+            err = f"{type(ex).__name__}: {ex}"
+        finally:
+            if w is not None:
+                self.drop_window(w)
+        if err:
+            return err
+        st = self.state(tab, node)
+        node.data["files"] = pack(f)
+        st["base"] = digests(f)
+        if reopen:
+            self.open_editor(tab, node, front=False)
+        return None
+
     def refresh(self, tab, node, key):
+        if key == "profile":
+            return self.refresh_profiles(tab, node)
         if key != "geometry":
             return None
         got = self.source_of(tab, node, key)

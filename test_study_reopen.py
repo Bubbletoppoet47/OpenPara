@@ -36,8 +36,8 @@ sk.solve_model(mm); d.store_sketch(s["id"])
 d.add(pm.new_feature("extrude", sketch=s["id"], depth="10")); d.rebuild()
 part = os.path.join(UD, "p.gpd"); open(part, "w").write(d.to_json())
 sh = gpd_app.AppShell([part])
-w = sh.add_sim("beam")
-assert w.create_project(os.path.join(UD, "b1"))
+w = sh.add_tab(sim_tab.SimWindow("beam", shell=sh))
+assert w.create_project(os.path.join(UD, "b1")) and w.import_file(part)
 w.tab.picker.refresh(); w.tab.picker.select(s["id"]); w.tab.picker.go()
 t = w.tab
 ends = list(t.model.lns[next(iter(t.model.lns))][:2])
@@ -93,14 +93,6 @@ st3 = w2.open_study()
 assert isinstance(st3, study_tab.StudyTab) and len(st3.data.cases) == len(kept.cases)
 assert sh.close_tabs() and sh.tabs.count() == 0
 
-# ---- 4. the same kind of mistake in the simulation tab: the part it was made from is closed before the project is created
-part_tab = sh.open_path(part)
-w3 = sh.add_sim("beam")
-assert w3.candidate is part_tab and sh.is_open(part_tab)
-assert sh.close_tab(sh.tabs.indexOf(part_tab)); purge()
-assert not sh.is_open(part_tab), "a closed tab is reported as closed, without an error"
-assert w3.candidate_ok() is False
-assert w3.create_project(os.path.join(UD, "b2")) and w3.project_ok(), "the project is made; the source is imported afterwards"
 print("OK study reopen")
 import shutil; shutil.rmtree(UD, ignore_errors=True)
 os._exit(0)

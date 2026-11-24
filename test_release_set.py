@@ -31,16 +31,16 @@ except KeyError:
     pass
 sh = gpd_app.AppShell([])
 def texts(name):
-    m = next(a.menu() for a in sh.menuBar().actions() if a.text().replace("&", "") == name)
-    return [a.text().replace("&", "") for a in m.actions() if a.text()]
+    m = next((a.menu() for a in sh.menuBar().actions() if a.text().replace("&", "") == name), None)      # (the Add menu is there only when an add-on has something to add)
+    return [a.text().replace("&", "") for a in m.actions() if a.text()] if m is not None else []
 f = texts("File")
-assert "New 1D FEA" in f and "New 2D FEA" in f and "New 2D CFD" in f and "New Parametric Study..." in f, f
+assert not any(l in f for l in ("New 1D FEA", "New 2D FEA", "New 2D CFD", "New Parametric Study...")), f              # a simulation and a study are blocks of a Workbench project: no entry of their own
 assert not any("Visualize" in t or "Motor" in t or "Remote" in t for t in f + texts("Add") + texts("Help")), (f, texts("Add"))
-assert "Parametric study of this simulation" in texts("Add")
+assert not any("FEA" in t or "CFD" in t or "arametric" in t for t in texts("Add")), texts("Add")
 assert sorted(addons.tab_kinds()) == ["beam", "cfd", "fea"], sorted(addons.tab_kinds())
 wp = sh.new_part()
 tabs = [wp.ribbon.tabText(i) for i in range(wp.ribbon.count())]
-assert tabs == ["Part Features", "Sketch", "Evaluate", "Simulation"], tabs
+assert tabs == ["Part Features", "Sketch", "Evaluate"], tabs                      # (no 'Simulation' page: an analysis is made in the Workbench)
 wa = sh.new_assembly()
 assert "Visualize" not in [wa.ribbon.tabText(i) for i in range(wa.ribbon.count())]
 assert not any("Visualize" in b.text() or "Motor" in b.text() for b in sh.start.buttons), [b.text() for b in sh.start.buttons]

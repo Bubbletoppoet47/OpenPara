@@ -920,7 +920,7 @@ part = os.path.join(T_, "src", "block.gpd")
 os.makedirs(os.path.dirname(part))
 make_part(part, material={"name": "Copper", "density": 8960.0, "E_MPa": 110000.0, "nu": 0.34, "Sy_MPa": 70.0, "Su_MPa": 220.0})
 w = sim_tab.SimWindow("thermal")
-assert w.kind == "thermal" and isinstance(w.tab, tt.ThermalTab) and not w.b_import.isEnabled()
+assert w.kind == "thermal" and isinstance(w.tab, tt.ThermalTab) and not hasattr(w, "b_import")
 assert w.create_project(os.path.join(T_, "block")) and w.path.endswith(".gph") and sp.kind_of_folder(w.path) == "thermal"
 assert w.import_file(part)
 sid = next(i for i, n in w.source_items() if i not in (sim_tab.SLICE_NEW, sim_tab.SLICE_LAST))

@@ -21,7 +21,8 @@
    "project_folder": {
     "marker": "simulation.json",
     "format": "openpara-sim-thermal"
-   }
+   },
+   "home": "workbench"
   }
  ]
 }

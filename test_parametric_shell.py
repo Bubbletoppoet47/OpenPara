@@ -30,8 +30,8 @@ part = os.path.join(UD, "beam.gpd"); open(part, "w").write(d.to_json())
 sh = gpd_app.AppShell([part])
 
 # ---- 1D FEA: a beam along the part's sketch
-w = sh.add_sim("beam")
-assert w.create_project(os.path.join(UD, "b1")) and w.project_ok()
+w = sh.add_tab(sim_tab.SimWindow("beam", shell=sh))
+assert w.create_project(os.path.join(UD, "b1")) and w.project_ok() and w.import_file(part)
 w.tab.picker.refresh()
 w.tab.picker.select(s["id"]); w.tab.picker.go()
 t = w.tab
