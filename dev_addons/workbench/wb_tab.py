@@ -105,6 +105,8 @@ class WorkbenchTab(QWidget):
         self.workspace = tempfile.mkdtemp(prefix="opara_wb_")
         atexit.register(self.drop_workspace)
         self.editors = {}                                   # node id -> the editor tab (a widget) that was opened for it
+        self.node_state = {}                                # node id -> what the kind's adapter keeps about it (its workspace file, what it last read back)
+        self.notes = []                                      # what the steps of the running Refresh / Update had to say (shown with the result)
         self.busy_now = False
         self.scene = cv.SchematicScene(self.project)
         self.view = cv.SchematicView(self.scene)
@@ -149,7 +151,8 @@ class WorkbenchTab(QWidget):
         act("refresh", "Refresh Project", lambda: self.refresh_project(), "Refresh the cells that take data from another block (the geometry of an analysis)")
         act("update", "Update Project", lambda: self.update_project(), "Refresh and compute everything that is out of date, in the order of the wires")
         bar.addSeparator()
-        act("import", "Import...", self.import_dialog, "Add a part, an assembly or a project folder from a file as a block")
+        act("import", "Import...", self.import_dialog, "Add parts, assemblies, tool files or another project (.opara) from files as blocks")
+        act("import_folder", "Import Folder...", self.import_folder_dialog, "Add an analysis project folder (.gpv, .gpf ...) or a Truss Generator folder as a block")
         act("fit", "Fit", self.view.fit_all, "Show the whole schematic")
         act("report", "Project Report", self.show_report, "What is in the project, the status of every cell, what Update would do and what is wrong")
         act("example", "Load Example Project", self.load_example, "Fills the schematic with an example project (it asks before it replaces anything)")
@@ -221,6 +224,7 @@ class WorkbenchTab(QWidget):
 
     # ---- the project
     def set_project(self, p):
+        self.node_state.clear()
         self.project = p
         self.scene.project = p
         self.path = p.path
@@ -420,6 +424,22 @@ class WorkbenchTab(QWidget):
         widget.title = lambda n=node: f"{n.label} {n.title}"
         return widget
 
+    def show_editor(self, node, widget):
+        """Puts the editor of a node in a tab of the program window (as a tab of this project: no recent list, no session)."""
+        self.register_editor(node, widget)
+        h = self.host
+        if h is not None and hasattr(h, "add_tab"):
+            h.add_tab(widget)
+        return widget
+
+    def adopt_editor(self, node, widget):
+        """An editor that the program window already put in a tab (an analysis opened from its project folder) becomes the node's editor."""
+        self.register_editor(node, widget)
+        h = self.host
+        if h is not None and hasattr(h, "refresh_titles"):
+            h.refresh_titles()
+        return widget
+
     def editor_of(self, nid):
         """The editor tab of a node when it is still open, else None."""
         w = self.editors.get(nid)
@@ -446,20 +466,22 @@ class WorkbenchTab(QWidget):
                     h.close_tab(i)
         self.editors.clear()
 
-    def sync_editors(self):
+    def sync_editors(self, skip=()):
         """What was edited in the blocks' editors goes back into the project (a changed block makes the cells that use it say refresh / update)."""
         changed = []
         for n in list(self.project.nodes.values()):
             a = nodes.adapter_for(n.kind)
-            if a is None or n.spec is None:
+            if a is None or n.spec is None or n.id in skip:
                 continue
             try:
-                key = a.sync(self, n)
+                keys = a.sync(self, n)
             except Exception as ex:                          # noqa: BLE001
                 self.say(f"'{n.title}' could not be read back from its editor: {ex}")
                 continue
-            if key:
+            keys = [keys] if isinstance(keys, str) else list(keys or [])
+            for key in keys:
                 self.project.touch(n.id, key)
+            if keys:
                 changed.append(n.id)
         if changed:
             self.scene.refresh()
@@ -491,8 +513,14 @@ class WorkbenchTab(QWidget):
             self.project.mark_updated(nid, key)
         return err or None
 
+    def note(self, text):
+        """Something a step wants the person to know: said now, and again with the final message of the Refresh / Update."""
+        self.notes.append(str(text))
+        self.say(text)
+
     def run_plan(self, steps, what):
         done, failed, skip = 0, [], set()
+        self.notes = []
         self.busy_now = True
         try:
             for s in steps:
@@ -510,12 +538,13 @@ class WorkbenchTab(QWidget):
         finally:
             self.busy_now = False
         self.scene.refresh()
+        more = ("  " + " ".join(self.notes)) if self.notes else ""
         if failed:
-            self.say(f"{what}: {done} done, {len(failed)} failed: " + "; ".join(f"{n}: {e}" for n, e in failed[:3]))
+            self.say(f"{what}: {done} done, {len(failed)} failed: " + "; ".join(f"{n}: {e}" for n, e in failed[:3]) + more)
         elif done:
-            self.say(f"{what}: {done} step{'s' if done != 1 else ''} done. Everything that could be is up to date.")
+            self.say(f"{what}: {done} step{'s' if done != 1 else ''} done. Everything that could be is up to date." + more)
         else:
-            self.say(f"{what}: nothing to do." + ("" if not self.project.blocked() else " Some cells are incomplete: " + self.project.blocked()[0][1]))
+            self.say(f"{what}: nothing to do." + ("" if not self.project.blocked() else " Some cells are incomplete: " + self.project.blocked()[0][1]) + more)
         return done, failed
 
     def refresh_project(self, only=None):
@@ -605,12 +634,24 @@ class WorkbenchTab(QWidget):
 
     def import_dialog(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Import into the project", os.path.dirname(self.path) if self.path else "",
-                                                "Parts, assemblies and projects (*.gpd *.gpa *.opara);;All files (*)")
-        out = []
-        for f in files:
+                                                "Parts, assemblies, tools and projects (*.gpd *.gpa *.opsheet *.opctl *.opcirc *.opara);;All files (*)")
+        return self.import_many(files)
+
+    def import_folder_dialog(self):
+        d = QFileDialog.getExistingDirectory(self, "Import an analysis project or Truss folder", os.path.dirname(self.path) if self.path else "")
+        return self.import_many([d] if d else [])
+
+    def import_many(self, paths):
+        """Imports every path; what could not be imported is listed with its reason in one message.  -> the nodes made."""
+        out, bad = [], []
+        for f in paths:
             n = self.import_file(f)
             if n is not None:
                 out.append(n)
+            else:
+                bad.append(f"{os.path.basename(str(f).rstrip('/' + chr(92)))}: {self.line.text()}")
+        if bad:
+            QMessageBox.warning(self, "Import", "Not imported:\n\n" + "\n\n".join(bad))
         return out
 
     def import_file(self, path):
@@ -679,6 +720,23 @@ class WorkbenchTab(QWidget):
         if f:
             with open(f, "w", encoding="utf-8") as fh:
                 fh.write(text)
+
+
+def load_adapters():
+    """What each kind of block does comes from its own module (a module that cannot be loaded leaves its kinds 'not wired in', the rest works)."""
+    for name in ("wb_parts", "wb_analysis", "wb_tools"):
+        try:
+            __import__(name)
+        except Exception:                                    # noqa: BLE001
+            import traceback
+            try:
+                import gpd_app
+                gpd_app.log_error(f"The workbench could not load {name}:\n{traceback.format_exc()}")
+            except Exception:                                # noqa: BLE001
+                pass
+
+
+load_adapters()
 
 
 def make_workbench(host=None, path=None):

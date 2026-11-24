@@ -1,6 +1,7 @@
 """The Workbench inside the real program window (the add-on loaded like the Playground does): it is the first tab at the start (the hook), a .opara file opens in a Workbench tab, the
 File menu and the start page offer it, the session remembers a saved project (and not the editors a project opened), the recent list too, closing a workbench closes its editors,
 and a project that cannot be read is said, not crashed on.   python test_wb_shell.py"""
+import atexit
 import faulthandler
 faulthandler.dump_traceback_later(200, exit=True)
 import json
@@ -46,6 +47,9 @@ app = QApplication([])
 shell = gpd_app.AppShell()
 shell.show()
 T = tempfile.mkdtemp(prefix="opara_wbs_")
+atexit.register(shutil.rmtree, UD, True)
+atexit.register(shutil.rmtree, DEV, True)
+atexit.register(shutil.rmtree, T, True)
 
 ok(not addons.load_errors(), f"the add-on loads without errors ({addons.load_errors()})")
 ok("workbench" in addons.tab_kinds() and addons.tab_kinds()["workbench"].get("file_types") == [".opara"], "the tab kind 'workbench' is offered, for .opara files")
