@@ -147,6 +147,38 @@ for order in (1, 2):
         assert np.allclose(r["qx"], Q / (t * H)) and np.allclose(r["qy"], 0, atol=1e-6)        # the flux points from hot to cold, +x
 print("ok  slab: temperature, heat flow and flux (both orders, metres and millimetres)")
 
+# insulated edges ('ins'): no heat through them - the answer is the one of the slab above, whatever the order, and it adds nothing to the flows
+for order in (1, 2):
+    mesh = rect_mesh(W, H, 8, 2)
+    base = run(mesh, order=order, t=t, mat={"k": k, "rho": 7800.0, "cp": 500.0},
+               conds=[{"kind": "temp", "T": T_(100.0), "targets": [("ln", 3)]}, {"kind": "temp", "T": T_(20.0), "targets": [("ln", 1)]}])
+    ins = run(mesh, order=order, t=t, mat={"k": k, "rho": 7800.0, "cp": 500.0},
+              conds=[{"kind": "temp", "T": T_(100.0), "targets": [("ln", 3)]}, {"kind": "temp", "T": T_(20.0), "targets": [("ln", 1)]},
+                     {"kind": "ins", "name": "Walls", "targets": [("ln", 0), ("ln", 2)]}])
+    assert np.array_equal(base["T"], ins["T"]), order
+    fl = [f for f in ins["flows"] if f["kind"] == "ins"]
+    assert len(fl) == 1 and fl[0]["name"] == "Walls" and fl[0]["Q"] == 0.0 and ins["balance"]["relative_error"] < 1e-8
+    zero = run(mesh, order=order, t=t, mat={"k": k, "rho": 7800.0, "cp": 500.0},
+               conds=[{"kind": "temp", "T": T_(100.0), "targets": [("ln", 3)]}, {"kind": "temp", "T": T_(20.0), "targets": [("ln", 1)]},
+                      {"kind": "flux", "q": 0.0, "targets": [("ln", 0), ("ln", 2)]}])
+    assert np.array_equal(zero["T"], ins["T"]), "an insulated edge is a heat flux of zero"
+# next to a convecting edge it is still insulated: the answer is the 1-D one, not one that loses heat through the top
+hh, Tinf_ = 40.0, T_(20.0)
+mesh = rect_mesh(W, H, 8, 2)
+rc = run(mesh, order=2, t=t, mat={"k": k, "rho": 7800.0, "cp": 500.0},
+         conds=[{"kind": "temp", "T": T_(100.0), "targets": [("ln", 3)]}, {"kind": "conv", "h": hh, "Tinf": Tinf_, "targets": [("ln", 1)]},
+                {"kind": "ins", "targets": [("ln", 0), ("ln", 2)]}])
+Q1 = 80.0 / (W / (k * H * t) + 1.0 / (hh * H * t))
+assert abs(rc["flows"][0]["Q"] - Q1) < 1e-8 * Q1, (rc["flows"], Q1)
+# an edge that no region owns (its region is switched off) is said, not silently skipped
+mesh_ = rect_mesh(W, H, 8, 2)
+mesh_["curve_segs"][("ln", 2)] = []
+rn = run(mesh_, order=2, t=t, mat={"k": k, "rho": 7800.0, "cp": 500.0},
+         conds=[{"kind": "temp", "T": T_(100.0), "targets": [("ln", 3)]}, {"kind": "temp", "T": T_(20.0), "targets": [("ln", 1)]},
+                {"kind": "ins", "targets": [("ln", 2)]}])
+assert any("Insulated on ln 2" in n for n in rn["notes"]), rn["notes"]
+print("ok  insulated edges: the same as a heat flux of zero, nothing added to the flows, noted when no mesh edge is there")
+
 # slab with convection on the right: q = (T1 - Tinf) / (L/k + 1/h)
 h, Tinf = 80.0, T_(20.0)
 mesh = rect_mesh(W, H, 8, 2)

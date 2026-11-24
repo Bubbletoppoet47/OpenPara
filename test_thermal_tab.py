@@ -333,19 +333,29 @@ tl.e_t.setText("1")
 add(tl, "add_temperature", [("ln", l7[5])], 100.0)
 add(tl, "add_temperature", [("ln", l7[2])], 20.0)
 left = next(i for i, f in enumerate(tl.geom["faces"]) if f["centroid"][0] < 60)
-tl.regions.setCurrentRow(left)
-j = tl.reg_mat_combo.findData("Copper")
+right = 1 - left
+fl, fr_ = tl.geom["faces"][left]["id"], tl.geom["faces"][right]["id"]
+# every region has a material from the start (the default one), all set in Material and analysis
+assert tl.region_mats == {fl: {"name": tmat.DEFAULT, "k": 167.0, "rho": 2700.0, "cp": 896.0}, fr_: {"name": tmat.DEFAULT, "k": 167.0, "rho": 2700.0, "cp": 896.0}}
+assert not hasattr(tl, "reg_mat_combo") and tl.mat_table.rowCount() == 2 and tl.mat_table.item(left, 1).text() == tmat.DEFAULT
+tl.mat_table.setCurrentCell(left, 0)
+j = tl.mat_combo.findData("Copper")
 assert j > 0
-tl.reg_mat_combo.setCurrentIndex(j)
-tl.region_material_picked(j)
-assert tl.region_mats[tl.geom["faces"][left]["id"]]["k"] == 401.0 and "Copper" in tl.regions.item(left).text()
-assert tl.read_setup(need_mesh=False)["region_mats"] == {tl.geom["faces"][left]["id"]: {"k": 401.0, "rho": 8960.0, "cp": 385.0}}
+tl.mat_combo.setCurrentIndex(j)
+assert tl.region_mats[fl]["k"] == 401.0 and tl.region_mats[fr_]["k"] == 167.0
+assert tl.mat_table.item(left, 1).text() == "Copper" and "Copper" not in tl.regions.item(left).text(), "the material is shown in Material and analysis only"
+assert tl.read_setup(need_mesh=False)["region_mats"] == {fl: {"k": 401.0, "rho": 8960.0, "cp": 385.0}, fr_: {"k": 167.0, "rho": 2700.0, "cp": 896.0}}
 r7 = mesh_solve(tl, 4)
 R1, R2 = 0.06 / (401.0 * A), 0.04 / (167.0 * A)
 assert close(flow(r7, "Temperature 1"), 80.0 / (R1 + R2), 1e-4), (flow(r7, "Temperature 1"), 80.0 / (R1 + R2))
-tl.reg_mat_combo.setCurrentIndex(0)
-tl.region_material_picked(0)
-assert tl.region_mats == {} and tl.result is None
+tl.mat_table.setCurrentCell(right, 0)                       # selecting the other region shows its material in the editor
+assert tl.mat_combo.currentData() == tmat.DEFAULT and close(float(tl.e_k.text()), 167.0)
+tl.mat_table.setCurrentCell(left, 0)
+assert tl.mat_combo.currentData() == "Copper" and close(float(tl.e_k.text()), 401.0)
+tl.material_for_all()                                       # 'Use for all regions'
+assert tl.region_mats[fl] == tl.region_mats[fr_] and tl.region_mats[fr_]["name"] == "Copper" and tl.result is None
+tl.mat_combo.setCurrentIndex(tl.mat_combo.findData(tmat.DEFAULT))
+assert tl.region_mats[fl]["name"] == tmat.DEFAULT and tl.region_mats[fr_]["name"] == "Copper" and tl.result is None
 print("6 ok: heat generation and regions")
 
 # ================================================================================================================ 7. radiation conditions
@@ -595,8 +605,7 @@ add(tv, "add_rad", [("ln", lv[0])], 0.6, 30.0)
 tv.regions.setCurrentRow(0)
 tv.e_qv.setText("3e4")
 tv.region_q_edited()
-tv.reg_mat_combo.setCurrentIndex(tv.reg_mat_combo.findData("Copper"))
-tv.region_material_picked(tv.reg_mat_combo.currentIndex())
+tv.mat_combo.setCurrentIndex(tv.mat_combo.findData("Copper"))
 tv.cb_plate.setChecked(True)
 tv.e_hplate.setText("12")
 tv.analysis_combo.setCurrentIndex(1)
@@ -684,7 +693,9 @@ assert close(tc.result["Tmax"], r12["Tmax"], 1e-9) and np.allclose(tc.mesh["node
 unitctl.set_units(INCH, notify=False, persist=False)
 note = tc.change_units(MM, INCH, False)
 assert "cleared" in note and tc.mesh is None and tc.result is None and tc.unit_name() == INCH
-assert tc.e_k.text() == "167" and tc.e_t.text() == "2" and close(tc.supports[0]["T"], tu.family_of(INCH).to_si("T", 100.0), 1e-12)   # the "100" typed is now 100 degF
+assert close(float(tc.e_k.text()), 167.0 / 1.730734666, 1e-8) and tc.region_mats[0]["name"] == tmat.DEFAULT and tc.region_mats[0]["k"] == 167.0, \
+    "a library material keeps its physical value in a relabel"
+assert tc.e_t.text() == "2" and close(tc.supports[0]["T"], tu.family_of(INCH).to_si("T", 100.0), 1e-12)   # the "100" typed is now 100 degF
 assert close(tc.loads[0]["h"], 25.0 * 5.678263341, 1e-9) and close(tc.region_q[0], 1000.0 * 10.34970717, 1e-9)
 assert close(tc.loads[0]["Tinf"], tu.family_of(INCH).to_si("T", 20.0), 1e-12), "the fluid temperature typed as 20 is now 20 degF"
 unitctl.set_units(MM, notify=False, persist=False)
@@ -705,22 +716,37 @@ l13 = [m13.add_line(pp13[i], pp13[(i + 1) % 6]) for i in range(6)] + [m13.add_li
 tm_.set_model(m13, "slice")
 fa, fb = [f["id"] for f in tm_.geom["faces"]]
 tm_.sim_apply_regions({fa: 0, fb: 1}, {fa: "Heat sink", fb: "Chip"}, {fa: {"name": "Aluminum 6061", "density": 2700.0}, fb: {"name": "Mystery alloy"}})
-assert tm_.region_names == {fa: "Heat sink", fb: "Chip"} and set(tm_.region_mats) == {fa} and tm_.region_mats[fa]["k"] == 167.0
+assert tm_.region_names == {fa: "Heat sink", fb: "Chip"} and set(tm_.region_mats) == {fa, fb} and tm_.region_mats[fa]["k"] == 167.0
+assert tm_.region_mats[fb]["name"] == tmat.DEFAULT and tm_.unset_regions == {fb}, "a part with no thermal values carries the default material, marked"
 assert tm_.missing_mats == ["Chip (Mystery alloy)"]
 notes = tm_.sim_part_materials({fa: {}, fb: {}}, None)
-assert any("Aluminum 6061" in n for n in notes) and any("Mystery alloy" in n and "material of the tab" in n for n in notes), notes
+assert any("Aluminum 6061" in n for n in notes) and any("Mystery alloy" in n and "default material" in n and "Material and analysis" in n for n in notes), notes
 tm_.fill_regions()
 assert "Heat sink" in tm_.regions.item(0).text() or "Heat sink" in tm_.regions.item(1).text()
+rowb = next(r for r, f in enumerate(tm_.geom["faces"]) if f["id"] == fb)
+assert "choose a material" in tm_.mat_table.item(rowb, 1).text() and "Chip" in tm_.mat_table.item(rowb, 0).text()
 s13 = tm_.read_setup(need_mesh=False)
-assert list(s13["region_mats"]) == [fa] and s13["region_mats"][fa] == {"k": 167.0, "rho": 2700.0, "cp": 896.0}
+assert set(s13["region_mats"]) == {fa, fb} and s13["region_mats"][fa] == {"k": 167.0, "rho": 2700.0, "cp": 896.0}
+tm_.mat_table.setCurrentCell(rowb, 0)                   # choosing a material for it takes the mark away
+tm_.mat_combo.setCurrentIndex(tm_.mat_combo.findData("Copper"))
+assert tm_.unset_regions == set() and "choose" not in tm_.mat_table.item(rowb, 1).text() and tm_.region_mats[fb]["k"] == 401.0
 # one part: its material fills the tab
 tm2 = new_tab(MM)
 tm2.set_model(*bar()[:1], "one")
 notes = tm2.sim_part_materials(None, {"name": "Copper", "density": 8960.0})
 assert any("Copper" in n for n in notes) and close(float(tm2.e_k.text()), 401.0) and tm2.mat_combo.currentData() == "Copper"
+assert all(m["name"] == "Copper" for m in tm2.region_mats.values()) and len(tm2.region_mats) == len(tm2.geom["faces"])
 notes = tm2.sim_part_materials(None, {"name": "Unobtainium"})
 assert any("Unobtainium" in n for n in notes) and close(float(tm2.e_k.text()), 401.0), "an unknown material leaves the boxes alone"
 assert tm2.sim_part_materials(None, None) == []
+# a model of two regions with one part material: both regions get it, and none stays marked
+tm3 = new_tab(MM)
+tm3.set_model(m13, "slice")
+assert len(tm3.geom["faces"]) == 2
+tm3.unset_regions = {tm3.geom["faces"][0]["id"]}
+tm3.sim_part_materials(None, {"name": "Copper", "density": 8960.0})
+assert [m["name"] for m in tm3.region_mats.values()] == ["Copper", "Copper"] and set(tm3.region_mats) == {f["id"] for f in tm3.geom["faces"]}
+assert all(m["k"] == 401.0 for m in tm3.region_mats.values()) and tm3.unset_regions == set()
 # the library: a material of your own, by name
 n0 = len(tm2.library)
 tm2.e_k.setText("12.5")
@@ -730,8 +756,10 @@ QW.QInputDialog.getText = staticmethod(lambda *a, **k: ("My ceramic", True))
 tm2.add_material()
 assert len(tm2.library) == n0 + 1 and tm2.mat_combo.currentData() == "My ceramic" and "My ceramic" in [m["name"] for m in tmat.user_materials()]
 assert tmat.find("My ceramic")["k"] == 12.5
+assert tm2.region_mats[0]["name"] == "My ceramic" and tm2.region_mats[0]["k"] == 12.5
 tm2.delete_material()
 assert len(tm2.library) == n0 and tmat.find("My ceramic") is None
+assert tm2.region_mats[0]["name"] == "(custom values)" and tm2.region_mats[0]["k"] == 12.5, "the region keeps its numbers when the material is deleted"
 print("13 ok: slice materials and the library")
 
 # ================================================================================================================ 14. the study adapter
@@ -748,6 +776,19 @@ tsd.add_probe("rect", x0=-1.0, y0=-1.0, x1=101.0, y1=21.0)
 tsd.e_h.setText("5")
 ad = tsd.study_adapter()
 assert ad.ready() is None
+# any one of a temperature, a load or a heat generation is enough to study
+for what in ("temp", "conv", "gen"):
+    tw = new_tab(MM)
+    mw, pw, lw = bar()
+    tw.set_model(mw, "ready")
+    assert tw.study_adapter().ready() == "The simulation has no conditions and no heat generation yet."
+    if what == "temp":
+        add(tw, "add_temperature", [("ln", lw[3])], 100.0)
+    elif what == "conv":
+        add(tw, "add_conv", [("ln", lw[1])], 25.0, 20.0)
+    else:
+        tw.region_q[tw.geom["faces"][0]["id"]] = 1e6
+    assert tw.study_adapter().ready() is None, what
 ps = {d["id"]: d for d in ad.params()}
 assert {"thermal.e_k", "thermal.e_t", "thermal.e_h", "thermal.analysis_combo", "thermal.cb_plate", "thermal.sup0.T", "thermal.load0.h", "thermal.load0.Tinf", "thermal.gen0"} <= set(ps), sorted(ps)
 assert ps["thermal.sup0.T"]["now"] == "100" and ps["thermal.load0.h"]["now"] == "25" and ps["thermal.load0.Tinf"]["now"] == "20" and ps["thermal.gen0"]["now"] == "0"

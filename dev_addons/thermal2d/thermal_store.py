@@ -69,7 +69,15 @@ def convert_state(st, old, new, convert):
                 out.append(it)
             st[key] = out
         st["region_q"] = {f: _reread(v, "qv", fo, fn) for f, v in (st.get("region_q") or {}).items()}
-        # (the materials are library values in SI: they keep their physical value)
+        # (a library material is a value in SI: it keeps its physical value; a region's own numbers ('(custom values)') were typed, so they are re-read)
+        mats = {}
+        for f, m in (st.get("region_mats") or {}).items():
+            m = dict(m)
+            if m.get("name") == "(custom values)":
+                for q in ("k", "rho", "cp"):
+                    m[q] = _reread(m[q], q, fo, fn)
+            mats[f] = m
+        st["region_mats"] = mats
     st["mesh"] = None
     st["result"] = None
     st["frame"] = 0

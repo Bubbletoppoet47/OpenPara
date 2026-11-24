@@ -7,6 +7,7 @@
   * conditions on points and sketch edges:
         temp   a fixed temperature (points or edges)                    [Dirichlet]
         flux   a heat flux INTO the body on edges, W/m2                  [Neumann]; zero everywhere else = insulated
+        ins    insulated edges: no heat through them (the same as a heat flux of zero; it only makes the choice visible and checked)
         power  a heat flow into the body at points, W (total through the depth)
         conv   convection to a fluid at T_inf with coefficient h:   q_out = h (T - T_inf)
         rad    radiation to surroundings at T_s with emissivity eps: q_out = eps sigma (T^4 - T_s^4)      (NOT between surfaces of the model:
@@ -261,7 +262,7 @@ class Model:
                     self.F[nd] += float(c["P"])
                 rec.update(P=float(c["P"]) * len(nds))
             else:
-                segs = self._edges({"flux": "Heat flux", "conv": "Convection", "rad": "Radiation"}[kind], targets, mesh)
+                segs = self._edges({"flux": "Heat flux", "conv": "Convection", "rad": "Radiation", "ins": "Insulated"}[kind], targets, mesh)
                 if not segs:
                     rec["edges"] = None
                     self.conds.append(rec)
@@ -269,7 +270,9 @@ class Model:
                 ed = _Edges(segs, self.nodes_m, self.mid, self.order)
                 rec["edges"] = ed
                 tt = self.t
-                if kind == "flux":
+                if kind == "ins":
+                    pass                                                  # nothing is added: an edge without a condition is insulated already
+                elif kind == "flux":
                     rec["q"] = float(c["q"])
                     np.add.at(self.F, ed.conn.ravel(), ((float(c["q"]) * tt * ed.L)[:, None] * ed.int_N[None]).ravel())
                 elif kind == "conv":

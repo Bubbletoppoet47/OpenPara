@@ -17,14 +17,19 @@ import physics_geom as pg
 import thermal_fem as tfem
 from study_iface import StudyAdapter, StudyCancelled, fmt_num, set_widget, widget_params
 
-THERMAL_PARAMS = [("e_k", "Conductivity"), ("e_rho", "Density"), ("e_cp", "Specific heat"), ("e_t", "Thickness"), ("e_h", "Element size"),
+THERMAL_PARAMS = [("e_k", "Conductivity (every region)"), ("e_rho", "Density (every region)"), ("e_cp", "Specific heat (every region)"),
+                  ("e_t", "Thickness"), ("e_h", "Element size"),
                   ("order_combo", "Elements (quadratic / linear)"), ("analysis_combo", "Analysis (steady / transient)"),
                   ("e_T0", "Start temperature"), ("e_tend", "End time"), ("time_combo", "Time unit of the end time"), ("e_steps", "Time steps"),
                   ("method_combo", "Time-stepping method"), ("cb_plate", "Heat loss from the flat faces"), ("e_hplate", "Flat faces: convection coefficient"),
                   ("e_Tamb", "Flat faces: fluid temperature"), ("e_eps_plate", "Flat faces: emissivity"), ("e_Tsur", "Flat faces: surroundings temperature")]
+# the three material boxes stand for every region in a study (each region also has its own three, below); id -> (key, quantity)
+ALL_MATS = {"thermal.e_k": ("k", "k"), "thermal.e_rho": ("rho", "rho"), "thermal.e_cp": ("cp", "cp")}
+MAT_LABELS = (("k", "k", "conductivity"), ("rho", "rho", "density"), ("cp", "cp", "specific heat"))
 # kind -> [(key stored in the condition, quantity of thermal_units ('eps' is a plain number), label)]
 COND_KEYS = {"temp": [("T", "T", "temperature")], "flux": [("q", "q", "heat flux")], "power": [("P", "P", "heat flow")],
-             "conv": [("h", "h", "coefficient"), ("Tinf", "T", "fluid temperature")], "rad": [("eps", None, "emissivity"), ("Ts", "T", "surroundings temperature")]}
+             "conv": [("h", "h", "coefficient"), ("Tinf", "T", "fluid temperature")], "rad": [("eps", None, "emissivity"), ("Ts", "T", "surroundings temperature")],
+             "ins": []}
 
 
 class ThermalStudy(StudyAdapter):
@@ -56,6 +61,10 @@ class ThermalStudy(StudyAdapter):
                                 "now": fmt_num(now)})
         for f in t.geom["faces"] if t.geom is not None else []:
             if f["included"]:
+                m = (t.region_mats or {}).get(f["id"])
+                for key, q, lab in MAT_LABELS if m else ():
+                    out.append({"id": f"thermal.mat{f['id']}.{key}", "group": "Thermal material values", "kind": "text", "choices": None, "mat": (f["id"], key, q),
+                                "label": f"Region {f['id'] + 1}: {lab} ({fam.unit(q)})", "now": fmt_num(fam.from_si(q, m[key]))})
                 out.append({"id": f"thermal.gen{f['id']}", "group": "Thermal condition values", "kind": "text", "choices": None, "gen": f["id"],
                             "label": f"Region {f['id'] + 1}: heat generation ({fam.unit('qv')})",
                             "now": fmt_num(fam.from_si("qv", (t.region_q or {}).get(f["id"], 0.0)))})
@@ -92,11 +101,20 @@ class ThermalStudy(StudyAdapter):
             conds = copy.deepcopy(setup["conds"])
             region_q = dict(setup["region_q"])
             n_sup = len(s.supports)
+            for pid, text in values.items():                # the three boxes first: every region; a region's own value (below) then wins
+                if pid in ALL_MATS:
+                    key, q = ALL_MATS[pid]
+                    for m_ in setup["region_mats"].values():
+                        m_[key] = fam.to_si(q, float(text))
             for pid, text in values.items():
                 d = self.desc(pid)
                 if d is None:
                     continue
-                if d.get("cond") is not None:
+                if d.get("mat") is not None:
+                    fid, key, q = d["mat"]
+                    if fid in setup["region_mats"]:
+                        setup["region_mats"][fid][key] = fam.to_si(q, float(text))
+                elif d.get("cond") is not None:
                     is_sup, idx, key, q = d["cond"]
                     v = float(text)
                     v = v if q is None else fam.to_si(q, v)
@@ -159,7 +177,7 @@ class ThermalStudy(StudyAdapter):
             d = self.desc(pid)
             if d is None:
                 raise ValueError(f"The input '{pid}' does not exist in this simulation any more.")
-            if d.get("cond") is not None or d.get("gen") is not None:
+            if d.get("cond") is not None or d.get("gen") is not None or d.get("mat") is not None:
                 continue
             set_widget(s, d["attr"], d["kind"], text, d.get("choices"))
         s.tr_box.setVisible(s.analysis_combo.currentIndex() == 1)

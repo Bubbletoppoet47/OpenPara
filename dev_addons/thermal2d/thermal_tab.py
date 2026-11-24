@@ -6,7 +6,8 @@ Solve, Results (fields, probes, node probe, animation), diagnostics and project 
 Simulation add-on's (sim_tab.SimWindow); this module registers itself there as the kind "thermal" (see make_thermal).
 
   Conditions   Temperature (fixed)  -  Heat flux (into the body)  -  Heat flow at a point  -  Convection (to a fluid)  -  Radiation (to surroundings)
-               an edge with none of them is insulated.  Every region can generate heat and has its own material.
+               -  Insulated (no heat through the edge; an edge with no condition at all is insulated too).
+  Materials    every region has its own material, all set in "Material and analysis" (none in Geometry).  Every region can generate heat.
   Plate faces  optional: the two flat faces of the plate lose heat by convection and / or radiation over the whole area.
   Units        the temperature, conductivity ... follow File > Units (metric: degC, W, m; US: degF, Btu, hr, ft).  What is stored and solved is SI.
 
@@ -19,8 +20,8 @@ import sys
 import time
 
 import numpy as np
-from PyQt6.QtCore import QPointF, Qt, QTimer
-from PyQt6.QtGui import QBrush, QColor, QFont, QPen, QPixmap
+from PyQt6.QtCore import QPointF, QSize, Qt, QTimer
+from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QPen, QPixmap, QPainter
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
                              QLineEdit, QListWidgetItem, QMessageBox, QPushButton, QSizePolicy, QSlider, QSplitter, QTableWidget, QTableWidgetItem,
                              QVBoxLayout, QWidget, QListWidget)
@@ -50,8 +51,7 @@ KIND_NAME = pt.KIND_NAME
 FIELDS = [("Temperature", "T", "nodal", "T"), ("Heat flux magnitude", "q", "elem", "q"), ("Heat flux X", "qx", "elem", "q"),
           ("Heat flux Y", "qy", "elem", "q")]
 CUSTOM = "(custom values)"
-SAME = "(the material of the tab)"
-COND_TYPES = {"temp": "Temperature", "flux": "Heat flux", "power": "Heat flow", "conv": "Convection", "rad": "Radiation"}
+COND_TYPES = {"temp": "Temperature", "flux": "Heat flux", "power": "Heat flow", "conv": "Convection", "rad": "Radiation", "ins": "Insulated"}
 NUM = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 
 
@@ -74,6 +74,30 @@ def make_thermal(host, path=None):
     ensure_registered()
     import sim_tab
     return sim_tab._make(KIND, host, path)
+
+
+def box_text(v):
+    """A number for a box: short when six digits say it exactly (401, 0.026), otherwise ten digits (a value converted to the other unit family)."""
+    short = f"{v:.6g}"
+    return short if abs(float(short) - v) <= 1e-9 * abs(v) else f"{v:.10g}"
+
+
+def insulated_icon():
+    """The button picture of 'Insulated': a wall with the slanted ticks of insulation on one side (the same ticks the drawing shows on the edge)."""
+    pm = QPixmap(48, 48)
+    pm.fill(Qt.GlobalColor.transparent)
+    q = QPainter(pm)
+    q.setRenderHint(QPainter.RenderHint.Antialiasing)
+    q.setPen(QPen(QColor("#0e7f86"), 4))
+    q.drawLine(QPointF(8, 34), QPointF(40, 34))
+    q.setPen(QPen(QColor("#5b6770"), 3))
+    for x in (10, 18, 26, 34):
+        q.drawLine(QPointF(x, 34), QPointF(x + 5, 42))
+    q.setPen(QPen(QColor("#0e7f86"), 3))
+    q.drawLine(QPointF(14, 22), QPointF(34, 22))
+    q.drawLine(QPointF(14, 14), QPointF(34, 14))
+    q.end()
+    return QIcon(pm)
 
 
 def ask_values(parent, title, note, labels, defaults):
@@ -131,7 +155,7 @@ class ThermalCanvas(pt.PhysCanvas):
                         p.setFont(QFont("Arial", 8, QFont.Weight.Bold))
                         p.drawText(QPointF(s.x() + 11, s.y() - 8), "Q")
                 continue
-            col = {"flux": "#c0182b", "conv": "#1d6fb8", "rad": "#d9561f"}.get(kind)
+            col = {"flux": "#c0182b", "conv": "#1d6fb8", "rad": "#d9561f", "ins": "#5b6770"}.get(kind)
             if col is None:
                 continue
             pen = QPen(QColor(col), 2)
@@ -144,6 +168,10 @@ class ThermalCanvas(pt.PhysCanvas):
                     continue
                 e, pts = edge_of[(tk, i)]
                 closed = e["kind"] == "ci"
+                if kind == "ins":                                                  # the insulation hatch: short slanted ticks outside the edge
+                    for a, b in self.insulation_ticks(pts, closed):
+                        p.drawLine(a, b)
+                    continue
                 count = max(2, min(80, int(round(pt.polyline_length(pts, closed) * self.scale / 40.0))))
                 for x0, y0, tx, ty in pt.points_along(pts, closed, count):
                     ix, iy = self.inward_normal(x0, y0, -ty, tx)
@@ -154,6 +182,16 @@ class ThermalCanvas(pt.PhysCanvas):
                         self.arrow(p, QPointF(s0.x() - 34 * d[0], s0.y() + 34 * d[1]), s0)
                     else:                                                          # heat leaves: the arrow points away from the body
                         self.arrow(p, s0, QPointF(s0.x() - 30 * ix, s0.y() + 30 * iy))
+
+    def insulation_ticks(self, pts, closed):
+        """The hatch of an insulated edge: (start, end) screen points of short ticks, from the edge to the outside of the body, slanted along the edge."""
+        n_ticks = max(3, min(160, int(round(pt.polyline_length(pts, closed) * self.scale / 12.0))))
+        out = []
+        for x0, y0, tx, ty in pt.points_along(pts, closed, n_ticks):
+            ix, iy = self.inward_normal(x0, y0, -ty, tx)
+            s0 = self.w2s(x0, y0)
+            out.append((s0, QPointF(s0.x() - 8 * ix + 6 * tx, s0.y() + 8 * iy - 6 * ty)))
+        return out
 
     def paint_fasteners(self, p):
         pass
@@ -223,6 +261,8 @@ class ThermalTab(pt.PhysicsTab):
         self._flux_cache = {}
         self.reg_sel = None
         self.missing_mats = []
+        self.unset_regions = set()   # regions whose part has no thermal values: they carry the default material until one is chosen
+        self._box_error = None       # what is wrong with the numbers typed in the material boxes (None = nothing)
         self.last_vals = {}
         self.coords = QLabel("")
         self.canvas = ThermalCanvas(self)
@@ -261,7 +301,7 @@ class ThermalTab(pt.PhysicsTab):
         self.info = QLabel("Nothing imported yet.")
         self.info.setWordWrap(True)
         lay.addWidget(self.info)
-        lay.addWidget(QLabel("<b>Regions</b> (tick = material)"))
+        lay.addWidget(QLabel("<b>Regions</b> (tick = part of the model; the materials are in Material and analysis)"))
         self.regions = QListWidget()
         self.regions.setMaximumHeight(110)
         self.regions.itemChanged.connect(self.region_toggled)
@@ -272,10 +312,6 @@ class ThermalTab(pt.PhysicsTab):
         rf.setContentsMargins(0, 0, 0, 0)
         self.reg_lbl = QLabel("Selected region: none")
         rf.addRow(self.reg_lbl)
-        self.reg_mat_combo = QComboBox()
-        self.reg_mat_combo.setToolTip("The material of this region. 'The material of the tab' uses the one chosen in Material and analysis.")
-        self.reg_mat_combo.activated.connect(self.region_material_picked)
-        rf.addRow("Material", self.reg_mat_combo)
         self.lbl_qv = QLabel("Heat generation")
         self.e_qv = QLineEdit("0")
         self.e_qv.setToolTip("Heat generated inside the region per unit of volume (an electric heater, a chip, a reaction). 0 = none; negative = a heat sink.")
@@ -298,24 +334,45 @@ class ThermalTab(pt.PhysicsTab):
 
         # ---- 2 Material and analysis
         lay = sec(2, "Material and analysis", False,
-                  summary=lambda: f"{self.mat_combo.currentText()}, {'steady' if self.analysis_combo.currentIndex() == 0 else 'transient'}",
-                  help_text="One material for the whole plate (a region can have its own, above). The values are typical room-temperature numbers and are the "
-                            "same at every temperature: check them against your own source. The thickness is the depth of the plate: heat flows in the "
-                            "results are in watts through that depth. Steady: the temperatures after everything has settled. Transient: the temperatures "
-                            "as time passes, from one uniform start temperature. Crank-Nicolson is the more accurate method; backward Euler is the more "
-                            "forgiving one (it never oscillates).")
+                  summary=lambda: f"{self.materials_summary()}, {'steady' if self.analysis_combo.currentIndex() == 0 else 'transient'}",
+                  help_text="Every region has its own material, and all of them are set here (Geometry only holds the shape): select a region in the "
+                            "list, then choose its material below or type its conductivity, density and specific heat (the region then shows "
+                            "'(custom values)'). 'Use for all regions' gives every region the material of the selected one. The values are typical "
+                            "room-temperature numbers and are the same at every temperature: check them against your own source. The thickness is the "
+                            "depth of the plate: heat flows in the results are in watts through that depth. Steady: the temperatures after everything "
+                            "has settled. Transient: the temperatures as time passes, from one uniform start temperature. Crank-Nicolson is the more "
+                            "accurate method; backward Euler is the more forgiving one (it never oscillates).")
+        lay.addWidget(QLabel("<b>Materials of the regions</b> (select a region)"))
+        self.mat_table = QTableWidget(0, 2)
+        self.mat_table.setHorizontalHeaderLabels(["Region", "Material"])
+        self.mat_table.verticalHeader().hide()
+        self.mat_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.mat_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.mat_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.mat_table.setMinimumHeight(70)
+        self.mat_table.setMaximumHeight(130)
+        self.mat_table.horizontalHeader().setStretchLastSection(True)
+        self.mat_table.currentCellChanged.connect(lambda r, c, pr, pc: self.material_row_picked(r))
+        lay.addWidget(self.mat_table)
+        self.mat_sel_lbl = QLabel("Import a sketch to give its regions a material.")
+        self.mat_sel_lbl.setWordWrap(True)
+        lay.addWidget(self.mat_sel_lbl)
         self.mat_combo = QComboBox()
         row = QHBoxLayout()
         row.addWidget(self.mat_combo, 1)
-        b = QPushButton("Add material...")
-        b.setToolTip("Adds the numbers now in the boxes below to your thermal material library (a file in your user folder).")
-        b.clicked.connect(self.add_material)
-        row.addWidget(b)
+        self.b_add_mat = QPushButton("Add material...")
+        self.b_add_mat.setToolTip("Adds the numbers now in the boxes below to your thermal material library (a file in your user folder).")
+        self.b_add_mat.clicked.connect(self.add_material)
+        row.addWidget(self.b_add_mat)
         self.b_del_mat = QPushButton("Delete")
         self.b_del_mat.setToolTip("Deletes a material you added. The built-in ones stay.")
         self.b_del_mat.clicked.connect(self.delete_material)
         row.addWidget(self.b_del_mat)
         lay.addLayout(row)
+        self.b_all_mats = QPushButton("Use for all regions")
+        self.b_all_mats.setToolTip("Gives every region the material (and the numbers) of the selected region.")
+        self.b_all_mats.clicked.connect(self.material_for_all)
+        lay.addWidget(self.b_all_mats)
         form = QFormLayout()
         self.e_k, self.e_rho, self.e_cp, self.e_t = QLineEdit("167"), QLineEdit("2700"), QLineEdit("896"), QLineEdit("1")
         self.lbl_k, self.lbl_rho, self.lbl_cp, self.lbl_t = QLabel("Conductivity k"), QLabel("Density"), QLabel("Specific heat"), QLabel("Thickness (depth)")
@@ -378,6 +435,8 @@ class ThermalTab(pt.PhysicsTab):
         self.mat_combo.currentIndexChanged.connect(self.material_picked)
         for e in (self.e_k, self.e_rho, self.e_cp):
             e.textEdited.connect(self.set_custom)
+            e.editingFinished.connect(self.material_boxes_finished)
+        self.load_material_editor()
         self.analysis_combo.currentIndexChanged.connect(self.analysis_changed)
         self.cb_plate.toggled.connect(self.plate_box.setVisible)
 
@@ -412,8 +471,13 @@ class ThermalTab(pt.PhysicsTab):
                                    ("Heat flux...", "pressure", self.add_flux, "Heat pushed through the selected edges, per unit area (positive = into the body)."),
                                    ("Heat flow at a point...", "force", self.add_power, "Watts put into the selected points (through the whole depth)."),
                                    ("Convection...", "wind", self.add_conv, "The selected edges lose heat to a fluid: coefficient and fluid temperature."),
-                                   ("Radiation...", "snow", self.add_rad, "The selected edges radiate to surroundings: emissivity and temperature.")):
+                                   ("Radiation...", "snow", self.add_rad, "The selected edges radiate to surroundings: emissivity and temperature."),
+                                   ("Insulated", None, self.add_insulated, "No heat goes through the selected edges (an adiabatic edge or a line of symmetry). "
+                                    "Their temperature is free to change along them.")):
             b = sim_ui.icon_button(text, icn, tip)
+            if icn is None:
+                b.setIcon(insulated_icon())
+                b.setIconSize(QSize(22, 22))
             b.clicked.connect(fn)
             lay.addWidget(b)
         self.cond_list = QListWidget()
@@ -428,6 +492,8 @@ class ThermalTab(pt.PhysicsTab):
         self.cond_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.cond_table.itemChanged.connect(self.cond_item_changed)
         lay.addWidget(self.cond_table)
+        self.cond_note = self.note("")
+        lay.addWidget(self.cond_note)
         row = QHBoxLayout()
         b = QPushButton("Edit selected...")
         b.setToolTip("Edit the Value of the selected row; a row without a value lets you rename it.")
@@ -600,8 +666,8 @@ class ThermalTab(pt.PhysicsTab):
         self.lbl_Tsur.setText(f"Surroundings temperature ({fam.temp})")
         self.lbl_qv.setText(f"Heat generation ({fam.unit('qv')})")
         self.units_note.setText(f"Units: {name}  (change in File > Units); temperatures in {fam.temp}")
-        if hasattr(self, "mat_combo"):
-            self.update_mat_note()
+        if hasattr(self, "mat_note") and hasattr(self, "library"):
+            self.load_material_editor()                       # the boxes show the selected region's SI values in the family now in use
 
     def convert_family_boxes(self, fo, fn):
         for n, q in tstore.FAMILY_BOXES.items():
@@ -637,7 +703,7 @@ class ThermalTab(pt.PhysicsTab):
         self.b_solve.setEnabled(self.mesh is not None and "scipy" in have)
 
     def signature_extra(self):
-        return (sorted((self.region_q or {}).items()), sorted((f, m.get("name")) for f, m in (self.region_mats or {}).items()))
+        return (sorted((self.region_q or {}).items()), sorted((f, m.get("name"), m.get("k"), m.get("rho"), m.get("cp")) for f, m in (self.region_mats or {}).items()))
 
     def num(self, edit, name, positive=False, nonneg=False):
         try:
@@ -663,6 +729,7 @@ class ThermalTab(pt.PhysicsTab):
         self.supports, self.loads = [], []
         self.region_mats, self.region_names, self.region_q = {}, {}, {}
         self.missing_mats = []
+        self.unset_regions = set()
         self.probes, self.probe_fos, self.probe_trig = [], None, None
         self.canvas.node_sel = None
         self.canvas.sel = []
@@ -694,6 +761,7 @@ class ThermalTab(pt.PhysicsTab):
         self.supports, self.loads = [], []
         self.region_mats, self.region_names, self.region_q = {}, {}, {}
         self.missing_mats = []
+        self.unset_regions = set()
         self.probes, self.probe_fos, self.probe_trig = [], None, None
         self.canvas.node_sel = None
         self.canvas.sel = []
@@ -704,6 +772,7 @@ class ThermalTab(pt.PhysicsTab):
         self.regions.clear()
         self.reg_sel = None
         self.update_region_box()
+        self.fill_material_table()
         self.refresh_lists()
         self.info.setText("Nothing imported yet.")
         self.res_lbl.setText("")
@@ -714,26 +783,31 @@ class ThermalTab(pt.PhysicsTab):
 
     # --- what the Simulation window tells a thermal tab about a slice of a part / assembly
     def sim_apply_regions(self, rp, names, mats):
-        """Regions of a slice: named by their part, each with the thermal material of that part's material (looked up by its name)."""
+        """Regions of a slice: named by their part, each with the thermal material of that part's material (looked up by its name).  A part whose
+        material has no thermal values leaves its region on the default material, marked in the table so that a material is chosen."""
         self.region_names = dict(names)
         self.region_mats, missing = {}, []
+        self.unset_regions = set()
         lib = tmat.library()
         for fid, m in mats.items():
             tm = tmat.for_part_material(m, lib)
             if tm is None:
                 missing.append(f"{names.get(fid, 'a part')} ({(m or {}).get('name') or 'no material'})")
+                self.unset_regions.add(fid)
             else:
                 self.region_mats[fid] = {"name": tm["name"], "k": tm["k"], "rho": tm["rho"], "cp": tm["cp"]}
         self.missing_mats = sorted(set(missing))
+        self.ensure_region_materials()
 
     def sim_part_materials(self, mats, part_mat):
         notes = []
         if mats:
             if self.region_mats:
-                notes.append("Thermal materials from the parts: " + ", ".join(sorted({m["name"] for m in self.region_mats.values()})) + ".")
+                notes.append("Thermal materials from the parts: " + ", ".join(sorted({m["name"] for f, m in self.region_mats.items() if f not in self.unset_regions})) + ".")
             if self.missing_mats:
-                notes.append("No thermal values for " + ", ".join(self.missing_mats) + ": those regions use the material of the tab (Material and "
-                             "analysis); give them one of their own in Geometry > Regions.")
+                notes.append("No thermal values for " + ", ".join(self.missing_mats) + ": those regions carry the default material (" + tmat.DEFAULT +
+                             ") until you choose one for them in Material and analysis.")
+            self.fill_material_table()
             return notes
         if part_mat:
             tm = tmat.for_part_material(part_mat)
@@ -745,31 +819,27 @@ class ThermalTab(pt.PhysicsTab):
         return notes
 
     def set_default_material(self, tm):
-        """Puts a thermal material (SI) into the boxes of the tab as custom values (its name is kept in the note)."""
-        fam = self.family()
-        self.mat_combo.blockSignals(True)
-        i = self.mat_combo.findData(tm["name"])
-        self.mat_combo.setCurrentIndex(i if i >= 0 else 0)
-        self.mat_combo.blockSignals(False)
-        for w, q in ((self.e_k, "k"), (self.e_rho, "rho"), (self.e_cp, "cp")):
-            w.setText(f"{fam.from_si(q, tm[q]):.6g}")
-        self.update_mat_note()
+        """Gives every region a thermal material (SI), the way a whole part's material is taken."""
+        self.ensure_region_materials()
+        for f in (self.geom["faces"] if self.geom is not None else []):
+            self.region_mats[f["id"]] = {"name": tm["name"], "k": tm["k"], "rho": tm["rho"], "cp": tm["cp"]}
+        self.unset_regions = set()
+        self.fill_regions()
 
     # ------------------------------------------------------------------------------------------------------------------------------ regions
     def fill_regions(self):
+        self.ensure_region_materials()
         self.regions.blockSignals(True)
         self.regions.clear()
         for f in self.geom["faces"]:
             self.regions.addItem(self.region_item(f))
         self.regions.blockSignals(False)
         self.update_region_box()
+        self.fill_material_table()
 
     def region_item(self, f):
         nm = (self.region_names or {}).get(f["id"])
         extra = ""
-        m = (self.region_mats or {}).get(f["id"])
-        if m:
-            extra += f"  {m['name']}"
         if abs((self.region_q or {}).get(f["id"], 0.0)) > 0:
             extra += "  [heat generation]"
         it = QListWidgetItem(f"Region {f['id'] + 1}" + (f"  [{nm}]" if nm else "") + f"   area {f['net_area']:.5g}{extra}")
@@ -792,22 +862,10 @@ class ThermalTab(pt.PhysicsTab):
         self.reg_box.setEnabled(f is not None)
         self.reg_sel = f["id"] if f is not None else None
         if f is None:
-            self.reg_lbl.setText("Select a region to give it a material and a heat generation.")
+            self.reg_lbl.setText("Select a region to give it a heat generation.")
             return
         nm = (self.region_names or {}).get(f["id"])
         self.reg_lbl.setText(f"Selected: Region {f['id'] + 1}" + (f" [{nm}]" if nm else ""))
-        self.reg_mat_combo.blockSignals(True)
-        self.reg_mat_combo.clear()
-        self.reg_mat_combo.addItem(SAME, None)
-        names = [m["name"] for m in tmat.library()]
-        have = (self.region_mats or {}).get(f["id"])
-        for n in names:
-            self.reg_mat_combo.addItem(n, n)
-        if have and have["name"] not in names:                # a part's own name (a slice): shown as it is
-            self.reg_mat_combo.addItem(have["name"], have["name"])
-        i = self.reg_mat_combo.findData(have["name"]) if have else 0
-        self.reg_mat_combo.setCurrentIndex(max(i, 0))
-        self.reg_mat_combo.blockSignals(False)
         self.e_qv.setText(f"{self.family().from_si('qv', (self.region_q or {}).get(f['id'], 0.0)):.8g}")
 
     def refresh_region_row(self):
@@ -818,24 +876,6 @@ class ThermalTab(pt.PhysicsTab):
             self.regions.blockSignals(True)
             old.setText(it.text())
             self.regions.blockSignals(False)
-
-    def region_material_picked(self, index):
-        f = self.selected_face()
-        if f is None:
-            return
-        name = self.reg_mat_combo.itemData(index)
-        if name is None:
-            self.region_mats.pop(f["id"], None)
-        else:
-            cur = (self.region_mats or {}).get(f["id"])
-            tm = tmat.find(name) or tmat.for_part_material({"name": name})
-            if tm is None and cur is not None and cur["name"] == name:
-                tm = cur
-            if tm is None:
-                return
-            self.region_mats[f["id"]] = {"name": name, "k": tm["k"], "rho": tm["rho"], "cp": tm["cp"]}
-        self.refresh_region_row()
-        self.after_conditions()
 
     def region_q_edited(self):
         f = self.selected_face()
@@ -879,7 +919,7 @@ class ThermalTab(pt.PhysicsTab):
         self._flux_cache = {}
         self.res_lbl.setText("")
         self.update_time_controls()
-        self.fill_regions()
+        self.fill_regions()                                   # (gives a region that came out of a split or a merge the default material if it has none)
         self.refresh_region_row()
 
     def region_toggled(self, item):
@@ -888,8 +928,124 @@ class ThermalTab(pt.PhysicsTab):
         self.res_lbl.setText("")
         self.update_time_controls()
         self.update_region_box()
+        self.fill_material_table()                            # (a switched-off region is greyed there)
+        self.update_cond_note()                               # (and its edges are no longer edges of the model)
 
     # ------------------------------------------------------------------------------------------------------------------------------ materials
+    # Every region has its own material (self.region_mats: region id -> {"name", "k", "rho", "cp"}, SI), and all of them are set in Material and
+    # analysis: the table lists the regions, the combo and the three boxes below it are the editor of the selected one.
+    def default_region_material(self):
+        tm = tmat.find(tmat.DEFAULT) or tmat.builtin()[0]
+        return {"name": tm["name"], "k": tm["k"], "rho": tm["rho"], "cp": tm["cp"]}
+
+    def ensure_region_materials(self, base=None):
+        """Every region of the sketch has a material: the ones that have none get a copy of `base` (the default material)."""
+        if self.region_mats is None:
+            self.region_mats = {}
+        if self.geom is None:
+            return
+        base = base or self.default_region_material()
+        for f in self.geom["faces"]:
+            if f["id"] not in self.region_mats:
+                self.region_mats[f["id"]] = dict(base)
+
+    def materials_summary(self):
+        names = []
+        for f in (self.geom["faces"] if self.geom is not None else []):
+            m = (self.region_mats or {}).get(f["id"])
+            if f["included"] and m and m["name"] not in names:
+                names.append(m["name"])
+        if not names:
+            return "no regions yet"
+        return names[0] if len(names) == 1 else f"{len(names)} materials"
+
+    def mat_face(self):
+        r = self.mat_table.currentRow() if hasattr(self, "mat_table") else -1
+        if self.geom is None or not (0 <= r < len(self.geom["faces"])):
+            return None
+        return self.geom["faces"][r]
+
+    def material_row_text(self, f):
+        m = (self.region_mats or {}).get(f["id"])
+        text = m["name"] if m else "(none)"
+        if f["id"] in self.unset_regions:
+            text += "  - no thermal values: choose a material"
+        return text
+
+    def fill_material_row(self, r, f):
+        nm = (self.region_names or {}).get(f["id"])
+        a = QTableWidgetItem(f"Region {f['id'] + 1}" + (f" [{nm}]" if nm else ""))
+        b = QTableWidgetItem(self.material_row_text(f))
+        for it in (a, b):
+            it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            if not f["included"]:
+                it.setForeground(QBrush(QColor("#8a8a8a")))
+                it.setToolTip("This region is switched off in Geometry: it is not part of the model.")
+        if f["id"] in self.unset_regions:
+            b.setForeground(QBrush(QColor("#b3261e")))
+        self.mat_table.setItem(r, 0, a)
+        self.mat_table.setItem(r, 1, b)
+
+    def fill_material_table(self):
+        """The table of the regions and their materials (kept on the same region when it can be)."""
+        t = self.mat_table
+        faces = self.geom["faces"] if self.geom is not None else []
+        keep = self.mat_face()
+        keep_id = keep["id"] if keep is not None else None
+        t.blockSignals(True)
+        t.setRowCount(len(faces))
+        for r, f in enumerate(faces):
+            self.fill_material_row(r, f)
+        t.resizeColumnsToContents()
+        row = next((r for r, f in enumerate(faces) if f["id"] == keep_id), 0 if faces else -1)
+        t.setCurrentCell(row, 0) if row >= 0 else t.setCurrentCell(-1, -1)
+        t.blockSignals(False)
+        self.material_row_picked(row)
+        self.refresh_sections()
+
+    def refresh_material_row(self):
+        f = self.mat_face()
+        if f is not None:
+            self.mat_table.blockSignals(True)
+            self.fill_material_row(self.mat_table.currentRow(), f)
+            self.mat_table.resizeColumnsToContents()
+            self.mat_table.blockSignals(False)
+        self.refresh_sections()
+
+    def material_row_picked(self, row):
+        """A region is chosen in the table: it is shown on the drawing and the editor below holds its material."""
+        self.canvas.hl_face = row if row is not None and row >= 0 else None
+        self.canvas.update()
+        self.load_material_editor()
+
+    def load_material_editor(self):
+        """The combo and the boxes show the material of the selected region (the default material while nothing is selected)."""
+        f = self.mat_face()
+        m = (self.region_mats or {}).get(f["id"]) if f is not None else None
+        have = m or self.default_region_material()
+        fam = self.family()
+        self.mat_combo.blockSignals(True)
+        while self.mat_combo.count() > 1 + len(self.library):               # a name that is not in the library (a part's own) was added earlier
+            self.mat_combo.removeItem(self.mat_combo.count() - 1)
+        if have["name"] not in (CUSTOM, None) and self.mat_combo.findData(have["name"]) < 0:
+            self.mat_combo.addItem(have["name"], have["name"])               # shown as it is (a slice names its regions' materials after the parts)
+        i = self.mat_combo.findData(have["name"]) if have["name"] != CUSTOM else 0
+        self.mat_combo.setCurrentIndex(i if i >= 0 else 0)
+        self.mat_combo.blockSignals(False)
+        for w, q in ((self.e_k, "k"), (self.e_rho, "rho"), (self.e_cp, "cp")):
+            w.setText(box_text(fam.from_si(q, have[q])))
+        self._box_error = None
+        on = f is not None
+        for w in (self.mat_combo, self.e_k, self.e_rho, self.e_cp, self.b_add_mat, self.b_all_mats):
+            w.setEnabled(on)
+        if on:
+            nm = (self.region_names or {}).get(f["id"])
+            self.mat_sel_lbl.setText(f"Material of Region {f['id'] + 1}" + (f" [{nm}]" if nm else "") + ":")
+        else:
+            self.mat_sel_lbl.setText("Import a sketch to give its regions a material.")
+        self.b_del_mat.setEnabled(any(x["name"] not in tmat.builtin_names() for x in self.library))
+        self.update_mat_note()
+
     def fill_materials(self, select=None):
         self.library = tmat.library()
         builtin = tmat.builtin_names()
@@ -904,38 +1060,102 @@ class ThermalTab(pt.PhysicsTab):
         if hasattr(self, "b_del_mat"):
             self.b_del_mat.setEnabled(any(m["name"] not in builtin for m in self.library))
 
+    def material_changed(self):
+        """A region got another material: its row, the notes and the result (which no longer matches) follow."""
+        self.refresh_material_row()
+        self.update_mat_note()
+        self.after_conditions()
+
     def material_picked(self, *_):
+        """The material of the selected region was chosen in the combo."""
+        f = self.mat_face()
+        if f is None:
+            return
         name = self.mat_combo.currentData()
-        tm = tmat.find(name, self.library) if name else None
-        if tm is not None:
-            fam = self.family()
-            for w, q in ((self.e_k, "k"), (self.e_rho, "rho"), (self.e_cp, "cp")):
-                w.setText(f"{fam.from_si(q, tm[q]):.6g}")
+        cur = self.region_mats[f["id"]]
+        if name is None:                                        # '(custom values)': the numbers stay, they are the region's own now
+            self.region_mats[f["id"]] = {"name": CUSTOM, "k": cur["k"], "rho": cur["rho"], "cp": cur["cp"]}
+        else:
+            tm = tmat.find(name, self.library)
+            if tm is None:
+                return
+            self.region_mats[f["id"]] = {"name": tm["name"], "k": tm["k"], "rho": tm["rho"], "cp": tm["cp"]}
+        self.unset_regions.discard(f["id"])
+        fam = self.family()
+        m = self.region_mats[f["id"]]
+        for w, q in ((self.e_k, "k"), (self.e_rho, "rho"), (self.e_cp, "cp")):
+            w.setText(box_text(fam.from_si(q, m[q])))
+        self._box_error = None
+        self.material_changed()
+
+    def read_material_boxes(self):
+        """-> {"k", "rho", "cp"} in SI from the three boxes (pf.ModelError with a message when one is not a positive number)."""
+        fam = self.family()
+        return {"k": fam.to_si("k", self.num(self.e_k, "The conductivity", positive=True)),
+                "rho": fam.to_si("rho", self.num(self.e_rho, "The density", positive=True)),
+                "cp": fam.to_si("cp", self.num(self.e_cp, "The specific heat", positive=True))}
+
+    def set_custom(self, *_):
+        """Numbers were typed in the boxes: they are the selected region's own values ('(custom values)') as soon as all three are fine."""
+        f = self.mat_face()
+        if f is None:
+            return
+        try:
+            v = self.read_material_boxes()
+        except pf.ModelError as ex:
+            self._box_error = str(ex)                           # kept until the boxes are fine again (an error on Solve, not on every keystroke)
+            return
+        self._box_error = None
+        cur = self.region_mats[f["id"]]
+        if all(abs(cur[k] - v[k]) <= 1e-9 * abs(v[k]) for k in v) and cur["name"] != CUSTOM:
+            return                                              # the same numbers as the library material (a re-typed digit): nothing changed
+        self.region_mats[f["id"]] = {"name": CUSTOM, **v}
+        self.unset_regions.discard(f["id"])
+        self.mat_combo.blockSignals(True)
+        self.mat_combo.setCurrentIndex(0)
+        self.mat_combo.blockSignals(False)
+        self.refresh_material_row()
         self.update_mat_note()
         self.after_inputs()
 
-    def set_custom(self, *_):
-        if self.mat_combo.currentData() is not None:
-            self.mat_combo.blockSignals(True)
-            self.mat_combo.setCurrentIndex(0)
-            self.mat_combo.blockSignals(False)
-        self.update_mat_note()
+    def material_boxes_finished(self):
+        """A box was left: a wrong entry is said at once and the boxes go back to the numbers the region really has."""
+        if self._box_error:
+            msg = self._box_error
+            self.load_material_editor()
+            self.status(msg + " The region kept its material.")
+
+    def material_for_all(self):
+        f = self.mat_face()
+        if f is None:
+            return
+        m = self.region_mats[f["id"]]
+        for g in self.geom["faces"]:
+            self.region_mats[g["id"]] = dict(m)
+        self.unset_regions = set()
+        self.fill_regions()
+        self.status(f"Every region now has the material of Region {f['id'] + 1}: {m['name']}.")
+        self.after_conditions()
 
     def update_mat_note(self):
-        name = self.mat_combo.currentData()
-        self.mat_note.setText("" if name is None else "Typical room-temperature values, taken as constant. Check them against your own source.")
+        f = self.mat_face()
+        m = (self.region_mats or {}).get(f["id"]) if f is not None else None
+        name = m["name"] if m else None
+        self.mat_note.setText("" if name in (None, CUSTOM) else "Typical room-temperature values, taken as constant. Check them against your own source.")
         self.refresh_sections()
 
     def default_material(self):
-        fam = self.family()
-        k = fam.to_si("k", self.num(self.e_k, "The conductivity", positive=True))
-        rho = fam.to_si("rho", self.num(self.e_rho, "The density", positive=True))
-        cp = fam.to_si("cp", self.num(self.e_cp, "The specific heat", positive=True))
-        return {"name": self.mat_combo.currentData() or CUSTOM, "k": k, "rho": rho, "cp": cp}
+        """The material of the selected region (the default material while nothing is selected): {"name", "k", "rho", "cp"} in SI."""
+        f = self.mat_face()
+        m = (self.region_mats or {}).get(f["id"]) if f is not None else None
+        return dict(m or self.default_region_material())
 
     def add_material(self):
+        f = self.mat_face()
+        if f is None:
+            return
         try:
-            m = self.default_material()
+            v = self.read_material_boxes()
         except pf.ModelError as ex:
             QMessageBox.warning(self, "Add material", str(ex))
             return
@@ -946,7 +1166,7 @@ class ThermalTab(pt.PhysicsTab):
         if name in tmat.builtin_names() or any(x["name"] == name for x in tmat.user_materials()):
             QMessageBox.information(self, "Add material", "A material with that name exists already. Choose another name.")
             return
-        mats = tmat.user_materials() + [{"name": name, "k": m["k"], "rho": m["rho"], "cp": m["cp"]}]
+        mats = tmat.user_materials() + [{"name": name, "k": v["k"], "rho": v["rho"], "cp": v["cp"]}]
         try:
             tmat.save_user(mats)
         except OSError as ex:
@@ -963,8 +1183,13 @@ class ThermalTab(pt.PhysicsTab):
         if QMessageBox.question(self, "Delete material", f"Delete '{name}' from your library?") != QMessageBox.StandardButton.Yes:
             return
         tmat.save_user([m for m in tmat.user_materials() if m["name"] != name])
+        f = self.mat_face()
         self.fill_materials()
-        self.update_mat_note()
+        if f is not None and (self.region_mats or {}).get(f["id"], {}).get("name") == name:        # the regions keep their numbers
+            for g in self.geom["faces"]:
+                if self.region_mats.get(g["id"], {}).get("name") == name:
+                    self.region_mats[g["id"]]["name"] = CUSTOM
+        self.fill_material_table()
 
     def analysis_changed(self, *_):
         self.tr_box.setVisible(self.analysis_combo.currentIndex() == 1)
@@ -975,7 +1200,7 @@ class ThermalTab(pt.PhysicsTab):
         self.refresh_sections()
 
     # ------------------------------------------------------------------------------------------------------------------------------ conditions
-    NAMES = {"temp": "Temperature", "flux": "Heat flux", "power": "Heat flow", "conv": "Convection", "rad": "Radiation"}
+    NAMES = {"temp": "Temperature", "flux": "Heat flux", "power": "Heat flow", "conv": "Convection", "rad": "Radiation", "ins": "Insulated"}
 
     def default_name(self, is_sup, idx):
         items = self.supports if is_sup else self.loads
@@ -987,7 +1212,8 @@ class ThermalTab(pt.PhysicsTab):
         fam = self.family()
         k = item["kind"]
         return {"temp": f"Temperature ({fam.temp})", "flux": f"Heat flux ({fam.unit('q')}, into the body)", "power": f"Heat flow ({fam.unit('P')})",
-                "conv": f"Convection (h in {fam.unit('h')}, fluid in {fam.temp})", "rad": f"Radiation (emissivity, surroundings in {fam.temp})"}[k]
+                "conv": f"Convection (h in {fam.unit('h')}, fluid in {fam.temp})", "rad": f"Radiation (emissivity, surroundings in {fam.temp})",
+                "ins": "Insulated (no heat through the edge)"}[k]
 
     def cond_value_text(self, item, is_sup=None):
         fam = self.family()
@@ -1000,6 +1226,8 @@ class ThermalTab(pt.PhysicsTab):
             return f"{fam.from_si('P', item['P']):.10g}"
         if k == "conv":
             return f"{fam.from_si('h', item['h']):.10g}, {fam.from_si('T', item['Tinf']):.10g}"
+        if k == "ins":
+            return ""                                          # nothing to set: no heat crosses the edge
         return f"{item['eps']:.10g}, {fam.from_si('T', item['Ts']):.10g}"
 
     def refresh_lists(self):
@@ -1017,7 +1245,40 @@ class ThermalTab(pt.PhysicsTab):
                 r += 1
         t.resizeColumnsToContents()
         t.blockSignals(False)
+        self.update_cond_note()
         self.fill_probe_table()
+
+    def boundary_edges(self):
+        """The sketch edges that bound the model: used by exactly one switched-on region (an edge between two regions is inside the material).
+        -> set of (kind, id)"""
+        if self.geom is None:
+            return set()
+        count = {}
+        for f in self.geom["faces"]:
+            if f["included"]:
+                for cyc in [f["cycle"]] + [h["cycle"] for h in f["holes"]]:
+                    for h in cyc:
+                        count[h[0]] = count.get(h[0], 0) + 1
+        return {self.geom["edges"][k]["src"] for k, n in count.items() if n == 1}
+
+    def uncovered_edges(self):
+        """The boundary edges that have no condition: they are insulated.  -> sorted list of (kind, id)"""
+        covered = {tuple(x) for it in list(self.supports) + list(self.loads) for x in it["targets"] if x[0] in ("ln", "ar", "ci")}
+        return sorted(self.boundary_edges() - covered)
+
+    def update_cond_note(self):
+        if not hasattr(self, "cond_note"):
+            return
+        if self.geom is None or not self.boundary_edges():
+            self.cond_note.setText("")
+            return
+        un = self.uncovered_edges()
+        if not un:
+            self.cond_note.setText("Every edge of the model has a condition.")
+            return
+        shown = self.names(un[:6]) + (f" and {len(un) - 6} more" if len(un) > 6 else "")
+        self.cond_note.setText(f"{len(un)} edge{'' if len(un) == 1 else 's'} of the model ha{'s' if len(un) == 1 else 've'} no condition and "
+                               f"{'is' if len(un) == 1 else 'are'} insulated (no heat through {'it' if len(un) == 1 else 'them'}): {shown}.")
 
     def after_conditions(self):
         self.result = None
@@ -1040,6 +1301,8 @@ class ThermalTab(pt.PhysicsTab):
         is_sup, idx, item = self._cond_ref(r)
         fam = self.family()
         k = item["kind"]
+        if k == "ins":
+            return False
         hints = {"temp": "one temperature above absolute zero", "flux": "one number", "power": "one number",
                  "conv": "the coefficient (0 or more), then the fluid temperature", "rad": "the emissivity (0 to 1), then the surroundings temperature"}
         new = None
@@ -1095,6 +1358,13 @@ class ThermalTab(pt.PhysicsTab):
             return
         self.last_vals["q"] = fam.to_si("q", v[0])
         self.loads.append({"kind": "flux", "q": fam.to_si("q", v[0]), "targets": t})
+        self.after_conditions()
+
+    def add_insulated(self):
+        t = self.targets(("ln", "ar", "ci"), "Insulated")
+        if not t:
+            return
+        self.loads.append({"kind": "ins", "targets": t})
         self.after_conditions()
 
     def add_power(self):
@@ -1155,12 +1425,16 @@ class ThermalTab(pt.PhysicsTab):
         if need_mesh and self.mesh is None:
             raise pf.ModelError("Mesh first.")
         fam = self.family()
-        mat = self.default_material()
+        if self._box_error:                                   # numbers typed in the material boxes that are not numbers
+            raise pf.ModelError(self._box_error)
+        self.ensure_region_materials()
         t = self.num(self.e_t, "The thickness", positive=True) * self.lscale()
         included = {f["id"] for f in self.geom["faces"] if f["included"]}
+        rmats = {f: {"k": m["k"], "rho": m["rho"], "cp": m["cp"]} for f, m in self.region_mats.items() if f in included}
+        first = rmats[min(rmats)] if rmats else self.default_region_material()         # (the solver keeps one as the fallback of a region without its own)
         setup = {"lscale": self.lscale(), "t": t, "order": 1 if self.order_combo.currentIndex() == 1 else 2,
-                 "mat": {"k": mat["k"], "rho": mat["rho"], "cp": mat["cp"]},
-                 "region_mats": {f: {"k": m["k"], "rho": m["rho"], "cp": m["cp"]} for f, m in (self.region_mats or {}).items() if f in included},
+                 "mat": {"k": first["k"], "rho": first["rho"], "cp": first["cp"]},
+                 "region_mats": rmats,
                  "region_q": {f: v for f, v in (self.region_q or {}).items() if f in included and v != 0.0}, "conds": []}
         for is_sup, items in ((True, self.supports), (False, self.loads)):
             for idx, it in enumerate(items):
@@ -1471,7 +1745,7 @@ class ThermalTab(pt.PhysicsTab):
                 "cur_unit": self.cur_unit, "material": self.mat_combo.currentData(), "faces_included": [bool(f["included"]) for f in self.geom["faces"]],
                 "supports": self.supports, "loads": self.loads, "mesh": self.mesh, "result": self.result, "probes": [dict(q) for q in self.probes],
                 "probe_fos": None, "probe_trig": None, "profile": None, "field": self.field.currentData(), "sketch_id": getattr(self, "sketch_id", None),
-                "region_mats": getattr(self, "region_mats", {}), "region_names": getattr(self, "region_names", {}),
+                "region_mats": getattr(self, "region_mats", {}), "region_mats_all": True, "region_names": getattr(self, "region_names", {}),
                 "region_q": getattr(self, "region_q", {}), "frame": self.frame_idx, "last_vals": dict(self.last_vals)}
 
     def import_state(self, st, out_of_date=False):
@@ -1481,19 +1755,23 @@ class ThermalTab(pt.PhysicsTab):
         self.sketch_id = st.get("sketch_id")
         for f, inc in zip(self.geom["faces"], st.get("faces_included", [])):
             f["included"] = bool(inc)
-        self.region_mats, self.region_names = dict(st.get("region_mats") or {}), dict(st.get("region_names") or {})
+        self.region_mats, self.region_names = {f: dict(m) for f, m in (st.get("region_mats") or {}).items()}, dict(st.get("region_names") or {})
         self.region_q = dict(st.get("region_q") or {})
         self.last_vals = dict(st.get("last_vals") or {})
-        self.fill_regions()
+        self.unset_regions = set()
         pstore.set_inputs(self, st.get("inputs", {}))
         self.tr_box.setVisible(self.analysis_combo.currentIndex() == 1)
         self.plate_box.setVisible(self.cb_plate.isChecked())
         self.cur_unit = st.get("cur_unit", self.cur_unit)
-        self.mat_combo.blockSignals(True)
-        i = self.mat_combo.findData(st.get("material"))
-        self.mat_combo.setCurrentIndex(i if i >= 0 else 0)
-        self.mat_combo.blockSignals(False)
-        self.update_mat_note()
+        if not st.get("region_mats_all"):
+            # saved before every region had its own material: the one material of the tab (the boxes and the name) goes to the regions that had none
+            try:
+                v = self.read_material_boxes()
+                base = {"name": st.get("material") or CUSTOM, **v}
+            except pf.ModelError:
+                base = None
+            self.ensure_region_materials(base)
+        self.fill_regions()
         self.supports, self.loads = [dict(s) for s in st.get("supports", [])], [dict(s) for s in st.get("loads", [])]
         self.probes = [dict(q) for q in st.get("probes", [])]
         self.probe_fos = self.probe_trig = None
@@ -1566,11 +1844,7 @@ class ThermalTab(pt.PhysicsTab):
         except pf.ModelError as ex:
             s = None
             add(f"setup: {ex}")
-        try:
-            mat = self.default_material()
-            add(f"material of the tab: {mat['name']}, k {mat['k']:g} W/(m K), rho {mat['rho']:g} kg/m3, cp {mat['cp']:g} J/(kg K)")
-        except pf.ModelError as ex:
-            add(f"material: {ex}")
+        add("materials: one per region (listed under regions above), k in W/(m K), rho in kg/m3, cp in J/(kg K)")
         add(f"thickness {self.e_t.text()} {units.get(self.unit_name())['L']}, element size {self.e_h.text()}, unit system {self.unit_name()} (temperatures in {fam.temp})")
         if s is not None:
             add(f"analysis: {s['analysis']}" + (f", start {s['T0']:.2f} K, end {s['t_end']:g} s, {s['steps']} steps, theta {s['theta']}" if s["analysis"] == "transient" else ""))
