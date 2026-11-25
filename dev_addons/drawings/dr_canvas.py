@@ -5,14 +5,19 @@ Placing (like SolidWorks): begin_model(vid)       the view `vid` (just made by t
                            begin_projected(pid)  pick a side of the view `pid` by moving the pointer to it: the projected view appears there and slides along its axis; a click puts it
                                                  down (and the next one can be placed from the same parent), Esc / right click ends
 
-Annotation tools (tool_begin(name): "dim" Smart Dimension, "center_mark", "centerline"):
+Annotation tools (tool_begin(name): "dim" Smart Dimension, "center_mark", "centerline", "note", "balloon"; the Sketch tools "line", "rect", "circle", "arc"):
           dim          click a line, a circle or an arc (a point for a distance between two points); a second click on another point / line / circle makes a distance or an angle;
                        the dimension follows the pointer until a click puts it down.  Esc / right click: takes away what is half done, then ends the tool
           center_mark  click a circle or an arc (or its centre)
           centerline   click two parallel lines
-          A click on a dimension / mark with no tool selects it (blue); a dimension can be dragged to put it somewhere else; Delete removes it.
+          note         (with a leader) click what the leader points at, then where the text goes; (without) click where the text goes.  The text, size and leader come from `opts`
+          balloon      click what the balloon points at (an edge: an arrow; a face: a dot), then where the circle goes; the number counts on
+          line, rect, circle, arc    drawn on the sheet by clicking points (they snap to the corners of the views and to the ends of what is already drawn); a line carries on from its end
+          A click on a dimension / mark / note / balloon / drawn item with no tool selects it (blue); drag it to move it, drag the squares on it (a leader's tip, the ends of a line, the radius of a
+          circle ...) to change it; double-click a note or a balloon to edit its text; Delete removes it.
 
-Signals:  selection_changed(vid or None)   changed(what)  the document changed ("move", "place", "delete", "dim", "mark", "annot_move", "annot_delete" ...)   hint(text)
+Signals:  edit_requested(id)  a note or a balloon was double-clicked   options_changed()  the canvas changed an option of a tool (the next balloon number)
+          selection_changed(vid or None)   changed(what)  the document changed ("move", "place", "delete", "dim", "mark", "annot_move", "annot_delete" ...)   hint(text)
           coords(x, y)  the pointer on the sheet, mm   placing(on)  True while a view follows the pointer   annot_selected(id or None)   tool_changed(name or None)
 """
 import math
@@ -22,7 +27,9 @@ from PyQt6.QtGui import QColor, QCursor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import QWidget
 
 import dr_annot as A
+import dr_items as IT
 import dr_render as R
+from dr_model import DrawingError
 
 CANVAS = QColor("#a9b1bf")
 SHEET = QColor("#ffffff")
@@ -39,6 +46,8 @@ class SheetCanvas(QWidget):
     placing = pyqtSignal(bool)
     annot_selected = pyqtSignal(object)
     tool_changed = pyqtSignal(object)
+    edit_requested = pyqtSignal(str)
+    options_changed = pyqtSignal()
 
     def __init__(self, drawing, parent=None):
         super().__init__(parent)
@@ -67,6 +76,10 @@ class SheetCanvas(QWidget):
         self.sel_annot = None                       # the selected dimension / mark
         self._last_drag = None
         self.hover_annot = None
+        self.opts = {"text": "Note", "size": IT.NOTE_SIZE, "leader": "straight", "balloon": "1"}      # what the Note and Balloon tools put down (the property panel sets them)
+        self.draft = None                           # a drawing item that is being clicked: {"pts": [the points so far]}
+        self.tool_pt = None                         # the pointer for a drawing tool, snapped
+        self.snap_mark = None                       # where it snapped to
 
     # ---- coordinates
     def sheet_h(self):
@@ -111,9 +124,9 @@ class SheetCanvas(QWidget):
             self.r.cache.clear()
         if self.sel is not None and not any(v["id"] == self.sel for v in self.d.views):
             self.set_selected(None)
-        if self.sel_annot is not None and not any(a.get("id") == self.sel_annot for a in self.d.dims + self.d.marks):
+        if self.sel_annot is not None and not any(a.get("id") == self.sel_annot for a in self.d.sheet_items()):
             self.set_selected_annot(None)
-        if self.float_annot is not None and not any(a.get("id") == self.float_annot for a in self.d.dims):
+        if self.float_annot is not None and not any(a.get("id") == self.float_annot for a in self.d.sheet_items()):
             self.float_annot = None
         self.picks = [pk for pk in self.picks if any(v["id"] == pk[0] for v in self.d.views)]
         self.update()
@@ -225,7 +238,17 @@ class SheetCanvas(QWidget):
     # ---- the annotation tools
     TOOL_HINT = {"dim": "Click a line, a circle or an arc to dimension it.  For a distance or an angle click two things.  Then click where the dimension goes.  Esc ends.",
                  "center_mark": "Click a circle or an arc to put a center mark on it.  Esc ends.",
-                 "centerline": "Click two parallel lines to put a centerline between them.  Esc ends."}
+                 "centerline": "Click two parallel lines to put a centerline between them.  Esc ends.",
+                 "note": "Click on the sheet where the text goes.  Esc ends.",
+                 "balloon": "Click the edge or the face of a view that the balloon points at.  Then click where the balloon goes.  Esc ends.",
+                 "line": "Click the start of the line, then its end.  The next click carries on from the end.  Esc ends the chain, then the tool.",
+                 "rect": "Click one corner of the rectangle, then the opposite corner.  Esc ends.",
+                 "circle": "Click the centre of the circle, then a point on it.  Esc ends.",
+                 "arc": "Click the centre of the arc, then where it starts, then where it ends (counter-clockwise from the start).  Esc ends."}
+    DRAW_TOOLS = ("line", "rect", "circle", "arc")
+    DRAW_NEED = {"line": 2, "rect": 2, "circle": 2, "arc": 3}
+    DRAW_STEP = {"line": ["Click the end of the line.", ], "rect": ["Click the opposite corner."], "circle": ["Click a point on the circle."],
+                 "arc": ["Click where the arc starts.", "Click where the arc ends (counter-clockwise from the start)."]}
 
     def tool_begin(self, name):
         if name not in self.TOOL_HINT:
@@ -235,11 +258,20 @@ class SheetCanvas(QWidget):
         self.set_selected(None)
         self.set_selected_annot(None)
         self.tool, self.picks, self.hover_pick = name, [], None
+        self.draft, self.tool_pt, self.snap_mark = None, None, None
+        if name == "balloon":
+            self.opts["balloon"] = IT.next_balloon_text(self.d.balloons)
+            self.options_changed.emit()
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.tool_changed.emit(name)
-        self.hint.emit(self.TOOL_HINT[name])
+        self.hint.emit(self._tool_hint(name))
         self.update()
         return True
+
+    def _tool_hint(self, name):
+        if name == "note" and self.opts.get("leader") in ("straight", "bent"):
+            return "Click what the leader points at (an edge of a view, or anywhere).  Then click where the text goes.  Esc ends."
+        return self.TOOL_HINT.get(name, "")
 
     def tool_end(self, emit=True):
         """Ends the tool; a dimension that is still following the pointer is taken away."""
@@ -247,6 +279,7 @@ class SheetCanvas(QWidget):
             return
         self._drop_float()
         self.tool, self.picks, self.hover_pick = None, [], None
+        self.draft, self.tool_pt, self.snap_mark = None, None, None
         self.unsetCursor()
         if emit:
             self.tool_changed.emit(None)
@@ -263,10 +296,10 @@ class SheetCanvas(QWidget):
 
     def tool_cancel(self):
         """Esc: what is half done goes first (the dimension that follows the pointer, the first pick); then the tool ends."""
-        if self.float_annot is not None or self.picks:
+        if self.float_annot is not None or self.picks or self.draft:
             self._drop_float()
-            self.picks = []
-            self.hint.emit(self.TOOL_HINT.get(self.tool, ""))
+            self.picks, self.draft = [], None
+            self.hint.emit(self._tool_hint(self.tool))
             self.update()
             return
         self.tool_end()
@@ -282,7 +315,7 @@ class SheetCanvas(QWidget):
         pr = self.d.projection(v)
         q = ((x - ox) / s, (y - oy) / s)
         t = tol / s
-        if self.tool == "dim":
+        if self.tool in ("dim",):
             ref = A.pick(pr, q, t)
         elif self.tool == "center_mark":
             ref = A.pick(pr, q, t)
@@ -306,6 +339,15 @@ class SheetCanvas(QWidget):
         return at is not None and math.hypot(x - at[0], y - at[1]) <= A.TEXT_H * 1.2
 
     def _tool_press(self, x, y):
+        if self.tool == "note":
+            self._note_press(x, y)
+            return
+        if self.tool == "balloon":
+            self._balloon_press(x, y)
+            return
+        if self.tool in self.DRAW_TOOLS:
+            self._draw_press(x, y)
+            return
         hit = self.pick_at(x, y)
         if self.tool == "center_mark":
             if hit is None:
@@ -395,7 +437,15 @@ class SheetCanvas(QWidget):
         self.update()
 
     def _tool_move(self, x, y):
-        if self.float_annot is not None:
+        if self.tool in self.DRAW_TOOLS:
+            self.tool_pt = self._snap(x, y)
+            self.snap_mark = self.tool_pt if self.tool_pt != (x, y) else None
+        elif self.float_annot is not None and self.tool in ("note", "balloon"):
+            self.d.place_item(self.float_annot, x, y)
+            self.hover_pick = None
+        elif self.tool in ("note", "balloon"):
+            self.hover_pick = None
+        elif self.float_annot is not None:
             self.d.place_annot(self.float_annot, (x, y))
             self.hover_pick = None
         else:
@@ -403,14 +453,167 @@ class SheetCanvas(QWidget):
             self.hover_pick = hit
         self.update()
 
+    # ---- notes, balloons, drawing items
+    def _tip_at(self, x, y):
+        """What a click at (x, y) points at on a view: (view id, the point in the view's frame, snapped) - snapped True when it is on a line of the view (the point is the nearest one of it);
+        a point inside the view that is not near a line is (view id, point, False); None when it is on no view."""
+        tol = PICK_PX / self.k
+        vid = self.r.hit_view(x, y, tol)
+        if vid is None:
+            return None
+        v = self.d.view(vid)
+        s, (ox, oy) = v["scale"], v["origin"]
+        q = ((x - ox) / s, (y - oy) / s)
+        ref = A.pick(self.d.projection(v), q, tol / s)
+        if ref is None:
+            return (vid, q, False)
+        return (vid, IT.snap_on(ref, q), True)
+
+    def _snap(self, x, y):
+        """The point a drawing tool takes for the pointer: a corner / end point of a view or an end of something drawn, when one is near; else the pointer."""
+        tol = PICK_PX / self.k
+        best, bd = None, tol
+        for a in self.d.lines:
+            for _n, q in IT.handles(a):
+                dd = math.hypot(q[0] - x, q[1] - y)
+                if dd <= bd:
+                    best, bd = q, dd
+        vid = self.r.hit_view(x, y, tol)
+        if vid is not None:
+            v = self.d.view(vid)
+            s, (ox, oy) = v["scale"], v["origin"]
+            ref = A.pick(self.d.projection(v), ((x - ox) / s, (y - oy) / s), tol / s, edges=False)
+            if ref is not None:
+                q = (ox + s * ref["p"][0], oy + s * ref["p"][1])
+                dd = math.hypot(q[0] - x, q[1] - y)
+                if dd <= bd:
+                    best, bd = q, dd
+        return (float(best[0]), float(best[1])) if best is not None else (x, y)
+
+    def _note_press(self, x, y):
+        o = self.opts
+        if self.float_annot is not None:                                  # the text goes here
+            self.d.place_item(self.float_annot, x, y)
+            self.float_annot = None
+            self.hint.emit("Note added.  " + self._tool_hint("note"))
+            self.changed.emit("note")
+            self.update()
+            return
+        lead = None
+        if o.get("leader") in ("straight", "bent"):
+            hit = self._tip_at(x, y)
+            lead = {"kind": o["leader"], "view": hit[0], "p": hit[1]} if hit is not None else {"kind": o["leader"], "view": None, "p": (x, y)}
+        try:
+            n = self.d.add_note(o.get("text", ""), (x, y), o.get("size", IT.NOTE_SIZE), lead)
+        except DrawingError as ex:
+            self.hint.emit(str(ex))
+            return
+        if lead is None:
+            self.hint.emit("Note added.  " + self._tool_hint("note"))
+            self.changed.emit("note")
+        else:
+            self.float_annot = n["id"]
+            self.hint.emit("Click where the text goes.")
+        self.update()
+
+    def _balloon_press(self, x, y):
+        if self.float_annot is not None:                                  # the circle goes here
+            b = self.d.place_item(self.float_annot, x, y)
+            self.float_annot = None
+            self.opts["balloon"] = IT.bump_text(b["text"])
+            self.options_changed.emit()
+            self.hint.emit("Balloon added.  " + self.TOOL_HINT["balloon"])
+            self.changed.emit("balloon")
+            self.update()
+            return
+        hit = self._tip_at(x, y)
+        if hit is None:
+            self.hint.emit("Click on a view: a balloon points at something of it.")
+            return
+        try:
+            b = self.d.add_balloon(hit[0], self.opts.get("balloon", "1"), hit[1], (x, y), hit[2])
+        except DrawingError as ex:
+            self.hint.emit(str(ex))
+            return
+        self.float_annot = b["id"]
+        self.hint.emit("Click where the balloon goes.")
+        self.update()
+
+    def _draft_item(self, pts, pointer):
+        """The drawing item the points so far make with the pointer as the next one (not in the document); None when they make nothing yet."""
+        t = self.tool
+        try:
+            if t == "line" and len(pts) == 1:
+                return IT.new_item("line", a=pts[0], b=pointer)
+            if t == "rect" and len(pts) == 1:
+                return IT.new_item("rect", a=pts[0], b=pointer)
+            if t == "circle" and len(pts) == 1:
+                return IT.new_item("circle", c=pts[0], through=pointer)
+            if t == "arc" and len(pts) == 2:
+                return IT.new_item("arc", c=pts[0], start=pts[1], end=pointer)
+        except (KeyError, ValueError, IndexError):
+            return None
+        return None
+
+    def _draw_press(self, x, y):
+        pt = self._snap(x, y)
+        pts = (self.draft["pts"] if self.draft else []) + [pt]
+        t = self.tool
+        need = self.DRAW_NEED[t]
+        if len(pts) < need:
+            self.draft = {"pts": pts}
+            self.hint.emit(self.DRAW_STEP[t][len(pts) - 1])
+            self.update()
+            return
+        if t == "circle":
+            geo = {"c": pts[0], "through": pts[1]}
+        elif t == "arc":
+            geo = {"c": pts[0], "start": pts[1], "end": pts[2]}
+        else:
+            geo = {"a": pts[0], "b": pts[1]}
+        try:
+            self.d.add_item(t, **geo)
+        except DrawingError as ex:
+            self.hint.emit(str(ex))
+            self.draft = {"pts": pts[:-1]}
+            self.update()
+            return
+        self.draft = {"pts": [pt]} if t == "line" else None                # a line carries on from its end
+        self.hint.emit(("Line added.  Click the next end, or press Esc." if t == "line" else {"rect": "Rectangle", "circle": "Circle", "arc": "Arc"}[t] + " added.  " + self.TOOL_HINT[t]))
+        self.changed.emit("draw")
+        self.update()
+
     def _paint_tool(self, p):
         if not self.tool:
             return
         floor = MIN_LINE_PX / self.k
+        if self.tool in self.DRAW_TOOLS:
+            self._paint_draft(p, floor)
+            return
         for vid, ref in self.picks:
             self.r.paint_ref(p, vid, ref, R.SELECT, 0.9, floor)
         if self.hover_pick is not None and not any(vid == self.hover_pick[0] and A.same_ref(ref, self.hover_pick[1]) for vid, ref in self.picks):
             self.r.paint_ref(p, self.hover_pick[0], self.hover_pick[1], R.HOVER, 0.9, floor)
+
+    def _paint_draft(self, p, floor):
+        H = self.sheet_h()
+        if self.draft and self.tool_pt is not None:
+            pts = self.draft["pts"]
+            it = self._draft_item(pts, self.tool_pt)
+            if self.tool == "arc" and len(pts) == 2:                        # the radius to the start is shown with the arc
+                self.r.paint_shape(p, IT.item_shape({"type": "line", "p": [list(pts[0]), list(pts[1])]}), R.GHOST, floor)
+            elif self.tool == "arc" and len(pts) == 1:
+                it = IT.new_item("line", a=pts[0], b=self.tool_pt)
+            if it is not None:
+                self.r.paint_shape(p, IT.item_shape(it), R.SELECT, floor)
+        if self.snap_mark is not None:
+            x, y = self.snap_mark
+            half = 3.5 / self.k
+            pen = QPen(R.SELECT)
+            pen.setWidthF(max(0.15, floor))
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(QRectF(x - half, H - y - half, 2 * half, 2 * half))
 
     # ---- painting
     def paintEvent(self, ev):
@@ -431,6 +634,11 @@ class SheetCanvas(QWidget):
         ghost = (self.float_id,) if self.float_id is not None else ()
         self.r.paint(p, min_px=MIN_LINE_PX, selected=(self.sel,) if self.sel and self.sel not in ghost else (), hover=self.hover if not self.drag else None, ghost=ghost,
                      sel_annot=self.sel_annot, hover_annot=self.hover_annot if not self.drag else None, float_annot=self.float_annot)
+        if self.sel_annot is not None and not self.tool:
+            try:
+                self.r.paint_handles(p, self.d.annot(self.sel_annot), MIN_LINE_PX / self.k, self.k)
+            except DrawingError:
+                pass
         self._paint_tool(p)
         p.restore()
         if not self.d.views and self.float_id is None:
@@ -476,12 +684,20 @@ class SheetCanvas(QWidget):
             self._follow((x, y))
             self._drop()
             return
+        h = self._handle_at(x, y)
+        if h is not None:                                                  # a square on the selected item: drag it to change the item
+            self.drag = {"item": self.sel_annot, "handle": h, "last": (x, y), "moved": False}
+            self.setCursor(Qt.CursorShape.CrossCursor)
+            return
         aid = self.r.hit_annot(x, y, PICK_PX / self.k)
         if aid is not None:
             self.set_selected_annot(aid)
             a = next((a for a in self.d.dims if a["id"] == aid), None)
             if a is not None:
                 self.drag = {"aid": aid, "moved": False, "text": self._on_number(a, x, y)}
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+            elif any(b["id"] == aid for b in self.d.notes + self.d.balloons + self.d.lines):
+                self.drag = {"item": aid, "handle": None, "last": (x, y), "moved": False}
                 self.setCursor(Qt.CursorShape.SizeAllCursor)
             return
         self.set_selected_annot(None)
@@ -490,6 +706,33 @@ class SheetCanvas(QWidget):
         if vid:
             self.drag = {"vid": vid, "last": (x, y), "moved": False}
             self.setCursor(Qt.CursorShape.SizeAllCursor)
+
+    def _handle_at(self, x, y):
+        """The name of the handle of the selected item under the pointer, None when there is none."""
+        if not self.sel_annot:
+            return None
+        try:
+            a = self.d.annot(self.sel_annot)
+        except DrawingError:
+            return None
+        tol = 5.0 / self.k
+        best, bd = None, tol
+        for name, (hx, hy) in self.r.handles_of(a):
+            dd = math.hypot(hx - x, hy - y)
+            if dd <= bd:
+                best, bd = name, dd
+        return best
+
+    def mouseDoubleClickEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton and not self.tool and self.mode == "select":
+            x, y = self.to_sheet(ev.position())
+            aid = self.r.hit_annot(x, y, PICK_PX / self.k)
+            if aid is not None and any(b["id"] == aid for b in self.d.notes + self.d.balloons):
+                self.drag = None
+                self.set_selected_annot(aid)
+                self.edit_requested.emit(aid)
+                return
+        super().mouseDoubleClickEvent(ev)
 
     def mouseMoveEvent(self, ev):
         pos = ev.position()
@@ -513,6 +756,21 @@ class SheetCanvas(QWidget):
                         a[k] = keep[k]
                 self.drag["moved"] = True
             except Exception:                                      # noqa: BLE001
+                pass
+            self.update()
+            return
+        if self.drag and "item" in self.drag:
+            dr = self.drag
+            try:
+                if dr["handle"] is None:
+                    self.d.move_item(dr["item"], x - dr["last"][0], y - dr["last"][1])
+                    dr["last"] = (x, y)
+                elif dr["handle"] == "tip":
+                    self.d.set_tip(dr["item"], x, y, hit=self._tip_at(x, y))
+                else:
+                    self.d.drag_handle(dr["item"], dr["handle"], self._snap(x, y))
+                dr["moved"] = True
+            except DrawingError:
                 pass
             self.update()
             return
@@ -547,7 +805,7 @@ class SheetCanvas(QWidget):
             if self.mode != "select":
                 self.setCursor(Qt.CursorShape.CrossCursor)
             if moved:
-                self.changed.emit("annot_move" if "aid" in (self._last_drag or {}) else "move")
+                self.changed.emit("annot_move" if ("aid" in (self._last_drag or {}) or "item" in (self._last_drag or {})) else "move")
             self.update()
 
     def leaveEvent(self, ev):

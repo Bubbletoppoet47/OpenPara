@@ -3,18 +3,20 @@
     NewDrawingDialog(sheet)       the first thing a new drawing asks: the sheet (standard sizes only, landscape or portrait, a preview) and the kind of projection
     ModelViewPanel(tab)           Model View: the models, the nine orientations, the display style, the scale; picking an orientation lets the view follow the pointer to the sheet
     ProjectedPanel(tab)           Projected View: the view to project from, the display style; the pointer picks the side
-    ToolPanel(tab)                Smart Dimension / Center Mark / Centerline: what to click, and ✔ OK to leave the tool
-    OutlinePanel(tab)             the tree of the drawing (sheet, models, views, and the dimensions and marks of each view) with the Details of the selected item below it
+    ToolPanel(tab)                Smart Dimension / Center Mark / Centerline / Note / Balloon / Line / Rectangle / Circle / Arc: what to click, the options of the tool (a note's text, size
+                                  and leader; the number of the next balloon), and ✔ OK to leave the tool
+    OutlinePanel(tab)             the tree of the drawing (sheet, models, views and what is drawn on each, the notes, what is drawn on the sheet) with the Details of the selected item below it
 
 A panel never changes the document itself: it asks the tab (dr_tab.DrawingTab), which keeps the undo and the dirty mark.
 """
-from PyQt6.QtCore import QRectF, QSize, Qt
+from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                             QPushButton, QSplitter, QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                             QPlainTextEdit, QPushButton, QSplitter, QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import dr_annot as A
 import dr_icons as I
+import dr_items as IT
 import dr_model as M
 import dr_proj as P
 import dr_sheet as S
@@ -360,28 +362,85 @@ class ProjectedPanel(QWidget):
                 self.sbtn[k].setChecked(True)
 
 
-# ---------------------------------------------------------------------------------------------------------------------------- Smart Dimension, Center Mark, Centerline
+# ---------------------------------------------------------------------------------------------------------------------------- the tools of the Annotation and Sketch pages
+class FocusTextEdit(QPlainTextEdit):
+    """A multi-line text box that says when the person has finished with it (it lost the focus): the text is then applied."""
+    finished = pyqtSignal()
+
+    def focusOutEvent(self, ev):
+        super().focusOutEvent(ev)
+        self.finished.emit()
+
+
 class ToolPanel(QWidget):
-    """The PropertyManager of an annotation tool: a title, what to click, and OK (leave the tool)."""
-    TITLES = {"dim": "Smart Dimension", "center_mark": "Center Mark", "centerline": "Centerline"}
+    """The PropertyManager of a tool: a title, what to click, the options of the tool, and OK (leave the tool)."""
+    TITLES = {"dim": "Smart Dimension", "center_mark": "Center Mark", "centerline": "Centerline", "note": "Note", "balloon": "Balloon", "line": "Line", "rect": "Rectangle",
+              "circle": "Circle", "arc": "Arc"}
     HELP = {"dim": ["Click a line: its length.", "Click a circle: its diameter.  An arc: its radius.",
                     "Click two points, a point and a line, or two circles: the distance.", "Click two parallel lines: the distance between them.",
                     "Click two lines that meet: the angle between them."],
             "center_mark": ["Click a circle or an arc (or its centre point): a cross is put on it."],
-            "centerline": ["Click two parallel lines: a dash-dot line is put midway between them."]}
+            "centerline": ["Click two parallel lines: a dash-dot line is put midway between them."],
+            "note": ["Type the text, choose its size and a leader.", "Without a leader: click where the text goes.", "With a leader: click what it points at, then where the text goes."],
+            "balloon": ["Click the edge or the face of a view that the balloon points at, then where the circle goes.", "The number counts on by itself."],
+            "line": ["Click the start, then the end.  The next click carries on from the end."], "rect": ["Click one corner, then the opposite corner."],
+            "circle": ["Click the centre, then a point on the circle."], "arc": ["Click the centre, the start, then the end.  The arc runs counter-clockwise from the start."]}
     AFTER = {"dim": "After the picks, move the pointer to where the dimension should go and click.  Drag a dimension later to move it; the number is always the model's, whatever the scale.",
-             "center_mark": "Pick as many as you like, then OK.", "centerline": "Pick pairs of lines, one pair after another, then OK."}
+             "center_mark": "Pick as many as you like, then OK.", "centerline": "Pick pairs of lines, one pair after another, then OK.",
+             "note": "Double-click a note later to change its text.  Drag the square at the end of its leader to point it somewhere else.",
+             "balloon": "Drag the square at the end of the leader to point it at something else.  Double-click a balloon to change its number.",
+             "line": "Points snap to the corners of the views and to the ends of what is drawn.  Drag the squares on a selected line to change it.",
+             "rect": "Points snap to the corners of the views and to the ends of what is drawn.  Drag the squares on a selected rectangle to change it.",
+             "circle": "Points snap to the corners of the views and to the ends of what is drawn.  Drag the squares on a selected circle to change it.",
+             "arc": "Points snap to the corners of the views and to the ends of what is drawn.  Drag the squares on a selected arc to change it."}
 
     def __init__(self, tab):
         super().__init__()
         self.tab = tab
         self.name = "dim"
+        self.busy = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.addLayout(ok_cancel(lambda: tab.finish_tool(), lambda: tab.finish_tool()))
         self.title = QLabel("")
         self.title.setStyleSheet("font-weight:bold; font-size:13px; padding:4px 0;")
         lay.addWidget(self.title)
+        # ---- the options of a note
+        self.opt_note = QWidget()
+        nl = QVBoxLayout(self.opt_note)
+        nl.setContentsMargins(0, 0, 0, 0)
+        nl.addWidget(section("Text"))
+        self.n_text = QPlainTextEdit()
+        self.n_text.setFixedHeight(76)
+        self.n_text.setPlaceholderText("Type the note here")
+        self.n_text.textChanged.connect(self.options_edited)
+        nl.addWidget(self.n_text)
+        nf = QFormLayout()
+        self.n_size = QComboBox()
+        self.n_size.setEditable(True)
+        for pt in IT.NOTE_SIZES:
+            self.n_size.addItem(str(pt), float(pt))
+        self.n_size.activated.connect(lambda _i: self.options_edited())
+        self.n_size.lineEdit().editingFinished.connect(self.options_edited)
+        self.n_size.setToolTip("Font size in points.  14 is the height of the numbers of a dimension.")
+        self.n_leader = QComboBox()
+        self.n_leader.addItem("No leader", None)
+        self.n_leader.addItem("Straight leader", "straight")
+        self.n_leader.addItem("Bent leader", "bent")
+        self.n_leader.activated.connect(lambda _i: self.options_edited())
+        nf.addRow("Size (pt)", self.n_size)
+        nf.addRow("Leader", self.n_leader)
+        nl.addLayout(nf)
+        lay.addWidget(self.opt_note)
+        # ---- the options of a balloon
+        self.opt_balloon = QWidget()
+        bf = QFormLayout(self.opt_balloon)
+        bf.setContentsMargins(0, 0, 0, 0)
+        self.b_text = QLineEdit()
+        self.b_text.setToolTip("The number in the next balloon.  It counts on after each one.")
+        self.b_text.textChanged.connect(self.options_edited)
+        bf.addRow("Next number", self.b_text)
+        lay.addWidget(self.opt_balloon)
         lay.addWidget(section("What to click"))
         self.what = QLabel("")
         self.what.setWordWrap(True)
@@ -389,20 +448,56 @@ class ToolPanel(QWidget):
         self.after = ui_kit.note("")
         lay.addWidget(self.after)
         lay.addStretch(1)
+        tab.canvas.options_changed.connect(self.sync)
 
     def set_tool(self, name):
         self.name = name
         self.title.setText(self.TITLES.get(name, name))
         self.what.setText("\n".join("•  " + t for t in self.HELP.get(name, [])))
         self.after.setText(self.AFTER.get(name, ""))
+        self.opt_note.setVisible(name == "note")
+        self.opt_balloon.setVisible(name == "balloon")
+        self.sync()
+
+    def sync(self):
+        """The canvas's options into the boxes (the next balloon number moves on by itself)."""
+        o = self.tab.canvas.opts
+        self.busy = True
+        try:
+            if self.n_text.toPlainText() != o.get("text", ""):
+                self.n_text.setPlainText(o.get("text", ""))
+            self.n_size.setEditText(A.number_text(o.get("size", IT.NOTE_SIZE), 2))
+            self.n_leader.setCurrentIndex(max(0, self.n_leader.findData(o.get("leader"))))
+            if self.b_text.text() != o.get("balloon", ""):
+                self.b_text.setText(o.get("balloon", ""))
+        finally:
+            self.busy = False
+
+    def options_edited(self):
+        if self.busy:
+            return
+        o = self.tab.canvas.opts
+        o["text"] = self.n_text.toPlainText()
+        try:
+            o["size"] = IT.clean_size(float(self.n_size.currentText().replace(",", ".")))
+        except ValueError:
+            pass
+        o["leader"] = self.n_leader.currentData()
+        o["balloon"] = self.b_text.text()
+        if self.name == "note":
+            self.tab.canvas.hint.emit(self.tab.canvas._tool_hint("note"))
 
 
-ANNOT_LABEL = {"linear": "Dimension", "diameter": "Diameter", "radius": "Radius", "angle": "Angle", "center_mark": "Center Mark", "centerline": "Centerline"}
-ANNOT_ICON = {"linear": "dr_dim", "diameter": "dr_dim_dia", "radius": "dr_dim_rad", "angle": "dr_dim_ang", "center_mark": "dr_center_mark", "centerline": "dr_centerline"}
+ANNOT_LABEL = {"linear": "Dimension", "diameter": "Diameter", "radius": "Radius", "angle": "Angle", "center_mark": "Center Mark", "centerline": "Centerline", "note": "Note", "balloon": "Balloon",
+               "line": "Line", "rect": "Rectangle", "circle": "Circle", "arc": "Arc"}
+ANNOT_ICON = {"linear": "dr_dim", "diameter": "dr_dim_dia", "radius": "dr_dim_rad", "angle": "dr_dim_ang", "center_mark": "dr_center_mark", "centerline": "dr_centerline", "note": "dr_note",
+              "balloon": "dr_balloon", "line": "dr_draw_line", "rect": "dr_draw_rect", "circle": "dr_draw_circle", "arc": "dr_draw_arc"}
 
 
 def annot_text(a, fmt=None):
-    """How a dimension / mark reads in the Outline: 'Diameter  ⌀6', 'Center Mark', '... (lost)'."""
+    """How an item reads in the Outline: 'Diameter  ⌀6', 'Center Mark', 'Balloon  3', the first line of a note, 'Line', '... (lost)'."""
+    if a.get("type") in ("note", "balloon") + IT.DRAW_TYPES:
+        return IT.label(a)
     t = ANNOT_LABEL.get(a.get("type"), "Dimension")
     if a.get("type") in ("linear", "diameter", "radius", "angle"):
         try:
@@ -437,6 +532,9 @@ class OutlinePanel(QWidget):
         self.details.addWidget(self._page_model())
         self.details.addWidget(self._page_view())
         self.details.addWidget(self._page_annot())
+        self.details.addWidget(self._page_note())
+        self.details.addWidget(self._page_balloon())
+        self.details.addWidget(self._page_item())
         split.addWidget(self.details)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
@@ -546,6 +644,54 @@ class OutlinePanel(QWidget):
         lay.insertWidget(2, self.a_del)
         return w
 
+    def _page_note(self):
+        w, f, lay = self._wrap("Note")
+        self.n_text = FocusTextEdit()
+        self.n_text.setFixedHeight(90)
+        self.n_text.finished.connect(self.note_edited)
+        self.n_size = QComboBox()
+        self.n_size.setEditable(True)
+        for pt in IT.NOTE_SIZES:
+            self.n_size.addItem(str(pt), float(pt))
+        self.n_size.activated.connect(lambda _i: self.note_edited())
+        self.n_size.lineEdit().editingFinished.connect(self.note_edited)
+        self.n_leader = QComboBox()
+        self.n_leader.addItem("No leader", None)
+        self.n_leader.addItem("Straight leader", "straight")
+        self.n_leader.addItem("Bent leader", "bent")
+        self.n_leader.activated.connect(lambda _i: self.note_edited())
+        f.addRow("Text", self.n_text)
+        f.addRow("Size (pt)", self.n_size)
+        f.addRow("Leader", self.n_leader)
+        self.n_del = QPushButton("Delete")
+        self.n_del.clicked.connect(lambda _c=False: self.tab.delete_annot(self.cur_id))
+        lay.insertWidget(2, self.n_del)
+        return w
+
+    def _page_balloon(self):
+        w, f, lay = self._wrap("Balloon")
+        self.bl_text = QLineEdit()
+        self.bl_text.editingFinished.connect(self.balloon_edited)
+        self.bl_view = QLabel("")
+        f.addRow("Number", self.bl_text)
+        f.addRow("On", self.bl_view)
+        self.bl_del = QPushButton("Delete")
+        self.bl_del.clicked.connect(lambda _c=False: self.tab.delete_annot(self.cur_id))
+        lay.insertWidget(2, self.bl_del)
+        return w
+
+    def _page_item(self):
+        w, f, lay = self._wrap("Drawn on the sheet")
+        self.i_type = QLabel("")
+        self.i_size = QLabel("")
+        f.addRow("Kind", self.i_type)
+        f.addRow("Size (mm)", self.i_size)
+        lay.insertWidget(1, ui_kit.note("Drag the squares on it to change it; drag the line itself to move it."))
+        self.i_del = QPushButton("Delete")
+        self.i_del.clicked.connect(lambda _c=False: self.tab.delete_annot(self.cur_id))
+        lay.insertWidget(3, self.i_del)
+        return w
+
     # ---- the tree
     cur_kind, cur_id = "none", None
 
@@ -576,7 +722,7 @@ class OutlinePanel(QWidget):
             it.setIcon(0, I.icon(I.ORIENT_ICON.get(v["orient"], "dr_view"), 18))
             it.setData(0, Qt.ItemDataRole.UserRole, ("view", v["id"]))
             items[v["id"]] = it
-            for a in d.annots(v["id"]):
+            for a in d.view_items(v["id"]):
                 at = QTreeWidgetItem(it, [annot_text(a, self.tab.canvas.r.fmt)])
                 at.setIcon(0, I.icon(ANNOT_ICON.get(a.get("type"), "dr_dim"), 18))
                 at.setData(0, Qt.ItemDataRole.UserRole, ("annot", a["id"]))
@@ -586,6 +732,17 @@ class OutlinePanel(QWidget):
         for v in d.views:
             if v.get("parent") is None:
                 add(v, vroot)
+        for title, icon, recs in (("Notes", "dr_note", d.notes), ("Drawn on the sheet", "dr_draw_line", d.lines)):
+            if not recs:
+                continue
+            folder = QTreeWidgetItem(root, [title])
+            folder.setIcon(0, I.icon(icon, 18))
+            folder.setData(0, Qt.ItemDataRole.UserRole, ("folder", None))
+            for a in recs:
+                at = QTreeWidgetItem(folder, [annot_text(a, self.tab.canvas.r.fmt)])
+                at.setIcon(0, I.icon(ANNOT_ICON.get(a.get("type"), "dr_dim"), 18))
+                at.setData(0, Qt.ItemDataRole.UserRole, ("annot", a["id"]))
+                aitems[a["id"]] = at
         self.tree.expandAll()
         target = None
         if keep[0] == "view" and keep[1] in items:
@@ -687,6 +844,26 @@ class OutlinePanel(QWidget):
                 self.v_style.setCurrentIndex(max(0, self.v_style.findData(v["style"])))
                 self.v_scale.setCurrentText(M.scale_text(v["scale"]))
                 self.details.setCurrentIndex(3)
+            elif k == "annot" and d.annot(self.cur_id).get("type") == "note":
+                a = d.annot(self.cur_id)
+                if self.n_text.toPlainText() != a["text"]:
+                    self.n_text.setPlainText(a["text"])
+                self.n_size.setEditText(A.number_text(a.get("size", IT.NOTE_SIZE), 2))
+                self.n_leader.setCurrentIndex(max(0, self.n_leader.findData((a.get("leader") or {}).get("kind"))))
+                self.details.setCurrentIndex(5)
+            elif k == "annot" and d.annot(self.cur_id).get("type") == "balloon":
+                a = d.annot(self.cur_id)
+                self.bl_text.setText(a["text"])
+                try:
+                    self.bl_view.setText(d.view(a["view"])["name"])
+                except M.DrawingError:
+                    self.bl_view.setText("-")
+                self.details.setCurrentIndex(6)
+            elif k == "annot" and d.annot(self.cur_id).get("type") in IT.DRAW_TYPES:
+                a = d.annot(self.cur_id)
+                self.i_type.setText(ANNOT_LABEL[a["type"]])
+                self.i_size.setText(IT.describe(a))
+                self.details.setCurrentIndex(7)
             elif k == "annot":
                 a = d.annot(self.cur_id)
                 self.a_type.setText(ANNOT_LABEL.get(a["type"], "Dimension"))
@@ -706,6 +883,20 @@ class OutlinePanel(QWidget):
         if self.busy:
             return
         self.tab.set_sheet(self.sh_size.currentData(), self.sh_land.currentData(), self.sh_proj.currentData())
+
+    def note_edited(self):
+        if self.busy or self.cur_kind != "annot":
+            return
+        try:
+            size = float(self.n_size.currentText().replace(",", "."))
+        except ValueError:
+            size = None
+        self.tab.set_note(self.cur_id, self.n_text.toPlainText(), size, self.n_leader.currentData())
+
+    def balloon_edited(self):
+        if self.busy or self.cur_kind != "annot":
+            return
+        self.tab.set_balloon_text(self.cur_id, self.bl_text.text())
 
     def view_renamed(self):
         if self.busy or self.cur_kind != "view":

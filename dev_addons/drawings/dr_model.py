@@ -25,6 +25,7 @@ import re
 
 import dr_annot as A
 import dr_geom as G
+import dr_items as IT
 import dr_proj as P
 import dr_sheet as S
 
@@ -99,7 +100,7 @@ class Drawing:
         self.models = []
         self.views = []
         self.notes, self.dims, self.balloons, self.marks, self.lines = [], [], [], [], []
-        self.counter = {"view": 0, "model": 0, "dim": 0, "mark": 0}
+        self.counter = {"view": 0, "model": 0, "dim": 0, "mark": 0, "note": 0, "balloon": 0, "draw": 0}
         self.scale = 1.0                                          # the sheet scale: what a new model view starts at
         self.cache = {}                                           # model id -> its build123d shape (not saved)
         self._pcache = {}                                         # view id -> (its geom, the Projection made of it) (not saved)
@@ -405,6 +406,9 @@ class Drawing:
         """The view and the views projected from it."""
         self.view(vid)
         gone = {vid} | {c["id"] for c in self.descendants(vid)}
+        for n in self.notes:                                       # a leader that pointed into a view that goes keeps pointing at the same place on the sheet
+            if n.get("leader") and n["leader"].get("view") in gone:
+                self._leader_to_sheet(n)
         self.views = [v for v in self.views if v["id"] not in gone]
         for k in ("notes", "dims", "balloons", "marks"):
             setattr(self, k, [a for a in getattr(self, k) if a.get("view") not in gone])
@@ -414,11 +418,15 @@ class Drawing:
         """The dimensions and marks (of one view)."""
         return [a for a in self.dims + self.marks if vid is None or a.get("view") == vid]
 
+    def sheet_items(self):
+        """Everything that is drawn over the views, in the order it is painted: dimensions, marks, balloons, notes, drawing items."""
+        return self.dims + self.marks + self.balloons + self.notes + self.lines
+
     def annot(self, aid):
-        for a in self.dims + self.marks:
+        for a in self.sheet_items():
             if a.get("id") == aid:
                 return a
-        raise DrawingError("That dimension is not in the drawing.")
+        raise DrawingError("That item is not on the drawing.")
 
     def add_dim(self, vid, refs, kind=None):
         """A dimension on a view from what was picked on it (A.pick: points, lines, circles, arcs in the view's frame); -> the dimension.  Where it is drawn comes from place_annot."""
@@ -453,8 +461,8 @@ class Drawing:
 
     def remove_annot(self, aid):
         self.annot(aid)
-        self.dims = [a for a in self.dims if a.get("id") != aid]
-        self.marks = [a for a in self.marks if a.get("id") != aid]
+        for k in ("dims", "marks", "balloons", "notes", "lines"):
+            setattr(self, k, [a for a in getattr(self, k) if a.get("id") != aid])
 
     def lost_annots(self):
         """The dimensions and marks whose geometry is not in the model any more."""
@@ -464,9 +472,160 @@ class Drawing:
         v = self.view(a["view"])
         return A.mark_shape(a, v["scale"], v["origin"]) if a["type"] in ("center_mark", "centerline") else A.shape(a, v["scale"], v["origin"])
 
+    def item_shape(self, a, mt=None):
+        """The shape of any item drawn over the views (what is painted, picked): a dimension, a mark, a note, a balloon, a drawing item.  `mt` measures text (the renderer's font)."""
+        t = a.get("type")
+        mt = mt or IT.default_metrics
+        if t == "note":
+            return IT.note_shape(a, self.leader_tip(a), mt)
+        if t == "balloon":
+            return IT.balloon_shape(a, self.balloon_tip(a), mt)
+        if t in IT.DRAW_TYPES:
+            return IT.item_shape(a)
+        return self.dim_shape(a)
+
+    # ---- notes, balloons and drawing items (what is drawn on the sheet; dr_items.py)
+    def _tip(self, vid, p):
+        if vid is None:
+            return (float(p[0]), float(p[1]))
+        try:
+            v = self.view(vid)
+        except DrawingError:
+            return None
+        return (v["origin"][0] + v["scale"] * p[0], v["origin"][1] + v["scale"] * p[1])
+
+    def leader_tip(self, n):
+        """Where the leader of a note ends on the sheet (mm), None without a leader."""
+        ld = n.get("leader")
+        return self._tip(ld.get("view"), ld["p"]) if ld else None
+
+    def balloon_tip(self, b):
+        return self._tip(b.get("view"), b["tip"])
+
+    def _leader_to_sheet(self, n):
+        tip = self.leader_tip(n)
+        if tip is None:
+            n["leader"] = None
+        else:
+            n["leader"]["view"], n["leader"]["p"] = None, [tip[0], tip[1]]
+
+    def add_note(self, text, pos, size=IT.NOTE_SIZE, leader=None):
+        """A note with its top-left corner at pos (sheet mm); leader = {"kind": "straight" | "bent", "view": a view id or None, "p": the tip in the view's frame (or on the sheet)}."""
+        if not str(text).strip():
+            raise DrawingError("A note needs some text: type it in the panel first.")
+        if leader and leader.get("view") is not None:
+            self.view(leader["view"])
+        n = IT.new_note(text, pos, size, leader)
+        self.counter["note"] += 1
+        n["id"] = f"n{self.counter['note']}"
+        self.notes.append(n)
+        return n
+
+    def add_balloon(self, vid, text, tip, pos, snap=True):
+        """A balloon on a view: its circle at pos (sheet mm), its leader to `tip` (the view's frame)."""
+        self.view(vid)
+        if not str(text).strip():
+            raise DrawingError("A balloon needs a number: type it in the panel first.")
+        b = IT.new_balloon(text, vid, tip, pos, snap)
+        self.counter["balloon"] += 1
+        b["id"] = f"b{self.counter['balloon']}"
+        self.balloons.append(b)
+        return b
+
+    def add_item(self, kind, **geo):
+        """A line, a rectangle, a circle or an arc on the sheet (dr_items.new_item)."""
+        it = IT.new_item(kind, **geo)
+        if it is None:
+            raise DrawingError("That draws nothing: the points are on top of each other.")
+        self.counter["draw"] += 1
+        it["id"] = f"l{self.counter['draw']}"
+        self.lines.append(it)
+        return it
+
+    def set_note(self, aid, text=None, size=None, leader=False):
+        """Changes a note: its text, its size (points), its leader (None: no leader, "straight" or "bent"; a leader that is not there yet starts to the lower left of the text)."""
+        n = self.annot(aid)
+        if n.get("type") != "note":
+            raise DrawingError("That is not a note.")
+        if text is not None:
+            if not str(text).strip():
+                raise DrawingError("A note needs some text.")
+            n["text"] = str(text)
+        if size is not None:
+            n["size"] = IT.clean_size(size)
+        if leader is not False:
+            if leader is None:
+                n["leader"] = None
+            elif n.get("leader"):
+                n["leader"]["kind"] = "bent" if leader == "bent" else "straight"
+            else:
+                n["leader"] = {"kind": "bent" if leader == "bent" else "straight", "view": None, "p": [n["pos"][0] - 20.0, n["pos"][1] - 14.0]}
+        return n
+
+    def set_balloon_text(self, aid, text):
+        b = self.annot(aid)
+        if b.get("type") != "balloon":
+            raise DrawingError("That is not a balloon.")
+        if not str(text).strip():
+            raise DrawingError("A balloon needs a number.")
+        b["text"] = str(text).strip()
+        return b
+
+    def set_tip(self, aid, x, y, hit=None):
+        """Drags the tip of a note's leader or of a balloon's leader to the sheet point (x, y).  hit = (view id, the point in that view's frame, snapped) when the pointer is on a view's lines
+        (the tip then follows the view); without it a note's tip is a point of the sheet, and a balloon's stays in its own view."""
+        a = self.annot(aid)
+        if a.get("type") == "note":
+            if not a.get("leader"):
+                raise DrawingError("That note has no leader.")
+            if hit is not None:
+                a["leader"]["view"], a["leader"]["p"] = hit[0], [float(hit[1][0]), float(hit[1][1])]
+            else:
+                a["leader"]["view"], a["leader"]["p"] = None, [float(x), float(y)]
+        elif a.get("type") == "balloon":
+            if hit is not None:
+                a["view"], a["tip"], a["snap"] = hit[0], [float(hit[1][0]), float(hit[1][1])], bool(hit[2])
+            else:
+                v = self.view(a["view"])
+                a["tip"], a["snap"] = [(x - v["origin"][0]) / v["scale"], (y - v["origin"][1]) / v["scale"]], False
+        else:
+            raise DrawingError("That has no leader.")
+        return a
+
+    def move_item(self, aid, dx, dy):
+        """Moves a note, a balloon (its circle) or a drawing item by (dx, dy) sheet mm."""
+        a = self.annot(aid)
+        if a.get("type") not in ("note", "balloon") + IT.DRAW_TYPES:
+            raise DrawingError("A dimension moves by its own handles.")
+        IT.translate(a, dx, dy)
+        return a
+
+    def place_item(self, aid, x, y):
+        """Puts a note (its top-left corner) or a balloon (its circle) at the sheet point (x, y); -> the item."""
+        a = self.annot(aid)
+        if a.get("type") not in ("note", "balloon"):
+            raise DrawingError("Only a note or a balloon is put down by its position.")
+        a["pos"] = [float(x), float(y)]
+        return a
+
+    def drag_handle(self, aid, name, p):
+        a = self.annot(aid)
+        if a.get("type") not in IT.DRAW_TYPES:
+            raise DrawingError("That has no handles.")
+        return IT.drag_handle(a, name, p)
+
+    def view_items(self, vid):
+        """What is drawn on a view and goes with it: its dimensions, marks and balloons."""
+        return [a for a in self.dims + self.marks + self.balloons if a.get("view") == vid]
+
     def _annots_follow(self, v, same_dir):
         """The lines of a view were drawn again: the dimensions and marks of it find their geometry again in them; when the view looks another way now they have nothing to hold on to
-        and go."""
+        and go, and so do the balloons of it; a note's leader that pointed into it stays where it points on the sheet."""
+        if not same_dir:
+            for n in self.notes:
+                if n.get("leader") and n["leader"].get("view") == v["id"]:
+                    self._leader_to_sheet(n)
+            self.balloons = [b for b in self.balloons if b.get("view") != v["id"]]
         mine = [a for a in self.dims + self.marks if a.get("view") == v["id"]]
         if not mine:
             return
@@ -504,8 +663,12 @@ class Drawing:
         for v in d.get("views", []):
             if isinstance(v, dict) and v.get("model") in ids and v.get("style") in STYLE_KEYS:
                 o.views.append(v)
-        for k in ("notes", "dims", "balloons", "marks", "lines"):
+        for k in ("dims", "marks"):
             setattr(o, k, [dict(x) for x in d.get(k, []) if isinstance(x, dict)])
+        for k in ("notes", "balloons", "lines"):                  # what is not a whole record is left out: the rest of the drawing opens
+            setattr(o, k, [dict(x) for x in d.get(k, []) if isinstance(x, dict) and IT.valid(x)])
+        view_ids = {v["id"] for v in o.views}
+        o.balloons = [b for b in o.balloons if b["view"] in view_ids]
         return o
 
     def snapshot(self):

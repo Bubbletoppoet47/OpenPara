@@ -2,7 +2,7 @@
 dr_tab.py - the Drawings tab: a ribbon (View Layout, Annotation, Sketch), the Outline + Details column on the left (the Model View and Projected View panels open in its place), the
 sheet in the middle (a white sheet on a grey canvas) and a status line.  It looks and behaves like the Part window.
 
-Files: .opdraw (JSON: the sheet, the copies of the models, the views and what is drawn on them).  Export > PDF writes the sheet at its true paper size.
+Files: .opdraw (JSON: the sheet, the copies of the models, the views, and what is drawn on them: dimensions, marks, balloons; and on the sheet: notes and lines).  Export > PDF writes the sheet at its true paper size.
 In a Workbench block ("Drawing") the models are not added by hand: the parts and assemblies wired into the block are the models (sync_models).
 """
 import json
@@ -10,11 +10,12 @@ import os
 
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
-from PyQt6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QScrollArea, QSplitter, QStackedWidget, QTabWidget, QToolButton, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QFileDialog, QFrame, QInputDialog, QHBoxLayout, QLabel, QScrollArea, QSplitter, QStackedWidget, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 import dr_canvas as C
 import dr_geom as G
 import dr_icons as I
+import dr_items as IT
 import dr_model as M
 import dr_panels as PN
 import dr_pdf
@@ -24,7 +25,8 @@ import ui_kit
 FILTER = "Drawing (*.opdraw);;All files (*)"
 RIBBON_QSS = "QToolButton{font-size:11px; padding:2px;} QToolButton:disabled{color:#a0a0a0;} QToolButton:checked{background:#cfe3fb; border:1px solid #6aa0e0;}"
 UNDO_LIMIT = 60
-TOOL_KEYS = ("dim", "center_mark", "centerline")
+TOOL_KEYS = ("dim", "center_mark", "centerline", "note", "balloon", "line", "rect", "circle", "arc")
+NEEDS_VIEW = ("dim", "center_mark", "centerline", "balloon")           # the tools that pick things on the views (the others work on the bare sheet)
 
 
 class DrawingTab(QWidget):
@@ -68,7 +70,7 @@ class DrawingTab(QWidget):
             ("fit", "dr_fit", "Fit to\nWindow", "Show the whole sheet", lambda: self.canvas.fit()),
             "|",
             ("refresh", "dr_refresh", "Refresh\nViews", "Draw the lines of every view again from its model", lambda: self.refresh_views()),
-            ("delete", "dr_delete", "Delete", "Delete the selected view (and the views projected from it) or the selected dimension", lambda: self.delete_selected()),
+            ("delete", "dr_delete", "Delete", "Delete the selected view (and the views projected from it) or the selected dimension, note, balloon or drawn line", lambda: self.delete_selected()),
             "|",
             ("save", "dr_save", "Save", "Save the drawing (.opdraw)", lambda: self.save()),
             ("pdf", "dr_pdf", "Export\nPDF", "Write the sheet as a PDF at its true paper size", lambda: self.export_pdf_dialog()),
@@ -78,8 +80,8 @@ class DrawingTab(QWidget):
         ]), "View Layout")
         self.ribbon.addTab(self.ribbon_page([
             ("dim", "dr_dim", "Smart\nDimension", "Dimension what you click: a length, a diameter, a radius, an angle", lambda: self.start_tool("dim")),
-            (None, "dr_note", "Note", "Text on the sheet, with or without a leader", None),
-            (None, "dr_balloon", "Balloon", "A circle with a number and a leader", None),
+            ("note", "dr_note", "Note", "Text on the sheet, with or without a leader (straight or bent, with an arrow)", lambda: self.start_tool("note")),
+            ("balloon", "dr_balloon", "Balloon", "A circle with a number and a leader to an edge or a face of a view", lambda: self.start_tool("balloon")),
             "|",
             ("center_mark", "dr_center_mark", "Center\nMark", "A cross at the middle of a circle or an arc", lambda: self.start_tool("center_mark")),
             ("centerline", "dr_centerline", "Centerline", "A dash-dot line along the axis between two lines", lambda: self.start_tool("centerline")),
@@ -87,15 +89,16 @@ class DrawingTab(QWidget):
             (None, "dr_note_pattern", "Linear Note\nPattern", "Repeat a note along a line", None),
         ]), "Annotation")
         self.ribbon.addTab(self.ribbon_page([
-            (None, "dr_select", "Select", "Pick and move things", None),
-            (None, "dr_draw_line", "Line", "Draw a line on the sheet", None),
-            (None, "dr_draw_rect", "Rectangle", "Draw a rectangle on the sheet", None),
-            (None, "dr_draw_circle", "Circle", "Draw a circle on the sheet", None),
-            (None, "dr_draw_arc", "Arc", "Draw an arc on the sheet", None),
+            ("select", "dr_select", "Select", "Pick and move things (ends the tool that is open)", lambda: self.finish_tool()),
+            ("line", "dr_draw_line", "Line", "Draw a line on the sheet", lambda: self.start_tool("line")),
+            ("rect", "dr_draw_rect", "Rectangle", "Draw a rectangle on the sheet", lambda: self.start_tool("rect")),
+            ("circle", "dr_draw_circle", "Circle", "Draw a circle on the sheet", lambda: self.start_tool("circle")),
+            ("arc", "dr_draw_arc", "Arc", "Draw an arc on the sheet: the centre, the start, the end", lambda: self.start_tool("arc")),
         ]), "Sketch")
         self.ribbon.setCurrentIndex(0)
-        for k in TOOL_KEYS:
+        for k in TOOL_KEYS + ("select",):
             self.act[k].setCheckable(True)
+        self.act["select"].setChecked(True)
         # ---- the left column: Outline + Details, and the property panel of the command that is open
         self.left = QTabWidget()
         self.left.setTabPosition(QTabWidget.TabPosition.North)
@@ -155,6 +158,7 @@ class DrawingTab(QWidget):
         self.canvas.placing.connect(lambda on: self.model_panel.clear_pick() if not on else None)
         self.canvas.annot_selected.connect(self.on_annot_selected)
         self.canvas.tool_changed.connect(self.on_tool_changed)
+        self.canvas.edit_requested.connect(self.edit_item_text)
         for seq, fn in (("Ctrl+Z", self.do_undo), ("Ctrl+Y", self.do_redo), ("Ctrl+Shift+Z", self.do_redo)):
             QShortcut(QKeySequence(seq), self, activated=fn, context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.set_hint("Open Model View to put a view of a part or an assembly on the sheet.")
@@ -369,7 +373,7 @@ class DrawingTab(QWidget):
                 self.set_sheet(r["size"], r["landscape"], r["first_angle"])
 
     def set_sheet(self, size, landscape, first_angle):
-        old, had = dict(self.d.sheet), len(self.d.annots())
+        old, had = dict(self.d.sheet), len(self.d.annots()) + len(self.d.balloons)
         ok, _ = self.guard(self.d.set_sheet, size, landscape, first_angle)
         if not ok:
             return False
@@ -378,9 +382,9 @@ class DrawingTab(QWidget):
         self.canvas.r.cache.clear()
         self.commit("sheet")
         self.canvas.fit()
-        gone = had - len(self.d.annots())
+        gone = had - len(self.d.annots()) - len(self.d.balloons)
         if gone:
-            self.status.say(f"The projected views look from the other side now: {gone} dimension{'s' if gone != 1 else ''} / mark{'s' if gone != 1 else ''} on them {'were' if gone != 1 else 'was'} removed (Undo brings {'them' if gone != 1 else 'it'} back).", "warn")
+            self.status.say(f"The projected views look from the other side now: {gone} dimension{'s' if gone != 1 else ''} / mark{'s' if gone != 1 else ''} / balloon{'s' if gone != 1 else ''} on them {'were' if gone != 1 else 'was'} removed (Undo brings {'them' if gone != 1 else 'it'} back).", "warn")
         return True
 
     # ------------------------------------------------------------------------------------------------------------------------ models
@@ -475,19 +479,20 @@ class DrawingTab(QWidget):
             self.act[k].setDown(False)
 
     def start_tool(self, name):
-        """Smart Dimension, Center Mark or Centerline: the pointer picks things on the views."""
+        """An Annotation or Sketch tool: Smart Dimension, Center Mark, Centerline (the pointer picks things on the views), Note, Balloon, Line, Rectangle, Circle, Arc."""
         self.cmd = None
         self.model_panel.clear_pick()
         self.canvas.end_place(emit=False)
         self.tool_panel.set_tool(name)
         self.props.setCurrentWidget(self.tool_panel)
         self.left.setCurrentIndex(1)
-        if not self.d.views:
-            self.status.say("There is no view on the sheet to dimension yet.", "warn")
+        if not self.d.views and name in NEEDS_VIEW:
+            self.status.say("There is no view on the sheet yet: " + ("a balloon points at a view." if name == "balloon" else "there is nothing to pick."), "warn")
         self.canvas.tool_begin(name)
         self.canvas.setFocus()
         for k in TOOL_KEYS:
             self.act[k].setChecked(k == name)
+        self.act["select"].setChecked(False)
 
     def finish_tool(self):
         self.canvas.tool_end()
@@ -495,6 +500,7 @@ class DrawingTab(QWidget):
     def on_tool_changed(self, name):
         for k in TOOL_KEYS:
             self.act[k].setChecked(k == name)
+        self.act["select"].setChecked(name is None)
         if name is None and self.props.currentWidget() is self.tool_panel:
             self.props.setCurrentIndex(0)
             self.left.setCurrentIndex(0)
@@ -518,7 +524,7 @@ class DrawingTab(QWidget):
         if ok:
             if self.canvas.sel_annot == aid:
                 self.canvas.sel_annot = None
-            self.commit("delete dimension")
+            self.commit("annot_delete")
 
     def finish_command(self, ok=True):
         self.canvas.end_place()
@@ -558,9 +564,64 @@ class DrawingTab(QWidget):
             self.start_projected(vid)
 
     def on_canvas_changed(self, what):
-        if what in ("place", "move", "delete", "dim", "mark", "annot_move", "annot_delete"):
+        if what in ("place", "move", "delete", "dim", "mark", "annot_move", "annot_delete", "note", "balloon", "draw"):
             self.commit(what)
         elif what == "place_end":
+            self.after_change()
+
+    # ------------------------------------------------------------------------------------------------------------------------ notes and balloons
+    def ask_text(self, title, label, text, multiline=False):
+        """Asks for a text in a small dialog; None when it was cancelled (a test replaces this)."""
+        if multiline:
+            v, ok = QInputDialog.getMultiLineText(self, title, label, text)
+        else:
+            v, ok = QInputDialog.getText(self, title, label, text=text)
+        return v if ok else None
+
+    def edit_item_text(self, aid):
+        """A note or a balloon was double-clicked: ask for its text."""
+        try:
+            a = self.d.annot(aid)
+        except M.DrawingError:
+            return
+        if a.get("type") == "note":
+            v = self.ask_text("Note", "Text of the note", a["text"], True)
+            if v is not None:
+                self.set_note(aid, v, None, (a.get("leader") or {}).get("kind"))
+        elif a.get("type") == "balloon":
+            v = self.ask_text("Balloon", "Number in the balloon", a["text"], False)
+            if v is not None:
+                self.set_balloon_text(aid, v)
+
+    def set_note(self, aid, text, size, leader):
+        """The text, the size (points) or the leader (None, "straight", "bent") of a note changed (the Details, the dialog)."""
+        try:
+            n = self.d.annot(aid)
+        except M.DrawingError:
+            return
+        cur = (n.get("leader") or {}).get("kind")
+        new_text = None if text is None or text == n["text"] else text
+        new_size = None if size is None or abs(IT.clean_size(size) - n.get("size", IT.NOTE_SIZE)) < 1e-9 else size
+        lead = False if leader == cur else leader
+        if new_text is None and new_size is None and lead is False:
+            return
+        ok, _ = self.guard(self.d.set_note, aid, new_text, new_size, lead)
+        if ok:
+            self.commit("note")
+        else:
+            self.after_change()                                      # the boxes show what the note says again
+
+    def set_balloon_text(self, aid, text):
+        try:
+            b = self.d.annot(aid)
+        except M.DrawingError:
+            return
+        if (text or "").strip() == b["text"]:
+            return
+        ok, _ = self.guard(self.d.set_balloon_text, aid, text)
+        if ok:
+            self.commit("balloon")
+        else:
             self.after_change()
 
     # ------------------------------------------------------------------------------------------------------------------------ what the Details change
@@ -597,14 +658,14 @@ class DrawingTab(QWidget):
         v = self.d.view(vid)
         if v["orient"] == name:
             return
-        had = len(self.d.annots())
+        had = len(self.d.annots()) + len(self.d.balloons)
         ok, _ = self.guard(self.d.set_orient, vid, name)
         if ok:
             self.canvas.r.cache.clear()
             self.commit("orientation")
-            gone = had - len(self.d.annots())
+            gone = had - len(self.d.annots()) - len(self.d.balloons)
             if gone:
-                self.status.say(f"The view looks another way now: its {gone} dimension{'s' if gone != 1 else ''} / mark{'s' if gone != 1 else ''} had nothing to hold on to and {'were' if gone != 1 else 'was'} removed (Undo brings {'them' if gone != 1 else 'it'} back).", "warn")
+                self.status.say(f"The view looks another way now: its {gone} dimension{'s' if gone != 1 else ''} / mark{'s' if gone != 1 else ''} / balloon{'s' if gone != 1 else ''} had nothing to hold on to and {'were' if gone != 1 else 'was'} removed (Undo brings {'them' if gone != 1 else 'it'} back).", "warn")
 
     def set_view_scale(self, vid, text):
         try:

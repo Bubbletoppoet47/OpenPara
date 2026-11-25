@@ -14,6 +14,9 @@ are text in the PDF (the same text as on the screen), at ISO 3.5 mm.
     r.hit_annot(x, y, tol)                                the id of the dimension / mark the point is on (its lines or its number within tol mm), None when there is none
     r.paint_ref(p, vid, ref, col, ...)                    a picked point / line / circle / arc of a view, highlighted
     r.fmt(mm)                                             how a length reads in a dimension (the units of the program); settable
+    r.shape(a) / r.metrics(size)                          the shape of any item drawn over the views (notes, balloons, drawing items too), text measured with the real font
+    r.paint_shape(p, shp, col, floor)                     one shape (a draft that is not in the document yet)
+    r.handles_of(a)                                       the points of an item a person can drag: [(name, (x, y))] - the tip of a leader, the ends of a line ...
 """
 import math
 
@@ -22,6 +25,8 @@ from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPainterPath, QPen, QPolygonF
 
 import dr_annot as A
+import dr_items as IT
+from dr_model import DrawingError
 
 VISIBLE_W = 0.50                 # mm on paper
 HIDDEN_W = 0.25
@@ -34,6 +39,19 @@ LOST = QColor("#c0392b")
 DIM_W = 0.25                     # dimension, extension and center lines, mm on paper
 MARK_DASH = (6.0, 1.2, 1.2, 1.2)  # a centerline: long dash, gap, short dash, gap (mm)
 FONT_PX = 100                    # the numbers are set at this size and scaled down to TEXT_H
+
+
+def sheet_font():
+    """The font of everything written on the sheet: the numbers of a dimension, notes, balloons.  The alternate letter forms that depend on the neighbours (a raised colon between capitals ...) are
+    off: they have no letter of their own, so a PDF would hand a strange character to whoever copies the text."""
+    f = QFont()
+    f.setPixelSize(FONT_PX)
+    for tag in ("calt", "case"):
+        try:
+            f.setFeature(QFont.Tag(tag), 0)
+        except (AttributeError, TypeError):                           # a Qt without font features: the plain font
+            break
+    return f
 
 
 def default_fmt(mm):
@@ -50,6 +68,7 @@ class Renderer:
         self.d = drawing
         self.cache = {}                                           # view id -> (key, paths, segments)
         self.fmt = fmt or default_fmt
+        self._metrics = {}
 
     # ---- the lines of a view on the sheet
     def _key(self, v):
@@ -148,6 +167,88 @@ class Renderer:
                     self._paint_dim(p, a, A.shape(a, s, o), H, col, floor)
             except (KeyError, ValueError, IndexError, ZeroDivisionError):      # a record that cannot be drawn (a damaged file) is skipped
                 continue
+        for a in self.d.balloons + self.d.notes + self.d.lines:
+            col = SELECT if a["id"] in (sel, float_) else HOVER if a["id"] == hover else INK
+            try:
+                self._paint_shape(p, self.shape(a), H, col, floor)
+            except (KeyError, ValueError, IndexError, ZeroDivisionError, TypeError, DrawingError):
+                continue
+
+    # ---- notes, balloons and drawing items
+    def metrics(self, size):
+        """How big text of `size` points is (dr_items.Metrics), measured with the font the text is painted in."""
+        m = self._metrics.get(size)
+        if m is None:
+            fm = QFontMetricsF(sheet_font())
+            k = size * IT.PT / FONT_PX
+            m = IT.Metrics(size, width=lambda t: fm.horizontalAdvance(t) * k, cap=(fm.capHeight() or fm.ascent() * 0.72) * k, pitch=fm.lineSpacing() * k)
+            self._metrics[size] = m
+        return m
+
+    def shape(self, a):
+        """The shape of anything drawn over the views: what is painted and what is picked."""
+        return self.d.item_shape(a, self.metrics)
+
+    def handles_of(self, a):
+        """What can be dragged on an item: a note's or a balloon's leader tip, the handles of a line / rectangle / circle / arc.  [(name, (x, y) on the sheet)]"""
+        t = a.get("type")
+        if t == "note":
+            tip = self.d.leader_tip(a)
+            return [("tip", tip)] if tip is not None else []
+        if t == "balloon":
+            tip = self.d.balloon_tip(a)
+            return [("tip", tip)] if tip is not None else []
+        if t in IT.DRAW_TYPES:
+            return IT.handles(a)
+        return []
+
+    def paint_shape(self, p, shp, col, floor=0.0):
+        self._paint_shape(p, shp, self.d.sheet_dims()[1], col, floor)
+
+    def _paint_shape(self, p, shp, H, col, floor):
+        kind = shp["kind"]
+        w = max(IT.DRAW_W if kind in IT.DRAW_TYPES else DIM_W, floor)
+        p.setPen(self._pen(col, w))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        if kind == "circle":
+            (cx, cy), r = shp["circle"]
+            p.drawEllipse(QPointF(cx, H - cy), r, r)
+        elif kind == "arc":
+            (cx, cy), r, a0, a1 = shp["arc"]
+            path = QPainterPath()
+            path.moveTo(QPointF(cx + r * math.cos(a0), H - (cy + r * math.sin(a0))))
+            path.arcTo(QRectF(cx - r, H - cy - r, 2 * r, 2 * r), math.degrees(a0), math.degrees(a1 - a0))
+            p.drawPath(path)
+        else:
+            if kind == "balloon":
+                (cx, cy), r = shp["circle"]
+                p.drawEllipse(QPointF(cx, H - cy), r, r)
+            self._poly(p, shp["segs"], H)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(col))
+        self._heads(p, shp["heads"], H)
+        for (x, y), r in shp["dots"]:
+            p.drawEllipse(QPointF(x, H - y), r, r)
+        if shp["lines"]:
+            f = sheet_font()
+            k = shp["size"] * IT.PT / FONT_PX
+            for text, (x, y) in shp["lines"]:
+                p.save()
+                p.translate(QPointF(x, H - y))
+                p.scale(k, k)
+                p.setFont(f)
+                p.setPen(col)
+                p.drawText(QPointF(0, 0), text)
+                p.restore()
+
+    def paint_handles(self, p, a, floor=0.0, k=1.0):
+        """Small squares on what can be dragged of a selected item (k: pixels per mm, so they stay the same size on screen)."""
+        H = self.d.sheet_dims()[1]
+        half = 3.2 / max(k, 1e-9)
+        p.setPen(self._pen(SELECT, max(0.15, floor)))
+        p.setBrush(QBrush(QColor("#ffffff")))
+        for _name, (x, y) in self.handles_of(a):
+            p.drawRect(QRectF(x - half, H - y - half, 2 * half, 2 * half))
 
     def _pen(self, col, width, dash=None):
         pen = QPen(col)
@@ -180,17 +281,19 @@ class Renderer:
         self._poly(p, shp["segs"], H)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(col))
-        for tip, inward, size in shp["heads"]:
+        self._heads(p, shp["heads"], H)
+        self._text(p, A.text(a, self.fmt), shp["at"], shp["ang"], shp["anchor"], col, H)
+
+    def _heads(self, p, heads, H):
+        for tip, inward, size in heads:
             nx, ny = -inward[1], inward[0]
             bx, by = tip[0] + inward[0] * size, tip[1] + inward[1] * size
             half = size / 6.0
             p.drawPolygon(QPolygonF([QPointF(tip[0], H - tip[1]), QPointF(bx + nx * half, H - (by + ny * half)), QPointF(bx - nx * half, H - (by - ny * half))]))
-        self._text(p, A.text(a, self.fmt), shp["at"], shp["ang"], shp["anchor"], col, H)
 
     def _text(self, p, text, at, ang, anchor, col, H):
         """The numbers of a dimension: real text (a PDF keeps it as text), TEXT_H tall in capitals, centred / left / right of `at`, turned by ang (radians, y up)."""
-        f = QFont()
-        f.setPixelSize(FONT_PX)
+        f = sheet_font()
         fm = QFontMetricsF(f)
         cap = fm.capHeight() or fm.ascent() * 0.72
         width = fm.horizontalAdvance(text)
@@ -206,17 +309,21 @@ class Renderer:
         p.restore()
 
     def hit_annot(self, x, y, tol):
-        """The dimension / mark whose lines (or number) are within tol mm of the point; the nearest one; None when there is none."""
+        """The item (dimension, mark, balloon, note, drawing item) whose lines (or number, or text) are within tol mm of the point; the nearest one - the one painted last when they are
+        equally near; None when there is none."""
         best, bd = None, tol
-        for a in self.d.dims + self.d.marks:
-            v = self._view_of(a)
-            if v is None:
-                continue
+        for a in self.d.sheet_items():
             try:
-                shp = A.mark_shape(a, v["scale"], v["origin"]) if a["type"] in ("center_mark", "centerline") else A.shape(a, v["scale"], v["origin"])
-            except (KeyError, ValueError, IndexError, ZeroDivisionError):
+                if a.get("type") in IT.DRAW_TYPES or a.get("type") in ("note", "balloon"):
+                    d = IT.distance(self.shape(a), (x, y))
+                else:
+                    v = self._view_of(a)
+                    if v is None:
+                        continue
+                    shp = A.mark_shape(a, v["scale"], v["origin"]) if a["type"] in ("center_mark", "centerline") else A.shape(a, v["scale"], v["origin"])
+                    d = A.distance(shp, (x, y))
+            except (KeyError, ValueError, IndexError, ZeroDivisionError, TypeError, DrawingError):
                 continue
-            d = A.distance(shp, (x, y))
             if d <= bd:
                 best, bd = a["id"], d
         return best
