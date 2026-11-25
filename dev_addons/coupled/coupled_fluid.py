@@ -131,6 +131,7 @@ def solve_fluid_thermal(fl, th, opt=None, tick=None):
     scale = max(abs(Q_fluid), abs(Q_solid), 1e-300)
     Q_rel = (Q_solid - Q_fluid) / scale
     gap_f, gap_s = max(gaps["h_max"], gaps["Tref_max"]), gaps["T_wall_max"]
-    return {"converged": converged, "iterations": len(history), "history": history, "mismatch": history[-1]["mismatch"], "tol": o["conj_tol"],
+    Tw_end = np.concatenate([np.concatenate([wall[k]["T_a"], wall[k]["T_b"]]) for k in keys])
+    return {"Tw": Tw_end, "wall_points": int(sum(len(wall[k]["T_a"]) for k in keys)), "converged": converged, "iterations": len(history), "history": history, "mismatch": history[-1]["mismatch"], "tol": o["conj_tol"],
             "Q_solid": Q_solid, "Q_fluid": Q_fluid, "Q_rel": Q_rel, "q_tol": o["q_tol"], "gap_fluid": gap_f, "gap_solid": gap_s, "h": hvals, "h_lin": h_lin, "flow": flow, "heat": hres,
             "keys": keys, "T_in": T_in, "h_max": hmax}

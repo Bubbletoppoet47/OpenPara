@@ -410,6 +410,8 @@ def run(progress=None):
     fl_u, st_u, r_u = fsi(A3, nmax=15)
     cu = next(c for c in r_u["checks"] if c["name"] == "Moved flow converged")
     _row(rows, "The structure moves the flow: a loop with no steady state is refused", "the check 'Moved flow converged' fails and the result is refused", "failed" if not cu["ok"] and not r_u["ok"] else "passed", not cu["ok"] and not r_u["ok"])
+    import coupled_check3d
+    rows += coupled_check3d.rows_fluid3d(progress)
     if progress:
         progress("Done", 1.0)
     return {"rows": rows, "ok": all(x["ok"] for x in rows), "seconds": time.monotonic() - t0}

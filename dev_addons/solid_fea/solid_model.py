@@ -216,12 +216,12 @@ def set_sizes(setup, geom, fid, col_sizes, row_sizes):
     return rec
 
 
-def check_ready(setup, geom=None, thermal=False):
+def check_ready(setup, geom=None, thermal=False, fluid=False):
     """The reason why nothing can run yet, or None.  `geom` (when given and an assembly) also checks every body's material and that the bodies hold together.
-    thermal=True: a temperature is a load (a Coupled Physics solve), so the setup needs none of its own."""
+    thermal=True: a temperature is a load (a Coupled Physics solve), so the setup needs none of its own; so does fluid=True (the pressure of a flow is the load)."""
     if not setup["supports"]:
         return "Add at least one support."
-    if not thermal and not setup["loads"] and not any(s_.get("mode") == "disp" and any(s_.get(k) not in (None, 0, 0.0) for k in ("ux", "uy", "uz")) for s_ in setup["supports"]):
+    if not (thermal or fluid) and not setup["loads"] and not any(s_.get("mode") == "disp" and any(s_.get(k) not in (None, 0, 0.0) for k in ("ux", "uy", "uz")) for s_ in setup["supports"]):
         return "Add at least one load (or a Displacement that moves a face)."
     if geom is not None and geom.get("bodies"):
         import solid_asm
@@ -272,23 +272,30 @@ def face_normal(q, geom, fid):
     return n / ln if ln > 1e-12 else np.asarray(geom["faces"][fid]["normal"], float)
 
 
-def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None, thermal=None):
-    """thermal: None, or {"T": ...} for the mesh, or a function of the mesh q that gives that (the mesh is made inside, so the temperature is looked up on its nodes)."""
+def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None, thermal=None, fluid=None):
+    """thermal: None, or {"T": ...} for the mesh, or a function of the mesh q that gives that (the mesh is made inside, so the temperature is looked up on its nodes).
+    fluid: None, or {"fids": [...], "p": ...} (see solve_mesh), or a function of the mesh q that gives that (the pressure of a flow, looked up on the nodes of the mesh)."""
     h = r["h"] or auto_h(geom)
     if r.get("adapt"):                                                         # solve, refine, solve again (solid_adapt)
         if thermal is not None:
             raise fem.FemError("The adaptive mesh loop does not include a temperature yet: untick 'Adaptive mesh (h)' for a thermal-stress solve.")
+        if fluid is not None:
+            raise fem.FemError("The adaptive mesh loop does not include the pressure of a fluid yet: untick 'Adaptive mesh (h)' for a solve with a flow.")
         return sad.run(geom, r, h, cache, cancel, progress, get_mesh, solve_mesh)
     q = get_mesh(geom, h, cache, cancel, progress, r.get("mesh"))
     if callable(thermal):
         thermal = thermal(q)
-    return solve_mesh(geom, r, h, q, cancel, progress, thermal)
+    if callable(fluid):
+        fluid = fluid(q)
+    return solve_mesh(geom, r, h, q, cancel, progress, thermal, fluid)
 
 
-def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None, thermal=None):
+def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None, thermal=None, fluid=None):
     """Solves the setup `r` on the mesh `q` (element size `h`) and returns the result dict.
     thermal = {"T": the temperature at every node of the mesh q (kelvin)}: the body is heated or cooled to it from the material's reference temperature
-    (material["Tref"], 20 degC when missing) and expands by material["alpha"] (1/K, needed; an assembly: each body's own).  It is a load of its own: no other load is then needed."""
+    (material["Tref"], 20 degC when missing) and expands by material["alpha"] (1/K, needed; an assembly: each body's own).  It is a load of its own: no other load is then needed.
+    fluid = {"fids": [face ids], "p": the pressure at every node of the mesh q in MPa}: the pressure of a flow, pushing into the part on those faces (the mean of its three corner
+    values on every surface triangle; the friction of the flow is not in it).  It is a load of its own too."""
     mat = r["material"]
     sizes = fem.element_sizes(geom, h, r.get("mesh"))                           # the element size of every part (one entry for a single part)
     mats = r.get("materials") if geom.get("bodies") else None
@@ -354,13 +361,34 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None, the
             fb = fem.body_load(nodes, groups, b)
             force += fb
             applied += fb.reshape(-1, 3).sum(axis=0)
+    fl_sum = None
+    if fluid is not None:
+        pn = np.asarray(fluid["p"], float)
+        if pn.shape != (nn,):
+            raise fem.FemError("The pressure of the fluid is not given at the nodes of this mesh.")
+        f_fl, p_all = np.zeros(3), []
+        for fid in fluid["fids"]:
+            if fid not in ftri:
+                raise fem.FemError("The mesh has no elements on a face that the fluid loads.")
+            t6, t3 = ftri[fid], q["faces"][fid]
+            nv, area = fem.outward_normals(q, t3)
+            p_el = pn[np.asarray(t3)].mean(axis=1)
+            fe = (-p_el[:, None] * nv) * (area / 3.0)[:, None]                  # (nt, 3): into the part for p > 0, a third of the triangle's force per node
+            for j in load_cols:
+                for c in range(3):
+                    np.add.at(force, 3 * t6[:, j] + c, fe[:, c])
+            applied += fe.sum(axis=0) * 3
+            f_fl += fe.sum(axis=0) * 3
+            p_all.append(p_el)
+        pa = np.concatenate(p_all) if p_all else np.zeros(1)
+        fl_sum = {"force": f_fl.tolist(), "faces": [int(f) for f in fluid["fids"]], "p_min": float(pa.min()), "p_max": float(pa.max())}
     imposed = any(s["mode"] == "disp" and any(s[k] not in (None, 0.0) for k in ("ux", "uy", "uz")) for s in r["supports"])      # a movement is a load too
     th, fth = None, None
     if thermal is not None:
         th = {"T": np.asarray(thermal["T"], float), "alpha": mat.get("alpha"), "Tref": mat.get("Tref", 293.15)}
         fth = fem.thermal_load(nodes, groups, mat["E"], mat["nu"], th)
         force = force + fth                                                         # (an internal load: it adds nothing to the applied total)
-    if not np.any(force) and not imposed and th is None:
+    if not np.any(force) and not imposed and th is None and fl_sum is None:
         raise fem.FemError("The loads are all zero.")
     u, reac, info, K, D = fem.solve(q, mat["E"], mat["nu"], cons, force, cancel, progress)
     progress("stresses")
@@ -405,8 +433,8 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None, the
            "hexdom_note": q.get("hexdom_note"), "tet_body": q.get("tet_body"),
            "order": int(q["order"]), "quality": q.get("quality"), "mesh_opts": r.get("mesh"),
            "equilibrium": float(np.linalg.norm(total_reac + applied) / max(np.linalg.norm(applied), (float(np.linalg.norm(reac, axis=1).sum()) if imposed else 0.0), (float(np.linalg.norm(fth)) if th is not None else 0.0), 1e-12)),
-           "info": info, "thermal": (None if th is None else _thermal_summary(th, mat, mats)),
-           "material": dict(mat)}
+           "info": info, "thermal": (None if th is None else _thermal_summary(th, mat, mats)), "fluid": fl_sum,
+           "material": dict(mat), "surface": {fid: np.asarray(t, np.int32) for fid, t in (q.get("ftri") or q.get("faces") or {}).items()}}
     if per_body is not None:
         res.update({"bodies": per_body, "sy_node": sy_node, "material": dict(mat, sy=0.0, su=0.0), "bond_tol": geom.get("tol"),
                     "bonds": [{"a": geom["bodies"][b["a"]]["name"], "b": geom["bodies"][b["b"]]["name"], "area": b["area"]} for b in geom["bonds"]]})

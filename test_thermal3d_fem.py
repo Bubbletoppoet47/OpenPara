@@ -299,6 +299,31 @@ hlin = 4 * eps * tf.SIGMA * 300.5 ** 3
 resc = run(q, {"temps": [{"name": "hot", "fids": [left], "T": 301.0}], "convs": [{"name": "out", "fids": [right], "h": hlin, "Tinf": 300.0}]})
 ok(np.abs(resr["T"] - resc["T"]).max() < 1e-4, f"for a small temperature difference radiation is convection with h = 4 eps sigma T3: {np.abs(resr['T'] - resc['T']).max():.2e} K")
 
+# ------------------------------------------------------------------------------------------------------------------- convection that changes over the face (what a flow hands over in Coupled Physics)
+gv, qv = part(slab, 8.0)
+lv, rv = fid(gv, [-1, 0, 0]), fid(gv, [1, 0, 0])
+base = run(qv, {"fluxes": [{"name": "in", "fids": [lv], "q": 5000.0}], "convs": [{"name": "out", "fids": [rv], "h": 60.0, "Tinf": 300.0}]})
+flat = run(qv, {"fluxes": [{"name": "in", "fids": [lv], "q": 5000.0}],
+                "convs": [{"name": "out", "fids": [rv], "h_at": lambda P: np.full(len(P), 60.0), "Tinf_at": lambda P: np.full(len(P), 300.0)}]})
+ok(np.abs(flat["T"] - base["T"]).max() < 1e-9 and abs(flat["balance"]["relative_error"]) < 1e-6, f"a constant profile gives the same answer as a constant coefficient: {np.abs(flat['T'] - base['T']).max():.2e} K")
+# a bar so conductive that its temperature is uniform: the heat that goes in leaves through  integral h (T - Tinf) dA,  so  T = (Q + integral h Tinf dA) / integral h dA  for any profile
+MATC = {"k": 1.0e6, "rho": 7800.0, "cp": 500.0}
+a0, a1 = 40.0, 0.5                                       # h = a0 + a1 * y  (W/m2K, y in mm)
+Tinf_of = lambda P: 290.0 + 0.4 * P[:, 1]
+h_of = lambda P: a0 + a1 * P[:, 1]
+Qin = 5000.0 * (LY * LZ * 1e-6)
+rp = run(qv, {"materials": [dict(MATC)], "fluxes": [{"name": "in", "fids": [lv], "q": 5000.0}], "convs": [{"name": "out", "fids": [rv], "h_at": h_of, "Tinf_at": Tinf_of}]})
+yy = np.linspace(-LY / 2, LY / 2, 20001)                 # the face is y in [-10, 10] mm, z in [-5, 5] mm
+Ah = float(np.trapezoid(a0 + a1 * yy, yy)) * LZ * 1e-6
+Ahi = float(np.trapezoid((a0 + a1 * yy) * (290.0 + 0.4 * yy), yy)) * LZ * 1e-6
+Texact = (Qin + Ahi) / Ah
+near(float(rp["T"].mean()), Texact, 1e-5, "a linear coefficient and a linear fluid temperature on a very conductive bar: its temperature")
+cv = flow(rp, "out")
+ok(abs(cv["Q"] + Qin) / Qin < 1e-4 and rp["balance"]["relative_error"] < 1e-5, f"the heat leaving through the face is the heat that went in: {cv['Q']:.6g} W against {-Qin:.6g} W")
+for bad, words in (({"h_at": lambda P: -np.ones(len(P)), "Tinf_at": lambda P: np.full(len(P), 300.0)}, ("negative",)),
+                   ({"h_at": lambda P: np.ones(len(P)), "Tinf_at": lambda P: np.full(len(P), np.nan)}, ("finite",))):
+    refuses(qv, {"fluxes": [{"name": "in", "fids": [lv], "q": 5000.0}], "convs": [dict({"name": "out", "fids": [rv]}, **bad)]}, words, "a profile that is not usable")
+
 # ------------------------------------------------------------------------------------------------------------------- transient: a slab cooled from both ends (series solution)
 Lt = 50.0
 plate = b.Box(Lt, 20.0, 10.0)

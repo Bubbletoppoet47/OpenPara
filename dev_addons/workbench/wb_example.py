@@ -1,6 +1,6 @@
 """wb_example.py - "Load Example Project": a small project that uses everything the Workbench does, so that it can be tried (and so that a change to the Workbench can be checked on it).
 
-    Parts          Bar (100 x 10 x 10 mm)          Plate (100 x 20 x 10 mm; its sketch is used by the 2D analysis)
+    Parts          Bar (100 x 10 x 10 mm)          Plate (100 x 20 x 10 mm; its sketch is used by the 2D analysis)          Square (20 x 20 x 10 mm)          Block (30 x 10 x 10 mm)
     Assembly       Frame                           keeps its OWN copy of a bar, 20 mm thick (no link to the part blocks)
     Analyses       Bar stress          3D Static Structural from Bar: fixed at one end, 1000 N pulling the other      (u = F L / (A E) = 0.005 mm)
                    Plate stress 2D     2D Static Structural from Plate: fixed on the left edge, 0.5 MPa on the right edge
@@ -15,6 +15,11 @@
                    Square bending      2D Static Structural of the Square: left edge held, NO load; so soft (E = 5e-8 MPa, on purpose) that the pressure of the air bends it by a visible fraction of a percent
                    Air, heat and bending  Coupled Physics of the three: the air takes the heat of the square, the pressure of the air loads the stress analysis, and the structure MOVES the flow
                                        (the flow is solved again round the bent square until the displacement stops changing).  Known answer: the walls are at 50 C (the body conducts so well it is at one temperature)
+    3D flow        Block air flow      3D Fluid Flow of the Block (30 x 10 x 10 mm): slow air (0.06 m/s, Re about 40) along +x; every face but the upstream end is a wall of the thermal analysis
+                   Block heat          3D Thermal of the Block: a very good conductor (400 W/m/K), the upstream end held at 70 C, the other faces are cooled by the air
+                   Block pressure      3D Static Structural of the Block: the downstream end held, NO load; so soft (E = 4e-7 MPa, on purpose) that the pressure of the air moves it by a visible fraction of its size
+                   Air, heat and pressure 3D  Coupled Physics of the three: the air takes the heat of the block, its pressure loads the stress analysis, and the structure MOVES the flow.
+                                       Known answer: the walls are at 70 C (the block conducts so well it is at one temperature)
     Study          Bar study           Parametric Study of Bar stress (wired from its Setup; a new study runs one design point, as the analysis is)
     Tools          Load table (Sheets, with formulas), LED circuit (Circuits), Plant (Systems and Controls)
 
@@ -242,6 +247,45 @@ def setup_frame_heating(w):
     w.add_condition("temps", {"T": 293.15}, [face_by_normal(w, [1, 0, 0], True)], "Cold end")
 
 
+BLOCK = (30.0, 10.0, 10.0)                                  # the block in the 3D air stream (mm)
+E_SOFT3 = 4e-7                                              # MPa: so soft that the pressure of this slow air (a few 1e-9 Pa x mm2 of force) moves a 30 mm block by a fraction of a percent
+KNOWN_BLOCK = {"kind": "wall_temperature", "name": "a block this conductive is at one temperature, and so are its walls (held at 70 C at the upstream end)", "expected": 70.0, "unit": "degC", "tol_abs": 1.0}
+
+
+def setup_block_flow(w):
+    """Slow air along +x past the block; every face but the upstream end (which the heat analysis holds at 70 C) is a wall of the thermal analysis."""
+    w.setup["flow"].update({"speed": 0.06, "dir": "+x", "heat": True, "T_in": 293.15})
+    hot = face_by_normal(w, [-1, 0, 0])
+    w.add_condition("exch", {}, [int(f["id"]) for f in w.geom["faces"] if int(f["id"]) != int(hot)], "Wall of the thermal analysis")
+    w.fill_part_sizes()
+    w.set_size("2.5")
+    w.put_physics()
+    w.refresh_lists()
+
+
+def setup_block_heat(w):
+    w.add_condition("temps", {"T": 343.15}, [face_by_normal(w, [-1, 0, 0])], "Hot end")
+    w.setup["analysis"] = "steady"
+    w.e_k.setText("400")                                    # (copper: so conductive that the block is at one temperature)
+    w.inputs_changed()
+    w.refresh_lists()
+
+
+def setup_block_pressure(w):
+    w.add_support("fixed", [face_by_normal(w, [1, 0, 0])])
+    w.e_alpha.setText("2.3e-5")
+    w.e_tref.setText("20")
+    w.e_E.setText(f"{E_SOFT3:g}")
+    w.inputs_changed()
+
+
+def setup_coupled_block(w):
+    w.options["known"] = dict(KNOWN_BLOCK)
+    w.options["moves_flow"] = True
+    w.cb_moves.setChecked(True)
+    w.save()
+
+
 # ---------------------------------------------------------------------------------------------------------------------------- the project
 def load(tab):
     """Replaces the project of `tab` with the example.  -> [what could not be made (the reason)]."""
@@ -254,12 +298,15 @@ def load(tab):
     nFrame = tab.add_block("assembly", 40, 500, title="Frame", data={"asm": frame_asm(100, 10, 20)})
     square, square_sid = part_doc(SQ, SQ, 10)
     nSquare = tab.add_block("part", 40, 1380, title="Square", data={"doc": square})
+    block, _block_sid = part_doc(BLOCK[0], BLOCK[1], BLOCK[2])
+    nBlock = tab.add_block("part", 40, 2060, title="Block", data={"doc": block})
     made = {}
     for key, kind, x, y, title, src in (("bar", "solid", 380, 60, "Bar stress", nBar), ("plate", "fea", 380, 280, "Plate stress 2D", nPlate),
                                         ("heat", "thermal3d", 380, 500, "Frame heating", nFrame), ("check", "solid", 380, 720, "Frame check (needs a setup)", nFrame),
                                         ("bheat", "thermal3d", 380, 940, "Bar heating", nBar), ("grow", "solid", 380, 1160, "Bar growth", nBar),
                                         ("air", "cfd", 380, 1380, "Air flow", nSquare), ("sheat", "thermal", 380, 1600, "Square heat", nSquare),
-                                        ("sbend", "fea", 380, 1820, "Square bending", nSquare)):
+                                        ("sbend", "fea", 380, 1820, "Square bending", nSquare), ("bflow", "fluid3d", 380, 2060, "Block air flow", nBlock),
+                                        ("bheat3", "thermal3d", 380, 2280, "Block heat", nBlock), ("bpress", "solid", 380, 2500, "Block pressure", nBlock)):
         ok, why = nodes.availability(tab, kind)
         if not ok:
             problems.append(f"{title}: {why}")
@@ -287,6 +334,17 @@ def load(tab):
             problems.append(f"Air, heat and bending: {why}")
     elif any(k in made for k in ("air", "sheat", "sbend")):
         problems.append("Air, heat and bending: one of the three analyses (2D Fluid Flow, 2D Thermal, 2D Static Structural) is not available, so the block was left out.")
+    nBlk = None
+    if all(k in made for k in ("bflow", "bheat3", "bpress")):  # the third Coupled Physics block: a 3D flow, the heat of a block and the pressure on it
+        ok, why = nodes.availability(tab, "coupled")
+        if ok:
+            nBlk = tab.add_block("coupled", 720, 2280, title="Air, heat and pressure 3D")
+            for k in ("bflow", "bheat3", "bpress"):
+                tab.scene.make_link(made[k].id, "setup", nBlk.id, "physics")
+        else:
+            problems.append(f"Air, heat and pressure 3D: {why}")
+    elif any(k in made for k in ("bflow", "bheat3", "bpress")):
+        problems.append("Air, heat and pressure 3D: one of the three analyses (3D Fluid Flow, 3D Thermal, 3D Static Structural) is not available, so the block was left out.")
     nStudy = None
     if "bar" in made:                                        # a parametric study of the bar analysis (when the add-on for it is there)
         ok, why = nodes.availability(tab, "study")
@@ -317,7 +375,8 @@ def load(tab):
         for key, fn, title in (("bar", setup_bar_stress, "Bar stress"), ("plate", setup_plate_2d(plate_sid), "Plate stress 2D"), ("heat", setup_frame_heating, "Frame heating"),
                                ("bheat", setup_frame_heating, "Bar heating"), ("grow", setup_bar_growth, "Bar growth"),
                                ("air", setup_air_flow(square_sid), "Air flow"), ("sheat", setup_square_heat(square_sid), "Square heat"),
-                               ("sbend", setup_square_bending(square_sid), "Square bending")):
+                               ("sbend", setup_square_bending(square_sid), "Square bending"), ("bflow", setup_block_flow, "Block air flow"), ("bheat3", setup_block_heat, "Block heat"),
+                               ("bpress", setup_block_pressure, "Block pressure")):
             if key not in made:
                 continue
             try:
@@ -334,8 +393,13 @@ def load(tab):
             with_editor(tab, nAir, setup_coupled_air)        # (the known answer of the walls goes into the block's own options, and the structure moves the flow)
         except Exception as ex:                              # noqa: BLE001
             problems.append(f"Air, heat and bending: its options could not be set ({type(ex).__name__}: {ex})")
-    if any(n is not None for n in (nStudy, nCoupled, nAir)):  # (their cells take the setups that were just made: nothing is computed)
-        tab.refresh_project(only=[n.id for n in (nStudy, nCoupled, nAir) if n is not None])
+    if nBlk is not None and h is not None and hasattr(h, "new_addon_tab"):
+        try:
+            with_editor(tab, nBlk, setup_coupled_block)      # (the known answer of the walls goes into the block's own options, and the structure moves the flow)
+        except Exception as ex:                              # noqa: BLE001
+            problems.append(f"Air, heat and pressure 3D: its options could not be set ({type(ex).__name__}: {ex})")
+    if any(n is not None for n in (nStudy, nCoupled, nAir, nBlk)):  # (their cells take the setups that were just made: nothing is computed)
+        tab.refresh_project(only=[n.id for n in (nStudy, nCoupled, nAir, nBlk) if n is not None])
     tab.scene.refresh()
     tab.say(f"Example loaded: {len(tab.project.nodes)} blocks. Nothing is computed yet: press Update Project and the analyses are solved (the coupled blocks with their PASS / FAIL known answers) and the study runs." +
             ("  Left out or not set up: " + "; ".join(problems) if problems else ""))

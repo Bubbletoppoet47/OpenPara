@@ -939,9 +939,10 @@ class SolidWindow(SolidBase):
             self.read_inputs()
         except ValueError as ex:
             return str(ex)
-        return sm.check_ready(self.setup, self.geom, thermal=self.coupled_in is not None)
+        return sm.check_ready(self.setup, self.geom, thermal=self.coupled_in is not None, fluid=self.coupled_fluid is not None)
 
     coupled_in = None        # a Coupled Physics block sets this to a function: (the nodes of the mesh (n, 3), the mesh) -> the temperature there (kelvin)
+    coupled_fluid = None     # ... and this one to a function: (the nodes of the mesh (n, 3), the mesh) -> {"fids": the faces a flow pushes on, "p": its pressure (MPa) at every node}
 
     def run_solve(self):
         why = self.ready()
@@ -957,9 +958,11 @@ class SolidWindow(SolidBase):
 
         ci = self.coupled_in
         thermal = None if ci is None else (lambda q: {"T": ci(np.asarray(q["nodes"], float), q)})
+        cfl = self.coupled_fluid
+        fluid = None if cfl is None else (lambda q: cfl(np.asarray(q["nodes"], float), q))
 
         def work(progress, cancel):
-            return sm.run(g, r, self.cache, cancel, progress, thermal=thermal)
+            return sm.run(g, r, self.cache, cancel, progress, thermal=thermal, fluid=fluid)
         plan = self.job_plan(g, r)
 
         def done(res):
@@ -995,6 +998,11 @@ class SolidWindow(SolidBase):
         html = R.summary(r.get("fos_y"), r.get("fos_u"), rows)
         if r.get("thermal"):
             html += R.thermal_block(r["thermal"])
+        if r.get("fluid"):
+            fl_ = r["fluid"]
+            html += R.heading("Pressure of a flow") + R.kv([("Force of the pressure on the part", ", ".join(R.num(f_out(x), 4) for x in fl_["force"]), D["F"]),
+                                                            ("Pressure, highest", R.num(s_out(fl_["p_max"]), 4), D["S"]), ("Pressure, lowest", R.num(s_out(fl_["p_min"]), 4), D["S"]),
+                                                            ("Faces it pushes on", f"{len(fl_['faces'])}", None)])
         if r.get("support_reactions"):
             html += R.heading("Reactions", D["F"])
             html += R.grid(["", "Fx", "Fy", "Fz"], [[n, *(R.num(f_out(x)) for x in v)] for n, v in r["support_reactions"]])

@@ -265,6 +265,8 @@ class Model:
                         rec["P"] = float(c["P"])
                         rec["q"] = rec["P"] / rec["area"]
                         self.F += self._face_vector(fc, rec["q"])
+                    elif kind == "conv" and c.get("h_at") is not None:
+                        self._conv_field(rec, fc, c, label)
                     elif kind == "conv":
                         h, Ti = float(c["h"]), float(c["Tinf"])
                         if h < 0 or Ti <= 0:
@@ -284,6 +286,26 @@ class Model:
                             self.rad.append((fc, eps * SIGMA * fc.A, Ts))
                             self.ground[fc.conn.ravel()] = True
                 self.conds.append(rec)
+
+    def _conv_field(self, rec, fc, c, label):
+        """Convection whose coefficient and fluid temperature change over the faces (a flowing fluid that a Coupled Physics solve gives): c["h_at"](points (n, 3) in mesh units) and
+        c["Tinf_at"](points) are asked at the integration points of every triangle, so  q = h (T - Tinf)  is applied exactly as the two profiles say, point by point."""
+        w = fc.wg
+        X = np.einsum("gi,tix->tgx", fc.Ng, self.nodes[fc.conn])               # (nt, G, 3): where the integration points are, in mesh units
+        nt, G = X.shape[0], X.shape[1]
+        h = np.asarray(c["h_at"](X.reshape(-1, 3)), float).reshape(nt, G)
+        Ti = np.asarray(c["Tinf_at"](X.reshape(-1, 3)), float).reshape(nt, G)
+        if not (np.all(np.isfinite(h)) and np.all(np.isfinite(Ti))):
+            raise ThermalError(f"{label}: the convection coefficient or the fluid temperature is not finite somewhere on the faces.")
+        if np.any(h < 0) or np.any(Ti <= 0):
+            raise ThermalError(f"{label}: the convection coefficient cannot be negative and the fluid temperature must be above 0 K.")
+        rec.update(h=float(np.sum(fc.A[:, None] * w[None] * h) / max(fc.area(), 1e-300)), Tinf=float(np.mean(Ti)), h_g=h, Tinf_g=Ti)
+        if np.any(h > 0):
+            Ke = np.einsum("t,g,tg,gi,gj->tij", fc.A, w, h, fc.Ng, fc.Ng)
+            self.K = self.K + _csr_local(fc.conn, Ke, self.N)
+            Fe = np.einsum("t,g,tg,gi->ti", fc.A, w, h * Ti, fc.Ng)
+            self.F += np.bincount(fc.conn.ravel(), weights=Fe.ravel(), minlength=self.N)
+            self.ground[fc.conn.ravel()] = True
 
     def _face_vector(self, fc, value):
         """The load vector of a surface load `value` (W/m2) on the triangles of fc."""
@@ -627,6 +649,8 @@ def _balance(mdl, T, storage):
             item["Q"] = per_cond.get(ci, 0.0)                          # into the body
         elif kind in ("flux", "power"):
             item["Q"] = rec["q"] * rec["area"]
+        elif kind == "conv" and rec["h"] > 0 and "h_g" in rec:
+            item["Q"] = -float(np.sum(fc.A[:, None] * fc.wg[None] * rec["h_g"] * (fc.interp(T) - rec["Tinf_g"])))
         elif kind == "conv" and rec["h"] > 0:
             Tg = fc.interp(T)
             item["Q"] = -rec["h"] * float(np.sum(fc.A * (fc.wg @ (Tg - rec["Tinf"]).T)))      # negative = leaving

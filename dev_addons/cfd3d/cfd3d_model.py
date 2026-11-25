@@ -12,6 +12,7 @@ setup = {
   "temps":  [{"name", "faces": [face signature], "T": K}]            wall temperature
   "fluxes": [{"name", "faces", "q": W/m2}]                           heat flux INTO the fluid
   "ins":    [{"name", "faces"}]                                      adiabatic wall (nothing is added; it makes the choice visible)
+  "exch":   [{"name", "faces"}]                                      the wall of a thermal analysis (Coupled Physics): adiabatic when the fluid is solved on its own
   "probe": [x, y, z] or None
 }
 `h` of the setup is the element size on the part (mm, 0 = automatic).  Everything stored is SI (and kelvin); the units of File > Units only change what is shown.
@@ -28,10 +29,10 @@ import solid_fem as fem
 import solid_mesh as smesh
 import solid_model as sm
 
-CONDITION_KINDS = (("Wall temperature", "temps"), ("Wall heat flux", "fluxes"), ("Adiabatic wall", "ins"))
+CONDITION_KINDS = (("Wall temperature", "temps"), ("Wall heat flux", "fluxes"), ("Adiabatic wall", "ins"), ("Wall of the thermal analysis", "exch"))
 KEYS = tuple(k for _n, k in CONDITION_KINDS)
 NAMES = dict((k, n) for n, k in CONDITION_KINDS)
-VALUES = {"temps": ("T",), "fluxes": ("q",), "ins": ()}
+VALUES = {"temps": ("T",), "fluxes": ("q",), "ins": (), "exch": ()}
 DIRS = {"+x": (1.0, 0.0, 0.0), "-x": (-1.0, 0.0, 0.0), "+y": (0.0, 1.0, 0.0), "-y": (0.0, -1.0, 0.0), "+z": (0.0, 0.0, 1.0), "-z": (0.0, 0.0, -1.0)}
 DIR_TEXT = {"+x": "toward +X", "-x": "toward -X", "+y": "toward +Y", "-y": "toward -Y", "+z": "toward +Z", "-z": "toward -Z"}
 BOX = ("x-", "x+", "y-", "y+", "z-", "z+")
@@ -194,6 +195,10 @@ def notes(setup, geom):
     if re > RE_STEADY:
         out.append(f"The Reynolds number is {re:,.0f}. This solver is for laminar, steady flow; past a blunt body the real flow above about {RE_STEADY:.0f} "
                    "sheds vortices or is turbulent, so the result is a steady approximation of it (the solve may also stall). Use a lower speed, a smaller part or a more viscous fluid to test the setup.")
+    if setup.get("exch"):
+        n = sum(len(c.get("faces") or []) for c in setup["exch"])
+        out.append(f"{n} face(s) are marked as the wall of a thermal analysis: the fluid solved on its own treats them as adiabatic. They exchange heat with the solid only "
+                   "inside a Coupled Physics block.")
     _a, block = frontal_area(geom, setup)
     if block > BLOCKAGE_WARN:
         out.append(f"The part covers {block * 100:.0f} % of the cross-section of the domain: the walls of the box squeeze the flow. Raise the side margin.")
@@ -285,9 +290,16 @@ def spec_of(r, q):
     return spec
 
 
-def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
-    """Meshes (cached), solves, and returns the result dict of cfd3d_flow.solve_flow with the mesh, the numbers of the report and the conditions' heat added."""
+def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None, nodes=None):
+    """Meshes (cached), solves, and returns the result dict of cfd3d_flow.solve_flow with the mesh, the numbers of the report and the conditions' heat added.
+    nodes: the nodes (mm) of the air mesh moved to somewhere else (the same tetrahedra: see moved_nodes), or a function of the mesh that gives them: the flow is solved round the part as a
+    structure moved it."""
     q = get_mesh(geom, r, cache, cancel, progress)
+    if nodes is not None:
+        nodes = np.asarray(nodes(q) if callable(nodes) else nodes, float)
+        if nodes.shape != np.shape(q["nodes"]):
+            raise fem.FemError("The moved mesh does not have the nodes of the air mesh.")
+        q = dict(q, nodes=nodes)
     spec = spec_of(r, q)
     res = cf.solve_flow(q, spec, progress=progress, cancel=cancel)
     res["mesh"] = q
@@ -409,3 +421,91 @@ def part_surface(res):
     if not tris:
         return np.zeros((0, 3), np.int64), np.zeros(0, np.int64)
     return np.vstack(tris), np.concatenate(ids)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------- for Coupled Physics
+# What a Coupled Physics block asks of this analysis: the flow solved once, the pressure on the walls of the part (for a stress analysis), the heat exchanged with the walls of a
+# thermal analysis (a wall temperature in, a heat flux out), and the flow round a part that a structure has moved (the air mesh is moved with it: moved_nodes).
+def exch_fids(r):
+    """The ids of the faces that exchange heat with a thermal analysis (the faces of the conditions 'Wall of the thermal analysis')."""
+    return sorted({int(f) for c in (r.get("exch") or []) for f in c["fids"]})
+
+
+def wall_triangles(q, fids):
+    """The triangles (nt, 3) of node numbers of the air mesh on the faces `fids` of the part."""
+    parts = [np.asarray(q["patches"][f], np.int64) for f in fids if f in q["patches"]]
+    return np.vstack(parts) if parts else np.zeros((0, 3), np.int64)
+
+
+def node_areas(nodes_mm, tris, n):
+    """The area (m2) that every one of the n nodes stands for on the surface `tris` (a third of every triangle that touches it)."""
+    P = np.asarray(nodes_mm, float)
+    tris = np.asarray(tris, np.int64)
+    a = 0.5 * np.linalg.norm(np.cross(P[tris[:, 1]] - P[tris[:, 0]], P[tris[:, 2]] - P[tris[:, 0]]), axis=1) * 1e-6
+    return np.bincount(tris.ravel(), weights=np.repeat(a / 3.0, 3), minlength=n)
+
+
+def wall_pressure(res, fids):
+    """The pressure (Pa, relative to the outlet) on the faces `fids`: {"points": (n, 3) mm, "tris": (nt, 3) numbers into points, "p": (n,)} - a triangulated surface and its field."""
+    tris = wall_triangles(res["mesh"], fids)
+    nodes, inv = np.unique(tris.ravel(), return_inverse=True)
+    return {"points": np.asarray(res["mesh"]["nodes"], float)[nodes], "tris": inv.reshape(-1, 3), "p": np.asarray(res["p"], float)[nodes], "nodes": nodes}
+
+
+def pressure_force(res, fids):
+    """-> (the force (3,) in N that the pressure of the fluid puts on the faces `fids`, the sum of the sizes of the forces of their triangles).  Friction is not in it."""
+    bd = res["boundary"]
+    F, S = np.zeros(3), 0.0
+    for f in fids:
+        if f not in bd.patches:
+            continue
+        fv = res["p"][bd.patches[f]].mean(axis=1)[:, None] * bd.faces(f)[1]
+        F += fv.sum(axis=0)
+        S += float(np.linalg.norm(fv, axis=1).sum())
+    return F, S
+
+
+def wall_heat_spec(r, spec, fids, T_wall):
+    """The spec of the temperature with the walls `fids` held at T_wall (a number, or a function of the points (n, 3) in mm).  Whatever else the window says stays; a face of `fids` that
+    also has a temperature or a flux of its own takes the exchange instead."""
+    s = dict(spec)
+    s["wall_T"] = dict(spec.get("wall_T") or {})
+    s["wall_q"] = {k: v for k, v in (spec.get("wall_q") or {}).items() if k not in fids}
+    for f in fids:
+        s["wall_T"][f] = T_wall
+    return s
+
+
+def solve_wall_heat(res, fids, T_wall, progress=None, cancel=None, x_ref=None):
+    """The temperature of the fluid on the flow of `res` (not changed) with the walls `fids` held at T_wall (see wall_heat_spec).  `x_ref`: the nodes (N, 3) mm of the air mesh as
+    drawn, when the flow was solved on a mesh moved with the part: T_wall is asked for the places of the material points, not for where the flow has them now.
+    -> (a copy of the result with the temperature, {"nodes": (n,), "area": (n,) m2, "T": (n,) K, "q": (n,) W/m2 INTO the fluid, "Q": W into the fluid through the faces})."""
+    out = dict(res)
+    spec = wall_heat_spec(res["run"], res["spec"], fids, T_wall)
+    if x_ref is not None:
+        spec["x_ref"] = np.asarray(x_ref, float)
+    cf.solve_temperature(out, spec, progress, cancel)
+    tris = wall_triangles(res["mesh"], fids)
+    nodes = np.unique(tris.ravel())
+    area = node_areas(res["mesh"]["nodes"], tris, len(res["mesh"]["nodes"]))[nodes]
+    heat = out["heat"]["node_heat"][nodes]
+    return out, {"nodes": nodes, "area": area, "T": out["T"][nodes], "q": heat / np.maximum(area, 1e-300), "Q": float(sum(cf.patch_heat(out, f) for f in fids if f in out["boundary"].patches))}
+
+
+def moved_nodes(q, D):
+    """The nodes (mm) of the air mesh `q` when the nodes of the part's walls are moved by D (n_part, 3) mm, in the order of part_nodes(q): the box stays where it is and the nodes
+    between them follow (cfd3d_morph).  Raises FemError when a tetrahedron would be turned inside out."""
+    import cfd3d_morph as mo
+    part = part_nodes(q)
+    box = box_nodes(q)
+    return mo.morph(q["nodes"], q["tets"], part, np.asarray(D, float), box)
+
+
+def part_nodes(q):
+    """The nodes of the air mesh that lie on the part (sorted)."""
+    return np.unique(np.concatenate([np.asarray(v, np.int64).ravel() for k, v in q["patches"].items() if k not in BOX and len(v)] or [np.zeros(0, np.int64)]))
+
+
+def box_nodes(q):
+    """The nodes of the air mesh that lie on the sides of the box (sorted)."""
+    return np.unique(np.concatenate([np.asarray(v, np.int64).ravel() for k, v in q["patches"].items() if k in BOX and len(v)] or [np.zeros(0, np.int64)]))

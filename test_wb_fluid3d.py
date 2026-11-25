@@ -1,7 +1,7 @@
 """The 3D Fluid Flow block of the Workbench in the real program window: it is in the toolbox with its picture, a Part wired to it (Refresh copies the part into the analysis), the
 window that opens from the Setup cell, the flow solved from the project (Update), the part edited (the analysis says refresh and update), saving the project and opening it again
 (nothing is computed, nothing is lost), the block saved on its own as a .gpw folder that opens in the program, an Assembly (refused with its reason, the setup stays incomplete)
-and that the block is not offered to Coupled Physics yet.   python test_wb_fluid3d.py"""
+and that the block is offered to Coupled Physics (and not to a parametric study yet).   python test_wb_fluid3d.py"""
 import atexit
 import faulthandler
 faulthandler.dump_traceback_later(560, exit=True)
@@ -96,7 +96,7 @@ spec = wp.spec_of("fluid3d")
 ok(spec.label == "3D Fluid Flow" and spec.group == "Analysis Systems", f"in the group Analysis Systems as '{spec.label}'")
 ok([c.key for c in spec.cells] == ["geometry", "setup", "solution", "results"], f"with the cells of an analysis ({[c.key for c in spec.cells]})")
 ok(spec.cell("geometry").needs_link and "geometry" in spec.cell("geometry").accepts, "its Geometry cell comes only from a wire")
-ok("coupling" not in spec.cell("setup").provides and "analysis" not in spec.cell("setup").provides, f"its Setup is offered to neither a parametric study nor Coupled Physics yet ({spec.cell('setup').provides})")
+ok("coupling" in spec.cell("setup").provides and "analysis" not in spec.cell("setup").provides, f"its Setup is offered to Coupled Physics but not to a parametric study yet ({spec.cell('setup').provides})")
 ok(wb_kit.KIND["fluid3d"] == "wb_fluid3d" and "fluid3d" in wb_kit.SOLID_KINDS and wb_kit.cell_key("fluid3d", "geometry") == "tab_part", "the kit knows its picture and that its geometry is a solid")
 import wb_icons
 ok(wb_icons.KIND_GLYPH.get("fluid3d") is not None, "and the plain drawing of the old pictures has a glyph for it")

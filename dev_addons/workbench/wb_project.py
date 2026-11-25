@@ -116,8 +116,8 @@ for _k, _l, _tip, _cells in (
         ("cfd", "2D Fluid Flow", "2D CFD of a sketch", [_SKETCH]),
         ("beam", "1D Beam / Truss", "Beams and trusses from the lines of a sketch, with the profiles of their cross-sections", [_SKETCH, _PROFILE])):
     # the Setup of an analysis that a parametric study can run gives "analysis" (to the Parameters cell of a Parametric Study block); 3D Thermal has no study yet.  The Setup of a
-    # heat, stress or 2D fluid flow analysis also gives "coupling" (to the Physics cell of a Coupled Physics block)
-    _prov = tuple(x for x in (("analysis",) if _k in ("solid", "fea", "thermal", "cfd", "beam") else ()) + (("coupling",) if _k in ("solid", "fea", "thermal", "thermal3d", "cfd") else ()))
+    # heat, stress or fluid flow analysis (2D or 3D) also gives "coupling" (to the Physics cell of a Coupled Physics block)
+    _prov = tuple(x for x in (("analysis",) if _k in ("solid", "fea", "thermal", "cfd", "beam") else ()) + (("coupling",) if _k in ("solid", "fea", "thermal", "thermal3d", "cfd", "fluid3d") else ()))
     _setup = ("setup", "Setup", "data", _prov) if _prov else ("setup", "Setup", "data")
     register(_k, _l, "Analysis Systems", _cells + [_setup, ("solution", "Solution", "compute"), ("results", "Results", "view")], _tip, "folder")
 # Coupled Physics: one heat analysis and one stress analysis of the same geometry (both 2D or both 3D) solved together.  The Physics cell takes their Setups (a wire from each);

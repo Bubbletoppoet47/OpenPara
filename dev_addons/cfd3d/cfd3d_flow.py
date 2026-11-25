@@ -22,6 +22,8 @@ part (integers) and anything else the mesher or a test gives them.  `spec` (SI i
   "wall_T": {patch: K | callable(points mm) -> K}   "wall_q": {patch: W/m2 INTO the fluid | callable(points mm)}     the other walls, the slip planes and
                                                                      the outlet are insulated
   "T_in": K | callable(points mm) -> K,  "heat": True                 (the temperature is solved only with "heat")
+  "x_ref": (N, 3) mm                                                 (optional) where the callables above are asked for the nodes: the places of the material points of a
+                                                                     part that was moved (the mesh as drawn), instead of the nodes' own places
 Pressure is the gauge pressure relative to the outlet.
 
 Result:  {"u": (N, 3) m/s, "p": (N,) Pa, "status": "converged" | "stalled" | "not converged", "steps", "history": [change of the velocity per step],
@@ -435,6 +437,10 @@ def solve_temperature(res, spec, progress=None, cancel=None):
     fixed = np.zeros(N, bool)
     val = np.zeros(N)
     x_mm = d.x / d.lscale
+    if spec.get("x_ref") is not None:
+        x_mm = np.asarray(spec["x_ref"], float)
+        if x_mm.shape != (N, 3):
+            raise FlowError("The places the wall temperatures are asked for do not match the nodes of the mesh.")
     for nm, r in bd.roles.items():
         if r == "inlet":
             nodes = bd.nodes_of[nm]

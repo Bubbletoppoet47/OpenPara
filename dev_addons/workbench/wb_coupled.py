@@ -1,8 +1,8 @@
-"""wb_coupled.py - the Coupled Physics block of the workbench: one heat analysis and one stress analysis of the SAME geometry (both 2D or both 3D) solved together, or a 2D Fluid
-Flow analysis together with a 2D Thermal analysis (they exchange heat) and / or a 2D Static Structural analysis (it takes the pressure).
+"""wb_coupled.py - the Coupled Physics block of the workbench: one heat analysis and one stress analysis of the SAME geometry (both 2D or both 3D) solved together, or a Fluid
+Flow analysis together with a Thermal analysis (they exchange heat) and / or a Static Structural analysis (it takes the pressure), all 2D or all 3D.
 
-The cells:   Physics (import)   a wire from the Setup of a 2D / 3D Thermal block and one from the Setup of a 2D / 3D Static Structural block, or of a 2D Fluid Flow block and a 2D
-                                Thermal and / or a 2D Static Structural block.  Refresh checks them: one of each, the same dimension, wired from the same Part or Assembly block.
+The cells:   Physics (import)   a wire from the Setup of a 2D / 3D Thermal block and one from the Setup of a 2D / 3D Static Structural block, or of a 2D / 3D Fluid Flow block and a
+                                Thermal and / or a Static Structural block of the same dimension.  Refresh checks them: one of each, the same dimension, wired from the same Part or Assembly block.
              Setup (data)       the coupling options (the window's state file); always ready.
              Solution (compute) Update opens the window (and the two analyses, when they are not open), solves the heat analysis, hands its temperature to the stress analysis and
                                 solves that.  The results live in the windows of the two analyses and in the Coupled Physics window; closing the window makes the solution 'update' again.
@@ -19,8 +19,8 @@ import wb_nodes as nodes
 import wb_parts
 import wb_project as wp
 
-ROLE = {"thermal": "thermal", "thermal3d": "thermal", "fea": "structural", "solid": "structural", "cfd": "fluid"}      # what each kind of analysis is to the coupling
-DIM = {"thermal": 2, "fea": 2, "cfd": 2, "thermal3d": 3, "solid": 3}
+ROLE = {"thermal": "thermal", "thermal3d": "thermal", "fea": "structural", "solid": "structural", "cfd": "fluid", "fluid3d": "fluid"}      # what each kind of analysis is to the coupling
+DIM = {"thermal": 2, "fea": 2, "cfd": 2, "thermal3d": 3, "solid": 3, "fluid3d": 3}
 TWO_D = ("thermal", "fea", "cfd")
 ADDON = "Coupled Physics"
 
@@ -108,16 +108,18 @@ class CoupledAdapter(nodes.Adapter):
         return None
 
     def fluid_problems(self, tab, r):
-        """The wiring with a 2D Fluid Flow analysis: it needs a Thermal and / or a Static Structural analysis next to it, all 2D, all of the same geometry."""
+        """The wiring with a Fluid Flow analysis: it needs a Thermal and / or a Static Structural analysis next to it, all of its dimension, all of the same geometry."""
         if len(r["thermal"]) > 1 or len(r["structural"]) > 1 or len(r["fluid"]) > 1:
             return "One Fluid Flow, one Thermal and one Static Structural analysis can be coupled at a time for now: take the others out of the Physics cell."
+        dim = DIM[r["fluid"][0].kind]
         if not r["thermal"] and not r["structural"]:
-            return ("A 2D Fluid Flow analysis is coupled with a Thermal analysis (heat exchange) or a Static Structural analysis (pressure): wire the Setup of a 2D Thermal or a 2D "
-                    "Static Structural analysis into the Physics cell as well.")
+            return (f"A {dim}D Fluid Flow analysis is coupled with a Thermal analysis (heat exchange) or a Static Structural analysis (pressure): wire the Setup of a {dim}D Thermal or a "
+                    f"{dim}D Static Structural analysis into the Physics cell as well.")
         members = [x[0] for x in (r["fluid"], r["thermal"], r["structural"]) if x]
         for n in members:
-            if DIM[n.kind] != 2:
-                return f"{self.name_of(n)} is 3D: with a Fluid Flow analysis, Coupled Physics works in 2D, so wire in 2D analyses."
+            if DIM[n.kind] != dim:
+                return (f"{self.name_of(n)} is {DIM[n.kind]}D and {self.name_of(r['fluid'][0])} is {dim}D: a Fluid Flow analysis is coupled with analyses of its own dimension, so wire in "
+                        f"{dim}D analyses.")
         src = {}
         for n in members:
             g = tab.project.incoming(n.id, "geometry")
@@ -157,7 +159,9 @@ class CoupledAdapter(nodes.Adapter):
             if n is not None:
                 show[role] = (lambda n=n: tab.open_cell(n.id, "geometry"))
         why = self.problems(tab, node)
-        return {"windows": lambda: self.windows(tab, node), "labels": self.labels(tab, node), "show": show, "problem": why, "note": None}
+        fl = self.roles(tab, node).get("fluid")
+        return {"windows": lambda: self.windows(tab, node), "labels": self.labels(tab, node), "show": show, "problem": why, "note": None,
+                "dim": (DIM[fl.kind] if fl is not None else None)}
 
     # ---- the project folder in the workspace
     def state(self, tab, node):

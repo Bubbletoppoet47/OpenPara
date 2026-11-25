@@ -83,8 +83,8 @@ def material_problem(m, who=""):
     return None
 
 
-def check_ready(setup, geom=None):
-    """The reason why nothing can run yet, or None."""
+def check_ready(setup, geom=None, fluid=False):
+    """The reason why nothing can run yet, or None.  fluid: a Coupled Physics block gives the walls of a flowing fluid (they tie the temperature of a steady problem down)."""
     mats = body_materials(geom, setup) if geom is not None and geom.get("bodies") else [setup["material"]]
     bodies = [b["name"] for b in geom["bodies"]] if geom is not None and geom.get("bodies") else [""]
     for m, who in zip(mats, bodies):
@@ -99,7 +99,7 @@ def check_ready(setup, geom=None):
         if int(setup.get("steps") or 0) < 1:
             return "A transient run needs at least one time step."
         return None
-    holds = bool(setup.get("temps")) or any(float(c.get("h") or 0) > 0 for c in setup.get("convs") or []) or \
+    holds = bool(fluid) or bool(setup.get("temps")) or any(float(c.get("h") or 0) > 0 for c in setup.get("convs") or []) or \
         any(float(c.get("eps") or 0) > 0 for c in setup.get("rads") or [])
     if not holds:
         return ("Add a fixed temperature, convection or radiation: without one the temperature of a steady-state problem is not defined. "
@@ -137,6 +137,31 @@ def resolve(geom, setup):
     return r
 
 
+FLUID_NAME = "Fluid wall"
+
+
+def with_fluid(r, fl):
+    """r (resolve) with the faces fl["fids"] exchanging heat with a flowing fluid: convection q = h (T - Tinf) whose h and Tinf are the functions fl["h_at"](points (n, 3) in mm) and
+    fl["Tinf_at"](points) (a Coupled Physics block gives them from the flow).  Another condition on those faces gives way to the fluid: the names of those are in the result's "replaced"."""
+    fids = sorted({int(f) for f in fl["fids"]})
+    if not fids:
+        raise fem.FemError("The fluid wall has no faces.")
+    s = dict(r)
+    replaced = []
+    for key in KEYS:
+        items = []
+        for c in r.get(key) or []:
+            keep = [f for f in c["fids"] if f not in fids]
+            if len(keep) != len(c["fids"]):
+                replaced.append(c["name"])
+            if keep:
+                items.append(dict(c, fids=keep))
+        s[key] = items
+    s["convs"] = s["convs"] + [{"name": FLUID_NAME, "fids": fids, "h_at": fl["h_at"], "Tinf_at": fl["Tinf_at"]}]
+    s["replaced"] = replaced
+    return s
+
+
 def spec_of(r):
     """The setup for the solver: the resolved one in metres per mesh unit (the mesh of the 3D FEA is in mm)."""
     s = dict(r)
@@ -153,6 +178,8 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
     res["h_used"] = h
     res["sizes"] = [float(x) for x in fem.element_sizes(geom, h, r.get("mesh"))]          # mm: the element size of every body (one for a single part)
     res["names"] = {k: [c["name"] for c in r[k]] for k in KEYS}
+    if r.get("replaced"):
+        res.setdefault("notes", []).append("The faces of the fluid wall replace " + ", ".join(sorted(set(r["replaced"]))) + " there (the fluid decides the heat on those faces).")
     return res
 
 

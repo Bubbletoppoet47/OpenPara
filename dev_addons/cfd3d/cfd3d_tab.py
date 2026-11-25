@@ -52,13 +52,15 @@ CUSTOM = "Custom"
 # (key, name, quantity)  quantity: V speed, S pressure, T temperature
 FIELDS = [("speed", "Speed", "V"), ("p", "Pressure", "S"), ("T", "Temperature", "T"), ("ux", "Velocity X", "V"), ("uy", "Velocity Y", "V"), ("uz", "Velocity Z", "V")]
 PLAIN_PART = ("speed", "ux", "uy", "uz")                   # fields that are zero on a wall: the part is drawn grey
-COLOURS = {"temps": sv.SUPPORT, "fluxes": sv.LOAD, "ins": (0.45, 0.62, 0.45)}
-SPECS = {"temps": [("T", "T", "Temperature ({u})")], "fluxes": [("q", "q", "Heat flux ({u})")], "ins": []}
-TITLES = {"temps": "Wall temperature on the selected faces", "fluxes": "Wall heat flux on the selected faces", "ins": "Adiabatic wall"}
+COLOURS = {"temps": sv.SUPPORT, "fluxes": sv.LOAD, "ins": (0.45, 0.62, 0.45), "exch": (0.86, 0.55, 0.12)}
+SPECS = {"temps": [("T", "T", "Temperature ({u})")], "fluxes": [("q", "q", "Heat flux ({u})")], "ins": [], "exch": []}
+TITLES = {"temps": "Wall temperature on the selected faces", "fluxes": "Wall heat flux on the selected faces", "ins": "Adiabatic wall",
+          "exch": "Wall of the thermal analysis"}
 NOTES = {
     "temps": "The selected faces of the part are held at this temperature (a heater, a cooled plate). The fluid takes heat from them or gives heat to them.",
     "fluxes": "Heat pushed from the faces into the fluid, per unit of area. Positive heats the fluid.",
     "ins": "",
+    "exch": "",
 }
 DEFAULTS = {"T": 323.15, "q": 1000.0}
 DIR_ITEMS = [(k, f"{cm.DIR_TEXT[k]}") for k in ("+x", "-x", "+y", "-y", "+z", "-z")]
@@ -501,7 +503,10 @@ class FluidWindow(SolidBase):
         for text, icn, key, tip in (("Wall temperature...", "fixed", "temps", "Holds the selected faces of the part at a temperature."),
                                     ("Wall heat flux...", "pressure", "fluxes", "Heat per unit of area from the selected faces into the fluid."),
                                     ("Adiabatic wall", None, "ins", "No heat passes through the selected faces. Faces with no condition are adiabatic too: this "
-                                                                    "only makes the choice visible.")):
+                                                                    "only makes the choice visible."),
+                                    ("Wall of the thermal analysis", "wind", "exch", "For Coupled Physics: the selected faces are where the fluid and a 3D Thermal analysis of "
+                                                                                       "the same part exchange heat (the wall temperature of the solid and the heat flux of the "
+                                                                                       "fluid are iterated until they agree). On its own the fluid treats these faces as adiabatic.")):
             b = sim_ui.icon_button(text, icn, tip)
             if icn is None:
                 b.setIcon(insulated_icon())
@@ -836,6 +841,8 @@ class FluidWindow(SolidBase):
             self.show_field(mesh_only=True)
         return self.run_job(work, done, "Meshing", plan)
 
+    coupled_nodes = None     # a Coupled Physics block sets this to a function of the air mesh (cfd3d_model.run): the nodes (mm) of the mesh as a structure moved the part
+
     def run_solve(self):
         why = self.ready()
         if why:
@@ -848,8 +855,12 @@ class FluidWindow(SolidBase):
             return False
         g = self.geom
 
+        moved = self.coupled_nodes
+
         def work(progress, cancel):
-            return cm.run(g, r, self.cache, cancel, progress)
+            if moved is None:
+                return cm.run(g, r, self.cache, cancel, progress)
+            return cm.run(g, r, self.cache, cancel, progress, nodes=moved)
         plan = self.job_plan(g, r)
 
         def done(res):

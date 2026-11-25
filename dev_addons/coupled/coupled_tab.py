@@ -1,6 +1,6 @@
 """coupled_tab.py - the Coupled Physics window: one heat analysis and one stress analysis of the SAME geometry (both 2D or both 3D), solved together.  The heat problem is solved
 first, its temperature field is handed to the stress problem (every node of the stress mesh takes the temperature at its place in the heat mesh; the two analyses keep their own
-meshes), and the stress problem is solved with that temperature as a load of its own.  With a 2D Fluid Flow analysis wired in as well: the fluid and the heat analysis exchange
+meshes), and the stress problem is solved with that temperature as a load of its own.  With a Fluid Flow analysis (2D or 3D) wired in as well: the fluid and the heat analysis exchange
 heat at the walls they share (a loop until the two agree), and the pressure of the flow is the load of the stress analysis.  The window shows the members, the link between them,
 one Solve button, the combined result with the checks of the hand-over, a self-check and a diagnostics report.
 
@@ -25,6 +25,11 @@ import sim_ui
 KIND = coupled_ext.KIND
 LABEL = coupled_ext.LABEL
 DEFAULT_OPTIONS = {"tmean_tol_pct": 2.0, "conj_tol_pct": 1.0, "conj_max": 25, "shear": False, "moves_flow": False, "fsi_tol_pct": 1.0, "fsi_max": 12}
+
+
+def mesh_count(m):
+    """How many elements the mesh of a moved flow has (2D: triangles, 3D: tetrahedra)."""
+    return int(m.get("triangles", m.get("cells", 0)))
 
 
 def tol_text(kn):
@@ -313,13 +318,15 @@ class CoupledWindow(QWidget):
         self.b_heat.setEnabled(bool(src.get("show", {}).get("thermal")))
         self.b_stress.setEnabled(bool(src.get("show", {}).get("structural")))
         fl, th, st = (bool(labels.get(r)) for r in ("fluid", "thermal", "structural"))
+        things = "faces" if int(src.get("dim") or 2) == 3 else "edges"                    # what the walls of a flow are called
         rows = []
         if fl and th:
             rows.append(("Heat exchange", "Fluid ⇄ Heat", "the walls the two share", "the wall temperature of the solid and the heat flux of the fluid, iterated until they agree"))
         if fl and st:
-            rows.append(("Pressure", "Fluid → Stress", "the walls of the fluid that the stress analysis does not hold", "the pressure of the settled flow on those edges"))
+            rows.append(("Pressure", "Fluid → Stress", "the walls of the fluid that the stress analysis does not hold", f"the pressure of the settled flow on those {things}"))
             if self.options.get("moves_flow"):
-                rows.append(("Movement", "Stress → Fluid", "every point of the outline of the body in the fluid", "the displacement of the stress analysis: the body is moved, meshed again, the flow solved again"))
+                rows.append(("Movement", "Stress → Fluid", "every point of the outline of the body in the fluid", "the displacement of the stress analysis: the body is moved, "
+                             + ("the air mesh follows it" if things == "faces" else "meshed again") + ", the flow solved again"))
         if th and st:
             rows.append(("Temperature", "Heat → Stress", "every node of the stress mesh", "the temperature field of the heat analysis (linked: its values are not typed)"))
         t = "".join(f"<tr><td><b>{a}</b></td><td>{b}</td><td>{c}</td></tr>" for a, b, c, _d in rows)
@@ -327,8 +334,8 @@ class CoupledWindow(QWidget):
             note = (("The structure moves the flow: the flow, the stress and the displacement are repeated until the displacement stops changing; the stress analysis stays linear (small displacements). "
                      if st and self.options.get("moves_flow") else "The body is not moved by the structure: the flow is solved round it as drawn. ") +
                     "The flow does not depend on the temperature (no buoyancy), so it is solved once per pass. The heat exchange is repeated until the fluid and the solid agree on the wall; "
-                    "the edges that touch the solid are chosen in the fluid window ('Wall of the thermal analysis'), and what is set on those edges in the thermal analysis is replaced "
-                    "by the exchange. The pressure goes to every edge of the stress analysis that the fluid touches and that no support holds.")
+                    f"the {things} that touch the solid are chosen in the fluid window ('Wall of the thermal analysis'), and what is set on those {things} in the thermal analysis is replaced "
+                    f"by the exchange. The pressure goes to every {things[:-1]} of the stress analysis that the fluid touches and that no support holds.")
         else:
             note = ("One way: the stress does not change the temperature, so the heat problem is solved once and its field is given to the stress problem. The thermal expansion "
                     "coefficient and the reference temperature are the ones of the material in the stress analysis (Material and analysis).")
@@ -461,8 +468,8 @@ class CoupledWindow(QWidget):
         if res is None:
             msg = R.heading("Coupled Physics") + R.note(
                 "Wire a heat analysis and a stress analysis of the same geometry (both 2D or both 3D) into this block, set each of them up in its own window (the heat conditions; the supports, "
-                "the material with its thermal expansion coefficient; no mechanical load is needed), then press Solve. A 2D fluid flow analysis can be wired in next to a 2D heat analysis "
-                "(they exchange heat on the walls they share) and / or a 2D stress analysis (it takes the pressure).")
+                "the material with its thermal expansion coefficient; no mechanical load is needed), then press Solve. A fluid flow analysis (2D or 3D) can be wired in next to a heat analysis "
+                "of its dimension (they exchange heat on the walls they share) and / or a stress analysis (it takes the pressure).")
             if self.last_error:
                 msg += R.note(self.last_error.strip().splitlines()[-1], R.RED)
             if self.check_result is not None:                                    # the self-check needs no solve: show its rows even before the first one
@@ -495,7 +502,7 @@ class CoupledWindow(QWidget):
         trs = []
         for t in res["transfers"]:
             if "src_text" in t:                                                      # a transfer of the fluid: described in words
-                trs.append([t["name"], f"{t['points']:,} {t.get('unit', 'wall points')}", "iterated until both sides agree" if t["what"] == "heat exchange" else "by position along the edge",
+                trs.append([t["name"], f"{t['points']:,} {t.get('unit', 'wall points')}", "iterated until both sides agree" if t["what"] == "heat exchange" else ("by position on the wall" if t.get("unit") == "nodes" else "by position along the edge"),
                             t["src_text"], t["dst_text"], str(t["outside"])])
                 continue
             trs.append([t["name"], f"{t['points']:,} nodes", "direct copy" if t["direct"] else "interpolated", f"{R.temp_text(t['src_range'][0])} .. {R.temp_text(t['src_range'][1])}",
@@ -535,11 +542,11 @@ class CoupledWindow(QWidget):
             h.append(R.subhead("The structure moves the flow"))
             h.append(R.kv([("Passes", f"{fs['iterations']} ({'converged' if fs['converged'] else 'NOT converged'}, limit {100 * fs['tol']:g} %)", None),
                            ("Largest displacement", R.num(fs["umax"]), res.get("structural", {}).get("L", "")), ("Size of the body", R.num(fs["size"]), res.get("structural", {}).get("L", ""))]))
-            h.append(R.grid(["Pass", "Largest displacement", "Change from the pass before", "Relaxation", "Triangles"],
-                            [[str(x["it"]), R.num(x["umax"]), f"{100 * x['change']:.3g} %" if x["it"] > 1 else "-", f"{x['omega']:g}", f"{x['mesh']['triangles']:,}" if x.get("mesh") else "-"]
+            h.append(R.grid(["Pass", "Largest displacement", "Change from the pass before", "Relaxation", "Elements"],
+                            [[str(x["it"]), R.num(x["umax"]), f"{100 * x['change']:.3g} %" if x["it"] > 1 else "-", f"{x['omega']:g}", f"{mesh_count(x['mesh']):,}" if x.get("mesh") else "-"]
                              for x in fs["history"][:30]]))
             h.append(R.note("The body in the fluid window is the body as the stress analysis moved it in the last pass. The stress analysis is linear: it works with small displacements and the load of "
-                            "the moved flow is put on the edges as drawn."))
+                            "the moved flow is put on the walls as drawn."))
         hist = f.get("history") or []
         if len(hist) > 1:
             h.append(R.grid(["Iteration", "Heat flux mismatch", "Largest change of the wall temperature (K)"], [[str(x["it"]), f"{100 * x['mismatch']:.3g} %", f"{x['dT']:.3g}"] for x in hist[:12]]))
@@ -595,7 +602,7 @@ class CoupledWindow(QWidget):
                              f", largest displacement {res['structural']['umax']:.6g} {res['structural']['L']}, largest von Mises {res['structural']['vm_max']:.6g} {res['structural']['S']}"))
             fl = res.get("fluid")
             if fl:
-                lines.append(f"fluid: flow {fl.get('status')}, {fl.get('steps')} steps, {fl.get('triangles', '?')} triangles, {fl['seconds']:.4g} s")
+                lines.append(f"fluid: flow {fl.get('status')}, {fl.get('steps')} steps, {fl.get('triangles', fl.get('cells', '?'))} {'cells' if 'cells' in fl else 'triangles'}, {fl['seconds']:.4g} s")
                 if "iterations" in fl:
                     lines.append(f"heat exchange: {fl['iterations']} iterations, flux mismatch {fl['mismatch']:.3e}, inlet {fl['T_in']:.6g} K, wall {fl['Tw_min']:.6g} .. {fl['Tw_max']:.6g} K, "
                                  f"Q solid {fl['Q_solid']:.6g} W, Q fluid {fl['Q_fluid']:.6g} W, fluid balance {fl['balance'].get('relative', 0.0):.3e}, Prandtl {fl.get('Pr', float('nan')):.4g}")
@@ -606,7 +613,7 @@ class CoupledWindow(QWidget):
                 lines.append(f"structure moves the flow: {fs['iterations']} passes, {'converged' if fs['converged'] else 'NOT converged'} (limit {100 * fs['tol']:g} %), largest displacement {fs['umax']:.6g}, "
                              f"size of the body {fs['size']:.6g}, outline gap {fs['gap']:.3g} element sizes")
                 lines += [f"  pass {x['it']}: largest displacement {x['umax']:.6g}, change {100 * x['change']:.4g} %, relaxation {x['omega']:g}" +
-                          (f", {x['mesh']['triangles']} triangles, smallest angle {x['mesh']['angle_min']:.1f} deg" if x.get("mesh") else "") for x in fs["history"][:30]]
+                          (f", {mesh_count(x['mesh'])} elements" + (f", smallest angle {x['mesh']['angle_min']:.1f} deg" if "angle_min" in x["mesh"] else f", smallest volume ratio {x['mesh'].get('shrink', 1.0):.3f}") if x.get("mesh") else "") for x in fs["history"][:30]]
             for t in res["transfers"]:
                 if "src_text" in t:
                     lines.append(f"transfer {t['name']}: {t['what']}, {t['points']} {t.get('unit', 'wall points')}, gap {t['max_gap']:.3g}: {t['src_text']} -> {t['dst_text']}")
@@ -621,7 +628,7 @@ class CoupledWindow(QWidget):
             L += sec("Self-check", [f"{'PASS' if x['ok'] else 'FAIL'} {x['name']}: expected {x['expected']}; found {x['got']}" for x in self.check_result["rows"]])
         # what the two analyses said last (their own reports hold more)
         wins = src.get("windows") if isinstance(src.get("windows"), dict) else {}
-        for role, kinds in (("fluid", ("cfd",)), ("heat", ("thermal", "thermal3d")), ("stress", ("fea", "solid"))):
+        for role, kinds in (("fluid", ("cfd", "fluid3d")), ("heat", ("thermal", "thermal3d")), ("stress", ("fea", "solid"))):
             w = next((wins[k] for k in kinds if k in wins), None)
             ev = getattr(w, "events", None)
             if ev and diag is not None:

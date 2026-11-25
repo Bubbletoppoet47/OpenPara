@@ -88,7 +88,7 @@ g = w.geom
 ok(not g.get("bodies") and len(g["faces"]) == 7 and sum(1 for f in g["faces"] if f["kind"] == "cylinder") == 1, "one part: six flat faces and the curved face of the hole")
 ok(abs(g["volume"] - (30 * 20 * 16 - np.pi * 25 * 16)) < 1e-3 * g["volume"], f"the volume is the block less the hole ({g['volume']:.1f} mm3)")
 kinds = {k: len(w.setup[k]) for k in cm.KEYS}
-ok(kinds == {"temps": 1, "fluxes": 1, "ins": 1}, f"conditions of three kinds: {kinds}")
+ok(kinds == {"temps": 1, "fluxes": 1, "ins": 1, "exch": 0}, f"conditions of three kinds, none of them the wall of a thermal analysis (that is for Coupled Physics): {kinds}")
 ok(w.setup["flow"]["heat"] and w.cb_heat.isChecked() and not w.heat_box.isHidden(), "the temperature is on, and its boxes are shown")
 ok(abs(w.setup["flow"]["speed"] - 0.05) < 1e-12 and w.e_speed.text() == "0.05", "a speed of 0.05 m/s in the box too")
 ok(w.example_info and w.example_info["T_wall"] == 333.15, "the window knows it holds the example")

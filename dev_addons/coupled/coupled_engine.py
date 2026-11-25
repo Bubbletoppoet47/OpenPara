@@ -11,8 +11,8 @@ the fields over, and returns one result with the checks that must hold: nothing 
 matches the sending one, the receiving analysis really used the field it was given.  A member is anything with the small interface of `Member` below (the windows of the
 Workbench are wrapped in coupled_members.py; the tests use plain objects).  No Qt in this file.
 
-A 2D fluid flow (the CFD) can take part as a third kind of member, role "fluid": with a structural analysis the pressure on the walls is handed to it as a load; with a thermal
-analysis the two exchange heat through the walls they share (coupled_fluid.py: a loop that stops when the heat flux agrees on both sides); with both, the heat is exchanged first
+A fluid flow (the 2D CFD, or the 3D Fluid Flow) can take part as a third kind of member, role "fluid", with analyses of its own dimension: with a structural analysis the pressure on the walls is handed to it as a load; with a thermal
+analysis the two exchange heat through the walls they share (coupled_fluid.py in 2D, coupled_fluid3d.py in 3D: a loop that stops when the heat flux agrees on both sides); with both, the heat is exchanged first
 and then the temperature and the pressure go to the structural analysis.
 """
 import time
@@ -143,11 +143,12 @@ class Member:
     "structural"), `label`.  Thermal: solve() -> result dict, temperature_field() -> (points, simplices, values, mean).
     Structural: solve(temperature_at) -> result dict, where temperature_at(points) -> the temperature (kelvin) at those points; the member calls it with the nodes of ITS mesh,
     and puts the mesh weights of those nodes (for the average check) in `last_weights` and their points in `last_points`.  With a fluid member the engine calls
-    solve(temperature_at, cfd=info) where info = {"info": the CFD window's transfer_info(), "edges": the walls of the fluid, "shear": bool}; temperature_at is None when
-    there is no thermal analysis; the member then puts what it loaded in `pressure_report()` -> {"edges", "force": (fx, fy) N per metre of depth, "same_geometry": bool}.
-    Fluid: solve_flow(), coupled_keys(), h_iso(), profile(values), solve_temperature(Tw_at), pressure_info(), pressure_force(edges, shear) -> ((fx, fy), scale) with scale the sum
-    of the sizes of the pressure forces of the wall segments, flow_summary(), T_in, see coupled_fluid.py.
-    Thermal with a fluid: set_fluid(h_at, Tref_at, keys), wall_temperature_at(points) -> (values, gap), heat_to_fluid(), thickness.
+    solve(temperature_at, cfd=info) where info = {"info": the flow's pressure_info()["info"], "edges": the walls of the fluid, "shear": bool}; temperature_at is None when
+    there is no thermal analysis; the member then puts what it loaded in `pressure_report()` -> {"edges", "force": (fx, fy) N per metre of depth (2D) or (fx, fy, fz) N (3D),
+    "same_geometry": bool}.
+    Fluid: solve_flow(), coupled_keys(), solve_temperature(Tw_at), pressure_info(), pressure_force(edges, shear) -> (the force, scale) with scale the sum of the sizes of the pressure
+    forces of the wall segments, flow_summary(), T_in; 2D: h_iso(), profile(values), see coupled_fluid.py; 3D: wall_surface(), heat_summary(), see coupled_fluid3d.py.
+    Thermal with a fluid: set_fluid(h_at, Tref_at, keys), wall_temperature_at(points) -> (values, gap), heat_to_fluid(), (2D:) thickness.
     Every member may get `cancel` (a function) and `say` (a function(text, fraction)) from the engine to stay responsive during a long solve."""
     dim = 2
     role = ""
@@ -277,24 +278,28 @@ def _flow_checks(fl, flow, out):
 
 
 def _fluid_thermal(fl, th, opt, tick, out):
-    import coupled_fluid as cf
+    if fl.dim == 3:
+        import coupled_fluid3d as cf
+    else:
+        import coupled_fluid as cf
+    solve = cf.solve_fluid_thermal3d if fl.dim == 3 else cf.solve_fluid_thermal
     try:
-        r = cf.solve_fluid_thermal(fl, th, {"conj_tol": opt["conj_tol"], "conj_max": opt["conj_max"], "q_tol": opt["q_tol"]}, tick)
+        r = solve(fl, th, {"conj_tol": opt["conj_tol"], "conj_max": opt["conj_max"], "q_tol": opt["q_tol"]}, tick)
     except cf.FluidThermalError as ex:
         raise CoupledError(str(ex))
     flow = r["flow"]
     _flow_checks(fl, flow, out)
     hres = r["heat"]
-    wall = [hres["walls"][k] for k in r["keys"]]
-    Tw = np.concatenate([np.concatenate([w["T_a"], w["T_b"]]) for w in wall])
+    Tw = np.asarray(r["Tw"], float)
     out["fluid"].update(T_in=float(r["T_in"]), Tw_min=float(Tw.min()), Tw_max=float(Tw.max()), Tmin=float(hres["Tmin"]), Tmax=float(hres["Tmax"]), iterations=r["iterations"],
                         mismatch=r["mismatch"], Q_fluid=r["Q_fluid"], Q_solid=r["Q_solid"], history=r["history"], Pr=float(hres.get("Pr", float("nan"))),
                         balance=hres["balance"], notes=list(hres.get("notes", [])), h_max=r["h_max"])
-    out["transfers"].append({"name": "Fluid ⇄ Thermal", "what": "heat exchange", "points": int(sum(len(w["T_a"]) for w in wall)), "outside": 0, "max_gap": max(r["gap_fluid"], r["gap_solid"]),
+    out["transfers"].append({"name": "Fluid ⇄ Thermal", "what": "heat exchange", "points": int(r["wall_points"]), "outside": 0, "max_gap": max(r["gap_fluid"], r["gap_solid"]),
                              "direct": False, "src_text": f"{r['T_in'] - KELVIN:.5g} degC inlet", "dst_text": f"wall {Tw.min() - KELVIN:.5g} .. {Tw.max() - KELVIN:.5g} degC",
                              "src_range": (float(r["T_in"]), float(Tw.max())), "dst_range": (float(Tw.min()), float(Tw.max()))})
     out["checks"].append(check("Heat exchange converged", r["converged"],
-                               f"the heat flux on the wall agrees on both sides to {100 * r['mismatch']:.2g} % after {r['iterations']} iterations (limit {100 * r['tol']:g} %)" if r["converged"] else
+                               f"the heat flux on the wall agrees on both sides to {100 * r['mismatch']:.2g} % after {r['iterations']} iterations (limit {100 * r['tol']:g} %)"
+                               + (" (weighed by the heat of every wall node)" if fl.dim == 3 else "") if r["converged"] else
                                f"after {r['iterations']} iterations the heat flux still differs by {100 * r['mismatch']:.2g} % between the solid and the fluid (limit {100 * r['tol']:g} %): "
                                "raise the maximum number of iterations, or the two analyses do not describe the same wall", hard=True))
     out["checks"].append(check("Heat leaving the solid = heat entering the fluid", abs(r["Q_rel"]) <= r["q_tol"],
@@ -304,19 +309,23 @@ def _fluid_thermal(fl, th, opt, tick, out):
                                "every point of the wall of one mesh found its place on the wall of the other" if gap <= 0.5 else
                                f"a wall point lies {gap:.2g} element sizes from the wall of the other mesh: the two analyses do not have the same wall there", hard=True))
     rel = abs(float(hres["balance"].get("relative", 0.0)))
-    out["checks"].append(check("Fluid energy balance", rel <= 0.05,
-                               f"the heat the walls give to the fluid and the heat the flow carries away differ by {100 * rel:.1f} % (limit 5 %)"))
+    lim = 0.05 if fl.dim == 2 else 0.10                                                 # (the 3D flow is first order: its heat balance depends on the mesh, the README says how much)
+    word = "" if fl.dim == 2 or rel <= lim else (" (COARSE" if rel < 0.35 else " (CHECK") + ": the elements on the part are too long for the thin layer that carries the heat; the method is first order, so smaller elements make it smaller)"
+    out["checks"].append(check("Fluid energy balance", rel <= lim,
+                               f"the heat the walls give to the fluid and the heat the flow carries away differ by {100 * rel:.1f} % (limit {100 * lim:g} %)" + word))
     over = hres.get("overshoot")
     if over is not None:
         rng = max(out["fluid"]["Tw_max"], out["fluid"]["T_in"]) - min(out["fluid"]["Tw_min"], out["fluid"]["T_in"])
-        out["checks"].append(check("Temperature inside the given range", rng <= 0 or over <= 0.02 * rng,
-                                   f"the fluid temperature stays within {over:.2g} K of the range of the wall and inlet temperatures"))
+        lim_t = 0.02 if fl.dim == 2 else 0.05                                           # (the 3D temperature solver is stabilised, not monotone: a small undershoot at a thermal boundary layer is normal)
+        out["checks"].append(check("Temperature inside the given range", rng <= 0 or over <= lim_t * rng,
+                                   f"the fluid temperature stays within {over:.2g} K of the range of the wall and inlet temperatures (limit {100 * lim_t:g} % of that range)"))
     return r
 
 
 def _pressure_to_structural(fl, st, th, opt, tick, out, thermal_solved):
     """The fluid pressure on the walls of the stress analysis (with the temperature when there is a thermal analysis)."""
     info = fl.pressure_info()
+    dim = fl.dim
     cfd = {"info": info["info"], "edges": info["edges"], "shear": bool(opt.get("shear", False))}
     if th is not None:
         sres = _temperature_to_structural(th, st, opt, tick, out, thermal_solved=thermal_solved, cfd=cfd)
@@ -326,23 +335,34 @@ def _pressure_to_structural(fl, st, th, opt, tick, out, thermal_solved):
         sres = st.solve(None, cfd=cfd)
         out["structural"] = {"seconds": time.monotonic() - t2}
     rep = st.pressure_report()
-    edges = [tuple(k) for k in rep["edges"]]
+    edges = [tuple(k) if isinstance(k, (tuple, list)) else int(k) for k in rep["edges"]]
     if not edges:
         raise CoupledError("The structural analysis got no fluid pressure: none of its edges is a wall of the fluid without a support. Check that the two analyses use the same sketch, "
                            "and that the edges the fluid pushes on are not held by a support.")
     F_cfd, scale = fl.pressure_force(edges, shear=bool(opt.get("shear", False)))
     F_cfd, F_fea = np.asarray(F_cfd, float), np.asarray(rep["force"], float)
-    scale = max(float(scale), float(np.hypot(*F_cfd)), 1e-300)                     # (the resultant of a closed body can be near zero: the load carried is the scale)
-    dev = float(np.hypot(*(F_fea - F_cfd))) / scale
-    names = ", ".join(f"{k[0]} {k[1]}" for k in edges)
-    out["transfers"].append({"name": "Fluid → Structural", "what": "pressure", "points": len(edges), "outside": 0, "max_gap": 0.0, "direct": False,
-                             "src_text": f"force ({F_cfd[0]:.4g}, {F_cfd[1]:.4g}) N per metre of depth", "dst_text": f"force ({F_fea[0]:.4g}, {F_fea[1]:.4g}) N per metre of depth",
-                             "unit": "edges", "edges": edges})
+    scale = max(float(scale), float(np.linalg.norm(F_cfd)), 1e-300)                # (the resultant of a closed body can be near zero: the load carried is the scale)
+    dev = float(np.linalg.norm(F_fea - F_cfd)) / scale
+    per = " per metre of depth" if dim == 2 else ""
+    vec = lambda F: "(" + ", ".join(f"{x:.4g}" for x in F) + ")"
+    names = ", ".join(f"{k[0]} {k[1]}" for k in edges) if dim == 2 else ("face " if len(edges) == 1 else "faces ") + ", ".join(str(k) for k in edges)
+    gap = float(rep.get("gap", 0.0))
+    out["transfers"].append({"name": "Fluid → Structural", "what": "pressure", "points": len(edges) if dim == 2 else int(rep.get("points", len(edges))), "outside": 0, "max_gap": gap,
+                             "direct": False, "src_text": f"force {vec(F_cfd)} N{per}", "dst_text": f"force {vec(F_fea)} N{per}", "unit": "edges" if dim == 2 else "nodes", "edges": edges})
     out["checks"].append(check("Pressure force handed over", dev <= opt["pressure_tol"],
-                               f"the stress analysis carries ({F_fea[0]:.4g}, {F_fea[1]:.4g}) N per metre of depth on {names}; the fluid pushes with ({F_cfd[0]:.4g}, {F_cfd[1]:.4g}) N "
+                               f"the stress analysis carries {vec(F_fea)} N{per} on {names}; the fluid pushes with {vec(F_cfd)} N "
                                f"there (difference {100 * dev:.2g} % of the pressure load carried, limit {100 * opt['pressure_tol']:g} %)", hard=True))
     if not rep.get("same_geometry", True):
-        out["checks"].append(check("Same walls in both analyses", False, "some edges differ between the stress and the fluid sketch; the pressure was placed by position along the edge"))
+        if dim == 2:
+            out["checks"].append(check("Same walls in both analyses", False, "some edges differ between the stress and the fluid sketch; the pressure was placed by position along the edge"))
+        else:
+            bad = ", ".join(str(i) for i in rep.get("differs", []))
+            out["checks"].append(check("Same walls in both analyses", False, f"the faces {bad} are not the same face in the stress and in the fluid analysis (another area or another place): "
+                                       "the two analyses do not number the faces of the part the same way, so the pressure may sit on the wrong faces", hard=True))
+    if dim == 3:
+        out["checks"].append(check("Every wall point found", gap <= 0.5,
+                                   "every node of the loaded faces of the stress mesh lies on the wall of the flow mesh" if gap <= 0.5 else
+                                   f"a node of the loaded faces lies {gap:.2g} element sizes from the wall of the flow mesh: the two analyses do not have the same part there", hard=True))
     return sres
 
 
@@ -397,8 +417,8 @@ def _fsi_loop(fl, th, st, opt, tick, out):
         _one_pass(fl, th, st, opt, say, scratch)
         Dn, gap = st.displacement_at(P)
         Dn = np.asarray(Dn, float)
-        umax = float(np.hypot(Dn[:, 0], Dn[:, 1]).max())
-        step = float(np.hypot(Dn[:, 0] - D[:, 0], Dn[:, 1] - D[:, 1]).max())
+        umax = float(np.linalg.norm(Dn, axis=1).max())
+        step = float(np.linalg.norm(Dn - D, axis=1).max())
         change = step / max(umax, floor)
         R = (Dn - D).ravel()                                                    # the residual: where the structure says the outline should be, against where the flow had it
         row = {"it": it, "change": change, "step": step, "umax": umax, "omega": omega, "gap": float(gap)}
@@ -449,14 +469,14 @@ def _fsi_loop(fl, th, st, opt, tick, out):
 
 
 def _solve_with_fluid(fl, th, st, opt, tick):
-    """A 2D fluid with a thermal analysis (they exchange heat), a structural analysis (it takes the pressure), or both (heat first, then the temperature and the pressure).  With
-    opt["moves_flow"] the structure moves the body in the flow (`_fsi_loop`)."""
+    """A fluid (2D or 3D) with a thermal analysis (they exchange heat), a structural analysis (it takes the pressure), or both (heat first, then the temperature and the pressure), all
+    of its dimension.  With opt["moves_flow"] the structure moves the body in the flow (`_fsi_loop`)."""
     others = [m for m in (th, st) if m is not None]
     if not others:
         raise CoupledError("A fluid flow needs a thermal analysis or a structural analysis to be coupled with.")
     for m in others:
         if m.dim != fl.dim:
-            raise CoupledError(f"The fluid flow is {fl.dim}D and the {m.label} is {m.dim}D: Coupled Physics with a flow works in 2D for now, wire in 2D analyses.")
+            raise CoupledError(f"The fluid flow is {fl.dim}D and the {m.label} is {m.dim}D: a flow is coupled with analyses of its own dimension, wire in {fl.dim}D analyses.")
     t0 = time.monotonic()
     out = {"ok": True, "error": None, "passes": [], "transfers": [], "checks": [], "dim": fl.dim, "fluid": {}}
     if opt.get("moves_flow"):

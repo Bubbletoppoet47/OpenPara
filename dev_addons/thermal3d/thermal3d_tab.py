@@ -825,7 +825,7 @@ class ThermalWindow(SolidBase):
         why = None
         if self.geom is not None:
             try:
-                why = tm.check_ready(self.setup, self.geom)
+                why = tm.check_ready(self.setup, self.geom, fluid=self.coupled_fluid is not None)
             except Exception:                                                    # noqa: BLE001 - a note, never an error
                 why = None
         self.cond_note.setText(why or "")
@@ -941,7 +941,9 @@ class ThermalWindow(SolidBase):
             self.read_inputs()
         except ValueError as ex:
             return str(ex)
-        return tm.check_ready(self.setup, self.geom)
+        return tm.check_ready(self.setup, self.geom, fluid=self.coupled_fluid is not None)
+
+    coupled_fluid = None     # a Coupled Physics block sets this to {"fids": the faces that touch a flowing fluid, "h_at": f(points (n, 3) mm) -> W/(m2 K), "Tinf_at": f(points) -> K}
 
     def run_solve(self):
         why = self.ready()
@@ -950,6 +952,8 @@ class ThermalWindow(SolidBase):
             return False
         try:
             r = tm.resolve(self.geom, self.setup)
+            if self.coupled_fluid is not None:
+                r = tm.with_fluid(r, self.coupled_fluid)
         except fem.FemError as ex:
             self.say(str(ex))
             return False
