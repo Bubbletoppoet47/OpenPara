@@ -1,4 +1,5 @@
-"""dr_pdf.py - a drawing as a PDF: vector lines (never a picture), the page the size of the sheet (true paper size: an ANSI A sheet is 8.5 x 11 in, an A3 sheet 297 x 420 mm).
+"""dr_pdf.py - a drawing as a PDF: vector lines and text, the page the size of the sheet (true paper size: an ANSI A sheet is 8.5 x 11 in, an A3 sheet 297 x 420 mm).  The only pictures are
+the surfaces of views in a shaded style (200 dpi, grey, transparent where there is no surface); the lines and the numbers on them stay vectors and text.
 
     export_pdf(drawing, path)     writes the file; raises OSError when it cannot be written
 """
@@ -30,7 +31,9 @@ def export_pdf(drawing, path):
     try:
         k = wr.resolution() / 25.4
         p.scale(k, k)
-        R.Renderer(drawing).paint(p, min_px=None)
+        r = R.Renderer(drawing)
+        r.shade_cap = R.SHADE_DPI / 25.4
+        r.paint(p, min_px=None)
     finally:
         p.end()
     if not os.path.exists(path) or os.path.getsize(path) == 0:

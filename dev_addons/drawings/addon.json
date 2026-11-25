@@ -2,7 +2,7 @@
  "name": "Drawings",
  "order": 8,
  "status": "workshopping",
- "description": "Engineering drawings of parts and assemblies: a sheet in a standard size (ANSI A-E, ISO A4-A0), model views from the six standard directions and the three axonometric ones, projected views that stay aligned with their parent, a scale for every view, display styles, Smart Dimension (lengths, diameters, radii, angles, always the model's true values), center marks and centerlines that follow the model when it changes, notes with straight or bent leaders (repeated along a line with Linear Note Pattern), balloons, plain lines, rectangles, circles and arcs, and PDF export at true paper size. Looks and works like the Part window.",
+ "description": "Engineering drawings of parts and assemblies: a sheet in a standard size (ANSI A-E, ISO A4-A0), model views from the six standard directions and the three axonometric ones, projected views that stay aligned with their parent, a scale for every view, five display styles (wireframe, hidden lines visible, hidden lines removed, shaded with edges, shaded), Smart Dimension (lengths, diameters, radii, angles, always the model's true values), center marks and centerlines that follow the model when it changes, notes with straight or bent leaders (repeated along a line with Linear Note Pattern), balloons, plain lines, rectangles, circles and arcs, and PDF export at true paper size. Looks and works like the Part window.",
  "tabs": [
   {
    "kind": "drawing",

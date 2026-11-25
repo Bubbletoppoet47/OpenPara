@@ -107,7 +107,7 @@ t.version = t.saved_version
 t.open_command("model")
 ok(t.left.currentIndex() == 1 and t.props.currentWidget() is t.model_panel, "Model View opens its panel in place of the Outline")
 ok(t.model_panel.models.count() == 1 and t.model_panel.current_model() == "m1", "the models of the drawing are listed, the first is picked")
-ok(not t.model_panel.sbtn["shaded"].isEnabled() and t.model_panel.sbtn["hlr"].isEnabled(), "the shaded styles are not offered yet; the line styles are")
+ok(all(b.isEnabled() and "not built" not in b.toolTip() for b in t.model_panel.sbtn.values()) and len(t.model_panel.sbtn) == 5, "all five display styles are offered: three of lines, two shaded")
 ok(len(t.model_panel.obtn) == 9, "nine orientations: " + ", ".join(t.model_panel.obtn))
 t.model_panel.pick_orientation("Front")
 ok(len(t.d.views) == 1 and cv.float_id == t.d.views[0]["id"] and cv.mode == "model", "picking an orientation makes the view follow the pointer")

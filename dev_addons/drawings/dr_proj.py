@@ -6,6 +6,7 @@
     Projection.vis / .hid                entities: {"t": "line", "a", "b"} | {"t": "circle", "c", "r"} | {"t": "arc", "c", "r", "a0", "a1"} (counter-clockwise, radians)
                                          | {"t": "poly", "pts"};  every entity also has "pts" (the polyline that is drawn) and "n" (its number in the view)
     Projection.bbox()                    (xmin, ymin, xmax, ymax) of the visible lines, in model units, the model's origin at (0, 0)
+    Projection.mesh                      None, or (for the shaded styles) the triangles of the model in this view's frame: dr_shade.mesh_of
 
 The coordinates are the view's own: x to the right, y up, in the units of the model (mm), the origin of the model at (0, 0).  A hidden line that lies exactly on a visible one is not
 kept (a box seen from the top has its bottom edges behind its top edges: they are not 'hidden lines').  The model's frame is the Part window's: Z up, the Front plane looks along +Y.
@@ -43,8 +44,8 @@ def view_axes(name):
 
 
 class Projection:
-    def __init__(self, name, vis, hid):
-        self.name, self.vis, self.hid = name, vis, hid
+    def __init__(self, name, vis, hid, mesh=None):
+        self.name, self.vis, self.hid, self.mesh = name, vis, hid, mesh
 
     def bbox(self, hidden=False):
         pts = [p for e in (self.vis + (self.hid if hidden else [])) for p in e["pts"]]
@@ -54,11 +55,21 @@ class Projection:
         return (float(a[:, 0].min()), float(a[:, 1].min()), float(a[:, 0].max()), float(a[:, 1].max()))
 
     def to_json(self):
-        return {"name": self.name, "vis": self.vis, "hid": self.hid}
+        out = {"name": self.name, "vis": self.vis, "hid": self.hid}
+        if self.mesh:
+            out["mesh"] = self.mesh
+        return out
 
     @classmethod
     def from_json(cls, d):
-        return cls(d["name"], [_entity(e) for e in d.get("vis", [])], [_entity(e) for e in d.get("hid", [])])
+        mesh = d.get("mesh")
+        try:
+            import dr_shade
+            if mesh is not None:
+                dr_shade.decode(mesh)
+        except ValueError:                                           # a damaged mesh: the view shows its lines only
+            mesh = None
+        return cls(d["name"], [_entity(e) for e in d.get("vis", [])], [_entity(e) for e in d.get("hid", [])], mesh)
 
 
 def _entity(e):
@@ -152,16 +163,16 @@ def frame_of(eye, up):
     return eye, up, right / np.linalg.norm(right)
 
 
-def project(shape, name, hidden=True):
-    """The lines of `shape` seen as the standard view `name`.  hidden=False leaves the hidden lines out."""
+def project(shape, name, hidden=True, mesh=False):
+    """The lines of `shape` seen as the standard view `name`.  hidden=False leaves the hidden lines out; mesh=True adds the triangles for the shaded styles."""
     eye, up, _right = view_axes(name)
-    return project_axes(shape, eye, up, name, hidden)
+    return project_axes(shape, eye, up, name, hidden, mesh)
 
 
-def project_axes(shape, eye, up, name="", hidden=True):
+def project_axes(shape, eye, up, name="", hidden=True, mesh=False):
     """The lines of `shape` seen from the direction `eye` (from the model toward the viewer) with `up` toward the top of the view (any pair of directions: the views that are
-    projected from another view are made like this)."""
-    eye, up, _right = frame_of(eye, up)
+    projected from another view are made like this).  mesh=True: the triangles of the shape in the view's frame as well (dr_shade), for the shaded styles."""
+    eye, up, right = frame_of(eye, up)
     bb = shape.bounding_box()
     diag = float(np.linalg.norm([bb.size.X, bb.size.Y, bb.size.Z])) or 1.0
     origin = tuple(float(x) for x in eye * (diag * 10.0 + 100.0))
@@ -174,4 +185,8 @@ def project_axes(shape, eye, up, name="", hidden=True):
         hid = [e for e in hid if not _on_visible(e, segs, tol)]
     for i, e in enumerate(vis + hid):
         e["n"] = i
-    return Projection(name, vis, hid)
+    shaded = None
+    if mesh:
+        import dr_shade
+        shaded = dr_shade.mesh_of(shape, right, up, eye)
+    return Projection(name, vis, hid, shaded)

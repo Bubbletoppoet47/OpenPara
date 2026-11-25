@@ -35,8 +35,10 @@ FORMAT = "openpara-drawing"
 VERSION = 1
 EXT = ".opdraw"
 
-STYLES = [("wireframe", "Wireframe"), ("hlv", "Hidden Lines Visible"), ("hlr", "Hidden Lines Removed")]      # the shaded styles come last (not built yet)
+STYLES = [("wireframe", "Wireframe"), ("hlv", "Hidden Lines Visible"), ("hlr", "Hidden Lines Removed"), ("shaded_edges", "Shaded With Edges"), ("shaded", "Shaded")]
 STYLE_KEYS = [k for k, _l in STYLES]
+SHADED = ("shaded_edges", "shaded")                               # these show the surface (a picture), the others lines only
+HIDDEN_LINES = ("wireframe", "hlv")                               # these need the hidden lines of the projection
 SCALES = [("1:1", 1.0), ("1:2", 0.5), ("1:4", 0.25), ("1:5", 0.2), ("1:10", 0.1), ("1:20", 0.05), ("1:50", 0.02), ("1:100", 0.01), ("2:1", 2.0), ("4:1", 4.0),
           ("5:1", 5.0), ("10:1", 10.0), ("20:1", 20.0), ("50:1", 50.0)]
 FIT_FRACTION = 0.5                                                # the first view fills at most this much of the sheet's width and height
@@ -238,7 +240,7 @@ class Drawing:
 
     def project(self, v):
         """The lines of the view (from its model, direction and style)."""
-        pr = P.project_axes(self.shape(v["model"]), v["eye"], v["up"], v["orient"], hidden=v["style"] != "hlr")
+        pr = P.project_axes(self.shape(v["model"]), v["eye"], v["up"], v["orient"], hidden=v["style"] in HIDDEN_LINES, mesh=v["style"] in SHADED)
         v["geom"] = pr.to_json()
         return pr
 
@@ -389,8 +391,10 @@ class Drawing:
         v = self.view(vid)
         old = v["style"]
         v["style"] = style
-        if (old == "hlr") != (style == "hlr"):                     # the hidden lines are needed (or not) by this style
+        if (old in HIDDEN_LINES) != (style in HIDDEN_LINES) or (style in SHADED and not self.projection(v).mesh):       # the hidden lines or the triangles are needed (or not) by this style
             self.project(v)
+        elif style not in SHADED and v["geom"] is not None and v["geom"].get("mesh"):                                    # the triangles are not needed: the file does not carry them
+            v["geom"] = {k: val for k, val in v["geom"].items() if k != "mesh"}
 
     def set_orient(self, vid, name):
         v = self.view(vid)

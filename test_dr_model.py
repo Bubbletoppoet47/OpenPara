@@ -169,7 +169,7 @@ try:
     ok(False, "unknown style")
 except M.DrawingError:
     ok(True, "an unknown style is refused")
-ok([k for k, _l in M.STYLES] == ["wireframe", "hlv", "hlr"], "the styles so far: wireframe, hidden lines visible, hidden lines removed (the shaded ones come last)")
+ok([k for k, _l in M.STYLES] == ["wireframe", "hlv", "hlr", "shaded_edges", "shaded"], "the styles: wireframe, hidden lines visible, hidden lines removed, shaded with edges, shaded")
 
 # ---- orientation of a model view; the children follow
 d.set_orient(v1["id"], "Top")

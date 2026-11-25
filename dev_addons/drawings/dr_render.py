@@ -7,6 +7,9 @@
     r.hit_view(x, y, tol)             the id of the view the point is on (its lines within tol mm, else inside its box), None when there is none
     r.segments(v)                     numpy (n, 2, 2) array of the visible segments of the view on the sheet (y up)
 
+The shaded styles (Shaded With Edges, Shaded) put a picture of the surface under the lines (dr_shade: lit, grey, at most 200 dpi of the paper; the lines stay vectors): the picture is made
+once for a view, a scale and a zoom and kept; Shaded has no lines, Shaded With Edges has the visible ones.
+
 The line weights follow the usual drawing practice: visible edges thick, hidden edges thin and dashed; dimensions, extension lines and center lines thin; the numbers of a dimension
 are text in the PDF (the same text as on the screen), at ISO 3.5 mm.
 
@@ -22,11 +25,12 @@ import math
 
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPainterPath, QPen, QPolygonF
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QPolygonF
 
 import dr_annot as A
 import dr_items as IT
-from dr_model import DrawingError
+import dr_shade as SH
+from dr_model import SHADED, DrawingError
 
 VISIBLE_W = 0.50                 # mm on paper
 HIDDEN_W = 0.25
@@ -39,6 +43,10 @@ LOST = QColor("#c0392b")
 DIM_W = 0.25                     # dimension, extension and center lines, mm on paper
 MARK_DASH = (6.0, 1.2, 1.2, 1.2)  # a centerline: long dash, gap, short dash, gap (mm)
 FONT_PX = 100                    # the numbers are set at this size and scaled down to TEXT_H
+SHADE_DPI = 200.0                # the picture of a shaded view in a PDF has this many pixels to an inch of paper
+SHADE_SCREEN_PX = 12.0           # on the screen it has at most this many pixels to the sheet mm (a picture bigger than dr_shade.MAX_SAMPLES allows is made coarser)
+SHADE_STEP = 1.5                 # the zoom a picture is made for is rounded up to a power of this, so that a little zooming does not make it again
+SHADE_KEEP = 4.0                 # a picture that is up to this many times finer than needed is used as it is
 
 
 def sheet_font():
@@ -67,6 +75,8 @@ class Renderer:
     def __init__(self, drawing, fmt=None):
         self.d = drawing
         self.cache = {}                                           # view id -> (key, paths, segments)
+        self.shades = {}                                          # view id -> (mesh text, scale, pixels per sheet mm, QImage, Shaded) the picture of a shaded view
+        self.shade_cap = SHADE_SCREEN_PX                          # the most pixels to the sheet mm of a picture (a PDF sets it to 200 dpi)
         self.fmt = fmt or default_fmt
         self._metrics = {}
 
@@ -364,8 +374,47 @@ class Renderer:
             path.arcTo(QRectF(ox + s * c[0] - r, H - (oy + s * c[1]) - r, 2 * r, 2 * r), math.degrees(a0), math.degrees(ref["a1"] - a0))
             p.drawPath(path)
 
+    def shade_of(self, v, k):
+        """The picture of a shaded view for a zoom of k pixels to the sheet mm: (QImage, Shaded), made when there is none that is as good; None without triangles."""
+        pr = self.d.projection(v)
+        if not pr.mesh:
+            self.shades.pop(v["id"], None)
+            return None
+        want = min(max(k, 0.25), self.shade_cap)
+        want = min(SHADE_STEP ** math.ceil(math.log(want) / math.log(SHADE_STEP) - 1e-9), self.shade_cap)
+        c = self.shades.get(v["id"])
+        if c is not None and c[0] is pr.mesh["v"] and c[1] == v["scale"] and want * (1 - 1e-9) <= c[2] <= want * SHADE_KEEP:
+            return c[3], c[4]
+        sh = SH.render(pr.mesh, want * v["scale"], 2)
+        if sh is None:
+            return None
+        arr = np.ascontiguousarray(sh.rgba)
+        qi = QImage(arr.data, arr.shape[1], arr.shape[0], arr.shape[1] * 4, QImage.Format.Format_RGBA8888).copy()
+        self.shades[v["id"]] = (pr.mesh["v"], v["scale"], want, qi, sh)
+        for vid in [i for i in self.shades if not any(w["id"] == i for w in self.d.views)]:
+            del self.shades[vid]
+        return qi, sh
+
+    def _paint_shade(self, p, v, H, ghost):
+        got = self.shade_of(v, _scale_of(p))
+        if got is None:
+            return
+        qi, sh = got
+        s, (ox, oy) = v["scale"], v["origin"]
+        mm = s / sh.px                                             # sheet mm to a pixel of the picture
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        if ghost:
+            p.setOpacity(0.55)
+        p.drawImage(QRectF(ox + s * sh.x0, H - (oy + s * sh.y1), qi.width() * mm, qi.height() * mm), qi)
+        p.restore()
+
     def _paint_view(self, p, v, H, col, floor):
         _key, vis, hid, _arr = self._entry(v)
+        if v["style"] in SHADED:
+            self._paint_shade(p, v, H, col == GHOST)
+            if v["style"] == "shaded":                              # the surface alone: no lines
+                return
         wire = v["style"] == "wireframe"
         if hid:
             if wire:                                               # a wireframe shows every edge alike
