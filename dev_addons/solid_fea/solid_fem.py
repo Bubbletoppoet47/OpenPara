@@ -921,7 +921,7 @@ def solve_system(Kff, ff, progress=None, cancel=None, extent=None, B=None):
                 raise Cancelled()
             if progress is not None and seen[0] % 3 == 0:
                 r = float(np.linalg.norm(A @ xk - ff)) / b_norm
-                _part(progress, math.log10(1.0 / max(r, 1e-300)) / 8.0 if r < 1.0 else 0.0)
+                _part(progress, min(1.0, math.log10(1.0 / max(r, 1e-300)) / 8.0) if r < 1.0 else 0.0)
         x, info = spl.cg(A, ff, rtol=1e-8, maxiter=400, M=ml.aspreconditioner(cycle="V"), callback=after_iteration)
         if info == 0 and np.isfinite(x).all():
             return x, "iterative"
