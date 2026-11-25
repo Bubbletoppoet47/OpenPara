@@ -25,6 +25,8 @@ SHAPES = {
                      '<circle class="a" cx="18.750" cy="17.500" r="3"/><path class="n" stroke-width="2" d="M18.750 6.500v10"/>', "ana"),
     "wb_thermal3d": ('<path class="b" d="M9.500 3l6.500 3.750v7.500L9.500 18 3 14.250v-7.500z"/><path class="n" d="M3 6.750l6.500 3.750 6.500-3.750M9.500 10.500V18"/>'
                      '<rect class="p" x="17" y="6" width="4" height="10" rx="2"/><circle class="a" cx="19" cy="18.500" r="2.800"/><path class="n" stroke-width="2" d="M19 8.500v9"/>', "ana"),
+    "wb_coupled": ('<rect class="b" x="2.500" y="10" width="10" height="10"/><path class="n" d="M2.500 15h10M7.500 10v10"/><rect class="p" x="15" y="3" width="4" height="10" rx="2"/>'
+                   '<circle class="a" cx="17" cy="15.500" r="2.800"/><path class="n" stroke-width="2" d="M17 5.500v9"/><path class="n" stroke-width="2" d="M3 6h7M8 4l2 2-2 2"/>', "ana"),
     "wb_sheets": ('<rect class="p" x="3" y="4" width="18" height="16" rx="1"/><path class="l" d="M3 9.300h18M3 14.600h18M9 4v16M15 4v16"/><rect class="a" x="3" y="4" width="18" height="5.300"/>', "dat"),
     "wb_pdf": ('<path class="p" d="M5 3h9l5 5v13H5z"/><path class="l" d="M14 3v5h5"/><rect class="a" x="8" y="11" width="8" height="3"/><path class="l" d="M8 17h8M8 19.500h5"/>', "cut"),
     "wb_controls": ('<rect class="b" x="2.500" y="7" width="7" height="8"/><rect class="b" x="14.500" y="7" width="7" height="8"/><path class="n" stroke-width="2" d="M9.500 11h5M12.500 9l2 2-2 2"/>'
@@ -49,7 +51,7 @@ SHAPES = {
     "wb_failed": ('<circle class="p" cx="12" cy="12" r="9"/><path class="n" stroke-width="2.800" d="M8.500 8.500l7 7M15.500 8.500l-7 7"/>', "cut"),
 }
 
-KIND = {"part": "tab_part", "assembly": "assembly", "solid": "tab_solid", "thermal3d": "wb_thermal3d", "fea": "tab_fea", "thermal": "wb_thermal2d", "cfd": "tab_cfd",
+KIND = {"part": "tab_part", "assembly": "assembly", "solid": "tab_solid", "thermal3d": "wb_thermal3d", "coupled": "wb_coupled", "fea": "tab_fea", "thermal": "wb_thermal2d", "cfd": "tab_cfd",
         "beam": "tab_beam", "sheets": "wb_sheets", "pdf": "wb_pdf", "controls": "wb_controls", "circuits": "wb_circuits", "visualize": "wb_visualize", "motor": "wb_motor",
         "trainer": "wb_trainer", "annotator": "wb_annotator", "truss": "wb_truss", "study": "wb_params", "drawing": "wb_drawing"}
 STATUS = {"ok": "wb_ok", "incomplete": "wb_incomplete", "update": "wb_update", "refresh": "wb_refresh", "failed": "wb_failed"}

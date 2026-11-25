@@ -12,12 +12,13 @@ A project schematic in the style of ANSYS Workbench, as the first tab of Full de
 | Assembly | the assembly with its OWN COPY of every component (no live link to the Part blocks; Insert Component can copy from the project's parts) | the assembly window |
 | 3D Static Structural, 3D Thermal | the analysis project folder without meshes and results | the 3D window |
 | 2D Static Structural, 2D Fluid Flow, 2D Thermal, 1D Beam / Truss | the same | the 2D / 1D window |
+| Coupled Physics | a heat analysis and a stress analysis of the same geometry (both 2D or both 3D), solved together; the project folder holds the options only | the Coupled Physics window (`dev_addons/coupled`) |
 | Sheets, Systems and Controls, Circuits | the document (`.opsheet`, `.opctl`, `.opcirc`) | the tool's tab |
 | Truss Generator | the project folder (`project.json`, the sketch) | the Truss tab |
 
 Wire a Part or Assembly block into an analysis: its Geometry cell says **refresh** whenever the part changes, and Refresh copies the part into the analysis (an assembly's copies are written as plain files first). A 2D analysis gets the part and you choose the sketch in its tab; a Refresh takes the same sketch again and keeps the supports and loads of a 2D Static Structural analysis that still fit.
 
-Not wired yet (listed in the toolbox as "Not wired"): PDF editor, Visualize, Motor, Trainer, Annotator, Study. An analysis that takes the result of another analysis (thermal into structural) is not there.
+Not wired yet (listed in the toolbox as "Not wired"): PDF editor, Visualize, Motor, Trainer, Annotator, Study. A Coupled Physics block takes the Setup cells of one Thermal and one Static Structural block (same dimension, same Part or Assembly) in its Physics cell: Update solves the heat analysis, hands its temperature to the stress analysis and solves that; the two analyses are set up in their own windows (one way, heat to stress; no tabbed single window yet; see `dev_addons/coupled/README.md`). An analysis that takes the result of another analysis in any other way (pressure or heat from fluid flow, structure moving the flow) is not there.
 
 ## Buttons
 
@@ -25,7 +26,7 @@ Not wired yet (listed in the toolbox as "Not wired"): PDF editor, Visualize, Mot
 - **Update Project**: Refresh, then solve what is out of date, in the order of the wires. A cell that cannot be done says why.
 - **Import...** / **Import Folder...**: a `.gpd` part, a `.gpa` assembly (its part files are read into it), an analysis folder (`.gpv .gpf ...`), `.opsheet .opctl .opcirc`, a `.truss` folder, or another `.opara` (its blocks are added next to the ones here).
 - Right-click a block: **Save this system on its own...** writes the block as the ordinary file or folder it was (`.gpd`, `.gpa`, `.gpv` ...), which opens in the program like any other.
-- **Load Example Project**: a bar, a plate and a frame with three analyses (3D structural, 2D structural, 3D thermal), one analysis deliberately left without a setup, and three tools. Press Update Project to solve the three.
+- **Load Example Project**: a bar, a plate and a frame with three analyses (3D structural, 2D structural, 3D thermal), one analysis deliberately left without a setup, a heated bar (**Bar heating**, **Bar growth**, **Bar thermal stress**: a Coupled Physics block whose known answer, the far end of the bar growing 0.048 mm, is checked and shown as PASS or FAIL), a parametric study and three tools. Press Update Project to solve them.
 - **Project Report**: every block and cell with its status, what Update would do, what is incomplete and why, and which editors are open.
 
 ## Files

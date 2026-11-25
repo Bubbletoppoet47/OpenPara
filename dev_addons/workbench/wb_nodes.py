@@ -53,6 +53,9 @@ class Adapter:
         """A compute cell is computed.  -> None when done, else the text of what went wrong."""
         return None
 
+    def relink(self, tab, node):
+        """A wire was made or removed somewhere: look at the node again where its own readiness depends on its wires."""
+
     def closed(self, tab, node):
         """The node was removed from the project: close its editor, forget its workspace."""
 

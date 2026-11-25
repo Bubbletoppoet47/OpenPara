@@ -35,8 +35,16 @@ def auto_tol(diag):
 def body_material(m):
     """A part's material (the assembly file's: density, E_MPa, nu, Sy_MPa, Su_MPa) as the solver's material dict."""
     m = m or {}
-    return {"E": float(m.get("E_MPa") or 200000.0), "nu": float(m.get("nu") or 0.3), "rho": float(m.get("density") or 7850.0),
-            "sy": float(m.get("Sy_MPa") or 0.0), "su": float(m.get("Su_MPa") or 0.0), "name": m.get("name") or ""}
+    out = {"E": float(m.get("E_MPa") or 200000.0), "nu": float(m.get("nu") or 0.3), "rho": float(m.get("density") or 7850.0),
+           "sy": float(m.get("Sy_MPa") or 0.0), "su": float(m.get("Su_MPa") or 0.0), "name": m.get("name") or ""}
+    try:
+        import mat_lib
+        x = mat_lib.expansion(m)                          # thermal expansion: the part's own, else the library's for its name (None = nobody has one)
+    except ImportError:
+        x = None
+    if x is not None:
+        out["alpha"], out["Tref"] = x
+    return out
 
 
 def bodies_of_source(src):

@@ -113,6 +113,10 @@ def fill_material(tab, kind, mat):
     tab.e_su.setText(f"{pmat.from_mpa(su, u):.10g}")
     if kind == "fea":
         tab.e_nu.setText(f"{nu:.6g}")
+        if hasattr(tab, "e_alpha"):
+            x = mat_lib.expansion(mat)
+            tab.e_alpha.setText("" if x is None else f"{x[0]:.6g}")
+            tab.e_tref.setText(f"{(x[1] if x is not None else 293.15) - 273.15:.6g}")
     return True
 
 
@@ -553,8 +557,9 @@ class SimWindow(QWidget):
                 if rp.get(f["id"]) is None:
                     f["included"] = False              # inside a hole of a part: no material there
             t.region_names = names
-            t.region_mats = {f: {"E_MPa": e[0], "nu": e[1], "Sy_MPa": e[2], "Su_MPa": e[3]} for f, m in mats.items()
-                             for e in [mat_lib.elastic(m)] if e is not None}
+            t.region_mats = {f: {"E_MPa": e[0], "nu": e[1], "Sy_MPa": e[2], "Su_MPa": e[3],
+                                 **({"alpha": x[0], "Tref_K": x[1]} if x is not None else {})} for f, m in mats.items()
+                             for e in [mat_lib.elastic(m)] if e is not None for x in [mat_lib.expansion(m)]}
             missing = [names[f] for f, m in mats.items() if mat_lib.elastic(m) is None]
             t.fill_regions()
             t.refresh_lists()

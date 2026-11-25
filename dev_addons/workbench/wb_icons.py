@@ -223,7 +223,18 @@ def _g_drawing(p):
     p.drawRect(QRectF(8, 13.5, 8, 4))
 
 
-KIND_GLYPH = {"part": _g_part, "assembly": _g_assembly, "solid": _g_solid, "thermal3d": _g_thermal3d, "fea": _g_fea, "thermal": _g_thermal, "cfd": _g_cfd,
+def _g_coupled(p):
+    p.setPen(_pen(BLUE, 1.5))
+    p.setBrush(QBrush(QColor(43, 125, 233, 60)))
+    p.drawRect(QRectF(3.5, 10.5, 9, 9))
+    _thermo(p, 17, 3.5, ORANGE)
+    p.setPen(_pen(NAVY, 1.5))
+    p.drawLine(QPointF(4, 6.5), QPointF(10, 6.5))
+    p.drawLine(QPointF(8, 4.5), QPointF(10, 6.5))
+    p.drawLine(QPointF(8, 8.5), QPointF(10, 6.5))
+
+
+KIND_GLYPH = {"coupled": _g_coupled, "part": _g_part, "assembly": _g_assembly, "solid": _g_solid, "thermal3d": _g_thermal3d, "fea": _g_fea, "thermal": _g_thermal, "cfd": _g_cfd,
               "beam": _g_beam, "sheets": _g_sheets, "pdf": _g_pdf, "controls": _g_controls, "circuits": _g_circuits, "visualize": _g_visualize, "motor": _g_motor,
               "trainer": _g_trainer, "annotator": _g_annotator, "truss": _g_truss, "study": _g_study, "drawing": _g_drawing}
 

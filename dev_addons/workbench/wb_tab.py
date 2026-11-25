@@ -407,8 +407,20 @@ class WorkbenchTab(QWidget):
         self.add_block(kind, pos.x(), pos.y())
 
     def on_edited(self):
+        self.relink()
         self.scene.refresh()
         self.update_header()
+
+    def relink(self):
+        """A wire was made or removed: a block whose own readiness depends on where it is wired (a stress analysis wired into Coupled Physics needs no load) is looked at again."""
+        for n in list(self.project.nodes.values()):
+            a = nodes.adapter_for(n.kind)
+            if a is None or n.spec is None or not hasattr(a, "relink"):
+                continue
+            try:
+                a.relink(self, n)
+            except Exception as ex:                          # noqa: BLE001
+                self.say(f"'{n.title}' could not be looked at again: {ex}")
 
     def on_selection(self):
         try:
@@ -809,7 +821,7 @@ class WorkbenchTab(QWidget):
 
 def load_adapters():
     """What each kind of block does comes from its own module (a module that cannot be loaded leaves its kinds 'not wired in', the rest works)."""
-    for name in ("wb_parts", "wb_analysis", "wb_tools", "wb_study"):
+    for name in ("wb_parts", "wb_analysis", "wb_tools", "wb_study", "wb_coupled"):
         try:
             __import__(name)
         except Exception:                                    # noqa: BLE001

@@ -280,7 +280,29 @@ class AnalysisAdapter(nodes.Adapter):
         return w
 
     # ---- reading back
-    def setup_is_ready(self, w, folder):
+    COUPLED_KINDS = ("solid", "fea")                         # the stress analyses: wired into Coupled Physics they need supports but no load (the temperature is the load)
+
+    def coupled_nodes(self, tab, node):
+        """The Coupled Physics blocks that this analysis's Setup is wired into."""
+        out = []
+        for k in tab.project.outgoing(node.id, "setup"):
+            n = tab.project.nodes.get(k.b)
+            if n is not None and n.kind == "coupled":
+                out.append(n)
+        return out
+
+    def supported(self, folder):
+        """True when the setup in the project folder has supports (a stress analysis in Coupled Physics: that is all it needs of its own)."""
+        try:
+            st = state_object(folder)
+        except Exception:                                    # noqa: BLE001
+            return False
+        s = (st.get("setup") if self.kind == "solid" else st.get("main")) or {}
+        return bool(s.get("supports"))
+
+    def setup_is_ready(self, w, folder, tab=None, node=None):
+        if tab is not None and node is not None and self.kind in self.COUPLED_KINDS and self.coupled_nodes(tab, node):
+            return self.supported(folder)
         if w is not None and hasattr(w, "ready"):
             try:
                 return not w.ready()
@@ -324,9 +346,25 @@ class AnalysisAdapter(nodes.Adapter):
         if "geometry" in changed:
             tab.project.set_ready(node.id, "geometry", has_source(folder))
         if "setup" in changed or "geometry" in changed:
-            tab.project.set_ready(node.id, "setup", self.setup_is_ready(w, folder))
+            tab.project.set_ready(node.id, "setup", self.setup_is_ready(w, folder, tab, node))
         keys = [k for k in changed if k]
         return keys or None
+
+    def relink(self, tab, node):
+        """Wired into (or taken out of) Coupled Physics: a stress analysis needs a load of its own or not.  Looked at again for the setup the block has now."""
+        if self.kind not in self.COUPLED_KINDS:
+            return
+        st = tab.node_state.get(node.id)
+        folder = st.get("folder") if st else None
+        if not folder or not os.path.isdir(folder):
+            return                                           # never opened: there is no setup to look at
+        w = tab.editor_of(node.id)
+        try:
+            if w is not None and w.is_dirty():
+                w.save()
+        except Exception:                                    # noqa: BLE001
+            return
+        tab.project.set_ready(node.id, "setup", self.setup_is_ready(w, folder, tab, node))
 
     def created(self, tab, node):
         """A 1D Beam / Truss starts with its Profile cell ready: profiles are optional (the frame's own sketches work without any wire)."""
@@ -486,6 +524,11 @@ class AnalysisAdapter(nodes.Adapter):
     def update(self, tab, node, key):
         if key != "solution":
             return None
+        cn = self.coupled_nodes(tab, node)
+        if cn:                                               # it is solved together with its partner: that is the answer of both
+            ca = nodes.adapter_for("coupled")
+            if ca is not None:
+                return ca.update(tab, cn[0], "solution")
         w = tab.editor_of(node.id)
         if w is None:
             w = self.open_editor(tab, node, front=False)

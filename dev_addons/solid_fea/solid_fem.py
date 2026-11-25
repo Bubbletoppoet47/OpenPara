@@ -629,41 +629,103 @@ def _group_D(g, D):
     return material_matrix(float(m[0]), float(m[1])) if m else D
 
 
-def stresses(nodes, groups, D, u):
-    """Per element (the groups one after the other): von Mises at the integration points (max), the mean stress tensor, and the element volume."""
+def _group_thermal(g, thermal, T_nodes_of):
+    """The thermal strain alpha (T - Tref) at the nodes of the elements of a group: its own alpha and Tref when it has them (a body of an assembly), else the ones of
+    `thermal`.  None when there is no temperature."""
+    if thermal is None:
+        return None
+    a = g.get("alpha", thermal["alpha"])
+    tr = g.get("Tref", thermal["Tref"])
+    if a is None:
+        raise FemError("The material has no thermal expansion coefficient (alpha). Type it in Material (about 12e-6 per K for steel, 23e-6 for aluminium).")
+    return float(a) * (T_nodes_of - float(tr if tr is not None else 293.15))
+
+
+def stresses(nodes, groups, D, u, thermal=None, energy=False):
+    """Per element (the groups one after the other): von Mises at the integration points (max), the mean stress tensor, and the element volume.
+    thermal = {"T": temperature per node (K), "alpha": 1/K, "Tref": K} (a group may carry its own "alpha" and "Tref"): the stress comes from the strain that is not
+    thermal.  energy=True adds the elastic strain energy of the whole body as a fourth result."""
     groups = _as_groups(groups)
     ne = sum(len(g["conn"]) for g in groups)
     vm = np.zeros(ne)
     sig_mean = np.zeros((ne, 6))
     vol = np.zeros(ne)
+    en_total = 0.0
     base = 0
     D0 = D
+    Tn = None if thermal is None else np.asarray(thermal["T"], float)
     for g in groups:
         kind, conn = g["kind"], g["conn"]
         D = _group_D(g, D0)
         if kind == "tet":
             nne = conn.shape[1]
-            dN, _gw, _ns = _rule(nne)
+            dN, _gw, ns = _rule(nne)
             for s in range(0, len(conn), 8000):
                 e = min(s + 8000, len(conn))
                 gL, V = _grad_L(nodes, conn, s, e)
                 vol[base + s:base + e] = V
                 ue = u[_edofs(conn[s:e])]
+                e0 = _group_thermal(g, thermal, None if Tn is None else Tn[conn[s:e]])
                 vmax = np.zeros(e - s)
-                for d in dN:
+                for d, n_, w_ in zip(dN, ns, _gw):
                     B = _bmat(np.einsum("ik,ekx->eix", d, gL))
-                    sg = np.einsum("eri,ei->er", B, ue) @ D.T
+                    strain = np.einsum("eri,ei->er", B, ue)
+                    if e0 is not None:
+                        strain = strain - (e0 @ n_)[:, None] * np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])[None, :]
+                    sg = strain @ D.T
                     vmax = np.maximum(vmax, _vm(sg))
                     sig_mean[base + s:base + e] += sg / len(dN)
+                    en_total += 0.5 * float(np.sum(w_ * V * np.einsum("er,er->e", strain, sg)))
                 vm[base + s:base + e] = vmax
         else:
             for s in range(0, len(conn), 3000):
                 e = min(s + 3000, len(conn))
                 hx = elem.as_hex(kind, conn[s:e])
-                vmx, mean, vv = elem.recover(kind, nodes[hx], D, u[_edofs(hx)])
+                e0 = _group_thermal(g, thermal, None if Tn is None else Tn[hx])
+                vmx, mean, vv, en = elem.recover(kind, nodes[hx], D, u[_edofs(hx)], e0, True)
                 vm[base + s:base + e], sig_mean[base + s:base + e], vol[base + s:base + e] = vmx, mean, vv
+                en_total += float(en.sum())
         base += len(conn)
+    if energy:
+        return vm, sig_mean, vol, en_total
     return vm, sig_mean, vol
+
+
+def thermal_load(nodes, groups, E, nu, thermal):
+    """The nodal forces (3 nodes,) that a temperature stands for: thermal = {"T": temperature per node (K), "alpha": 1/K, "Tref": K}, a group may carry its own alpha
+    and Tref and its own material (E, nu).  The sum of them is zero (they are an internal load); the supports are what makes them stresses."""
+    f = np.zeros(3 * len(nodes))
+    Tn = np.asarray(thermal["T"], float)
+    if len(Tn) != len(nodes):
+        raise FemError(f"The temperature field has {len(Tn)} values but the mesh has {len(nodes)} nodes.")
+    if not np.all(np.isfinite(Tn)):
+        raise FemError("The temperature field contains NaN or infinity.")
+    D0 = material_matrix(E, nu)
+    e0v = np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+    for g in _as_groups(groups):
+        kind, conn = g["kind"], g["conn"]
+        D = _group_D(g, D0)
+        if kind == "tet":
+            nne = conn.shape[1]
+            dN, gw, Ns = _rule(nne)
+            for s in range(0, len(conn), 4000):
+                e = min(s + 4000, len(conn))
+                gL, V = _grad_L(nodes, conn, s, e)
+                e0 = _group_thermal(g, thermal, Tn[conn[s:e]])
+                fe = np.zeros((e - s, 3 * nne))
+                for d, w, n_ in zip(dN, gw, Ns):
+                    B = _bmat(np.einsum("ik,ekx->eix", d, gL))
+                    Ds0 = ((e0 @ n_)[:, None] * e0v[None, :]) @ D.T
+                    fe += (w * V)[:, None] * np.einsum("eri,er->ei", B, Ds0)
+                f += np.bincount(_edofs(conn[s:e]).ravel(), weights=fe.ravel(), minlength=len(f))
+        else:
+            for s in range(0, len(conn), 3000):
+                e = min(s + 3000, len(conn))
+                hx = elem.as_hex(kind, conn[s:e])
+                e0 = _group_thermal(g, thermal, Tn[hx])
+                fe = elem.thermal_forces(kind, nodes[hx], D, e0)
+                f += np.bincount(_edofs(hx).ravel(), weights=fe.reshape(len(hx), -1).ravel(), minlength=len(f))
+    return f
 
 
 def _vm(s):

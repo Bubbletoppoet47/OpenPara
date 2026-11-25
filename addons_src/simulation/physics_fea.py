@@ -8,6 +8,8 @@ Physics Calc - 2D linear-elastic finite elements.
     a screw holds one way only); frictionless one-way contact against a surface
   * a one-way support is found by an active-set iteration (supports that would have to pull are released)
   * loads: point forces, edge pressure (normal), edge traction (fixed direction)
+  * thermal strain: a temperature at the nodes (a Thermal result, see solve(thermal=...)) with the material's expansion coefficient alpha and its reference
+    temperature: strain alpha (T - Tref) in every direction (times 1 + nu in plane strain), and the stress comes from the strain that is NOT thermal
   * direct sparse solve (no iteration, no tolerance), stresses are the raw element values - nothing is averaged
 
 Units are whatever you use consistently: lengths in sketch units, E in force / length^2, thickness in sketch units,
@@ -60,20 +62,32 @@ def apply_D(D, eps):
 
 
 def region_material_arrays(mat, mesh):
-    """When the sketch has several materials (mat["region_mats"] = {region id: {"E","nu","sy","su"}}): per-triangle arrays
-    (E, nu, sy, su), else None.  Regions that have no entry use the material of the tab (mat itself)."""
+    """When the sketch has several materials (mat["region_mats"] = {region id: {"E","nu","sy","su"}, and optionally "alpha" and "Tref"}): per-triangle arrays
+    (E, nu, sy, su, alpha, Tref), else None.  Regions that have no entry use the material of the tab (mat itself).  alpha / Tref are nan where nobody gave one."""
     rm = mat.get("region_mats")
     tf = mesh.get("tri_face")
     if not rm or tf is None:
         return None
+    opt = ("alpha", "Tref")
+
+    def val(m_, k, dflt):
+        v = m_.get(k)
+        return float(v) if v is not None else dflt
     base = {"E": float(mat["E"]), "nu": float(mat["nu"]), "sy": float(mat.get("sy") or 0.0), "su": float(mat.get("su") or 0.0)}
+    for k in opt:
+        base[k] = val(mat, k, None)
     table = {}
     for fid, m_ in rm.items():
-        table[int(fid)] = {k: float(m_.get(k) or 0.0) if k in ("sy", "su") else float(m_[k]) for k in base}
-    if len({tuple(sorted(v.items())) for v in list(table.values()) + [base]}) <= 1:
+        row = {k: float(m_.get(k) or 0.0) if k in ("sy", "su") else float(m_[k]) for k in ("E", "nu", "sy", "su")}
+        for k in opt:
+            row[k] = val(m_, k, base[k])
+        table[int(fid)] = row
+    if len({tuple(sorted(v.items(), key=lambda kv: kv[0])) for v in list(table.values()) + [base]}) <= 1:
         return None
     tf = np.asarray(tf)
-    out = {k: np.array([table.get(int(f), base)[k] for f in tf], float) for k in base}
+    out = {k: np.array([table.get(int(f), base)[k] for f in tf], float) for k in ("E", "nu", "sy", "su")}
+    for k in opt:
+        out[k] = np.array([(table.get(int(f), base)[k] if table.get(int(f), base)[k] is not None else np.nan) for f in tf], float)
     return out
 
 
@@ -521,6 +535,79 @@ def apply_probes(res, mesh, probes, fos_name, trig_name=None):
 
 
 # ----------------------------------------------------------------------------------------------
+# thermal strain
+# ----------------------------------------------------------------------------------------------
+TREF_DEFAULT = 293.15            # K: the temperature at which a material is stress free when its entry gives none (20 degC)
+
+
+def thermal_setup(mat, multi, mode, M, thermal, n_base, notes):
+    """The temperatures at the corner nodes (n_base,) and, per triangle, the expansion coefficient alpha, the reference temperature and c = the thermal strain per
+    kelvin in the plane (alpha, times 1 + nu in plane strain: the strain across the plate is held at zero there)."""
+    T = np.asarray(thermal["T"], float).reshape(-1)
+    if len(T) != n_base:
+        raise ModelError(f"The temperature field has {len(T)} values but the mesh has {n_base} nodes.")
+    if not np.all(np.isfinite(T)):
+        raise ModelError("The temperature field contains NaN or infinity.")
+    if multi is not None:
+        alpha, tref = multi["alpha"].copy(), multi["Tref"].copy()
+        nu = multi["nu"]
+    else:
+        a0 = mat.get("alpha")
+        alpha = np.full(M, np.nan if a0 is None else float(a0))
+        t0 = mat.get("Tref")
+        tref = np.full(M, np.nan if t0 is None else float(t0))
+        nu = np.full(M, float(mat["nu"]))
+    if np.any(~np.isfinite(alpha)):
+        raise ModelError("The material has no thermal expansion coefficient (alpha). Type it in Material and analysis (about 12e-6 per K for steel, 23e-6 for aluminium).")
+    if np.any(~np.isfinite(tref)):
+        tref = np.where(np.isfinite(tref), tref, TREF_DEFAULT)
+        notes.append(f"A material has no reference temperature: {TREF_DEFAULT - 273.15:.0f} degC is used (the temperature at which it is free of thermal stress).")
+    c = alpha * ((1.0 + nu) if mode == "strain" else 1.0)
+    return T, alpha, tref, c
+
+
+def _eps0(c, dT):
+    e = np.zeros((len(c), 3))
+    e[:, 0] = e[:, 1] = c * dT
+    return e
+
+
+def thermal_forces(nodes_all, conn, tris, th, D, c, tref, T, order, dofs, ndof):
+    """The nodal forces that the thermal strain stands for: integral of B^T D eps0 over every element (consistent, exact for the linear temperature of a
+    3-node triangle and for the quadratic element with the temperature interpolated from its corners)."""
+    corner = T[tris]
+    fe_all = []
+    if order == 2:
+        for L in GAUSS3:
+            B, A = t6_B(nodes_all, conn, L)
+            e0 = _eps0(c, corner @ L - tref)
+            fe_all.append((th / 3.0) * A[:, None] * np.einsum("mji,mj->mi", B, apply_D(D, e0)))
+    else:
+        B, A = tri_B(nodes_all, tris)
+        e0 = _eps0(c, corner.mean(axis=1) - tref)
+        fe_all.append(th * A[:, None] * np.einsum("mji,mj->mi", B, apply_D(D, e0)))
+    fe = sum(fe_all)
+    return np.bincount(dofs.ravel(), weights=fe.ravel(), minlength=ndof)
+
+
+def thermal_energy(nodes_all, conn, tris, th, D, c, tref, T, order, dofs, u):
+    """The elastic strain energy of the body: half the integral of (strain - thermal strain) . stress.  (Half u.K.u would include the thermal part.)"""
+    corner = T[tris]
+    ue = u[dofs]
+    E = 0.0
+    if order == 2:
+        for L in GAUSS3:
+            B, A = t6_B(nodes_all, conn, L)
+            e = np.einsum("mij,mj->mi", B, ue) - _eps0(c, corner @ L - tref)
+            E += 0.5 * (th / 3.0) * float(np.sum(A * np.einsum("mi,mi->m", e, apply_D(D, e))))
+    else:
+        B, A = tri_B(nodes_all, tris)
+        e = np.einsum("mij,mj->mi", B, ue) - _eps0(c, corner.mean(axis=1) - tref)
+        E += 0.5 * th * float(np.sum(A * np.einsum("mi,mi->m", e, apply_D(D, e))))
+    return E
+
+
+# ----------------------------------------------------------------------------------------------
 # solve
 # ----------------------------------------------------------------------------------------------
 def check_rigid_body(nodes, tris, fixed_idx, extra=()):
@@ -699,10 +786,13 @@ def _constrained_solve(K, f, N, fixed_global, rules, cancel=None, rb=None, presc
     return u, react, info, fixmask
 
 
-def solve(mesh, mat, supports, loads, progress=None, cancel=None):
+def solve(mesh, mat, supports, loads, progress=None, cancel=None, thermal=None):
     """Assemble, apply supports, solve, recover stresses.  -> result dict (everything the display and the report need).
     mat["order"] = 2 uses quadratic triangles (the stress is then given on the four small triangles of every element and
-    result["mesh"] is the mesh to draw it on); 1 or missing uses the 3-node triangles."""
+    result["mesh"] is the mesh to draw it on); 1 or missing uses the 3-node triangles.
+    thermal = {"T": the temperature at the nodes of the corner mesh (kelvin)}: the body is heated or cooled to it from the material's reference temperature
+    mat["Tref"] (kelvin; 20 degC when missing) and expands by mat["alpha"] (1/K, needed) per kelvin; that is a load of its own (no other load is then needed).
+    Only the linear solver includes it."""
     import scipy.sparse as sp
 
     def tick(txt, f):
@@ -753,7 +843,7 @@ def solve(mesh, mat, supports, loads, progress=None, cancel=None):
     if not fixed and not groups:
         raise ModelError("No supports: the body is free to fly away. Add a support first.")
     imposed = {d: v for d, v in fixed.items() if v != 0.0}                # displacements that are imposed (a Displacement support with a number)
-    if not point_forces and not edge_loads and not edge_nodal and not imposed:
+    if not point_forces and not edge_loads and not edge_nodal and not imposed and thermal is None:
         raise ModelError("No loads. Add a force, pressure or traction first (or impose a displacement).")
 
     # bolts fix their nodes; screws and contact supports become rules (rotated dofs, one-way)
@@ -846,6 +936,18 @@ def solve(mesh, mat, supports, loads, progress=None, cancel=None):
             f[2 * nb] += fbx * th
             f[2 * nb + 1] += fby * th
 
+    th_state = None
+    if thermal is not None:
+        tick("Thermal strain", 0.38)
+        T_n, alpha_el, tref_el, c_el = thermal_setup(mat, multi, mode, M, thermal, len(nodes), notes)
+        f_thermal = thermal_forces(nodes_all, conn, tris, th, D, c_el, tref_el, T_n, order, dofs, 2 * N)
+        f = f + f_thermal
+        th_state = {"T": T_n, "alpha": alpha_el, "Tref": tref_el, "c": c_el}
+        notes.append(f"THERMAL STRAIN: the temperature field runs from {float(T_n.min()) - 273.15:.4g} to {float(T_n.max()) - 273.15:.4g} degC; the material "
+                     f"is free of thermal stress at {float(np.min(tref_el)) - 273.15:.4g}" +
+                     (f" .. {float(np.max(tref_el)) - 273.15:.4g}" if float(np.ptp(tref_el)) > 0 else "") + " degC and expands by alpha = " +
+                     (f"{float(alpha_el[0]):.4g}" if float(np.ptp(alpha_el)) == 0 else f"{float(alpha_el.min()):.4g} .. {float(alpha_el.max()):.4g}") + " per kelvin.")
+
     tick("Applying supports", 0.4)
     extra = []
     for n, r in rules.items():
@@ -897,27 +999,45 @@ def solve(mesh, mat, supports, loads, progress=None, cancel=None):
         ue = u[dofs]
         cols_ = {k: [] for k in ("sx", "sy", "txy")}
         sx = np.zeros((M, 4)); sy = np.zeros((M, 4)); txy = np.zeros((M, 4))
+        dT_cells = np.zeros((M, 4))
         for j, L in enumerate(SUB_CENTROIDS):
             Bj, _ = t6_B(nodes_all, conn, L)
-            sg = apply_D(D, np.einsum("mij,mj->mi", Bj, ue))
+            strain = np.einsum("mij,mj->mi", Bj, ue)
+            if th_state is not None:
+                dT_cells[:, j] = th_state["T"][tris] @ L - th_state["Tref"]
+                strain = strain - _eps0(th_state["c"], dT_cells[:, j])
+            sg = apply_D(D, strain)
             sx[:, j], sy[:, j], txy[:, j] = sg[:, 0], sg[:, 1], sg[:, 2]
         sx, sy, txy = sx.reshape(-1), sy.reshape(-1), txy.reshape(-1)
+        dT_out = dT_cells.reshape(-1)
         A = np.repeat(A, 4) / 4.0
         view = display_mesh(mesh, nodes_all, conn, mid)
     else:
         ue = u[dofs]
         eps = np.einsum("mij,mj->mi", B, ue)
+        dT_out = None
+        if th_state is not None:
+            dT_out = th_state["T"][tris].mean(axis=1) - th_state["Tref"]
+            eps = eps - _eps0(th_state["c"], dT_out)
         sig = apply_D(D, eps)
         sx, sy, txy = sig[:, 0], sig[:, 1], sig[:, 2]
         view = None
     # ---- automatic switch to the nonlinear solver (large displacements and yielding) when the linear result says it is needed
     f_lin_applied = f
-    solver, nlinfo, trigger, peeq, energy_val, residual_nl = "linear", None, "", None, float(0.5 * u @ (Ku if imposed else f)), None
+    energy_lin = float(0.5 * u @ (Ku if imposed else f))
+    if th_state is not None:                                       # half u.f would count the thermal strain too: the elastic energy is the strain minus the thermal strain
+        energy_lin = thermal_energy(nodes_all, conn, tris, th, D, th_state["c"], th_state["Tref"], th_state["T"], order, dofs, u)
+    solver, nlinfo, trigger, peeq, energy_val, residual_nl = "linear", None, "", None, energy_lin, None
     sy_, su_ = float(mat.get("sy") or 0.0), float(mat.get("su") or 0.0)
     umax_lin = float(np.max(np.hypot(u.reshape(-1, 2)[:, 0], u.reshape(-1, 2)[:, 1])))
     vm_lin = np.sqrt(sx ** 2 - sx * sy + sy ** 2 + 3 * txy ** 2)
     lin_on = mat.get("lin_on", True)
     nl_wanted = bool(mat.get("nl_on")) and multi is None
+    if th_state is not None and mat.get("nl_on"):
+        if not lin_on:
+            raise ModelError("The nonlinear solver does not include thermal strain yet. Tick the linear solver.")
+        notes.append("WARNING: the nonlinear solver was requested, but it does not include thermal strain yet: the LINEAR result is shown.")
+        nl_wanted = False
     if multi is not None and mat.get("nl_on"):
         if not lin_on:
             raise ModelError("The nonlinear solver cannot be used with several materials in one sketch. Tick the linear solver.")
@@ -991,6 +1111,10 @@ def solve(mesh, mat, supports, loads, progress=None, cancel=None):
     else:
         nu_o = nu
     szz = nu_o * (sx + sy) if mode == "strain" else np.zeros(Mout)
+    if th_state is not None and mode == "strain":                  # the strain across the plate is held at zero, so the heated material pushes against it
+        rep_t = 4 if order == 2 else 1
+        E_t = np.repeat(multi["E"], rep_t) if multi is not None else E
+        szz = szz - E_t * np.repeat(th_state["alpha"], rep_t) * dT_out
     vm = np.sqrt(0.5 * ((sx - sy) ** 2 + (sy - szz) ** 2 + (szz - sx) ** 2) + 3 * txy ** 2)
     pstats = probe_stats(probes, pmasks, vm, peeq) if probes else []
     for ps in pstats:
@@ -1053,4 +1177,7 @@ def solve(mesh, mat, supports, loads, progress=None, cancel=None):
         "n_point_forces": len(point_forces), "n_edge_loads": len(edge_loads) + len(edge_nodal), "notes": notes, "times": times,
         "total_time": time.perf_counter() - t0,
         "order": order, "mesh": view, "fasteners": fast, "oneway": {k: info[k] for k in ("iterations", "oneway", "released")},
+        "thermal": None if th_state is None else {"T_min": float(th_state["T"].min()), "T_max": float(th_state["T"].max()),
+                                                  "alpha_min": float(th_state["alpha"].min()), "alpha_max": float(th_state["alpha"].max()),
+                                                  "Tref_min": float(th_state["Tref"].min()), "Tref_max": float(th_state["Tref"].max())},
     }

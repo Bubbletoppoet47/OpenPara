@@ -97,8 +97,9 @@ ok(not addons.load_errors(), f"the add-ons load without errors ({addons.load_err
 ok(wb_nodes.adapter_for("study") is not None and "study" not in wb_nodes.check_kinds(), "the study block has an adapter (it is wired in)")
 ok(wb_nodes.availability(W, "study")[0], f"and the add-on it needs is there ({wb_nodes.availability(W, 'study')})")
 for k in ("solid", "fea", "thermal", "cfd", "beam"):
-    ok(wp.spec_of(k).cell("setup").provides == ("analysis",), f"the Setup of '{k}' gives 'analysis'")
-ok(not wp.spec_of("thermal3d").cell("setup").provides, "3D Thermal gives none (it has no parametric study yet)")
+    want = ("analysis", "coupling") if k in ("solid", "fea", "thermal") else ("analysis",)      # a heat or stress analysis also gives 'coupling' (to the Physics cell of a Coupled Physics block)
+    ok(wp.spec_of(k).cell("setup").provides == want, f"the Setup of '{k}' gives {' and '.join(repr(x) for x in want)}")
+ok(wp.spec_of("thermal3d").cell("setup").provides == ("coupling",), "3D Thermal gives no 'analysis' (it has no parametric study yet), only 'coupling'")
 sp_ = wp.spec_of("study")
 ok([c.key for c in sp_.cells] == ["setup", "solution", "results"] and [c.role for c in sp_.cells] == ["import", "compute", "view"], "a study has Parameters (import), Study (compute), Results (view)")
 ok(sp_.cell("setup").accepts == ("analysis", "dimensions") and sp_.cell("setup").many and sp_.standalone == "", "Parameters takes analyses and dimensions of parts, any number; the block is not saved on its own")
@@ -111,7 +112,7 @@ nS = W.add_block("study", 760, 60, title="Bar study")
 ok(P.why_not_link(nBar.id, "geometry", nS.id, "setup") is None, "a part can feed a study (its dimensions)")
 ok(wp.spec_of("assembly") and "dimensions" not in wp.spec_of("assembly").cell("geometry").provides and "takes analysis / dimensions" in (P.why_not_link(
     W.add_block("assembly", 40, 700, title="Asm").id, "geometry", nS.id, "setup") or ""), "an assembly cannot (it has no dimensions a study can vary)")
-ok("does not give" in (P.why_not_link(nT.id, "setup", nS.id, "setup") or ""), f"3D Thermal cannot feed one ({P.why_not_link(nT.id, 'setup', nS.id, 'setup')})")
+ok("takes analysis" in (P.why_not_link(nT.id, "setup", nS.id, "setup") or ""), f"3D Thermal cannot feed one ({P.why_not_link(nT.id, 'setup', nS.id, 'setup')})")
 ok(P.why_not_link(nA.id, "setup", nS.id, "setup") is None, "a 3D analysis's Setup can")
 ok(P.why_not_link(nS.id, "setup", nA.id, "geometry") is not None, "and nothing flows back out of a study")
 

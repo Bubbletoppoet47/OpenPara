@@ -114,9 +114,16 @@ for _k, _l, _tip, _cells in (
         ("thermal", "2D Thermal", "Heat conduction in a sketch", [_SKETCH]),
         ("cfd", "2D Fluid Flow", "2D CFD of a sketch", [_SKETCH]),
         ("beam", "1D Beam / Truss", "Beams and trusses from the lines of a sketch, with the profiles of their cross-sections", [_SKETCH, _PROFILE])):
-    # the Setup of an analysis that a parametric study can run gives "analysis" (to the Parameters cell of a Parametric Study block); 3D Thermal has no study yet
-    _setup = ("setup", "Setup", "data", ("analysis",)) if _k in ("solid", "fea", "thermal", "cfd", "beam") else ("setup", "Setup", "data")
+    # the Setup of an analysis that a parametric study can run gives "analysis" (to the Parameters cell of a Parametric Study block); 3D Thermal has no study yet.  The Setup of a
+    # heat or a stress analysis also gives "coupling" (to the Physics cell of a Coupled Physics block)
+    _prov = tuple(x for x in (("analysis",) if _k in ("solid", "fea", "thermal", "cfd", "beam") else ()) + (("coupling",) if _k in ("solid", "fea", "thermal", "thermal3d") else ()))
+    _setup = ("setup", "Setup", "data", _prov) if _prov else ("setup", "Setup", "data")
     register(_k, _l, "Analysis Systems", _cells + [_setup, ("solution", "Solution", "compute"), ("results", "Results", "view")], _tip, "folder")
+# Coupled Physics: one heat analysis and one stress analysis of the same geometry (both 2D or both 3D) solved together.  The Physics cell takes their Setups (a wire from each);
+# the Setup cell holds the coupling options; Solution solves both in order and hands the temperature over; the Results page shows the combined result.
+register("coupled", "Coupled Physics", "Analysis Systems",
+         [CellSpec("physics", "Physics", "import", (), ("coupling",), True, True, ("coupling",)), ("setup", "Setup", "data"), ("solution", "Solution", "compute"), ("results", "Results", "view")],
+         "A heat analysis and a stress analysis of the same geometry solved together: the temperature of the first is the load of the second", "folder")
 # Other tools: one document each.
 for _k, _l, _tip, _st in (
         ("sheets", "Sheets", "A spreadsheet", ".opsheet"), ("pdf", "PDF Editor", "Read, mark up and arrange PDF files", ".oppb"),

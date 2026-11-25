@@ -64,6 +64,30 @@ def kv(rows, bold=False):
     return "".join(out)
 
 
+def temp_text(k, digits=5):
+    """A temperature given in kelvin in the degree of File > Units (degC when the heat-transfer units are not there)."""
+    try:
+        import thermal_units as tu
+        import unitctl
+        return tu.temp_text(k, tu.family_of(unitctl.system()), digits)
+    except Exception:                                  # noqa: BLE001
+        return f"{k - 273.15:.{digits}g} \u00b0C"
+
+
+def thermal_block(th):
+    """The 'Temperature' block of a stress result that was solved with a temperature field.  th = {"T_min", "T_max" (kelvin), and when known "alpha_min", "alpha_max" (1/K),
+    "Tref_min", "Tref_max" (kelvin)}."""
+    def rng(a, b, f):
+        return f(a) if abs(b - a) <= 1e-12 * max(1.0, abs(a)) else f(a) + " to " + f(b)
+    rows = [("Temperature of the body", rng(th["T_min"], th["T_max"], temp_text), None)]
+    if th.get("Tref_min") is not None:
+        rows.append(("Free of thermal stress at", rng(th["Tref_min"], th["Tref_max"], temp_text), None))
+    if th.get("alpha_min") is not None:
+        rows.append(("Thermal expansion coefficient", rng(th["alpha_min"], th["alpha_max"], lambda v: f"{v:.4g}"), "1/K"))
+    return heading("Temperature", "from Coupled Physics") + kv(rows) + note(
+        "The stress comes from the strain that the temperature does NOT account for: a body that is free to grow and has the same temperature everywhere has none.")
+
+
 def grid(headers, rows):
     out = ["<table width='100%' cellspacing='0' cellpadding='3'><tr>"]
     for i, h in enumerate(headers):

@@ -17,7 +17,7 @@ open(os.path.join(UD, "addons.json"), "w").write('{"removed": ["partgen", "truss
 os.environ["OPARA_NO_UPDATE"] = "1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEV = tempfile.mkdtemp(prefix="opara_dev_")
-for name in ("workbench", "solid_fea", "thermal3d", "thermal2d", "sheets", "controls", "circuits"):
+for name in ("workbench", "solid_fea", "thermal3d", "thermal2d", "coupled", "sheets", "controls", "circuits"):
     shutil.copytree(os.path.join(HERE, "dev_addons", name), os.path.join(DEV, name), ignore=shutil.ignore_patterns("__pycache__"))
 os.environ["OPARA_DEV_ADDONS"] = DEV
 sys.path.insert(0, HERE)
@@ -66,18 +66,20 @@ P = W.project
 ok(res is P and P is not P0 and P.name == wb_example.NAME, f"Load Example Project makes a project of its own ({P.name})")
 ok(all(n.title != "Something that was here" for n in P.nodes.values()), "and replaces what was in the tab")
 byt = {n.title: n for n in P.nodes.values()}
-ok(sorted(byt) == sorted(["Bar", "Plate", "Frame", "Bar stress", "Plate stress 2D", "Frame heating", "Frame check (needs a setup)", "Bar study", "Load table", "LED circuit", "Plant"]),
-   f"eleven blocks ({sorted(byt)})")
-ok(len(P.links) == 5 and sum(k.a_cell == "geometry" and k.b_cell == "geometry" for k in P.links) == 4, f"four wires, geometry to geometry, and one from a setup to the study ({len(P.links)})")
+ok(sorted(byt) == sorted(["Bar", "Plate", "Frame", "Bar stress", "Plate stress 2D", "Frame heating", "Frame check (needs a setup)", "Bar heating", "Bar growth", "Bar thermal stress",
+                          "Bar study", "Load table", "LED circuit", "Plant"]), f"fourteen blocks ({sorted(byt)})")
+ok(len(P.links) == 9 and sum(k.a_cell == "geometry" and k.b_cell == "geometry" for k in P.links) == 6, f"six wires, geometry to geometry, one from a setup to the study and two from setups to Coupled Physics ({len(P.links)})")
+ok(sorted((P.node(k.a).title, k.a_cell, P.node(k.b).title, k.b_cell) for k in P.links if k.b_cell == "physics") == [("Bar growth", "setup", "Bar thermal stress", "physics"), ("Bar heating", "setup", "Bar thermal stress", "physics")],
+   "the Coupled Physics block takes the Setup of the heat and of the stress analysis of the bar")
 import wb_canvas as _cv
 import wb_route as _wr
 _its = list(W.scene.items_by_id.values())
-ok(len(_its) == 11 and all(_cv.clear_of(a.keep(), [b.keep() for b in _its if b is not a]) for a in _its), "the blocks of the example keep the gap from each other")
+ok(len(_its) == 14 and all(_cv.clear_of(a.keep(), [b.keep() for b in _its if b is not a]) for a in _its), "the blocks of the example keep the gap from each other")
 _rects = W.scene.keep_rects()
-ok(len(W.scene.link_items) == 5 and all(_wr.crossings([(q.x(), q.y()) for q in l.pts], _rects) == [] for l in W.scene.link_items.values()), "and none of its five wires runs behind a block")
+ok(len(W.scene.link_items) == 9 and all(_wr.crossings([(q.x(), q.y()) for q in l.pts], _rects) == [] for l in W.scene.link_items.values()), "and none of its nine wires runs behind a block")
 src_of = {P.node(k.b).title: P.node(k.a).title for k in P.links if k.b_cell == "geometry"}
 ok([(P.node(k.a).title, k.a_cell, P.node(k.b).title, k.b_cell) for k in P.links if k.b_cell == "setup"] == [("Bar stress", "setup", "Bar study", "setup")], "the study takes the Setup of Bar stress")
-ok(src_of == {"Bar stress": "Bar", "Plate stress 2D": "Plate", "Frame heating": "Frame", "Frame check (needs a setup)": "Frame"}, f"each analysis is wired to its part ({src_of})")
+ok(src_of == {"Bar stress": "Bar", "Plate stress 2D": "Plate", "Frame heating": "Frame", "Frame check (needs a setup)": "Frame", "Bar heating": "Bar", "Bar growth": "Bar"}, f"each analysis is wired to its part ({src_of})")
 ok(not MSGS, f"nothing complained ({MSGS})")
 ok(shell.tabs.count() == 1 and not [i for i in W.editors if W.editor_of(i) is not None], f"no editor is left open ({shell.tabs.count()} tab)")
 ok("Left out or not set up" not in W.line.text(), f"and nothing was left out ({W.line.text()[:100]})")
@@ -92,8 +94,9 @@ for title in ("Bar", "Plate", "Frame"):
 ok(st("Load table") == {"studies": wp.OK, "document": wp.OK}, f"Load table: its document is ok, and its Study Results cell needs no wire ({st('Load table')})")
 for title in ("LED circuit", "Plant"):
     ok(st(title) == {"document": wp.OK}, f"{title}: ok ({st(title)})")
-for title in ("Bar stress", "Plate stress 2D", "Frame heating"):
+for title in ("Bar stress", "Plate stress 2D", "Frame heating", "Bar heating", "Bar growth"):
     ok(st(title) == {"geometry": wp.OK, "setup": wp.OK, "solution": wp.UPDATE, "results": wp.INCOMPLETE}, f"{title}: geometry and setup ok, the solution waits for Update ({st(title)})")
+ok(st("Bar thermal stress") == {"physics": wp.OK, "setup": wp.OK, "solution": wp.UPDATE, "results": wp.INCOMPLETE}, f"Bar thermal stress: Physics and Setup ok (the stress analysis needs no load once it is wired in), the solution waits for Update ({st('Bar thermal stress')})")
 chk = st("Frame check (needs a setup)")
 ok(chk["geometry"] == wp.OK and chk["setup"] == wp.INCOMPLETE and chk["solution"] == wp.INCOMPLETE, f"Frame check: geometry ok, setup incomplete ({chk})")
 why = P.why_incomplete(byt["Frame check (needs a setup)"].id, "setup")
@@ -101,15 +104,20 @@ ok("Setup of 'Frame check" in why and "not set up yet" in why, f"and it says why
 ok(all(not json.dumps(n.data).count("opara_wb") for n in P.nodes.values()), "no temporary folder of the workbench is in any block")
 ok(all('"orig": "/' not in json.dumps(n.data) for n in P.nodes.values()), "and no path of a file on this computer")
 plan = [(s["name"], s["action"]) for s in P.plan_update()]
-ok(len(plan) == 4 and all(a == "update" for _n, a in plan), f"Update would solve the three analyses and run the study, nothing else ({plan})")
+ok(len(plan) == 7 and all(a == "update" for _n, a in plan), f"Update would solve the five analyses, solve them coupled and run the study, nothing else ({plan})")
 ok(st("Bar study") == {"setup": wp.OK, "solution": wp.UPDATE, "results": wp.INCOMPLETE}, f"the study: its Parameters are ok, its Study waits for Update ({st('Bar study')})")
 
 # ---------------------------------------------------------------------------------------------------------------------------- Update Project
 done, failed = W.update_project()
-ok(done == 4 and not failed, f"Update Project solved them and ran the study ({done} done, {failed})")
+ok(done == 7 and not failed, f"Update Project solved them, solved the coupled pair and ran the study ({done} done, {failed})")
 ok(all(v == wp.OK for v in st("Bar study").values()), f"Bar study: every cell ok ({st('Bar study')})")
-for title in ("Bar stress", "Plate stress 2D", "Frame heating"):
+for title in ("Bar stress", "Plate stress 2D", "Frame heating", "Bar heating", "Bar growth", "Bar thermal stress"):
     ok(all(v == wp.OK for v in st(title).values()), f"{title}: every cell ok ({st(title)})")
+wcp = W.editor_of(byt["Bar thermal stress"].id)
+kn = wcp.result.get("known") if wcp is not None and wcp.result else None
+ok(kn is not None and kn["ok"] and abs(kn["got"] - 0.048) / 0.048 < 0.02 and all(c["ok"] for c in wcp.result["checks"]),
+   f"the coupled bar: the far end grows alpha (Tmean - Tref) L = 0.048 mm, PASS beside the number ({kn})")
+ok("PASS" in wcp.report_html() and "Known answer" in wcp.report_html() and "Known answer" in wcp.diagnostics_text(), "the window and its diagnostics report show the known answer")
 wbar = W.editor_of(byt["Bar stress"].id)
 um = wbar.result["umax"] if wbar is not None and wbar.result else None
 ok(um is not None and abs(um - 0.005) / 0.005 < 0.03, f"the bar: u = F L / (A E) = 0.005 mm ({um})")
@@ -139,11 +147,14 @@ ok(size < 3_000_000, f"in one file of a sensible size ({size // 1024} KB: no mes
 W.load(f)
 P = W.project
 byt = {n.title: n for n in P.nodes.values()}
-ok(not P.is_dirty() and len(P.nodes) == 11, "it opens again with eleven blocks, unchanged")
+ok(not P.is_dirty() and len(P.nodes) == 14, "it opens again with fourteen blocks, unchanged")
 ok(all(P.status(byt[t_].id, "solution") == wp.UPDATE for t_ in ("Bar stress", "Plate stress 2D", "Frame heating")), "nothing was computed: the solutions say update")
 ok(P.status(byt["Bar stress"].id, "geometry") == wp.REFRESH, "and the bar analysis still says refresh (the part was changed before it was saved)")
+plan = [(s_["name"], s_["action"]) for s_ in P.plan_update()]
+print("     plan after reopening:", plan)
 done, failed = W.update_project()
-ok(done == 5 and not failed, f"Update Project refreshes it, solves the three and runs the study ({done} steps, {failed})")
+ok(done == len(plan) == 10 and not failed and sum(a_ == "refresh" for _n, a_ in plan) == 3 and sum(a_ == "update" for _n, a_ in plan) == 7,
+   f"Update Project refreshes the three analyses that use the bar, solves the five analyses and the coupled pair, and runs the study ({done} steps, {failed})")
 wbar = W.editor_of(byt["Bar stress"].id)
 ok(abs(wbar.geom["volume"] - 20000) < 1e-6 and wbar.result is not None, f"the bar analysis follows the change: the bar is 20 thick now (volume {wbar.geom['volume']:.0f})")
 rep = W.report_text()
@@ -166,10 +177,10 @@ ok(W.sync_editors() == [byt["Load table"].id] and P.is_dirty(), "and the project
 
 # loading it again replaces it; with no program window the analyses cannot be set up, and it says so
 W.load_example()
-ok(len(W.project.nodes) == 11, "loading it again gives eleven blocks, not twenty-two")
+ok(len(W.project.nodes) == 14, "loading it again gives fourteen blocks, not twenty-eight")
 bare = wb_tab.WorkbenchTab(None)
 probs = wb_example.load(bare)
-ok(any("no program window" in p for p in probs) and len(bare.project.nodes) == 11, f"without a program window the blocks are made and it says the analyses need setting up ({probs[:1]})")
+ok(any("no program window" in p for p in probs) and len(bare.project.nodes) == 14, f"without a program window the blocks are made and it says the analyses need setting up ({probs[:1]})")
 ok(bare.project.status(next(n.id for n in bare.project.nodes.values() if n.title == "Bar stress"), "setup") == wp.INCOMPLETE, "(they say incomplete)")
 
 print()

@@ -175,39 +175,92 @@ def stiffness(kind, X, D):
     return K
 
 
-def recover(kind, X, D, ue):
+_E0 = np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])                    # a thermal strain is the same in every normal direction and has no shear
+
+
+def _inc_thermal(X, D, e0):
+    """The thermal load of the 8-node brick in its two parts: on the displacement modes (ne, 24) and on the incompatible modes (ne, 9).
+    e0 (ne, 8): the thermal strain alpha (T - Tref) at the nodes."""
+    N, dN, w = tables(1, 2)
+    pts, _w = gauss(2)
+    _N0, dN0 = shape(1, np.zeros((1, 3)))
+    J0, det0, Ji0 = _jac(X, dN0[0])
+    ne = len(X)
+    fu, fa = np.zeros((ne, 24)), np.zeros((ne, 9))
+    for p, n, dn, wi in zip(pts, N, dN, w):
+        J, det, Ji = _jac(X, dn)
+        B = bmat(_grads(Ji, dn))
+        Bi = bmat(np.einsum("eba,ma->emb", Ji0, _INC(p)) * (det0 / det)[:, None, None])
+        Ds0 = ((e0 @ n)[:, None] * _E0[None, :]) @ D.T
+        fu += (wi * det)[:, None] * np.einsum("eri,er->ei", B, Ds0)
+        fa += (wi * det)[:, None] * np.einsum("eri,er->ei", Bi, Ds0)
+    return fu, fa
+
+
+def thermal_forces(kind, X, D, e0):
+    """Consistent nodal forces (ne, nodes, 3) of a thermal strain: e0 (ne, nodes) is alpha (T - Tref) at the nodes of every element, the same in x, y and z
+    (the 8-node brick condenses its incompatible modes out, exactly as its stiffness does)."""
+    order = 2 if X.shape[1] == 20 else 1
+    ne, nn = X.shape[0], X.shape[1]
+    if kind == "hex" and order == 1:
+        fu, fa = _inc_thermal(X, D, e0)
+        Kuu, Kua, Kaa, _v = _inc_parts(X, D, 2)
+        f = fu - np.einsum("eia,ea->ei", Kua, np.linalg.solve(Kaa, fa[:, :, None])[:, :, 0])
+        return f.reshape(ne, nn, 3)
+    N, dN, w = tables(order, 3)
+    f = np.zeros((ne, 3 * nn))
+    for n, dn, wi in zip(N, dN, w):
+        J, det, Ji = _jac(X, dn)
+        B = bmat(_grads(Ji, dn))
+        Ds0 = ((e0 @ n)[:, None] * _E0[None, :]) @ D.T
+        f += (wi * det)[:, None] * np.einsum("eri,er->ei", B, Ds0)
+    return f.reshape(ne, nn, 3)
+
+
+def recover(kind, X, D, ue, e0=None, energy=False):
     """Per element: the largest von Mises stress at the integration points, the volume-weighted mean stress (ne, 6) and the volume.
-    ue (ne, 3 nodes): the element's displacements."""
+    ue (ne, 3 nodes): the element's displacements.  e0 (ne, nodes): the thermal strain alpha (T - Tref) at the nodes (None: no temperature); the stress then comes from
+    the strain that is not thermal.  energy=True also returns the elastic strain energy of every element (half the integral of strain-minus-thermal-strain . stress)."""
     order = 2 if X.shape[1] == 20 else 1
     ne = len(X)
     vmax = np.zeros(ne)
     mean = np.zeros((ne, 6))
     vol = np.zeros(ne)
+    en = np.zeros(ne)
+
+    def point(strain, n, wd):
+        nonlocal vmax, mean, vol, en
+        if e0 is not None:
+            strain = strain - (e0 @ n)[:, None] * _E0[None, :]
+        sg = strain @ D.T
+        vmax = np.maximum(vmax, vm(sg))
+        mean += wd[:, None] * sg
+        vol += wd
+        en += 0.5 * wd * np.einsum("er,er->e", strain, sg)
+
     if kind == "hex" and order == 1:
         Kuu, Kua, Kaa, _v = _inc_parts(X, D, 2)
-        alpha = -np.linalg.solve(Kaa, np.einsum("eia,ei->ea", Kua, ue)[:, :, None])[:, :, 0]
+        rhs = -np.einsum("eia,ei->ea", Kua, ue)
+        if e0 is not None:
+            rhs = rhs + _inc_thermal(X, D, e0)[1]
+        alpha = np.linalg.solve(Kaa, rhs[:, :, None])[:, :, 0]
         pts, _w = gauss(2)
         N, dN, w = tables(1, 2)
         _N0, dN0 = shape(1, np.zeros((1, 3)))
         J0, det0, Ji0 = _jac(X, dN0[0])
-        for p, dn, wi in zip(pts, dN, w):
+        for p, n, dn, wi in zip(pts, N, dN, w):
             J, det, Ji = _jac(X, dn)
             B = bmat(_grads(Ji, dn))
             Bi = bmat(np.einsum("eba,ma->emb", Ji0, _INC(p)) * (det0 / det)[:, None, None])
-            sg = (np.einsum("eri,ei->er", B, ue) + np.einsum("eri,ei->er", Bi, alpha)) @ D.T
-            vmax = np.maximum(vmax, vm(sg))
-            mean += (wi * det)[:, None] * sg
-            vol += wi * det
-        return vmax, mean / vol[:, None], vol
-    N, dN, w = tables(order, 3)
-    for dn, wi in zip(dN, w):
-        J, det, Ji = _jac(X, dn)
-        B = bmat(_grads(Ji, dn))
-        sg = np.einsum("eri,ei->er", B, ue) @ D.T
-        vmax = np.maximum(vmax, vm(sg))
-        mean += (wi * det)[:, None] * sg
-        vol += wi * det
-    return vmax, mean / vol[:, None], vol
+            point(np.einsum("eri,ei->er", B, ue) + np.einsum("eri,ei->er", Bi, alpha), n, wi * det)
+    else:
+        N, dN, w = tables(order, 3)
+        for n, dn, wi in zip(N, dN, w):
+            J, det, Ji = _jac(X, dn)
+            B = bmat(_grads(Ji, dn))
+            point(np.einsum("eri,ei->er", B, ue), n, wi * det)
+    out = (vmax, mean / vol[:, None], vol)
+    return out + (en,) if energy else out
 
 
 def body_forces(kind, X, b):

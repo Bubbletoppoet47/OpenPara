@@ -216,11 +216,12 @@ def set_sizes(setup, geom, fid, col_sizes, row_sizes):
     return rec
 
 
-def check_ready(setup, geom=None):
-    """The reason why nothing can run yet, or None.  `geom` (when given and an assembly) also checks every body's material and that the bodies hold together."""
+def check_ready(setup, geom=None, thermal=False):
+    """The reason why nothing can run yet, or None.  `geom` (when given and an assembly) also checks every body's material and that the bodies hold together.
+    thermal=True: a temperature is a load (a Coupled Physics solve), so the setup needs none of its own."""
     if not setup["supports"]:
         return "Add at least one support."
-    if not setup["loads"] and not any(s_.get("mode") == "disp" and any(s_.get(k) not in (None, 0, 0.0) for k in ("ux", "uy", "uz")) for s_ in setup["supports"]):
+    if not thermal and not setup["loads"] and not any(s_.get("mode") == "disp" and any(s_.get(k) not in (None, 0, 0.0) for k in ("ux", "uy", "uz")) for s_ in setup["supports"]):
         return "Add at least one load (or a Displacement that moves a face)."
     if geom is not None and geom.get("bodies"):
         import solid_asm
@@ -271,22 +272,29 @@ def face_normal(q, geom, fid):
     return n / ln if ln > 1e-12 else np.asarray(geom["faces"][fid]["normal"], float)
 
 
-def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None):
+def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None, thermal=None):
+    """thermal: None, or {"T": ...} for the mesh, or a function of the mesh q that gives that (the mesh is made inside, so the temperature is looked up on its nodes)."""
     h = r["h"] or auto_h(geom)
     if r.get("adapt"):                                                         # solve, refine, solve again (solid_adapt)
+        if thermal is not None:
+            raise fem.FemError("The adaptive mesh loop does not include a temperature yet: untick 'Adaptive mesh (h)' for a thermal-stress solve.")
         return sad.run(geom, r, h, cache, cancel, progress, get_mesh, solve_mesh)
     q = get_mesh(geom, h, cache, cancel, progress, r.get("mesh"))
-    return solve_mesh(geom, r, h, q, cancel, progress)
+    if callable(thermal):
+        thermal = thermal(q)
+    return solve_mesh(geom, r, h, q, cancel, progress, thermal)
 
 
-def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
-    """Solves the setup `r` on the mesh `q` (element size `h`) and returns the result dict."""
+def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None, thermal=None):
+    """Solves the setup `r` on the mesh `q` (element size `h`) and returns the result dict.
+    thermal = {"T": the temperature at every node of the mesh q (kelvin)}: the body is heated or cooled to it from the material's reference temperature
+    (material["Tref"], 20 degC when missing) and expands by material["alpha"] (1/K, needed; an assembly: each body's own).  It is a load of its own: no other load is then needed."""
     mat = r["material"]
     sizes = fem.element_sizes(geom, h, r.get("mesh"))                           # the element size of every part (one entry for a single part)
     mats = r.get("materials") if geom.get("bodies") else None
     nodes, conn, groups = q["nodes"], q["conn"], q["groups"]
     if mats:                                                                   # an assembly: every body's elements carry its own material
-        groups = [dict(g, mat=(mats[g["body"]]["E"], mats[g["body"]]["nu"])) for g in groups]
+        groups = [dict(g, mat=(mats[g["body"]]["E"], mats[g["body"]]["nu"]), alpha=mats[g["body"]].get("alpha"), Tref=mats[g["body"]].get("Tref")) for g in groups]
         q = dict(q, groups=groups)
     nn = len(nodes)
     ftri = q["ftri"]                                                           # the nodes of the triangles of every face: 6 per triangle (quadratic) or 3
@@ -347,12 +355,20 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
             force += fb
             applied += fb.reshape(-1, 3).sum(axis=0)
     imposed = any(s["mode"] == "disp" and any(s[k] not in (None, 0.0) for k in ("ux", "uy", "uz")) for s in r["supports"])      # a movement is a load too
-    if not np.any(force) and not imposed:
+    th, fth = None, None
+    if thermal is not None:
+        th = {"T": np.asarray(thermal["T"], float), "alpha": mat.get("alpha"), "Tref": mat.get("Tref", 293.15)}
+        fth = fem.thermal_load(nodes, groups, mat["E"], mat["nu"], th)
+        force = force + fth                                                         # (an internal load: it adds nothing to the applied total)
+    if not np.any(force) and not imposed and th is None:
         raise fem.FemError("The loads are all zero.")
     u, reac, info, K, D = fem.solve(q, mat["E"], mat["nu"], cons, force, cancel, progress)
     progress("stresses")
     fem._stage(progress, "stress", float(sum(len(g["conn"]) for g in groups)))
-    vm_el, sig, vol = fem.stresses(nodes, groups, D, u.ravel())
+    if th is not None:
+        vm_el, sig, vol, en_th = fem.stresses(nodes, groups, D, u.ravel(), th, True)
+    else:
+        vm_el, sig, vol = fem.stresses(nodes, groups, D, u.ravel())
     w = np.zeros(nn)
     acc = np.zeros(nn)
     base = 0
@@ -370,6 +386,8 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
     s1, s3 = fem.principal(sig)
     total_reac = np.asarray(info["total_reaction"])
     energy = 0.5 * float(u.ravel() @ (K @ u.ravel())) if imposed else 0.5 * float(force @ u.ravel())      # (a displacement does the work, not only the loads)
+    if th is not None:
+        energy = en_th                                                          # half u.f would count the thermal strain too: the elastic energy is the strain minus the thermal strain
     un = np.linalg.norm(u, axis=1)
     vmax = float(vm_el.max())
     fos_y = (mat["sy"] / vmax) if vmax > 0 and mat.get("sy") else None
@@ -386,8 +404,8 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
            "counts": {"tets": len(conn), "hexes": int(len(q.get("hexes", ()))), "pyramids": int(len(q.get("pyrs", ())))}, "viewcells": q.get("viewcells"),
            "hexdom_note": q.get("hexdom_note"), "tet_body": q.get("tet_body"),
            "order": int(q["order"]), "quality": q.get("quality"), "mesh_opts": r.get("mesh"),
-           "equilibrium": float(np.linalg.norm(total_reac + applied) / max(np.linalg.norm(applied), (float(np.linalg.norm(reac, axis=1).sum()) if imposed else 0.0), 1e-12)),
-           "info": info,
+           "equilibrium": float(np.linalg.norm(total_reac + applied) / max(np.linalg.norm(applied), (float(np.linalg.norm(reac, axis=1).sum()) if imposed else 0.0), (float(np.linalg.norm(fth)) if th is not None else 0.0), 1e-12)),
+           "info": info, "thermal": (None if th is None else _thermal_summary(th, mat, mats)),
            "material": dict(mat)}
     if per_body is not None:
         res.update({"bodies": per_body, "sy_node": sy_node, "material": dict(mat, sy=0.0, su=0.0), "bond_tol": geom.get("tol"),
@@ -395,6 +413,17 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
         res["notes"] = thin_notes(geom, h, sizes)
         res["part_sizes"] = [{"name": b["name"], "h": float(sizes[i])} for i, b in enumerate(geom["bodies"])]
     return res
+
+
+def _thermal_summary(th, mat, mats):
+    """What a thermal-stress result says about its temperature: the range of the field and the expansion data the bodies used (kelvin, 1 / kelvin)."""
+    out = {"T_min": float(th["T"].min()), "T_max": float(th["T"].max())}
+    ms = list(mats) if mats else [mat]
+    al = [float(m["alpha"]) for m in ms if m.get("alpha") is not None]
+    tr = [float(m.get("Tref") if m.get("Tref") is not None else 293.15) for m in ms if m.get("alpha") is not None]
+    if al:
+        out.update(alpha_min=min(al), alpha_max=max(al), Tref_min=min(tr), Tref_max=max(tr))
+    return out
 
 
 def _per_body(geom, mats, groups, vm_el, vol, nn):

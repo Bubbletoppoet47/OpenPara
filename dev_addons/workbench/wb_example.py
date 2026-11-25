@@ -6,11 +6,15 @@
                    Plate stress 2D     2D Static Structural from Plate: fixed on the left edge, 0.5 MPa on the right edge
                    Frame heating       3D Thermal from Frame: 100 C at one end, 20 C at the other
                    Frame check         3D Static Structural from Frame with NO setup: it says what is missing (the example of an incomplete cell)
+    Coupled        Bar heating         3D Thermal from Bar: 100 C at one end, 20 C at the other
+                   Bar growth          3D Static Structural from Bar: three symmetry planes hold it, NO load; steel, free of thermal stress at 20 C
+                   Bar thermal stress  Coupled Physics of the two: the heat analysis is solved, its temperature goes to the stress analysis, and the far end of the bar grows
+                                       alpha (Tmean - Tref) L = 12e-6 x 40 x 100 = 0.048 mm: a known answer that is checked (PASS / FAIL) in its window
     Study          Bar study           Parametric Study of Bar stress (wired from its Setup; a new study runs one design point, as the analysis is)
     Tools          Load table (Sheets, with formulas), LED circuit (Circuits), Plant (Systems and Controls)
 
 Loading does not compute anything: the geometry cells are refreshed (the parts are copied into the analyses) and the setups are made in the usual windows (as a person would),
-then every window is closed again.  Update Project solves the three analyses and runs the study; change a part and the analyses that use it say 'refresh'.
+then every window is closed again.  Update Project solves the five analyses and the coupled pair and runs the study; change a part and the analyses that use it say 'refresh'.
 A kind whose add-on is not installed is left out (and said).  load(tab) -> [what could not be done].
 """
 import json
@@ -140,6 +144,25 @@ def setup_plate_2d(sid):
     return fn
 
 
+def setup_bar_growth(w):
+    """Three symmetry planes (no rigid movement, nothing else held), no load, steel that is free of thermal stress at 20 C: the temperature is the whole load."""
+    w.add_support("disp", [face_by_normal(w, [-1, 0, 0])], {"ux": 0.0, "uy": None, "uz": None})
+    w.add_support("disp", [face_by_normal(w, [0, -1, 0])], {"ux": None, "uy": 0.0, "uz": None})
+    w.add_support("disp", [face_by_normal(w, [0, 0, -1])], {"ux": None, "uy": None, "uz": 0.0})
+    w.e_alpha.setText("1.2e-5")
+    w.e_tref.setText("20")
+    w.set_size("6")
+    w.inputs_changed()
+
+
+KNOWN = {"name": "the far end of the bar grows alpha (Tmean - Tref) L", "expected": 12e-6 * 40.0 * 100.0, "unit": "mm", "tol_pct": 2.0, "axis": 0}
+
+
+def setup_coupled(w):
+    w.options["known"] = dict(KNOWN)
+    w.save()
+
+
 def setup_frame_heating(w):
     w.add_condition("temps", {"T": 373.15}, [face_by_normal(w, [-1, 0, 0], True)], "Hot end")
     w.add_condition("temps", {"T": 293.15}, [face_by_normal(w, [1, 0, 0], True)], "Cold end")
@@ -157,7 +180,8 @@ def load(tab):
     nFrame = tab.add_block("assembly", 40, 500, title="Frame", data={"asm": frame_asm(100, 10, 20)})
     made = {}
     for key, kind, x, y, title, src in (("bar", "solid", 380, 60, "Bar stress", nBar), ("plate", "fea", 380, 280, "Plate stress 2D", nPlate),
-                                        ("heat", "thermal3d", 380, 500, "Frame heating", nFrame), ("check", "solid", 380, 720, "Frame check (needs a setup)", nFrame)):
+                                        ("heat", "thermal3d", 380, 500, "Frame heating", nFrame), ("check", "solid", 380, 720, "Frame check (needs a setup)", nFrame),
+                                        ("bheat", "thermal3d", 380, 940, "Bar heating", nBar), ("grow", "solid", 380, 1160, "Bar growth", nBar)):
         ok, why = nodes.availability(tab, kind)
         if not ok:
             problems.append(f"{title}: {why}")
@@ -165,6 +189,15 @@ def load(tab):
         n = tab.add_block(kind, x, y, title=title)
         tab.scene.make_link(src.id, "geometry", n.id, "geometry")
         made[key] = n
+    nCoupled = None
+    if "bheat" in made and "grow" in made:                   # the Coupled Physics block: wired from the Setup of the heat and of the stress analysis
+        ok, why = nodes.availability(tab, "coupled")
+        if ok:
+            nCoupled = tab.add_block("coupled", 720, 1050, title="Bar thermal stress")
+            tab.scene.make_link(made["bheat"].id, "setup", nCoupled.id, "physics")
+            tab.scene.make_link(made["grow"].id, "setup", nCoupled.id, "physics")
+        else:
+            problems.append(f"Bar thermal stress: {why}")
     nStudy = None
     if "bar" in made:                                        # a parametric study of the bar analysis (when the add-on for it is there)
         ok, why = nodes.availability(tab, "study")
@@ -192,16 +225,22 @@ def load(tab):
     if h is None or not hasattr(h, "new_addon_tab"):
         problems.append("The analyses could not be set up here (there is no program window): open them and make the setup by hand.")
     else:
-        for key, fn, title in (("bar", setup_bar_stress, "Bar stress"), ("plate", setup_plate_2d(plate_sid), "Plate stress 2D"), ("heat", setup_frame_heating, "Frame heating")):
+        for key, fn, title in (("bar", setup_bar_stress, "Bar stress"), ("plate", setup_plate_2d(plate_sid), "Plate stress 2D"), ("heat", setup_frame_heating, "Frame heating"),
+                               ("bheat", setup_frame_heating, "Bar heating"), ("grow", setup_bar_growth, "Bar growth")):
             if key not in made:
                 continue
             try:
                 with_editor(tab, made[key], fn)
             except Exception as ex:                          # noqa: BLE001
                 problems.append(f"{title}: its setup could not be made ({type(ex).__name__}: {ex})")
-    if nStudy is not None:                                   # (its Parameters cell takes the setup that was just made: nothing is computed)
-        tab.refresh_project(only=[nStudy.id])
+    if nCoupled is not None and h is not None and hasattr(h, "new_addon_tab"):
+        try:
+            with_editor(tab, nCoupled, setup_coupled)        # (the known answer of the bar goes into the block's own options)
+        except Exception as ex:                              # noqa: BLE001
+            problems.append(f"Bar thermal stress: its known answer could not be set ({type(ex).__name__}: {ex})")
+    if nStudy is not None or nCoupled is not None:           # (their cells take the setups that were just made: nothing is computed)
+        tab.refresh_project(only=[n.id for n in (nStudy, nCoupled) if n is not None])
     tab.scene.refresh()
-    tab.say(f"Example loaded: {len(tab.project.nodes)} blocks. Nothing is computed yet: press Update Project and the three analyses are solved and the study runs." +
+    tab.say(f"Example loaded: {len(tab.project.nodes)} blocks. Nothing is computed yet: press Update Project and the analyses are solved (the coupled one with its PASS / FAIL known answer) and the study runs." +
             ("  Left out or not set up: " + "; ".join(problems) if problems else ""))
     return problems

@@ -96,8 +96,15 @@ class SolidWindow(SolidBase):
         self.read_adapt()
 
     def read_physics(self):
-        return {"E": s_in(num(self.e_E, "E")), "nu": num(self.e_nu, "Poisson's ratio"), "rho": r_in(num(self.e_rho, "Density")),
-                "sy": s_in(num(self.e_sy, "Yield strength")), "su": s_in(num(self.e_su, "Ultimate strength"))}
+        out = {"E": s_in(num(self.e_E, "E")), "nu": num(self.e_nu, "Poisson's ratio"), "rho": r_in(num(self.e_rho, "Density")),
+               "sy": s_in(num(self.e_sy, "Yield strength")), "su": s_in(num(self.e_su, "Ultimate strength"))}
+        if self.e_alpha.text().strip():                                   # thermal expansion (only used when a temperature is given: Coupled Physics)
+            a = num(self.e_alpha, "The thermal expansion coefficient")
+            if not (0 < abs(a) < 1e-2):
+                raise ValueError("The thermal expansion coefficient is per kelvin: steel is about 12e-6.")
+            out["alpha"] = a
+            out["Tref"] = (num(self.e_tref, "The reference temperature") if self.e_tref.text().strip() else 20.0) + 273.15
+        return out
 
     def store_physics(self, m):
         self.setup["material"] = m
@@ -120,7 +127,8 @@ class SolidWindow(SolidBase):
         """Every label that carries a unit, in the program's current units."""
         D = UD()
         for key, text in (("E", f"Young's modulus E ({D['S']})"), ("nu", "Poisson's ratio"), ("rho", f"Density ({D['rho']})"),
-                          ("sy", f"Yield strength ({D['S']})"), ("su", f"Ultimate strength ({D['S']})")):
+                          ("sy", f"Yield strength ({D['S']})"), ("su", f"Ultimate strength ({D['S']})"),
+                          ("alpha", "Thermal expansion α (1/K)"), ("tref", "Reference temperature (°C)")):
             self.mat_labels[key].setText(text)
         super().refresh_labels()
         self.e_probe.setPlaceholderText(f"x, y, z  ({D['L']})")
@@ -159,8 +167,10 @@ class SolidWindow(SolidBase):
     def use_source_material(self, mat):
         e = mat.get("E_MPa")
         if e:
+            import mat_lib
+            x = mat_lib.expansion(mat)
             self.put_material({"E": e, "nu": mat.get("nu") or 0.3, "rho": mat.get("density") or 7850.0, "sy": mat.get("Sy_MPa") or 0.0,
-                               "su": mat.get("Su_MPa") or 0.0})
+                               "su": mat.get("Su_MPa") or 0.0, **({"alpha": x[0], "Tref": x[1]} if x is not None else {})})
             nm = mat.get("name")
             self.select_material_name(nm if nm and self.library_entry(nm) else None)
             self.read_inputs()
@@ -224,9 +234,12 @@ class SolidWindow(SolidBase):
         self.mat_note.setWordWrap(True)
         self.mat_note.setStyleSheet("color:#707070;")
         f = QFormLayout()
-        self.e_E, self.e_nu, self.e_rho, self.e_sy, self.e_su = (QLineEdit() for _ in range(5))
+        self.e_E, self.e_nu, self.e_rho, self.e_sy, self.e_su, self.e_alpha, self.e_tref = (QLineEdit() for _ in range(7))
+        self.e_alpha.setToolTip("Linear thermal expansion coefficient, per kelvin (about 12e-6 for steel, 23e-6 for aluminium). It is used only when a temperature is "
+                                "given to this analysis (a Coupled Physics block). Empty = none: a thermal-stress solve will say so.")
+        self.e_tref.setToolTip("The temperature, in degC, at which the material is free of thermal stress.")
         self.mat_labels = {}
-        for e, key in ((self.e_E, "E"), (self.e_nu, "nu"), (self.e_rho, "rho"), (self.e_sy, "sy"), (self.e_su, "su")):
+        for e, key in ((self.e_E, "E"), (self.e_nu, "nu"), (self.e_rho, "rho"), (self.e_sy, "sy"), (self.e_su, "su"), (self.e_alpha, "alpha"), (self.e_tref, "tref")):
             lab = QLabel()
             self.mat_labels[key] = lab
             f.addRow(lab, e)
@@ -546,7 +559,8 @@ class SolidWindow(SolidBase):
 
     def add_material(self):
         nm = sim_matdlg.add_material(self, self.library, unitctl.system(),
-                                     {"E": self.e_E.text(), "nu": self.e_nu.text(), "sy": self.e_sy.text(), "su": self.e_su.text(), "eu": ""})
+                                     {"E": self.e_E.text(), "nu": self.e_nu.text(), "sy": self.e_sy.text(), "su": self.e_su.text(), "eu": "",
+                                      "alpha": self.e_alpha.text(), "tref": self.e_tref.text()})
         if nm is not None:
             self.fill_materials(select=nm)
             self.material_picked()
@@ -571,7 +585,8 @@ class SolidWindow(SolidBase):
             cur = self.setup["material"]
             self.put_material({"E": m_["E_MPa"], "nu": m_["nu"], "rho": m_.get("density") or cur.get("rho") or 7850.0,
                                "sy": m_["Sy_MPa"] if m_.get("Sy_MPa") is not None else cur.get("sy", 0.0),
-                               "su": m_["Su_MPa"] if m_.get("Su_MPa") is not None else cur.get("su", 0.0)})
+                               "su": m_["Su_MPa"] if m_.get("Su_MPa") is not None else cur.get("su", 0.0),
+                               **({"alpha": m_["alpha"], "Tref": m_.get("Tref_K", pm.TREF_K)} if m_.get("alpha") is not None else {})})
             self.setup["mat_name"] = name
         else:
             self.setup.pop("mat_name", None)
@@ -584,6 +599,9 @@ class SolidWindow(SolidBase):
         for e, k, fn in ((self.e_E, "E", s_out), (self.e_nu, "nu", float), (self.e_rho, "rho", r_out), (self.e_sy, "sy", s_out),
                          (self.e_su, "su", s_out)):
             e.setText(format(fn(float(m.get(k) or 0.0)), ".8g"))
+        a = m.get("alpha")                                                # thermal expansion: blank = the material has none
+        self.e_alpha.setText("" if a is None else format(float(a), ".6g"))
+        self.e_tref.setText(format(float(m.get("Tref") if m.get("Tref") is not None else 293.15) - 273.15, ".6g"))
 
     def fill_bodies(self):
         t = self.body_table
@@ -632,8 +650,11 @@ class SolidWindow(SolidBase):
         b = self.geom["bodies"][self.cur_body]
         base = b["material"]
         own = {k: float(m[k]) for k in ("E", "nu", "rho", "sy", "su")}
+        for k in ("alpha", "Tref"):                                       # (only when the box has one; a body whose material has none keeps none)
+            if m.get(k) is not None:
+                own[k] = float(m[k])
         mine = self.setup.setdefault("body_mats", {})
-        if all(abs(own[k] - float(base[k])) <= 1e-9 * max(1.0, abs(float(base[k]))) for k in own):
+        if all(abs(own[k] - float(base[k] if base.get(k) is not None else (0.0 if k == "alpha" else 293.15))) <= 1e-9 * max(1.0, abs(float(base.get(k) or 1.0))) for k in own):
             mine.pop(b["name"], None)
         else:
             own["name"] = self.mat_combo.currentData() or ""
@@ -918,7 +939,9 @@ class SolidWindow(SolidBase):
             self.read_inputs()
         except ValueError as ex:
             return str(ex)
-        return sm.check_ready(self.setup, self.geom)
+        return sm.check_ready(self.setup, self.geom, thermal=self.coupled_in is not None)
+
+    coupled_in = None        # a Coupled Physics block sets this to a function: (the nodes of the mesh (n, 3), the mesh) -> the temperature there (kelvin)
 
     def run_solve(self):
         why = self.ready()
@@ -932,8 +955,11 @@ class SolidWindow(SolidBase):
             return False
         g = self.geom
 
+        ci = self.coupled_in
+        thermal = None if ci is None else (lambda q: {"T": ci(np.asarray(q["nodes"], float), q)})
+
         def work(progress, cancel):
-            return sm.run(g, r, self.cache, cancel, progress)
+            return sm.run(g, r, self.cache, cancel, progress, thermal=thermal)
         plan = self.job_plan(g, r)
 
         def done(res):
@@ -967,6 +993,8 @@ class SolidWindow(SolidBase):
                 ("Largest principal stress", R.num(s_out(r["s1_max"])), D["S"]), ("Smallest principal stress", R.num(s_out(r["s3_min"])), D["S"]),
                 ("Mass", R.num(r["mass"] * mu[3]), mu[1])]
         html = R.summary(r.get("fos_y"), r.get("fos_u"), rows)
+        if r.get("thermal"):
+            html += R.thermal_block(r["thermal"])
         if r.get("support_reactions"):
             html += R.heading("Reactions", D["F"])
             html += R.grid(["", "Fx", "Fy", "Fz"], [[n, *(R.num(f_out(x)) for x in v)] for n, v in r["support_reactions"]])

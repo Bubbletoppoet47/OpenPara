@@ -897,6 +897,10 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         self.e_t = QLineEdit("1")
         self.e_h = QLineEdit("")
         self.e_sy, self.e_su, self.e_eu = QLineEdit("250"), QLineEdit("400"), QLineEdit("10")
+        self.e_alpha, self.e_tref = QLineEdit(""), QLineEdit("20")
+        self.e_alpha.setToolTip("Linear thermal expansion coefficient, per kelvin (about 12e-6 for steel, 23e-6 for aluminium). It is used only when a temperature is "
+                                "given to this analysis (a Coupled Physics block). Empty = none: a thermal-stress solve will say so.")
+        self.e_tref.setToolTip("The temperature, in degC, at which the material is free of thermal stress (the part has no thermal strain at this temperature).")
         self.cb_lin = QCheckBox("Linear solver")
         self.cb_nl = QCheckBox("Nonlinear solver")
         self.cb_lin.setChecked(True)
@@ -919,6 +923,8 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         form.addRow(self.lbl_sy, self.e_sy)
         form.addRow(self.lbl_su, self.e_su)
         form.addRow("Plastic strain at ultimate (%)", self.e_eu)
+        form.addRow("Thermal expansion α (1/K)", self.e_alpha)
+        form.addRow("Reference temperature (°C)", self.e_tref)
         rowc = QHBoxLayout()
         rowc.addWidget(self.cb_lin)
         rowc.addWidget(self.cb_nl)
@@ -953,6 +959,8 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         self.cb_nl.toggled.connect(self.solver_boxes)
         self.e_sy.textEdited.connect(self.set_custom)
         self.e_su.textEdited.connect(self.set_custom)
+        self.e_alpha.textEdited.connect(self.set_custom)
+        self.e_tref.textEdited.connect(self.set_custom)
 
         self.b_mesh = QPushButton("Mesh")
         self.b_mesh.setMinimumHeight(30)
@@ -2283,6 +2291,8 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
                 self.e_su.setText(f"{pm.from_mpa(m_['Su_MPa'], self.unit_combo.currentText()):.10g}")
             if m_.get("eps_u") is not None:
                 self.e_eu.setText(f"{100 * m_['eps_u']:.6g}")
+            self.e_alpha.setText("" if m_.get("alpha") is None else f"{m_['alpha']:.6g}")
+            self.e_tref.setText(f"{m_.get('Tref_K', pm.TREF_K) - 273.15:.6g}")
         self.update_mat_note()
 
     def unit_changed(self, *_):
@@ -2329,7 +2339,7 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
     def add_material(self):
         nm = sim_matdlg.add_material(self, self.library, self.unit_combo.currentText(),
                                      {"E": self.e_E.text(), "nu": self.e_nu.text(), "sy": self.e_sy.text(), "su": self.e_su.text(),
-                                      "eu": self.e_eu.text()})
+                                      "eu": self.e_eu.text(), "alpha": self.e_alpha.text(), "tref": self.e_tref.text()})
         if nm is not None:
             self.fill_materials(select=nm)
             self.material_picked()
@@ -2501,12 +2511,17 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
             raise pf.ModelError("Yield strength, ultimate strength and plastic strain at ultimate cannot be negative.")
         if sy > 0 and su > 0 and su < sy:
             raise pf.ModelError("The ultimate strength cannot be smaller than the yield strength.")
+        alpha = opt(self.e_alpha, "The thermal expansion coefficient")
+        if alpha is not None and not (0 < abs(alpha) < 1e-2):
+            raise pf.ModelError("The thermal expansion coefficient is per kelvin: steel is about 12e-6.")
+        tref = opt(self.e_tref, "The reference temperature")
+        tref = pm.TREF_K if tref is None else tref + 273.15
         if not self.cb_lin.isChecked() and not self.cb_nl.isChecked():
             raise pf.ModelError("Tick the linear solver, the nonlinear solver, or both.")
         ny = opt(self.e_nly, "Stress trigger")
         return {"E": E, "nu": nu, "t": t, "mode": "strain" if self.rb_strain.isChecked() else "stress",
                 "order": self.element_order(),
-                "sy": sy, "su": su, "eps_u": eu, "nl_on": self.cb_nl.isChecked(), "lin_on": self.cb_lin.isChecked(),
+                "sy": sy, "su": su, "eps_u": eu, "alpha": alpha, "Tref": tref, "nl_on": self.cb_nl.isChecked(), "lin_on": self.cb_lin.isChecked(),
                 "nl_disp": opt(self.e_nld, "Displacement trigger"), "nl_yield": None if ny is None else ny / 100.0,
                 "probes": [dict(q) for q in self.probes], "probe_fos": self.probe_fos, "probe_trig": self.probe_trig,
                 "profile": self.profile_for_solver(), "region_mats": self.region_mats_in_units()}
@@ -2526,7 +2541,7 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
             return None
         u = self.unit_combo.currentText()
         return {fid: {"E": pm.from_mpa(m_["E_MPa"], u), "nu": m_["nu"], "sy": pm.from_mpa(m_.get("Sy_MPa") or 0.0, u),
-                      "su": pm.from_mpa(m_.get("Su_MPa") or 0.0, u)} for fid, m_ in rm.items()}
+                      "su": pm.from_mpa(m_.get("Su_MPa") or 0.0, u), "alpha": m_.get("alpha"), "Tref": m_.get("Tref_K")} for fid, m_ in rm.items()}
 
     def build_adaptive(self, lay):
         """The 'Adaptive mesh (h)' tick box and the small menu it reveals (the same words as the 3D window; the loops are physics_refine.fea_auto)."""
@@ -2587,6 +2602,8 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         self.canvas.invalidate()
         self.enable_buttons()
 
+    coupled_in = None        # a Coupled Physics block sets this to a function: the points of the nodes of the mesh (n, 2) -> the temperature there (kelvin)
+
     def run_solve(self):
         try:
             mat = self.read_material()
@@ -2600,10 +2617,20 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
             QMessageBox.warning(self, "Solve", str(ex))
             return
         unconv = any(l["kind"] == "cfd" and not l.get("converged", True) for l in lds)
+        thermal = None
+        if self.coupled_in is not None:                          # a Coupled Physics block gives the temperature of the nodes of this mesh
+            if self.cb_auto.isChecked():
+                QMessageBox.warning(self, "Solve", "The adaptive mesh loop does not include a temperature yet: untick 'Adaptive mesh (h)' for a thermal-stress solve.")
+                return
+            try:
+                thermal = {"T": np.asarray(self.coupled_in(np.asarray(mesh["nodes"], float)), float)}
+            except Exception as ex:                              # noqa: BLE001
+                QMessageBox.warning(self, "Solve", str(ex))
+                return
         if self.cb_auto.isChecked():
             self.run_solve_auto(mat, mesh, sup, lds, unconv)
             return
-        kind, data = self.run_task("Solving", lambda progress, cancel: pf.solve(mesh, mat, sup, lds, progress, cancel))
+        kind, data = self.run_task("Solving", lambda progress, cancel: pf.solve(mesh, mat, sup, lds, progress, cancel, thermal=thermal))
         if kind != "ok":
             self.status("Solve cancelled." if kind == "cancelled" else "Solve failed.")
             return
@@ -2675,6 +2702,8 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         if data.get("solver") == "nonlinear":
             rows.append(("Largest plastic strain", R.num(float(np.max(data["peeq"])) * 100, 4), "%"))
         html = R.summary(data.get("fos_yield"), data.get("fos_ult"), rows)
+        if data.get("thermal"):
+            html += R.thermal_block(data["thermal"])
         if data.get("fos_probe") and data.get("fos_yield_peak") is not None:
             html += R.note(f"Safety factor from the peak stress in the probe region: yield {R.num(data['fos_yield_peak'], 4)}")
         pr_ = data.get("probes") or []
@@ -2737,7 +2766,7 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
     # --- save / restore with the sketch file
     INPUTS = ("e_E", "e_nu", "e_t", "e_h", "rb_strain", "rb_stress", "unit_combo", "cb_def", "cb_mesh", "e_def", "cb_anim",
               "e_frames", "e_dur", "loop_combo", "cb_auto", "e_passes", "e_maxtris",
-              "e_sy", "e_su", "e_eu", "cb_lin", "cb_nl", "e_nld", "e_nly")
+              "e_sy", "e_su", "e_eu", "e_alpha", "e_tref", "cb_lin", "cb_nl", "e_nld", "e_nly")
 
     def export_state(self):
         return {"model_json": self.model.to_json(), "source": getattr(self, "source", ""),

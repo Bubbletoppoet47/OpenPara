@@ -37,10 +37,19 @@ BUILTIN = [
     ("Water", 1000.0, None, None, None, None),
 ]
 KEYS = ("name", "density", "E_MPa", "nu", "Sy_MPa", "Su_MPa")
+EXPANSION_KEYS = ("alpha", "Tref_K")           # linear thermal expansion coefficient (1/K) and the temperature (K) at which the material is free of thermal stress
+TREF_K = 293.15
+# typical thermal expansion coefficients, per kelvin (a material without one - wood, water - has none)
+ALPHA = {"Steel (generic)": 12.0e-6, "Structural steel (A36)": 11.7e-6, "Steel AISI 1018": 11.7e-6, "Stainless steel": 17.3e-6, "Stainless steel 316": 16.0e-6,
+         "Aluminum 6061": 23.6e-6, "Aluminum 7075-T6": 23.4e-6, "Aluminum 2024-T3": 23.2e-6, "Titanium": 8.6e-6, "Brass": 20.0e-6, "Copper": 16.5e-6,
+         "Cast iron": 10.8e-6, "Magnesium AZ31B": 26.0e-6, "Nickel alloy (Inconel 718)": 13.0e-6, "ABS plastic": 90.0e-6, "Nylon": 80.0e-6}
 
 
 def _entry(t):
-    return dict(zip(KEYS, t))
+    d = dict(zip(KEYS, t))
+    if t[0] in ALPHA:
+        d["alpha"], d["Tref_K"] = ALPHA[t[0]], TREF_K
+    return d
 
 
 def user_path():
@@ -51,7 +60,8 @@ def user_path():
 def user_materials():
     try:
         with open(user_path(), "r", encoding="utf-8") as fh:
-            return [{k: m.get(k) for k in KEYS} for m in json.load(fh).get("materials", []) if m.get("name") and m.get("density")]
+            return [{k: m.get(k) for k in KEYS + EXPANSION_KEYS if k in KEYS or m.get(k) is not None} for m in json.load(fh).get("materials", [])
+                    if m.get("name") and m.get("density")]
     except Exception:
         return []
 
@@ -79,7 +89,7 @@ def find(name):
 
 def material_dict(m):
     """A copy of a library entry as the dict stored in a part (keys with no value are left out)."""
-    return {k: m[k] for k in KEYS if m.get(k) is not None}
+    return {k: m[k] for k in KEYS + EXPANSION_KEYS if m.get(k) is not None}
 
 
 def default_material():
@@ -91,6 +101,21 @@ def elastic(mat):
     if not mat or mat.get("E_MPa") is None or mat.get("nu") is None:
         return None
     return float(mat["E_MPa"]), float(mat["nu"]), float(mat.get("Sy_MPa") or 0.0), float(mat.get("Su_MPa") or 0.0)
+
+
+def expansion(mat):
+    """(alpha per kelvin, reference temperature in kelvin) of a part material: its own values, else the library's for its name; None when nobody has one.
+    (Nothing here edits them: the built-in materials carry typical values, and a simulation window has its own boxes.)"""
+    if not mat:
+        return None
+    a, t = mat.get("alpha"), mat.get("Tref_K")
+    if a is None:
+        m = find(mat.get("name"))
+        if m is not None:
+            a, t = m.get("alpha"), (t if t is not None else m.get("Tref_K"))
+    if a is None:
+        return None
+    return float(a), float(TREF_K if t is None else t)
 
 
 def with_elastic(mat):
