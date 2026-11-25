@@ -587,7 +587,8 @@ class AnalysisAdapter(nodes.Adapter):
         if t is None or getattr(t, "model", None) is None:
             return "No sketch has been imported into this analysis yet: choose one in its tab and press Import."
         t.result = None
-        if hasattr(t, "run_mesh") and getattr(t, "mesh", None) is None:
+        m_ = getattr(t, "mesh", None)
+        if hasattr(t, "run_mesh") and (m_ is None or (isinstance(m_, dict) and m_.get("deformed"))):          # (a mesh that follows a body a structure moved is meshed again as drawn)
             t.run_mesh()
             if t.mesh is None:
                 return "the mesh could not be made (see the message in its tab)"

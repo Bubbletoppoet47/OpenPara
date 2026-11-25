@@ -22,8 +22,11 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog, QFormLa
                              QSlider, QSplitter, QTextEdit, QToolButton, QVBoxLayout, QWhatsThis, QWidget)
 
 import physics_cfd as pcfd
+import physics_cfd_heat as pheat
 import physics_refine as prefine
 import units
+import unitctl
+import heatunits as hu
 import physics_solve as psolve
 import result_style
 import physics_store as pstore
@@ -44,7 +47,8 @@ FIELD_LIST = [("Speed", "speed", "node", "m/s"), ("Velocity X", "ux", "node", "m
               ("Vorticity (per element, from the vertex velocities)", "vort", "elem", "1/s"),
               ("Turbulent kinetic energy k (turbulence model)", "k", "node", "m2/s2"),
               ("Specific dissipation omega (turbulence model)", "omega", "node", "1/s"),
-              ("Eddy viscosity ratio nut/nu (turbulence model, per element)", "nut", "elem", "-")]
+              ("Eddy viscosity ratio nut/nu (turbulence model, per element)", "nut", "elem", "-"),
+              ("Temperature of the fluid (heat transfer)", "T", "node", "K")]
 
 
 HELP = {
@@ -115,6 +119,15 @@ HELP = {
     "select": "Click an edge of a solid body on the drawing to select it (Ctrl-click adds or removes more, Esc clears). "
               "The numbers show the pressure and force the flow puts on it. 'Use selection in FEA' selects the same edges in "
               "the FEA tab and opens the pressure-transfer dialog; only the edges you picked are loaded.",
+    "heat": "Also finds the temperature of the fluid: the flow carries heat along (convection) while the fluid conducts it. The walls you choose get a fixed "
+            "temperature or a heat flux, the wind arrives at the inlet temperature, and every other wall is insulated. The temperature does not change the flow "
+            "(density and viscosity stay as typed), so this is right for forced convection with modest temperature differences; hot air rising (buoyancy) is not modelled.",
+    "k": "Thermal conductivity of the fluid. Air is about 0.026 W/(m K), water about 0.6 W/(m K) (shown here in your heat-transfer units, File > Units).",
+    "cp": "Specific heat of the fluid at constant pressure. Air is about 1006 J/(kg K), water about 4182 J/(kg K). The Prandtl number mu cp / k, shown below, is "
+          "about 0.7 for air and 7 for water: the larger it is, the thinner the layer of heated fluid at the wall, so the finer the mesh must be there.",
+    "tin": "Temperature of the wind far upstream. It is the temperature at every inlet side of the box.",
+    "wall_heat": "Select edges of the bodies on the drawing, then Set on selected edges: a fixed temperature, or a heat flux into the fluid (negative = heat taken "
+                 "out of the fluid). An edge that is not listed is insulated: no heat passes through it.",
     "bodies": "Tick the closed outlines that are solid. Outlines inside another outline are ignored. Shared edges between ticked "
               "bodies are treated as inside the solid.",
 }
@@ -165,6 +178,23 @@ def with_help(widget, help_text):
     return w
 
 
+def run_heat(mesh, res, heat, cancel=None):
+    """The temperature of the fluid on a solved flow, put into `res` (res["heat"]).  A problem with the temperature does not throw the flow away:
+    it is written to res["heat_error"] and the window shows it."""
+    try:
+        hres = pheat.solve_temperature(mesh, res, heat, cancel=cancel)
+        if res["status"] != "converged":
+            hres["notes"].append("The flow did not converge, so this temperature belongs to its last step, not to a steady flow.")
+        pheat.attach(res, hres)
+    except pcfd.Cancelled:
+        pass
+    except pcfd.ModelError as ex:
+        res["heat_error"] = str(ex)
+    except Exception:                                                                 # noqa: BLE001
+        res["heat_error"] = "The temperature solve hit an error:\n" + traceback.format_exc()
+    return res
+
+
 class SolveWorker(QThread):
     progress = pyqtSignal(int, int, float, float, float, float, float)
     frame = pyqtSignal(object)
@@ -173,9 +203,9 @@ class SolveWorker(QThread):
     stall = pyqtSignal(object)
     newmesh = pyqtSignal(object, int)
 
-    def __init__(self, mesh, setup, refine=None):
+    def __init__(self, mesh, setup, refine=None, heat=None):
         super().__init__()
-        self.mesh, self.setup, self.refine = mesh, setup, refine
+        self.mesh, self.setup, self.refine, self.heat = mesh, setup, refine, heat
         self.stop = False
         self.event = threading.Event()
         self.answer = "stop"
@@ -194,6 +224,7 @@ class SolveWorker(QThread):
         try:
             setup = dict(self.setup)
             setup["on_stall"] = self.ask_stall
+            mesh_final = self.mesh
             if self.refine:
                 out = prefine.cfd_auto(self.mesh, setup, self.refine["mesh_args"], self.refine["passes"], self.refine["max_tris"],
                                        progress=lambda *a: self.progress.emit(*a), frame=lambda f: self.frame.emit(f),
@@ -201,9 +232,12 @@ class SolveWorker(QThread):
                 res = out["result"]
                 res["refine"] = {"log": out["log"], "reason": out["reason"]}
                 res["all_history"] = out["all_history"]
+                mesh_final = out["mesh"]
             else:
                 res = pcfd.solve(self.mesh, setup, progress=lambda *a: self.progress.emit(*a),
                                  frame=lambda f: self.frame.emit(f), cancel=lambda: self.stop)
+            if self.heat and res["status"] != "stopped":
+                run_heat(mesh_final, res, self.heat, cancel=lambda: self.stop)
             self.done.emit(res)
         except (pcfd.ModelError, pg.GeometryError) as ex:
             self.failed.emit(str(ex), True)
@@ -492,6 +526,11 @@ class CFDCanvas(pt.PhysCanvas):
             p.setPen(QPen(QColor("#202030"), 1.6))
             poly = QPolygonF([self.w2s(*q) for q in pts] + ([self.w2s(*pts[0])] if e["kind"] == "ci" else []))
             p.drawPolyline(poly)
+            c_ = tab.heat_walls.get(e["src"]) if tab.cb_heat.isChecked() else None
+            if c_ is not None:                                                    # an edge with a heat condition: red = fixed temperature, violet = heat flux, green = thermal analysis
+                p.setPen(QPen(QColor({"temp": "#d62728", "flux": "#7b3fa0"}.get(c_["kind"], "#2e8b57")), 3.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                              Qt.PenJoinStyle.RoundJoin))
+                p.drawPolyline(poly)
             if e["src"] in self.sel:
                 p.setPen(QPen(QColor("#ff8c00"), 4.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
                 p.drawPolyline(poly)
@@ -595,7 +634,7 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         lay = sec(2, "Fluid and flow", True, help_text="Units: SI inside; per metre of depth. Typical fluid values - check your source. "
                   "0 deg = the wind blows toward +x, 90 deg = toward +y. Box sides facing the wind are inlets, the opposite sides outlets; a "
                   "side the wind runs exactly along is a free-slip wall.",
-                  summary=lambda: f"{self.fluid_combo.currentText()}, {self.e_speed.text()} at {self.e_angle.text()} deg")
+                  summary=lambda: f"{self.fluid_combo.currentText()}, {self.e_speed.text()} at {self.e_angle.text()} deg" + (", heat" if self.cb_heat.isChecked() else ""))
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.units_note = self.note("")
@@ -621,6 +660,39 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         lay.addLayout(form)
         self.sides_lbl = self.note("")
         lay.addWidget(self.sides_lbl)
+        self.heat_walls = {}                                   # edge key -> {"kind": "temp" | "flux", "v": kelvin | W/m2}: what the user set, always in SI
+        self.heat_inputs_units = self.hunits()                 # the heat-transfer units the three boxes below are written in
+        self.cb_heat = QCheckBox("Include heat transfer (temperature of the fluid)")
+        self.cb_heat.toggled.connect(self.heat_toggled)
+        lay.addWidget(with_help(self.cb_heat, HELP["heat"]))
+        self.heat_box = QWidget()
+        hl = QVBoxLayout(self.heat_box)
+        hl.setContentsMargins(14, 0, 0, 0)
+        hl.setSpacing(3)
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self.e_k, self.e_cp = QLineEdit(""), QLineEdit("")
+        self.e_Tin = QLineEdit(f"{hu.from_si('T', self.heat_inputs_units['T'], 293.15):.6g}")          # 20 degrees C
+        self.lbl_k = self.row(form, "Conductivity", self.e_k, HELP["k"])
+        self.lbl_cp = self.row(form, "Specific heat", self.e_cp, HELP["cp"])
+        self.lbl_Tin = self.row(form, "Inlet temperature", self.e_Tin, HELP["tin"])
+        hl.addLayout(form)
+        self.heat_note = self.note("")
+        hl.addWidget(self.heat_note)
+        hl.addWidget(HelpLabel("Wall conditions (the other walls are insulated)", HELP["wall_heat"]))
+        self.heat_list = QListWidget()
+        self.heat_list.setMaximumHeight(90)
+        hl.addWidget(self.heat_list)
+        row = QHBoxLayout()
+        self.b_heat_set = QPushButton("Set on selected edges...")
+        self.b_heat_set.clicked.connect(self.ask_wall_condition)
+        self.b_heat_off = QPushButton("Remove from selected")
+        self.b_heat_off.clicked.connect(lambda: self.remove_wall_conditions())
+        row.addWidget(self.b_heat_set)
+        row.addWidget(self.b_heat_off)
+        hl.addLayout(row)
+        self.heat_box.setVisible(False)
+        lay.addWidget(self.heat_box)
 
         lay = sec(3, "Domain", False, help_text="Margins around the bodies, in body sizes.",
                   summary=lambda: f"margins {self.e_ml.text()} / {self.e_mr.text()} / {self.e_mb.text()} / {self.e_mt.text()}")
@@ -842,6 +914,11 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         self.fluid_combo.currentIndexChanged.connect(self.fluid_picked)
         self.e_rho.textEdited.connect(self.set_custom_fluid)
         self.e_mu.textEdited.connect(self.set_custom_fluid)
+        self.e_k.textEdited.connect(self.set_custom_fluid)
+        self.e_cp.textEdited.connect(self.set_custom_fluid)
+        for e in (self.e_k, self.e_cp, self.e_mu, self.e_rho):
+            e.textChanged.connect(self.update_heat_note)
+        unitctl.on_heat_change(self.heat_changed)
         for e in (self.e_angle,):
             e.textChanged.connect(self.update_sides)
         for e in (self.e_cfl, self.e_speed, self.e_hb, self.e_dt):
@@ -851,6 +928,7 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
             e.textChanged.connect(self.update_bl_note)
         self.model_changed()
         self.fluid_picked()
+        self.refresh_unit_labels()
         self.update_sides()
         self.enable_buttons()
 
@@ -892,6 +970,7 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
 
     def selection_changed(self):
         sel = list(self.canvas.sel)
+        self.refresh_heat_buttons()
         self.b_send.setEnabled(bool(sel) and self.result is not None)
         self.b_clear_sel.setEnabled(bool(sel))
         if not sel:
@@ -913,8 +992,25 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
             (lo, su), (hi, _), (mean, _) = self.pressure_txt(lo), self.pressure_txt(hi), self.pressure_txt(mean)
             (fx, fu), (fy, _) = self.force_txt(fx), self.force_txt(fy)
             rows.append(f"<b>{name}</b>: pressure {lo:.4g} to {hi:.4g} {su} (mean {mean:.4g}); force on the edge "
-                        f"({fx:.4g}, {fy:.4g}) {fu} per unit of depth")
+                        f"({fx:.4g}, {fy:.4g}) {fu} per unit of depth" + self.heat_edge_text(k))
         self.sel_lbl.setText("<br>".join(rows))
+
+    def heat_edge_text(self, key):
+        """'; temperature 20 to 50 degC, heat into the fluid 3.2 W per metre of depth, h 41 W/(m2 K)' for an edge of the solved result, or ''."""
+        hres = self.result.get("heat") if self.result is not None else None
+        tb = hres["walls"].get(key) if hres else None
+        if tb is None:
+            return ""
+        hs = self.hunits()
+        L = tb["L"]
+        Ltot = max(float(np.sum(L)), 1e-300)
+        q_mean = float(np.sum(0.5 * (tb["q_a"] + tb["q_b"]) * L) / Ltot)
+        txt = (f"; temperature {hu.from_si('T', hs['T'], tb['T_min']):.4g} to {hu.from_si('T', hs['T'], tb['T_max']):.4g} {hs['T']}, "
+               f"heat into the fluid {hu.from_si('P', hs['P'], tb['Q']):.4g} {hs['P']} per metre of depth (mean flux {hu.from_si('q', hs['q'], q_mean):.4g} {hs['q']})")
+        dT = float(np.sum(0.5 * (tb["T_a"] + tb["T_b"]) * L) / Ltot) - hres["T_in"]
+        if tb["kind"] == "temp" and abs(dT) > 0.01:
+            txt += f", h = {hu.from_si('h', hs['h'], q_mean / dT):.4g} {hs['h']} (against the inlet temperature)"
+        return txt
 
     def refresh(self, *_):
         self.canvas.update()
@@ -955,6 +1051,14 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         self.lbl_first.setText(f"First layer ({u['L']})")
         self.lbl_bt.setText(f"Thickness ({u['L']})")
         self.units_note.setText(f"Units: {u['name']}  (change in File > Units)")
+        if hasattr(self, "heat_box"):
+            self.adopt_heat_units()
+            hs = self.hunits()
+            self.lbl_k.setText(f"Conductivity ({hs['k']})")
+            self.lbl_cp.setText(f"Specific heat ({hs['cp']})")
+            self.lbl_Tin.setText(f"Inlet temperature ({hs['T']})")
+            self.refresh_heat_list()
+            self.update_heat_note()
 
     def si_inputs(self):
         """(speed m/s, density kg/m3, viscosity Pa s) from the boxes, which are in the unit system."""
@@ -992,17 +1096,225 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         return "quadratic velocity, linear pressure"
 
     def fluid_picked(self, *_):
-        rho, mu = pcfd.FLUIDS[self.fluid_combo.currentText()]
+        name = self.fluid_combo.currentText()
+        rho, mu = pcfd.FLUIDS[name]
         if rho is not None:
             n = self.unit_name()
             self.e_rho.setText(f"{units.density_from_si(rho, n):.6g}")
             self.e_mu.setText(f"{units.viscosity_from_si(mu, n):.6g}")
+        k, cp = pcfd.FLUID_HEAT.get(name, (None, None))
+        if k is not None:
+            hs = self.hunits()
+            self.e_k.setText(f"{hu.from_si('k', hs['k'], k):.6g}")
+            self.e_cp.setText(f"{hu.from_si('cp', hs['cp'], cp):.6g}")
 
     def set_custom_fluid(self, *_):
         if self.fluid_combo.currentText() != "Custom":
             self.fluid_combo.blockSignals(True)
             self.fluid_combo.setCurrentText("Custom")
             self.fluid_combo.blockSignals(False)
+
+    # --- heat transfer
+    def hunits(self):
+        """The unit of every heat-transfer quantity as File > Units > Heat transfer sets them for this tab's unit system."""
+        try:
+            return unitctl.heat_units(self.unit_name())
+        except Exception:                                                              # noqa: BLE001
+            return unitctl.heat_units()
+
+    def heat_changed(self, *_):
+        try:
+            self.refresh_unit_labels()
+        except RuntimeError:                                                            # the window is gone
+            unitctl.off_heat_change(self.heat_changed)
+
+    def closeEvent(self, ev):
+        unitctl.off_heat_change(self.heat_changed)
+        super().closeEvent(ev)
+
+    def adopt_heat_units(self, old=None):
+        """The three boxes hold numbers in `old` (default: the units they were last written in); write them in the units now chosen."""
+        new = self.hunits()
+        old = dict(old or self.heat_inputs_units)
+        if old != new:
+            for e, q in ((self.e_k, "k"), (self.e_cp, "cp"), (self.e_Tin, "T")):
+                txt = e.text().strip()
+                if not txt:
+                    continue
+                try:
+                    e.setText(f"{hu.from_si(q, new[q], hu.to_si(q, old[q], float(txt))):.6g}")
+                except (ValueError, KeyError):
+                    pass
+        self.heat_inputs_units = new
+
+    def heat_toggled(self, on):
+        self.heat_box.setVisible(bool(on))
+        self.update_heat_note()
+        self.refresh_sections()
+        self.canvas.update()
+
+    def heat_si(self):
+        """(k W/(m K), cp J/(kg K), inlet temperature K) from the boxes, which are in the heat-transfer units."""
+        hs = self.hunits()
+        return (hu.to_si("k", hs["k"], float(self.e_k.text())), hu.to_si("cp", hs["cp"], float(self.e_cp.text())),
+                hu.to_si("T", hs["T"], float(self.e_Tin.text())))
+
+    def update_heat_note(self, *_):
+        if not hasattr(self, "heat_note"):
+            return
+        try:
+            k, cp, _ = self.heat_si()
+            _, rho, mu = self.si_inputs()
+            self.heat_note.setText(f"Prandtl number mu cp / k = {mu * cp / k:.3g};  thermal diffusivity k / (rho cp) = {k / (rho * cp):.3g} m2/s")
+        except (ValueError, ZeroDivisionError):
+            self.heat_note.setText("")
+
+    def wall_text(self, key):
+        """'Line 5: 80 degC (fixed temperature)' for an edge that has a heat condition."""
+        c = self.heat_walls[key]
+        hs = self.hunits()
+        name = f"{pt.KIND_NAME.get(key[0], key[0])} {key[1]}"
+        if c["kind"] == "temp":
+            return f"{name}: {hu.from_si('T', hs['T'], c['v']):.6g} {hs['T']} (fixed temperature)"
+        if c["kind"] == "coupled":
+            return f"{name}: wall of the thermal analysis (Coupled Physics)"
+        return f"{name}: {hu.from_si('q', hs['q'], c['v']):.6g} {hs['q']} (heat flux into the fluid)"
+
+    def refresh_heat_list(self):
+        self.heat_list.clear()
+        for key in sorted(self.heat_walls):
+            self.heat_list.addItem(self.wall_text(key))
+        self.heat_list.setVisible(bool(self.heat_walls))
+        self.refresh_heat_buttons()
+        self.canvas.update()
+
+    def refresh_heat_buttons(self):
+        if not hasattr(self, "b_heat_set"):
+            return
+        sel = list(self.canvas.sel)
+        self.b_heat_set.setEnabled(bool(sel))
+        self.b_heat_off.setEnabled(any(tuple(k) in self.heat_walls for k in sel))
+
+    def set_wall_condition(self, keys, kind, text):
+        """The condition on the edges `keys`: kind 'temp' (the temperature in the temperature unit) or 'flux' (the heat flux into the fluid).  A ModelError says what is wrong."""
+        hs = self.hunits()
+        if kind == "coupled":
+            if not keys:
+                raise pcfd.ModelError("Select at least one edge of a body on the drawing first.")
+            for k in keys:
+                self.heat_walls[tuple(k)] = {"kind": "coupled", "v": 0.0}
+            self.refresh_heat_list()
+            self.invalidate_heat_result()
+            return
+        try:
+            v = float(str(text).replace(",", "."))
+        except ValueError:
+            raise pcfd.ModelError("The value must be a number.")
+        if kind == "temp":
+            si = hu.to_si("T", hs["T"], v)
+            if si <= 0:
+                raise pcfd.ModelError("A temperature must be above absolute zero (0 K).")
+        elif kind == "flux":
+            si = hu.to_si("q", hs["q"], v)
+        else:
+            raise pcfd.ModelError(f"Unknown heat condition '{kind}'.")
+        if not keys:
+            raise pcfd.ModelError("Select at least one edge of a body on the drawing first.")
+        for k in keys:
+            self.heat_walls[tuple(k)] = {"kind": kind, "v": float(si)}
+        self.refresh_heat_list()
+        self.invalidate_heat_result()
+
+    def remove_wall_conditions(self, keys=None):
+        for k in (self.canvas.sel if keys is None else keys):
+            self.heat_walls.pop(tuple(k), None)
+        self.refresh_heat_list()
+        self.invalidate_heat_result()
+
+    def invalidate_heat_result(self):
+        """The flow result stays; a temperature that was found with other conditions is not shown as if it belonged to these."""
+        if self.result is not None and self.result.get("heat") is not None:
+            self.status("The heat conditions changed: solve again to update the temperature.")
+
+    def ask_wall_condition(self):
+        keys = list(self.canvas.sel)
+        if not keys:
+            QMessageBox.information(self, "Heat conditions", "Select at least one edge of a body on the drawing first (click it; Ctrl-click adds more).")
+            return
+        hs = self.hunits()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Heat condition on the selected edges")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(", ".join(f"{pt.KIND_NAME.get(k[0], k[0])} {k[1]}" for k in keys)))
+        kind = QComboBox()
+        kind.addItem("Fixed temperature", "temp")
+        kind.addItem("Heat flux into the fluid", "flux")
+        kind.addItem("Wall of the thermal analysis (Coupled Physics)", "coupled")
+        lay.addWidget(kind)
+        unit = QLabel()
+        edit = QLineEdit()
+        lay.addWidget(unit)
+        lay.addWidget(edit)
+
+        def changed(*_):
+            q = "T" if kind.currentData() == "temp" else "q"
+            coupled = kind.currentData() == "coupled"
+            unit.setText("The temperature and the heat flux of these edges come from the 2D Thermal analysis wired into the same Coupled Physics block."
+                         if coupled else f"Value ({hs[q]})")
+            edit.setEnabled(not coupled)
+            edit.setText("" if q == "q" or coupled else edit.text())
+        kind.currentIndexChanged.connect(changed)
+        changed()
+        row = QHBoxLayout()
+        ok, cancel = QPushButton("OK"), QPushButton("Cancel")
+        ok.clicked.connect(dlg.accept)
+        cancel.clicked.connect(dlg.reject)
+        row.addWidget(ok)
+        row.addWidget(cancel)
+        lay.addLayout(row)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self.set_wall_condition(keys, kind.currentData(), edit.text())
+        except pcfd.ModelError as ex:
+            QMessageBox.warning(self, "Heat conditions", str(ex))
+
+    def coupled_keys(self):
+        """The edges that are walls of a thermal analysis (their temperature and heat flux are handed over inside Coupled Physics), sorted."""
+        have = {e["src"] for e in self.geom["edges"]} if self.geom is not None else set()
+        return sorted(k for k, c in self.heat_walls.items() if c["kind"] == "coupled" and k in have)
+
+    def read_heat(self, allow_coupled=False):
+        """The `heat` dict of physics_cfd_heat.solve_temperature from the boxes and the list (SI), or None when heat transfer is off.  A ModelError says what is wrong.
+        Walls of the thermal analysis are left out of its walls (Coupled Physics adds them) and are refused unless `allow_coupled`."""
+        if not self.cb_heat.isChecked():
+            return None
+        try:
+            k, cp, T_in = self.heat_si()
+        except ValueError:
+            raise pcfd.ModelError("The conductivity, the specific heat and the inlet temperature must be numbers.")
+        if k <= 0 or cp <= 0:
+            raise pcfd.ModelError("The conductivity and the specific heat of the fluid must be greater than zero.")
+        if T_in <= 0:
+            raise pcfd.ModelError("The inlet temperature must be above absolute zero (0 K).")
+        have = {e["src"] for e in self.geom["edges"]}
+        walls = {}
+        coupled = []
+        for key, c in self.heat_walls.items():
+            if key not in have:
+                continue
+            if c["kind"] == "coupled":
+                coupled.append(key)
+                continue
+            walls[key] = {"kind": "temp", "T": c["v"]} if c["kind"] == "temp" else {"kind": "flux", "q": c["v"]}
+        if coupled and not allow_coupled:
+            raise pcfd.ModelError("These walls are set as walls of a thermal analysis: " + ", ".join(f"{pt.KIND_NAME.get(k[0], k[0])} {k[1]}" for k in sorted(coupled)) +
+                                  ". That works only inside a Coupled Physics block (its Solve hands the temperature over). Here, set a temperature or a heat flux on them "
+                                  "or remove the condition.")
+        if not walls and not coupled:
+            raise pcfd.ModelError("Heat transfer is on, but no wall has a temperature or a heat flux: select an edge of a body, press 'Set on selected edges...', "
+                                  "or switch heat transfer off.")
+        return {"k": k, "cp": cp, "T_in": T_in, "walls": walls}
 
     def update_sides(self, *_):
         kinds, _ = pcfd.classify_sides(self.angle_value())
@@ -1221,7 +1533,8 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
                 return None
         return m, g, ids, margins, hb, hf, tr, bl
 
-    def run_mesh(self):
+    def run_mesh(self, shape=None):
+        """Meshes the fluid around the bodies.  shape = None: the bodies as drawn; or, from a Coupled Physics block, {"edges": {edge index: points}}: the bodies as a structure moved them."""
         args = self.read_mesh_inputs()
         if args is None:
             return
@@ -1232,7 +1545,7 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
             QMessageBox.warning(self, "Mesh", str(ex))
             return
         kind, data = self.run_task("Meshing", lambda progress, cancel: pcfd.mesh_fluid(m, g, ids, margins, hb, hf, tr, progress,
-                                                                                         cancel, bl=bl, opts=opts))
+                                                                                         cancel, bl=bl, opts=opts, shape=shape))
         if kind != "ok":
             self.status("Meshing cancelled." if kind == "cancelled" else "Meshing failed.")
             return
@@ -1243,7 +1556,7 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         self.canvas.raster = self.canvas.base = None
         self.canvas.particles = None
         s = data["stats"]
-        self.status(f"Mesh: {s['n_nodes']} vertices, {s['n_tris']} triangles (quadratic velocity nodes are added by the solver); "
+        self.status(("Mesh around the body as the structure moved it: " if shape else "Mesh: ") + f"{s['n_nodes']} vertices, {s['n_tris']} triangles (quadratic velocity nodes are added by the solver); "
                     f"smallest angle {s['angle_min']:.1f} deg, worst aspect ratio {s['aspect_max']:.2f}."
                     + ("  NOTE: " + "; ".join(s["relaxed"]) + "." if s.get("relaxed") else ""))
         self.frame_lbl.setText("no frames yet")
@@ -1283,9 +1596,19 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
             if check_mesh and not self.mesh["stats"].get("bl"):
                 raise pcfd.ModelError("The turbulence model needs the boundary-layer mesh: select the model, then press Mesh again.")
         setup["edge_geoms"] = {e["src"]: pcfd.edge_geometry(self.model, e) for e in self.geom["edges"]}
+        shapes = getattr(self, "deformed_shapes", None)
+        if shapes:                                                    # a Coupled Physics block moved the body: where the wall is NOW, and where each point of it was
+            setup["edge_shapes"] = dict(shapes)
         return setup
 
+    coupled_flow_only = False        # a Coupled Physics block sets this for the flow solve: the temperature is solved by the block, not by this window
+    deformed_shapes = None           # a Coupled Physics block sets this when the structure has moved the body: {edge: moved geometry} (pcfd.poly_geometry)
+
     def run_solve(self):
+        if self.mesh is not None and self.mesh.get("deformed") and not self.deformed_shapes:
+            QMessageBox.warning(self, "Solve", "The mesh in this window follows the body as a structure moved it in the last Coupled Physics solve. Press Mesh to mesh the sketch as "
+                                "drawn, then Solve.")
+            return
         try:
             setup = self.read_setup()
         except pcfd.ModelError as ex:
@@ -1309,8 +1632,13 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
             except ValueError as ex:
                 QMessageBox.warning(self, "Solve", str(ex))
                 return
+        try:
+            heat = None if self.coupled_flow_only else self.read_heat()
+        except pcfd.ModelError as ex:
+            QMessageBox.warning(self, "Solve", str(ex))
+            return
         self.stop_motion()
-        self.setup_used = setup
+        self.setup_used = {k: v for k, v in (dict(setup, heat=heat) if heat else setup).items() if k != "edge_shapes"}       # (the moved geometry is in the mesh and the result)
         self.result = None
         self.selection_changed()
         self.frames, self.field_cache = [], {}
@@ -1322,7 +1650,7 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         self.plot.clear()
         self.plot.tol = setup["tol"]
         self.bar.setRange(0, 0 if setup["until"] else 1000)       # a busy bar when there is no step limit
-        self.worker = SolveWorker(self.mesh, setup, refine)
+        self.worker = SolveWorker(self.mesh, setup, refine, heat)
         self.worker.newmesh.connect(self.on_newmesh)
         self.worker.stall.connect(self.on_stall)
         self.worker.progress.connect(self.on_progress)
@@ -1479,21 +1807,47 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
             col = "#1a7a1a" if rf["reason"] == "converged" else "#b36b00"
             self.res_lbl.setText(self.res_lbl.text() + "<br><br><b>Auto-refinement</b><br>" + "<br>".join(lines) +
                                  f"<br><b style='color:{col}'>{why}</b>")
+        self.res_lbl.setText(self.res_lbl.text() + self.heat_result_html(res))
         self.status("Solved." if res["status"] == "converged" else "Finished, NOT converged.")
         self.selection_changed()
         self.canvas.update()
 
+    def heat_result_html(self, res):
+        """The lines about the temperature under the flow's numbers ('' when this run had no heat transfer)."""
+        if res.get("heat_error"):
+            return "<br><br><b style='color:#b00020'>Temperature not found:</b> " + res["heat_error"].replace("\n", "<br>")
+        h = res.get("heat")
+        if h is None:
+            return ""
+        hs = self.hunits()
+        T = lambda v: f"{hu.from_si('T', hs['T'], v):.4g} {hs['T']}"
+        b = h["balance"]
+        rel = abs(b["relative"])
+        col = "#1a7a1a" if rel <= 0.05 else "#b00020"
+        rows = [f"<b>Temperature</b>: from {T(h['Tmin'])} to {T(h['Tmax'])} (inlet {T(h['T_in'])}), Prandtl number {h['Pr']:.3g}",
+                f"heat from the walls into the fluid {hu.from_si('P', hs['P'], b['walls']):.4g} {hs['P']} per metre of depth; carried away by the flow "
+                f"{hu.from_si('P', hs['P'], b['advected']):.4g} {hs['P']}: <b style='color:{col}'>difference {100 * rel:.1f} %</b>"
+                + ("" if rel <= 0.05 else " (more than 5 %: the mesh is too coarse for this temperature field, or the flow is not settled)")]
+        for n in h.get("notes", []):
+            rows.append(f"<span style='color:#b36b00'>{n}</span>")
+        return "<br><br>" + "<br>".join(rows)
+
     # --- save / restore with the sketch file
     INPUTS = ("fluid_combo", "e_rho", "e_mu", "e_speed", "e_angle", "e_ml", "e_mr", "e_mb", "e_mt", "e_hb", "e_hf",
               "e_tr", "e_yp", "e_gr", "e_first", "e_bt", "turb", "e_int", "e_vr", "e_cfl", "e_dt", "e_steps", "e_tol", "e_every", "cb_until", "e_ramp",
-              "cb_mesh", "cb_auto", "e_passes", "e_maxtris")
+              "cb_mesh", "cb_auto", "e_passes", "e_maxtris", "cb_heat", "e_k", "e_cp", "e_Tin")
+
+    def signature_extra(self):
+        """What besides the input boxes makes a project 'changed' (the Workbench and the window's own Save ask): the wall conditions of the heat transfer, the bodies that are on."""
+        return (sorted((tuple(k), c["kind"], c["v"]) for k, c in self.heat_walls.items()), sorted(self.body_on), dict(self.heat_inputs_units))
 
     def export_state(self):
         return {"model_json": self.model.to_json(), "source": getattr(self, "source", ""),
                 "inputs": pstore.get_inputs(self, self.INPUTS), "body_on": sorted(self.body_on), "body_size": self.body_size,
                 "mesh": self.mesh, "result": self.result, "frames": self.frames, "setup_used": getattr(self, "setup_used", None),
                 "field": self.field.currentData(), "frame_index": self.slider.value(), "res_html": self.res_lbl.text(),
-                "sel": list(self.canvas.sel), "sketch_id": getattr(self, "sketch_id", None), "mesh_opts": self.mesh_state()}
+                "sel": list(self.canvas.sel), "sketch_id": getattr(self, "sketch_id", None), "mesh_opts": self.mesh_state(),
+                "heat_walls": [[list(k), c["kind"], c["v"]] for k, c in sorted(self.heat_walls.items())], "heat_units": dict(self.heat_inputs_units)}
 
     def import_state(self, st, out_of_date=False):
         m = sc.Model()
@@ -1501,6 +1855,12 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         self.set_model(m, st.get("source") or "the saved sketch")
         self.sketch_id = st.get("sketch_id")
         pstore.set_inputs(self, st.get("inputs", {}))
+        saved = st.get("heat_units")
+        self.heat_inputs_units = hu.clean(saved) if isinstance(saved, dict) else self.hunits()          # the units the saved boxes were written in
+        self.heat_walls = {tuple(k): {"kind": kind, "v": float(v)} for k, kind, v in st.get("heat_walls", [])}
+        self.adopt_heat_units()
+        self.heat_box.setVisible(self.cb_heat.isChecked())
+        self.refresh_unit_labels()
         self.restore_mesh_options(st)
         self.auto_toggled(self.cb_auto.isChecked())
         on = set(st.get("body_on", []))
@@ -1580,6 +1940,8 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         self.frames, self.field_cache = [], {}
         self.body_on = set()
         self.bodies.clear()
+        self.heat_walls = {}
+        self.refresh_heat_list()
         self.canvas.sel = []
         self.selection_changed()
         self.canvas.raster = self.canvas.base = None
@@ -1606,7 +1968,17 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         if key in ("k", "omega", "nut") and key not in fr:
             key = "speed"                                  # this run had no turbulence model
             name, kind, unit = next((n, k_, u) for n, kk, k_, u in FIELD_LIST if kk == key)
+        hres = self.result.get("heat") if self.result is not None else None
+        if key == "T" and hres is None:
+            key = "speed"                                  # this run had no heat transfer
+            name, kind, unit = next((n, k_, u) for n, kk, k_, u in FIELD_LIST if kk == key)
         unit, div = self.field_units(key)
+        if key == "T":
+            hs = self.hunits()
+            vals = np.asarray(hu.from_si("T", hs["T"], np.asarray(hres["T"][:len(self.mesh["nodes"])], dtype=float)), dtype=float)
+            self.frame_lbl.setText(f"frame {i + 1} of {len(self.frames)}: the temperature is that of the final flow")
+            self.lbl_frames.setText(f"Frames: {len(self.frames)}")
+            return {"values": vals, "kind": kind, "name": name, "unit": hs["T"], "stamp": (id(hres), key, hs["T"])}
         if key == "speed":
             vals = np.hypot(fr["ux"], fr["uy"])
         elif key in ("ux", "uy", "p", "k", "omega", "nut"):
@@ -1840,7 +2212,7 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         if self.result is None or self.model is None:
             return None
         return {"result": self.result, "edge_geoms": self.setup_used["edge_geoms"], "status": self.result["status"],
-                "walls": self.result["walls"], "lscale": self.result["lscale"]}
+                "walls": self.result["walls"], "lscale": self.result["lscale"], "heat": self.result.get("heat")}
 
     # --- diagnostics
     def show_diag(self):
@@ -1900,6 +2272,24 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         add(f"wind: {self.e_speed.text()} {self.U()['V']} = {sp_:.6g} m/s toward {self.e_angle.text()} deg")
         kinds, _ = pcfd.classify_sides(self.angle_value())
         add("sides: " + ", ".join(f"{s} {kinds[s]}" for s in pcfd.SIDES))
+        if self.cb_heat.isChecked():
+            hs = self.hunits()
+            try:
+                k_, cp_, tin_ = self.heat_si()
+            except ValueError:
+                k_ = cp_ = tin_ = float("nan")
+            add(f"heat transfer: ON; conductivity {self.e_k.text()} {hs['k']} = {k_:.6g} W/(m K), specific heat {self.e_cp.text()} {hs['cp']} = {cp_:.6g} J/(kg K), "
+                f"inlet temperature {self.e_Tin.text()} {hs['T']} = {tin_:.6g} K")
+            if self.heat_walls:
+                for key in sorted(self.heat_walls):
+                    c = self.heat_walls[key]
+                    add(f"  {pt.KIND_NAME.get(key[0], key[0])} {key[1]}: " + (f"fixed temperature {c['v']:.6g} K" if c["kind"] == "temp" else
+                                                                             "wall of the thermal analysis (Coupled Physics)" if c["kind"] == "coupled" else
+                                                                             f"heat flux into the fluid {c['v']:.6g} W/m2"))
+            else:
+                add("  no wall has a heat condition (the solve will refuse)")
+        else:
+            add("heat transfer: off")
         add(f"margins (left, right, bottom, top) in body sizes: {self.e_ml.text()}, {self.e_mr.text()}, {self.e_mb.text()}, {self.e_mt.text()}")
         add(f"solver: {'k-omega SST' if self.is_sst() else 'laminar'}, CFL {self.e_cfl.text()}, time step "
             f"{self.e_dt.text().strip() or 'automatic'}, max steps {'none (run until converged)' if self.cb_until.isChecked() else self.e_steps.text()}, "
@@ -1970,6 +2360,22 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
         pv = [float(np.min(t["p_a"])) for t in r["walls"].values()] + [float(np.max(t["p_a"])) for t in r["walls"].values()]
         if pv:
             add(f"wall pressure range: {min(pv):.6g} .. {max(pv):.6g} Pa  (gauge, relative to the outlet)")
+        hr_ = r.get("heat")
+        if r.get("heat_error"):
+            add("\n== Temperature ==\nNOT FOUND: " + r["heat_error"])
+        elif hr_ is not None:
+            b_ = hr_["balance"]
+            add("\n== Temperature (passive: the flow does not depend on it) ==")
+            add(f"fluid: conductivity {hr_['k']:.6g} W/(m K), specific heat {hr_['cp']:.6g} J/(kg K), Prandtl number {hr_['Pr']:.4g}, "
+                f"diffusivity {hr_['alpha']:.4g} m2/s, inlet {hr_['T_in']:.6g} K")
+            add(f"temperature range {hr_['Tmin']:.6g} .. {hr_['Tmax']:.6g} K"
+                + ("" if hr_.get("overshoot") is None else f"; outside the given temperatures by {hr_['overshoot']:.3g} K"))
+            add(f"energy balance (W per metre of depth): from the walls {b_['walls']:.6g}, carried away by the flow {b_['advected']:.6g}, "
+                f"difference {100 * b_['relative']:.2f} % of the larger (inlet reaction {b_['inlet']:.3g})")
+            for key, tb in hr_["walls"].items():
+                add(f"  {key[0]} {key[1]}: {tb['kind']}, heat into the fluid {tb['Q']:.6g} W, temperature {tb['T_min']:.6g} .. {tb['T_max']:.6g} K")
+            for n_ in hr_.get("notes", []):
+                add("  note: " + n_)
         add("linear solver: " + psolve.status()[1] + ("   (last solve used " + psolve.last_used() + ")" if psolve.last_used() else ""))
         add(f"timing: assemble {r['times']['assemble']:.2f} s, solve {r['times']['solve']:.2f} s, total {r['times']['total']:.2f} s")
         return "\n".join(L)

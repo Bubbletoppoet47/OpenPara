@@ -1,7 +1,8 @@
-"""wb_coupled.py - the Coupled Physics block of the workbench: one heat analysis and one stress analysis of the SAME geometry (both 2D or both 3D) solved together.
+"""wb_coupled.py - the Coupled Physics block of the workbench: one heat analysis and one stress analysis of the SAME geometry (both 2D or both 3D) solved together, or a 2D Fluid
+Flow analysis together with a 2D Thermal analysis (they exchange heat) and / or a 2D Static Structural analysis (it takes the pressure).
 
-The cells:   Physics (import)   a wire from the Setup of a 2D / 3D Thermal block and one from the Setup of a 2D / 3D Static Structural block.  Refresh checks them: one of each,
-                                the same dimension, wired from the same Part or Assembly block.
+The cells:   Physics (import)   a wire from the Setup of a 2D / 3D Thermal block and one from the Setup of a 2D / 3D Static Structural block, or of a 2D Fluid Flow block and a 2D
+                                Thermal and / or a 2D Static Structural block.  Refresh checks them: one of each, the same dimension, wired from the same Part or Assembly block.
              Setup (data)       the coupling options (the window's state file); always ready.
              Solution (compute) Update opens the window (and the two analyses, when they are not open), solves the heat analysis, hands its temperature to the stress analysis and
                                 solves that.  The results live in the windows of the two analyses and in the Coupled Physics window; closing the window makes the solution 'update' again.
@@ -18,9 +19,9 @@ import wb_nodes as nodes
 import wb_parts
 import wb_project as wp
 
-ROLE = {"thermal": "thermal", "thermal3d": "thermal", "fea": "structural", "solid": "structural"}      # what each kind of analysis is to the coupling
-DIM = {"thermal": 2, "fea": 2, "thermal3d": 3, "solid": 3}
-TWO_D = ("thermal", "fea")
+ROLE = {"thermal": "thermal", "thermal3d": "thermal", "fea": "structural", "solid": "structural", "cfd": "fluid"}      # what each kind of analysis is to the coupling
+DIM = {"thermal": 2, "fea": 2, "cfd": 2, "thermal3d": 3, "solid": 3}
+TWO_D = ("thermal", "fea", "cfd")
 ADDON = "Coupled Physics"
 
 
@@ -74,8 +75,8 @@ class CoupledAdapter(nodes.Adapter):
         return f"{n.spec.label} {n.label} '{n.title}'" if n.spec is not None else f"{n.label} '{n.title}'"
 
     def roles(self, tab, node):
-        """{"thermal": node or None, "structural": node or None} of the analyses wired in (the first of each)."""
-        out = {"thermal": None, "structural": None}
+        """{"thermal": node or None, "structural": node or None, "fluid": node or None} of the analyses wired in (the first of each)."""
+        out = {"thermal": None, "structural": None, "fluid": None}
         for n in self.member_nodes(tab, node):
             out.setdefault(ROLE[n.kind], None)
             if out[ROLE[n.kind]] is None:
@@ -85,7 +86,9 @@ class CoupledAdapter(nodes.Adapter):
     def problems(self, tab, node):
         """The reason, in words, why what is wired in cannot be coupled, or None."""
         ms = self.member_nodes(tab, node)
-        r = {"thermal": [n for n in ms if ROLE[n.kind] == "thermal"], "structural": [n for n in ms if ROLE[n.kind] == "structural"]}
+        r = {"thermal": [n for n in ms if ROLE[n.kind] == "thermal"], "structural": [n for n in ms if ROLE[n.kind] == "structural"], "fluid": [n for n in ms if ROLE[n.kind] == "fluid"]}
+        if r["fluid"]:
+            return self.fluid_problems(tab, r)
         if not r["thermal"] or not r["structural"]:
             missing = " and ".join(t for t, k in (("a 2D or 3D Thermal analysis", "thermal"), ("a 2D or 3D Static Structural analysis", "structural")) if not r[k])
             return f"Coupled Physics needs both a heat problem and a stress problem: wire the Setup of {missing} into the Physics cell."
@@ -102,6 +105,28 @@ class CoupledAdapter(nodes.Adapter):
             na, nb = tab.project.nodes[a.a], tab.project.nodes[b.a]
             return (f"{self.name_of(th)} works on {self.name_of(na)} and {self.name_of(st)} on {self.name_of(nb)}: the two analyses must work on the same geometry, so wire both "
                     f"from the same Part or Assembly block.")
+        return None
+
+    def fluid_problems(self, tab, r):
+        """The wiring with a 2D Fluid Flow analysis: it needs a Thermal and / or a Static Structural analysis next to it, all 2D, all of the same geometry."""
+        if len(r["thermal"]) > 1 or len(r["structural"]) > 1 or len(r["fluid"]) > 1:
+            return "One Fluid Flow, one Thermal and one Static Structural analysis can be coupled at a time for now: take the others out of the Physics cell."
+        if not r["thermal"] and not r["structural"]:
+            return ("A 2D Fluid Flow analysis is coupled with a Thermal analysis (heat exchange) or a Static Structural analysis (pressure): wire the Setup of a 2D Thermal or a 2D "
+                    "Static Structural analysis into the Physics cell as well.")
+        members = [x[0] for x in (r["fluid"], r["thermal"], r["structural"]) if x]
+        for n in members:
+            if DIM[n.kind] != 2:
+                return f"{self.name_of(n)} is 3D: with a Fluid Flow analysis, Coupled Physics works in 2D, so wire in 2D analyses."
+        src = {}
+        for n in members:
+            g = tab.project.incoming(n.id, "geometry")
+            if g is None:
+                return "Every analysis needs its geometry first: wire each of them from the same Part or Assembly block."
+            src[n.id] = g.a
+        if len(set(src.values())) > 1:
+            names = "; ".join(f"{self.name_of(n)} works on {self.name_of(tab.project.nodes[src[n.id]])}" for n in members)
+            return f"The analyses must work on the same geometry, so wire all of them from the same Part or Assembly block ({names})."
         return None
 
     def labels(self, tab, node):

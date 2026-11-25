@@ -94,8 +94,8 @@ ok(wb_nodes.adapter_for("coupled") is not None and wb_nodes.availability(W, "cou
 ok("coupled" not in wb_nodes.check_kinds(), "it is wired into the workbench")
 sp = wp.spec_of("coupled")
 ok(sp.group == "Analysis Systems" and [c.key for c in sp.cells] == ["physics", "setup", "solution", "results"], "four cells: Physics, Setup, Solution, Results")
-ok(all("coupling" in wp.spec_of(k).cell("setup").provides for k in ("solid", "fea", "thermal", "thermal3d")) and "coupling" not in wp.spec_of("cfd").cell("setup").provides,
-   "the Setup of the heat and stress analyses give 'coupling'; the fluid and beam ones do not (yet)")
+ok(all("coupling" in wp.spec_of(k).cell("setup").provides for k in ("solid", "fea", "thermal", "thermal3d", "cfd")) and "coupling" not in wp.spec_of("beam").cell("setup").provides,
+   "the Setup of the heat, stress and fluid analyses give 'coupling'; the beam one does not (yet)")
 
 P = W.project
 nBar = W.add_block("part", 40, 60, title="Bar", data={"doc": bar_json(10)})

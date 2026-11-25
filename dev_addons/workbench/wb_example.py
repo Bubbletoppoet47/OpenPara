@@ -10,11 +10,16 @@
                    Bar growth          3D Static Structural from Bar: three symmetry planes hold it, NO load; steel, free of thermal stress at 20 C
                    Bar thermal stress  Coupled Physics of the two: the heat analysis is solved, its temperature goes to the stress analysis, and the far end of the bar grows
                                        alpha (Tmean - Tref) L = 12e-6 x 40 x 100 = 0.048 mm: a known answer that is checked (PASS / FAIL) in its window
+    Flow           Air flow            2D Fluid Flow of the Square (20 mm): slow air (0.03 m/s, Re about 40) past it; its left edge is held at 50 C, the other three walls are the walls of the heat analysis
+                   Square heat         2D Thermal of the Square: a very good conductor (400 W/m/K), left edge held at 50 C, the other edges are cooled by the air
+                   Square bending      2D Static Structural of the Square: left edge held, NO load; so soft (E = 5e-8 MPa, on purpose) that the pressure of the air bends it by a visible fraction of a percent
+                   Air, heat and bending  Coupled Physics of the three: the air takes the heat of the square, the pressure of the air loads the stress analysis, and the structure MOVES the flow
+                                       (the flow is solved again round the bent square until the displacement stops changing).  Known answer: the walls are at 50 C (the body conducts so well it is at one temperature)
     Study          Bar study           Parametric Study of Bar stress (wired from its Setup; a new study runs one design point, as the analysis is)
     Tools          Load table (Sheets, with formulas), LED circuit (Circuits), Plant (Systems and Controls)
 
 Loading does not compute anything: the geometry cells are refreshed (the parts are copied into the analyses) and the setups are made in the usual windows (as a person would),
-then every window is closed again.  Update Project solves the five analyses and the coupled pair and runs the study; change a part and the analyses that use it say 'refresh'.
+then every window is closed again.  Update Project solves the analyses, the two coupled blocks and runs the study; change a part and the analyses that use it say 'refresh'.
 A kind whose add-on is not installed is left out (and said).  load(tab) -> [what could not be done].
 """
 import json
@@ -163,6 +168,75 @@ def setup_coupled(w):
     w.save()
 
 
+SQ = 20.0                                                   # the side of the square in the air (mm)
+E_SOFT = 5e-8                                               # MPa: so soft that the pressure of this slow air (a few 1e-4 Pa) bends a 20 mm square by about a half percent of its size
+KNOWN_AIR = {"kind": "wall_temperature", "name": "a body this conductive is at one temperature, and so are its walls (held at 50 C)", "expected": 50.0, "unit": "degC", "tol_abs": 1.0}
+
+
+def left_line(t):
+    """The id of the line of the square that lies on x = 0."""
+    return next(ln for ln in t.model.lns if max(t.model.pts[p][0] for p in t.model.lns[ln][:2]) < 1e-9)
+
+
+def pick_sketch(t, sid):
+    t.picker.refresh()
+    t.picker.select(sid)
+    t.picker.go()
+
+
+def setup_air_flow(sid):
+    def fn(w):
+        import units
+        t = w.tab
+        pick_sketch(t, sid)
+        t.e_speed.setText(f"{units.speed_from_si(0.03, t.unit_name()):.6g}")
+        for e, v in ((t.e_hb, "3"), (t.e_hf, "12"), (t.e_ml, "3"), (t.e_mr, "8"), (t.e_mb, "3"), (t.e_mt, "3"), (t.e_cfl, "2"), (t.e_steps, "250"), (t.e_tol, "1e-6"), (t.e_ramp, "5"),
+                     (t.e_every, "1000")):
+            e.setText(v)
+        t.cb_until.setChecked(False)
+        t.cb_auto.setChecked(False)                          # (a body that moves needs the mesh to be the one that was asked for)
+        t.cb_heat.setChecked(True)
+        left = ("ln", left_line(t))
+        t.set_wall_condition([left], "temp", "50")
+        t.set_wall_condition(sorted({e["src"] for e in t.geom["edges"] if e["src"] != left}), "coupled", "")
+    return fn
+
+
+def setup_square_heat(sid):
+    def fn(w):
+        t = w.tab
+        pick_sketch(t, sid)
+        t.supports = [{"kind": "temp", "T": 323.15, "targets": [("ln", left_line(t))]}]
+        t.after_conditions()
+        t.e_h.setText("2")
+        t.e_t.setText("1")
+        t.ensure_region_materials()
+        for f in t.region_mats:
+            t.region_mats[f]["k"] = 400.0                    # (copper: so conductive that the body is at one temperature)
+    return fn
+
+
+def setup_square_bending(sid):
+    def fn(w):
+        t = w.tab
+        pick_sketch(t, sid)
+        t.supports = [{"mode": "fixed", "targets": [("ln", left_line(t))]}]
+        t.e_E.setText(f"{E_SOFT:g}")
+        t.e_alpha.setText("1.2e-5")
+        t.e_tref.setText("20")
+        t.e_h.setText("2")
+        t.cb_auto.setChecked(False)
+        t.refresh_lists()
+    return fn
+
+
+def setup_coupled_air(w):
+    w.options["known"] = dict(KNOWN_AIR)
+    w.options["moves_flow"] = True
+    w.cb_moves.setChecked(True)
+    w.save()
+
+
 def setup_frame_heating(w):
     w.add_condition("temps", {"T": 373.15}, [face_by_normal(w, [-1, 0, 0], True)], "Hot end")
     w.add_condition("temps", {"T": 293.15}, [face_by_normal(w, [1, 0, 0], True)], "Cold end")
@@ -178,10 +252,14 @@ def load(tab):
     nBar = tab.add_block("part", 40, 60, title="Bar", data={"doc": bar})
     nPlate = tab.add_block("part", 40, 280, title="Plate", data={"doc": plate})
     nFrame = tab.add_block("assembly", 40, 500, title="Frame", data={"asm": frame_asm(100, 10, 20)})
+    square, square_sid = part_doc(SQ, SQ, 10)
+    nSquare = tab.add_block("part", 40, 1380, title="Square", data={"doc": square})
     made = {}
     for key, kind, x, y, title, src in (("bar", "solid", 380, 60, "Bar stress", nBar), ("plate", "fea", 380, 280, "Plate stress 2D", nPlate),
                                         ("heat", "thermal3d", 380, 500, "Frame heating", nFrame), ("check", "solid", 380, 720, "Frame check (needs a setup)", nFrame),
-                                        ("bheat", "thermal3d", 380, 940, "Bar heating", nBar), ("grow", "solid", 380, 1160, "Bar growth", nBar)):
+                                        ("bheat", "thermal3d", 380, 940, "Bar heating", nBar), ("grow", "solid", 380, 1160, "Bar growth", nBar),
+                                        ("air", "cfd", 380, 1380, "Air flow", nSquare), ("sheat", "thermal", 380, 1600, "Square heat", nSquare),
+                                        ("sbend", "fea", 380, 1820, "Square bending", nSquare)):
         ok, why = nodes.availability(tab, kind)
         if not ok:
             problems.append(f"{title}: {why}")
@@ -198,6 +276,17 @@ def load(tab):
             tab.scene.make_link(made["grow"].id, "setup", nCoupled.id, "physics")
         else:
             problems.append(f"Bar thermal stress: {why}")
+    nAir = None
+    if all(k in made for k in ("air", "sheat", "sbend")):    # the second Coupled Physics block: the flow, the heat of the square and its bending
+        ok, why = nodes.availability(tab, "coupled")
+        if ok:
+            nAir = tab.add_block("coupled", 720, 1600, title="Air, heat and bending")
+            for k in ("air", "sheat", "sbend"):
+                tab.scene.make_link(made[k].id, "setup", nAir.id, "physics")
+        else:
+            problems.append(f"Air, heat and bending: {why}")
+    elif any(k in made for k in ("air", "sheat", "sbend")):
+        problems.append("Air, heat and bending: one of the three analyses (2D Fluid Flow, 2D Thermal, 2D Static Structural) is not available, so the block was left out.")
     nStudy = None
     if "bar" in made:                                        # a parametric study of the bar analysis (when the add-on for it is there)
         ok, why = nodes.availability(tab, "study")
@@ -226,7 +315,9 @@ def load(tab):
         problems.append("The analyses could not be set up here (there is no program window): open them and make the setup by hand.")
     else:
         for key, fn, title in (("bar", setup_bar_stress, "Bar stress"), ("plate", setup_plate_2d(plate_sid), "Plate stress 2D"), ("heat", setup_frame_heating, "Frame heating"),
-                               ("bheat", setup_frame_heating, "Bar heating"), ("grow", setup_bar_growth, "Bar growth")):
+                               ("bheat", setup_frame_heating, "Bar heating"), ("grow", setup_bar_growth, "Bar growth"),
+                               ("air", setup_air_flow(square_sid), "Air flow"), ("sheat", setup_square_heat(square_sid), "Square heat"),
+                               ("sbend", setup_square_bending(square_sid), "Square bending")):
             if key not in made:
                 continue
             try:
@@ -238,9 +329,14 @@ def load(tab):
             with_editor(tab, nCoupled, setup_coupled)        # (the known answer of the bar goes into the block's own options)
         except Exception as ex:                              # noqa: BLE001
             problems.append(f"Bar thermal stress: its known answer could not be set ({type(ex).__name__}: {ex})")
-    if nStudy is not None or nCoupled is not None:           # (their cells take the setups that were just made: nothing is computed)
-        tab.refresh_project(only=[n.id for n in (nStudy, nCoupled) if n is not None])
+    if nAir is not None and h is not None and hasattr(h, "new_addon_tab"):
+        try:
+            with_editor(tab, nAir, setup_coupled_air)        # (the known answer of the walls goes into the block's own options, and the structure moves the flow)
+        except Exception as ex:                              # noqa: BLE001
+            problems.append(f"Air, heat and bending: its options could not be set ({type(ex).__name__}: {ex})")
+    if any(n is not None for n in (nStudy, nCoupled, nAir)):  # (their cells take the setups that were just made: nothing is computed)
+        tab.refresh_project(only=[n.id for n in (nStudy, nCoupled, nAir) if n is not None])
     tab.scene.refresh()
-    tab.say(f"Example loaded: {len(tab.project.nodes)} blocks. Nothing is computed yet: press Update Project and the analyses are solved (the coupled one with its PASS / FAIL known answer) and the study runs." +
+    tab.say(f"Example loaded: {len(tab.project.nodes)} blocks. Nothing is computed yet: press Update Project and the analyses are solved (the coupled blocks with their PASS / FAIL known answers) and the study runs." +
             ("  Left out or not set up: " + "; ".join(problems) if problems else ""))
     return problems

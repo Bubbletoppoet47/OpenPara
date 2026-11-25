@@ -150,6 +150,11 @@ def out_normal(nodes, tris, owner, na, nb):
     return nrm
 
 
+class _Notes(list):
+    """The notes of `resolve`; `cfd_tally` is {edge: {"p": pressure resultant, "s": shear resultant, "abs": sum of the element-edge resultants' sizes}} of the CFD loads (per unit thickness)."""
+    cfd_tally = None
+
+
 def resolve(mesh, supports, loads, mid=None):
     """Turn supports / loads on sketch entities into node data.
     -> fixed {dof: the displacement it is held at (0.0, or the value a Displacement imposes)}, point_forces [(node, fx, fy)], edge_loads [(na, nb, fx_total, fy_total)], notes [str],
@@ -157,7 +162,8 @@ def resolve(mesh, supports, loads, mid=None):
        edge load totals are the resultant force of that element edge (already including thickness is done later).
     Bolts, screws and contact supports are handled by resolve_fasteners."""
     nodes, tris = mesh["nodes"], mesh["tris"]
-    notes = []
+    notes = _Notes()
+    notes.cfd_tally = {}
     fixed = {}
     conflict = set()
     for s in supports:
@@ -218,7 +224,7 @@ def resolve(mesh, supports, loads, mid=None):
     for ld in loads:
         if ld["kind"] == "cfd":
             for pair in ld["pairs"]:
-                edge_nodal += cfd_edge_loads(mesh, owner, pair, ld["include_shear"], notes)
+                edge_nodal += cfd_edge_loads(mesh, owner, pair, ld["include_shear"], notes, tally=notes.cfd_tally)
     return fixed, point_forces, edge_loads, notes, edge_nodal
 
 
@@ -332,7 +338,7 @@ def resolve_fasteners(mesh, supports, mid=None):
     return groups, notes
 
 
-def cfd_edge_loads(mesh, owner, pair, include_shear, notes):
+def cfd_edge_loads(mesh, owner, pair, include_shear, notes, tally=None):
     """Pressure (and optionally wall shear) from a CFD result on the mesh edges of one sketch edge.
     Both are interpolated by position along the edge - linear over each element edge, no averaging."""
     import physics_cfd as pcfd
@@ -347,6 +353,7 @@ def cfd_edge_loads(mesh, owner, pair, include_shear, notes):
     out = []
     tot_p = np.zeros(2)
     tot_s = np.zeros(2)
+    sum_abs = 0.0
     skipped = 0
     for na, nb in segs:
         key = (min(na, nb), max(na, nb))
@@ -371,6 +378,7 @@ def cfd_edge_loads(mesh, owner, pair, include_shear, notes):
         fa = -nrm * (L / 6.0) * (2 * pr_a + pr_b)                 # positive pressure pushes into the body
         fb = -nrm * (L / 6.0) * (pr_a + 2 * pr_b)
         tot_p += fa + fb
+        sum_abs += float(np.hypot(*(fa + fb)))
         if include_shear:
             sh_a = np.array([tax, tay]) * factor
             sh_b = np.array([tbx, tby]) * factor
@@ -379,6 +387,11 @@ def cfd_edge_loads(mesh, owner, pair, include_shear, notes):
             tot_s += fsa + fsb
             fa, fb = fa + fsa, fb + fsb
         out.append((na, nb, float(fa[0]), float(fa[1]), float(fb[0]), float(fb[1])))
+    if tally is not None:                                          # what a Coupled Physics block checks: the resultant on each edge, per unit thickness (pressure and wall shear apart)
+        t_ = tally.setdefault((kind, i), {"p": [0.0, 0.0], "s": [0.0, 0.0], "abs": 0.0})
+        t_["p"] = [t_["p"][0] + float(tot_p[0]), t_["p"][1] + float(tot_p[1])]
+        t_["s"] = [t_["s"][0] + float(tot_s[0]), t_["s"][1] + float(tot_s[1])]
+        t_["abs"] += sum_abs
     msg = (f"CFD load on {name} (from CFD {pair['source'][0]} {pair['source'][1]}): {len(out)} element edge(s), "
            f"pressure resultant per unit thickness ({tot_p[0]:.6g}, {tot_p[1]:.6g})")
     if include_shear:
@@ -1174,7 +1187,7 @@ def solve(mesh, mat, supports, loads, progress=None, cancel=None, thermal=None):
         "fos_probe": fos_probe["name"] if fos_probe else None, "probes": pstats,
         "equilibrium": {"sum_fx": sum_fx, "sum_fy": sum_fy, "sum_mz": moment, "applied": applied, "reactions": reactions},
         "n_dof": int(2 * N), "n_fixed": int(info["fixed_dofs"]), "nnz": int(K.nnz),
-        "n_point_forces": len(point_forces), "n_edge_loads": len(edge_loads) + len(edge_nodal), "notes": notes, "times": times,
+        "cfd_tally": dict(getattr(notes, "cfd_tally", None) or {}), "n_point_forces": len(point_forces), "n_edge_loads": len(edge_loads) + len(edge_nodal), "notes": list(notes), "times": times,
         "total_time": time.perf_counter() - t0,
         "order": order, "mesh": view, "fasteners": fast, "oneway": {k: info[k] for k in ("iterations", "oneway", "released")},
         "thermal": None if th_state is None else {"T_min": float(th_state["T"].min()), "T_max": float(th_state["T"].max()),

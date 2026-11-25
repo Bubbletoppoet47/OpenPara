@@ -97,7 +97,7 @@ ok(not addons.load_errors(), f"the add-ons load without errors ({addons.load_err
 ok(wb_nodes.adapter_for("study") is not None and "study" not in wb_nodes.check_kinds(), "the study block has an adapter (it is wired in)")
 ok(wb_nodes.availability(W, "study")[0], f"and the add-on it needs is there ({wb_nodes.availability(W, 'study')})")
 for k in ("solid", "fea", "thermal", "cfd", "beam"):
-    want = ("analysis", "coupling") if k in ("solid", "fea", "thermal") else ("analysis",)      # a heat or stress analysis also gives 'coupling' (to the Physics cell of a Coupled Physics block)
+    want = ("analysis", "coupling") if k in ("solid", "fea", "thermal", "cfd") else ("analysis",)      # a heat, stress or fluid analysis also gives 'coupling' (to the Physics cell of a Coupled Physics block)
     ok(wp.spec_of(k).cell("setup").provides == want, f"the Setup of '{k}' gives {' and '.join(repr(x) for x in want)}")
 ok(wp.spec_of("thermal3d").cell("setup").provides == ("coupling",), "3D Thermal gives no 'analysis' (it has no parametric study yet), only 'coupling'")
 sp_ = wp.spec_of("study")

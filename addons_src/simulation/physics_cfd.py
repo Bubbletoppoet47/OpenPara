@@ -35,6 +35,8 @@ class ModelError(Exception):
 LENGTH_UNITS = {"mm": 1.0e-3, "cm": 1.0e-2, "m": 1.0, "in": 0.0254, "ft": 0.3048}
 FLUIDS = {"Air 15 C (sea level)": (1.225, 1.789e-5), "Air 20 C": (1.204, 1.825e-5),
           "Water 20 C": (998.2, 1.002e-3), "Custom": (None, None)}
+# thermal conductivity W/(m K) and specific heat J/(kg K) of the same fluids (typical values; the density and viscosity are in FLUIDS)
+FLUID_HEAT = {"Air 15 C (sea level)": (0.0253, 1006.0), "Air 20 C": (0.0257, 1006.0), "Water 20 C": (0.598, 4182.0), "Custom": (None, None)}
 SIDES = ("bottom", "right", "top", "left")
 SIDE_NORMAL = {"bottom": (0.0, -1.0), "right": (1.0, 0.0), "top": (0.0, 1.0), "left": (-1.0, 0.0)}
 
@@ -128,8 +130,50 @@ def convex_corners(m, geom, loops, min_turn_deg=20.0):
     return out
 
 
+def _moved_curves(gmsh, gpoint, gcurve, e, pts):
+    """The gmsh curves of an edge of the outline that has moved: a smooth curve through `pts` (n, 2).  The two ends of a line or an arc are the points of the sketch (shared with
+    the neighbouring edges: the caller gives the same moved point to both); a circle is drawn as two halves."""
+    n = len(pts)
+    if e["kind"] == "ci":
+        if n < 6:
+            raise pg.GeometryError("A moved circle needs at least 6 points.")
+        h = n // 2
+        ids = [gpoint(pts[i][0], pts[i][1]) for i in range(n)]
+        return [gcurve(gmsh.model.geo.addSpline, ids[:h + 1]), gcurve(gmsh.model.geo.addSpline, ids[h:] + [ids[0]])]
+    if n < 2:
+        raise pg.GeometryError("A moved edge needs at least 2 points.")
+    ids = [gpoint(pts[0][0], pts[0][1], e["a"])] + [gpoint(pts[i][0], pts[i][1]) for i in range(1, n - 1)] + [gpoint(pts[-1][0], pts[-1][1], e["b"])]
+    if n == 2:
+        return [gcurve(gmsh.model.geo.addLine, ids[0], ids[1])]
+    return [gcurve(gmsh.model.geo.addSpline, ids)]
+
+
+def sample_edge(m, e, n):
+    """n points along an edge of the sketch, in its own direction a -> b, and their positions along it (0 at the start, 1 at the end; proportional to the length on a line and to the
+    angle on an arc, as `edge_param` measures): (points (n, 2), s (n,)).  A circle: n points counter-clockwise from angle 0, the first not repeated, s = i / n."""
+    n = int(n)
+    if e["kind"] == "ln":
+        a, b = np.asarray(m.pts[e["a"]], float), np.asarray(m.pts[e["b"]], float)
+        s = np.linspace(0.0, 1.0, max(n, 2))
+        return a[None, :] + s[:, None] * (b - a)[None, :], s
+    if e["kind"] == "ar":
+        c = np.asarray(m.pts[e["c"]], float)
+        a0, a1, r = pg.arc_angles(m, e)
+        s = np.linspace(0.0, 1.0, max(n, 3))
+        ang = a0 + (a1 - a0) * s
+        pts = c[None, :] + r * np.stack([np.cos(ang), np.sin(ang)], axis=1)
+        pts[0], pts[-1] = m.pts[e["a"]], m.pts[e["b"]]
+        return pts, s
+    if e["kind"] == "ci":
+        c = np.asarray(m.pts[e["c"]], float)
+        s = np.arange(max(n, 8)) / float(max(n, 8))
+        ang = 2.0 * np.pi * s
+        return c[None, :] + float(e["r"]) * np.stack([np.cos(ang), np.sin(ang)], axis=1), s
+    raise pg.GeometryError("The moved outline of a spline edge is not supported by the fluid mesher.")
+
+
 def mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progress=None, cancel=None, algorithm=6, bl=None,
-                    refine=None, use_corners=True, opts=None):
+                    refine=None, use_corners=True, opts=None, shape=None):
     """Triangles for the box around the bodies, minus the bodies.
     margins = (left, right, bottom, top) in multiples of the body size.  h_body / h_far = element size at the walls / far away
     (sketch units), `transition` = distance (in body sizes) over which the size grows.
@@ -139,7 +183,9 @@ def mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progr
     refine = None, or {"nodes", "tris", "sizes", "floor"}: adaptive refinement - the element size wanted at each node of a previous mesh
     (never below `floor`); the new mesh follows it wherever it is smaller than the normal sizes.
     opts = None, or the advanced mesh options (sim_mesh2d.options): {"hmin", "growth", "curv", "local"} - a smaller size on single edges or points of the bodies (they grow back
-    to `h_body` at `growth`), refinement at the curved edges of the bodies (`curv` elements around a full circle), and a smallest element (not used with a boundary layer)."""
+    to `h_body` at `growth`), refinement at the curved edges of the bodies (`curv` elements around a full circle), and a smallest element (not used with a boundary layer).
+    shape = None, or {"edges": {edge index: points (n, 2)}}: the outline of the bodies has MOVED (a structure under load): every edge of the outline is drawn as a smooth curve through
+    those points instead (see `sample_edge` for how they are ordered).  The box around the bodies is the one of the sketch as drawn."""
     import gmsh
     pg.face_geometry_ok(geom)
     faces = [f for f in geom["faces"] if f["id"] in face_ids and f["depth"] == 0]
@@ -200,9 +246,12 @@ def mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progr
             return fn(*a, next_curve[0])
 
         curve_tag = {}
+        moved = (shape or {}).get("edges") or {}
         for k in used:
             e = edges[k]
-            if e["kind"] == "ln":
+            if k in moved:
+                curve_tag[k] = _moved_curves(gmsh, gpoint, gcurve, e, np.asarray(moved[k], float))
+            elif e["kind"] == "ln":
                 pa, pb = m.pts[e["a"]], m.pts[e["b"]]
                 curve_tag[k] = [gcurve(gmsh.model.geo.addLine, gpoint(pa[0], pa[1], e["a"]), gpoint(pb[0], pb[1], e["b"]))]
             elif e["kind"] == "ar":
@@ -376,7 +425,7 @@ def mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progr
         tick("Done", 1.0)
         return {"nodes": nodes, "tris": tris, "wall_segs": wall_segs, "box_segs": box_segs,
                 "box": (bx0, by0, bx1, by1), "body_box": (xmin, ymin, xmax, ymax), "size": size, "stats": stats,
-                "faces": [f["id"] for f in faces], "n_loops": len(loops)}
+                "faces": [f["id"] for f in faces], "n_loops": len(loops), "deformed": bool(moved)}
     finally:
         try:
             gmsh.finalize()
@@ -385,7 +434,7 @@ def mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progr
 
 
 def mesh_fluid(m, geom, face_ids, margins, h_body, h_far, transition, progress=None, cancel=None, algorithm=6, bl=None,
-               refine=None, opts=None):
+               refine=None, opts=None, shape=None):
     """Same as mesh_fluid_once, but when gmsh cannot build the mesh (typically 'Edge not recovered': the boundary-layer stack is
     thicker than the room between walls, so layers from two walls run into each other) it is tried again with a thinner
     boundary layer, then without the corner fans.  What had to be relaxed is listed in stats["relaxed"]; if nothing works a
@@ -404,7 +453,7 @@ def mesh_fluid(m, geom, face_ids, margins, h_body, h_far, transition, progress=N
             raise pg.Cancelled()
         try:
             mesh = mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progress, cancel, algorithm, bl_i, refine,
-                                   use_corners=corners, opts=opts)
+                                   use_corners=corners, opts=opts, shape=shape)
         except (pg.Cancelled, pg.GeometryError, ModelError):
             raise
         except Exception as ex:                                  # gmsh raises a bare Exception
@@ -457,9 +506,32 @@ def edge_geometry(m, e):
     return {"kind": "ci", "c": (float(c[0]), float(c[1])), "r": float(e["r"])}
 
 
+def poly_geometry(pts, s, closed=False):
+    """The description (like edge_geometry's) of an edge that has MOVED: the points (n, 2) where it is now and the positions s (n,) they had along the edge as drawn.  `edge_param` of
+    it gives, for a point of the moved outline, the position of the same material point along the original edge: this is what puts the pressure of a moved wall back on the
+    edge of the stress analysis."""
+    return {"kind": "poly", "pts": np.asarray(pts, float), "s": np.asarray(s, float), "closed": bool(closed)}
+
+
+def _poly_param(g, x, y):
+    P, S = g["pts"], g["s"]
+    if g["closed"]:
+        P = np.vstack([P, P[:1]])
+        S = np.concatenate([S, [1.0]])
+    A, B = P[:-1], P[1:]
+    d = B - A
+    L2 = np.maximum((d * d).sum(axis=1), 1e-300)
+    t = np.clip(((x - A[:, 0]) * d[:, 0] + (y - A[:, 1]) * d[:, 1]) / L2, 0.0, 1.0)
+    cx, cy = A[:, 0] + t * d[:, 0], A[:, 1] + t * d[:, 1]
+    k = int(np.argmin((cx - x) ** 2 + (cy - y) ** 2))
+    return float(S[k] + t[k] * (S[k + 1] - S[k]))
+
+
 def edge_param(g, x, y):
     """Position of the point (x, y) along the edge, 0 at its start and 1 at its end (proportional to arc length).
     A circle starts at angle 0 and goes counter-clockwise."""
+    if g["kind"] == "poly":
+        return _poly_param(g, x, y)
     if g["kind"] == "ln":
         ax, ay = g["a"]
         bx, by = g["b"]
@@ -505,7 +577,7 @@ def wall_segments_param(g, nodes, na, nb):
     start gets an end above 1 so that each segment is one interval."""
     sa = np.array([edge_param(g, nodes[i][0], nodes[i][1]) for i in na])
     sb = np.array([edge_param(g, nodes[i][0], nodes[i][1]) for i in nb])
-    if g["kind"] == "ci":
+    if g["kind"] == "ci" or g.get("closed"):
         wrap = np.abs(sb - sa) > 0.5
         up = wrap & (sa > sb)
         sb = np.where(up, sb + 1.0, sb)
@@ -995,7 +1067,7 @@ def solve(mesh, setup, progress=None, frame=None, cancel=None):
         res["turb"] = {"intensity": setup["intensity"], "visc_ratio": setup["visc_ratio"], "k_in": tb.k_in, "om_in": tb.om_in,
                        "k": kk, "omega": om, "d1": tb.d1,
                        "nut_ratio": (nut_q[:, 0] / nu) if nut_q is not None else np.zeros(disc.M)}
-    res.update(postprocess(disc, mesh, res, setup["edge_geoms"]))
+    res.update(postprocess(disc, mesh, res, {**setup["edge_geoms"], **(setup.get("edge_shapes") or {})}))
     res["times"]["total"] = time.perf_counter() - T0
     return res
 

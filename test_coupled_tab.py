@@ -89,6 +89,7 @@ w = ctab.CoupledWindow()
 ok(w.members()["windows"] == {} and "Workbench" in w.members()["note"], "without a Workbench block the window says it works inside a Workbench project")
 ok("Workbench" in w.members_lbl.text(), "and says so on the page")
 ok(not w.b_solve.isEnabled() and not w.b_heat.isEnabled() and not w.b_stress.isEnabled(), "Solve and the two 'Open' buttons are off")
+ok(not w.cb_moves.isEnabled() and not w.options["moves_flow"], "'the structure moves the flow' is off, and cannot be ticked without a stress analysis wired in")
 ok("Wire a heat analysis" in html_of(w), "the result area says what to wire in before the first Solve")
 ok(w.solve() is False and w.result is None and w.last_error, f"Solve without analyses is refused with a reason ('{w.last_error}')")
 ok(not w.is_dirty() and w.title() == "Coupled Physics", "a new window is not dirty and is called by its kind")
@@ -217,7 +218,27 @@ wc.e_tol.setValue(3.5)
 ok(wc.is_dirty() and wc.save() is True and not wc.is_dirty(), "the option is saved in the project folder")
 wc.options["known"] = {"name": "Bar end growth", "expected": 0.048, "unit": "mm", "tol_pct": 3.0}
 ok(wc.save() is True, "a known answer is saved with the options too")
+# the known answer of the walls of a fluid and a very conductive solid: PASS when the walls are at the temperature, FAIL (it can) when they are not, a note when there is no flow
+saved_known, saved_result = wc.options.get("known"), wc.result
+wc.options["known"] = {"kind": "wall_temperature", "name": "walls at 50 degC", "expected": 50.0, "unit": "degC", "tol_abs": 1.0}
+wc.result = {"fluid": {"history": [{"Tw_min": 323.0, "Tw_max": 323.15}]}}
+kw = wc.known_answer({})
+ok(kw["ok"] and abs(kw["got"] - 49.85) < 1e-9 and "49.850" in kw["note"], f"known answer, walls at 49.85 .. 50 degC against 50 degC within 1 K: PASS ({kw})")
+wc.result = {"fluid": {"history": [{"Tw_min": 323.0, "Tw_max": 330.0}]}}
+kw = wc.known_answer({})
+ok(not kw["ok"] and abs(kw["got"] - 56.85) < 1e-9, f"and when a wall point is at 56.85 degC it is FAIL, with the point that is farthest from the answer ({kw})")
+wc.result = {"thermal": {}}
+kw = wc.known_answer({})
+ok(not kw["ok"] and kw["got"] is None and "needs the flow" in kw["note"], f"without a flow it says so, and is not a PASS ({kw.get('note')})")
+wc.options["known"], wc.result = saved_known, saved_result
+wc.cb_moves.setChecked(True)
+wc.e_fsi_tol.setValue(0.25)
+wc.e_fsi_max.setValue(7)
+ok(wc.options["moves_flow"] is True and abs(wc.options["fsi_tol_pct"] - 0.25) < 1e-12 and wc.options["fsi_max"] == 7 and wc.is_dirty(), "'the structure moves the flow', its tolerance and its number of passes follow the boxes")
+ok(wc.save() is True, "and are saved with the other options")
 w2 = ctab.make_coupled(None, folder)
+ok(w2.options["moves_flow"] is True and w2.cb_moves.isChecked() and abs(w2.e_fsi_tol.value() - 0.25) < 1e-12 and w2.e_fsi_max.value() == 7 and not w2.is_dirty(),
+   "opened again, the moving of the flow is back with its tolerance and its passes")
 ok(abs(w2.options["tmean_tol_pct"] - 3.5) < 1e-9 and abs(w2.e_tol.value() - 3.5) < 1e-9 and w2.options["known"]["name"] == "Bar end growth" and not w2.is_dirty(),
    "opened again, the option and the known answer are back and the window is not dirty")
 ok(w2.members()["windows"] == {}, "a window opened from its folder holds no analyses until the block gives them")

@@ -1529,10 +1529,30 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
                            "targets": [pr["target"] for pr in pairs], "converged": True})
         self.after_conditions()
 
+    coupled_pressure_edges = ()      # the edges that got the fluid pressure in the last solve (a Coupled Physics block reads it)
+    coupled_cfd = None       # a Coupled Physics block sets {"info": a CFD window's transfer_info(), "edges": [edge keys], "shear": bool}: the fluid pressure on those edges
+
+    def coupled_pressure_loads(self, lds):
+        """The loads plus one live CFD link for the edges a Coupled Physics block gives the fluid pressure to (the edges of `coupled_cfd["edges"]` that are in this sketch, have no
+        support and no CFD link of their own).  The tab's own list is not changed."""
+        cc = self.coupled_cfd
+        if cc is None:
+            return lds, []
+        mine = {e["src"] for e in self.geom["edges"]}
+        held = {tuple(k) for s_ in self.supports for k in s_["targets"]}
+        linked = {tuple(k) for l in lds if l["kind"] == "cfd" for k in l["targets"]}
+        edges = [tuple(k) for k in cc["edges"] if tuple(k) in mine and tuple(k) not in held and tuple(k) not in linked]
+        if not edges:
+            return lds, []
+        link = {"kind": "cfd", "include_shear": bool(cc.get("shear")), "pairs": [{"target": k, "source": k} for k in edges], "live": True, "targets": list(edges),
+                "converged": True}
+        return list(lds) + [link], edges
+
     def resolved_loads(self, lds):
         """The loads with every CFD link replaced by the pressure of the CFD result that exists now (ModelError if there is none)."""
         cfd = getattr(self.win, "cfd", None)
-        info = cfd.transfer_info() if cfd is not None else None
+        lds, self.coupled_pressure_edges = self.coupled_pressure_loads(lds)
+        info = self.coupled_cfd["info"] if self.coupled_cfd is not None else (cfd.transfer_info() if cfd is not None else None)
         fea_geoms = {e["src"]: pcfd.edge_geometry(self.model, e) for e in self.geom["edges"]}
         return prefine.resolve_cfd_links(lds, info, fea_geoms, pm.from_mpa(1e-6, self.stress_unit()))
 

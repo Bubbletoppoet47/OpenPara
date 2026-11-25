@@ -278,6 +278,9 @@ class ThermalTab(pt.PhysicsTab):
     ANIM_FILE = "Thermal_animation"
     kind = KIND
 
+    coupled_fluid = None       # a Coupled Physics block sets {edge key: {"h": f(points) -> W/(m2 K), "Tinf": f(points) -> K}}: the exchange with a flowing fluid, on those edges
+    coupled_dropped = ()       # what the last read_setup left out because the fluid replaces it: [(condition name, [edges])]
+
     INPUTS = ("e_k", "e_rho", "e_cp", "e_t", "e_h", "analysis_combo", "e_T0", "e_tend", "time_combo", "e_steps", "method_combo", "e_nframes",
               "cb_plate", "e_hplate", "e_Tamb", "e_eps_plate", "e_Tsur", "cb_mesh", "cb_anim", "e_frames", "e_dur", "loop_combo")
 
@@ -1521,12 +1524,21 @@ class ThermalTab(pt.PhysicsTab):
                  "mat": {"k": first["k"], "rho": first["rho"], "cp": first["cp"]},
                  "region_mats": rmats,
                  "region_q": {f: v for f, v in (self.region_q or {}).items() if f in included and v != 0.0}, "conds": []}
+        fluid = {tuple(k): v for k, v in (self.coupled_fluid or {}).items()}
+        self.coupled_dropped = []
         for is_sup, items in ((True, self.supports), (False, self.loads)):
             for idx, it in enumerate(items):
                 c = {k: v for k, v in it.items() if k in ("kind", "T", "q", "P", "h", "Tinf", "eps", "Ts")}
-                c["targets"] = [tuple(x) for x in it["targets"]]
+                c["targets"] = [tuple(x) for x in it["targets"] if tuple(x) not in fluid]
+                if len(c["targets"]) < len(it["targets"]):                                  # a Coupled Physics block replaces what is set on an edge the fluid touches
+                    self.coupled_dropped.append((self.cond_name(is_sup, idx), [tuple(x) for x in it["targets"] if tuple(x) in fluid]))
+                if not c["targets"]:
+                    continue
                 c["name"] = self.cond_name(is_sup, idx)
                 setup["conds"].append(c)
+        for key in sorted(fluid):
+            setup["conds"].append({"kind": "fluid", "targets": [key], "h": fluid[key]["h"], "Tinf": fluid[key]["Tinf"], "linearised": bool(fluid[key].get("linearised", True)),
+                                "name": f"Fluid exchange, {KIND_NAME.get(key[0], key[0])} {key[1]}"})
         if self.cb_plate.isChecked():
             h = fam.to_si("h", self.num(self.e_hplate, "The convection coefficient of the faces", nonneg=True))
             eps = self.num(self.e_eps_plate, "The emissivity of the faces", nonneg=True)
@@ -1817,7 +1829,7 @@ class ThermalTab(pt.PhysicsTab):
                 """The heat flow over the area it goes through = the average heat flux of a flux, convection or radiation condition (blank for a result saved
                 before the area was kept, and for the other kinds)."""
                 a = f.get("area")
-                if not a or f.get("kind") not in ("flux", "conv", "rad"):
+                if not a or f.get("kind") not in ("flux", "conv", "fluid", "rad"):
                     return ""
                 qq = "qr" if f["kind"] == "rad" else "q"
                 return f"{R.num(fam.from_si(qq, f['Q'] / a), 4)} {fam.unit(qq)}"

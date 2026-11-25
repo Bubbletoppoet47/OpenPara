@@ -10,6 +10,7 @@
         ins    insulated edges: no heat through them (the same as a heat flux of zero; it only makes the choice visible and checked)
         power  a heat flow into the body at points, W (total through the depth)
         conv   convection to a fluid at T_inf with coefficient h:   q_out = h (T - T_inf)
+        fluid  the same with h and T_inf given at every point of the edge by functions of the point (the exchange with a flowing fluid in Coupled Physics)
         rad    radiation to surroundings at T_s with emissivity eps: q_out = eps sigma (T^4 - T_s^4)      (NOT between surfaces of the model:
                that needs view factors, which this version does not have)
   * optional heat loss from the two flat faces of the plate: convection and / or radiation, both faces, over the whole area
@@ -262,7 +263,7 @@ class Model:
                     self.F[nd] += float(c["P"])
                 rec.update(P=float(c["P"]) * len(nds))
             else:
-                segs = self._edges({"flux": "Heat flux", "conv": "Convection", "rad": "Radiation", "ins": "Insulated"}[kind], targets, mesh)
+                segs = self._edges({"flux": "Heat flux", "conv": "Convection", "fluid": "Fluid exchange", "rad": "Radiation", "ins": "Insulated"}[kind], targets, mesh)
                 if not segs:
                     rec["edges"] = None
                     self.conds.append(rec)
@@ -284,6 +285,22 @@ class Model:
                         Ke = (h * tt * ed.L)[:, None, None] * ed.int_NN[None]
                         self.K = self.K + _csr(ed.conn, Ke, self.N)
                         np.add.at(self.F, ed.conn.ravel(), ((h * Ti * tt * ed.L)[:, None] * ed.int_N[None]).ravel())
+                        self.ground[ed.conn.ravel()] = True
+                elif kind == "fluid":
+                    # exchange with a flowing fluid (Coupled Physics): the coefficient h and the fluid temperature are functions of the point on the edge, given in sketch units
+                    X = np.einsum("gn,enj->egj", ed.Ng, self.nodes_m[ed.conn]) / float(setup["lscale"])            # (E, G, 2)
+                    flat = X.reshape(-1, 2)
+                    hg = np.asarray(c["h"](flat) if callable(c["h"]) else np.full(len(flat), float(c["h"])), float).reshape(X.shape[:2])
+                    Tg = np.asarray(c["Tinf"](flat) if callable(c["Tinf"]) else np.full(len(flat), float(c["Tinf"])), float).reshape(X.shape[:2])
+                    # (a linearised exchange, as Coupled Physics iterates it, has a reference that is only the other half of q = h (T - Tref): it need not be a temperature)
+                    if np.any(hg < 0) or (not c.get("linearised") and np.any(Tg <= 0)) or not (np.all(np.isfinite(hg)) and np.all(np.isfinite(Tg))):
+                        raise ModelError("The fluid exchange needs a coefficient that is not negative and a fluid temperature above 0 K, finite everywhere on the edge.")
+                    rec.update(hg=hg, Tg=Tg)
+                    Ke = np.einsum("e,g,eg,gi,gj->eij", tt * ed.L, ed.wg, hg, ed.Ng, ed.Ng)
+                    Fe = np.einsum("e,g,eg,gi->ei", tt * ed.L, ed.wg, hg * Tg, ed.Ng)
+                    self.K = self.K + _csr(ed.conn, Ke, self.N)
+                    np.add.at(self.F, ed.conn.ravel(), Fe.ravel())
+                    if np.any(hg > 0):
                         self.ground[ed.conn.ravel()] = True
                 else:
                     eps, Ts = float(c["eps"]), float(c["Ts"])
@@ -586,7 +603,7 @@ def _balance(mdl, T, storage):
         kind, ci = rec["kind"], rec["index"]
         item = {"index": ci, "kind": kind, "name": rec["name"], "Q": 0.0}
         ed = rec.get("edges")
-        if ed is not None and kind in ("flux", "conv", "rad"):
+        if ed is not None and kind in ("flux", "conv", "fluid", "rad"):
             item["area"] = t * float(ed.L.sum())                       # m2: the heat flow over it is the average flux
         if kind == "temp":
             item["Q"] = per_cond.get(ci, 0.0)                          # into the body
@@ -600,6 +617,10 @@ def _balance(mdl, T, storage):
         elif ed is not None and kind == "conv" and rec["h"] > 0:
             Tg = ed.interp(T)
             item["Q"] = -rec["h"] * t * float(np.sum(ed.L * (ed.wg @ (Tg - rec["Tinf"]).T)))       # negative = leaving
+            out += -item["Q"]
+        elif ed is not None and kind == "fluid":
+            Tg = ed.interp(T)
+            item["Q"] = -t * float(np.sum(ed.L * np.einsum("g,eg->e", ed.wg, rec["hg"] * (Tg - rec["Tg"]))))
             out += -item["Q"]
         elif ed is not None and kind == "rad" and rec["eps"] > 0:
             Tg = ed.interp(T)
