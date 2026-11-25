@@ -1,5 +1,5 @@
 """The left panels of 1D FEA, 2D FEA and 2D CFD (Simulation add-on): an Outline (the tree of the sections) with the Details of the selected one below it, stacked icon
-buttons for supports / loads, Solve pinned under them, and NO hotkeys at all (the keys F X Y B S C P T M D W N R J do nothing).  A free Section still folds and remembers it."""
+buttons for supports / loads, Solve at the top of the Results page, and NO hotkeys at all (the keys F X Y B S C P T M D W N R J do nothing).  A free Section still folds and remembers it."""
 import os, sys, json, tempfile
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 UD = tempfile.mkdtemp(); os.environ["OPARA_USER_DIR"] = UD
@@ -68,39 +68,45 @@ assert emb.embedded and not emb.toggle.isVisibleTo(tabs["2D FEA"])
 emb.toggle.setChecked(False)
 assert "fea2d/" + emb.title not in json.load(open(os.path.join(UD, sim_ui.STATE_FILE)))
 
-# --- buttons: stacked supports / loads with icons, the big Solve row
+# --- buttons: stacked supports / loads with icons, the Solve button on the Results page
 def texts(t, title):
     s = [x for x in t.sections if x.title == title][0]
     return [b.text().strip() for b in s.frame.findChildren(QPushButton)]
 fea = tabs["2D FEA"]
-assert texts(fea, "Supports") == ["Fixed", "ux = 0", "uy = 0", "Bolt...", "Screw...", "Contact"], texts(fea, "Supports")
+assert texts(fea, "Supports") == ["Fixed", "Displacement...", "Bolt...", "Screw...", "Contact"], texts(fea, "Supports")
 assert texts(fea, "Loads")[:3] == ["Force...", "Pressure...", "Pressure from CFD..."] and "Traction..." not in texts(fea, "Loads")
 beam = tabs["1D FEA"]
-assert texts(beam, "Supports") == ["Fixed", "Pinned", "ux = 0", "uy = 0"]
+assert texts(beam, "Supports") == ["Fixed", "Pinned", "Displacement..."]
 assert texts(beam, "Loads")[:5] == ["Force...", "Moment...", "Line load...", "Wind...", "Snow..."]
 assert texts(beam, "Joints") == ["Rigid joint", "Pinned joint"]
+def results_sec(t):
+    return [x for x in t.sections if x.title == "Results"][0]
 for name, t in tabs.items():
     assert not [b for b in t.findChildren(QPushButton) if b.parent() is not None and b.parent().objectName() == "pinned"], "no pinned bar any more"
-    assert t.b_solve.text() == "Solve" and t.b_solve.minimumHeight() >= 40
-    col = t.b_solve
-    while col is not None and not (col.objectName() == "simcontent" and col is not t.sections[0].parent()):
-        col = col.parent()
-    assert col is not None and col is not t.sections[0].parent(), "Solve sits in the part that stays under the Outline, not in the Details"
-    holder = t.b_solve if t.b_solve.parent() is col else t.b_solve.parent()          # the Solve button, or the row holding it (CFD: Solve + Stop)
-    lay = col.layout()
-    i = lay.indexOf(holder)
-    assert i == 0, "Solve is the first thing under the Outline"
+    # Solve is on the Results page, plain like Mesh (a grey button, not the teal call to action), and nothing of it is left under the Outline
+    rs = results_sec(t)
+    assert t.b_solve.text() == "Solve" and rs.isAncestorOf(t.b_solve), name
+    assert t.b_solve.styleSheet() == "" and t.b_solve.property("simrole") != "solve", (name, "plain, like the Mesh button")
+    if hasattr(t, "b_mesh"):
+        assert t.b_solve.minimumHeight() == t.b_mesh.minimumHeight(), (name, t.b_solve.minimumHeight(), t.b_mesh.minimumHeight())
+    lay = rs.body
+    holder = t.solve_row if hasattr(t, "solve_row") else t.b_solve                      # the Solve button, or the row holding it (CFD: Solve + Stop)
+    assert lay.indexOf(holder) == 0, (name, "Solve is the first thing of the Results page")
     under = {"1D FEA": ["cb_auto"], "2D CFD": ["solve_status"]}.get(name, [])
-    under = [getattr(t, a) for a in under]        # what belongs right under the Solve button of a panel
+    under = [getattr(t, a) for a in under]        # what belongs right under the Solve button of a page
     for k, w in enumerate(under):
-        assert lay.itemAt(i + 1 + k).widget() is w, (name, "the Solve bar's own status / choice is right under Solve")
-    assert lay.itemAt(i + 1 + len(under)).widget() is t.study_box, "the parametric-study slot is under Solve (and what belongs to it)"
-    assert t.b_solve.isVisible() and t.outline.isVisible(), "Solve is always in view, whatever node is selected"
-    pan = col
+        assert lay.itemAt(1 + k).widget() is w, (name, "the Solve button's own status / choice is right under it")
+    assert lay.itemAt(1 + len(under)).widget() is t.study_box, "the parametric-study slot is under Solve (and what belongs to it)"
+    t.outline.select("Results"); app.processEvents()
+    assert t.b_solve.isVisible(), "Solve shows when the Results page is selected"
+    t.outline.select("Geometry"); app.processEvents()
+    assert not t.b_solve.isVisible(), "and only then: it is a button of the Results page"
+    pan = t.outline.parent()
     while pan is not None and not hasattr(pan, "default_w"):
         pan = pan.parent()
     assert pan is not None and pan.maximumWidth() >= 16000, "the side panel has no maximum width: drag the divider to widen it"
     assert pan.outline is t.outline and t.outline.split.count() == 2
+    assert pan.layout().count() == 1, (name, "the Outline is all there is in the column: no strip under the Details")
 mesh_sec = [x for x in fea.sections if x.title == "Mesh"][0]
 assert "Mesh" in texts(fea, "Mesh") and fea.e_h.parent() is not None
 assert mesh_sec.isAncestorOf(fea.e_h) and mesh_sec.isAncestorOf(fea.order_combo) and mesh_sec.isAncestorOf(fea.cb_auto)

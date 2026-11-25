@@ -3,7 +3,7 @@ sim_ui.py - the shared building blocks of the left panels of 1D FEA, 2D FEA and 
 
   Section      a numbered, collapsible block: header (click to fold / unfold, one-line summary while folded, optional "?" help) + body
   icon_button  a full-width button with a sketched icon, text left-aligned (supports and loads are stacked with these)
-  solve_button / solve_side_button   the big Solve button, and the Stop / Cancel button that sits beside it
+  solve_button / solve_side_button   the Solve button (a plain grey button, like Mesh) and the Stop / Cancel button beside it; results_head puts them at the top of the Results page
   help_button  a small "?" that opens a pop-up with a long note, so the panel itself stays short
   make_panel   puts the scrolling sections and the pinned bar (Mesh / Solve ...) into one widget
   soften       gives a finished panel the soft bevel look of sim_style (make_panel does it; call it again when sections are added later)
@@ -192,22 +192,56 @@ class Section(QWidget):
         self.sum_lbl.setVisible(bool(txt))
 
 
+SOLVE_KEY = "F5"
+
+
 def solve_button(text="Solve"):
-    """The one big full-width Solve button that sits between the setup sections and the Results."""
+    """The Solve button.  It sits at the top of the Results page and looks like the Mesh button (a plain grey button), not like a call to action."""
     b = QPushButton(text)
-    b.setProperty("simrole", "solve")
-    b.setMinimumHeight(46)
-    b.setStyleSheet("QPushButton { background:#0e7f86; color:white; font-size:15px; font-weight:bold; border:none; border-radius:8px; margin:6px 4px; }"
-                    "QPushButton:hover { background:#12949c; } QPushButton:disabled { background:#b9c4cc; color:#eef2f4; }")
+    b.setProperty("simrole", "solvemain")
+    b.setMinimumHeight(30)
+    b.setToolTip(f"Solve ({SOLVE_KEY} from any page of this window)")
     return b
 
 
 def solve_side_button(text):
-    """Stop / Cancel, sitting right of the Solve button: as tall as it."""
+    """Stop / Cancel, sitting right of the Solve button: as tall as it, and as plain."""
     b = QPushButton(text)
-    b.setProperty("simrole", "solveside")
-    b.setMinimumHeight(46)
+    b.setProperty("simrole", "solveplain")
+    b.setMinimumHeight(30)
     return b
+
+
+def results_head(lay, *items):
+    """Puts the Solve button (and what belongs to it: Stop / Cancel, the progress, the chart) at the top of a Results section: `lay` is its body, `items` are widgets or layouts,
+    in the order they are shown."""
+    from PyQt6.QtWidgets import QLayout
+    for k, it in enumerate(items):
+        if isinstance(it, QLayout):
+            lay.insertLayout(k, it)
+        else:
+            lay.insertWidget(k, it)
+
+
+def solve_row(solve, side=None):
+    """The Solve button with its Stop / Cancel button on its right: -> a widget holding the row."""
+    row = QWidget()
+    rl = QHBoxLayout(row)
+    rl.setContentsMargins(0, 0, 0, 0)
+    rl.addWidget(solve, 1)
+    if side is not None:
+        rl.addWidget(side)
+    return row
+
+
+def solve_shortcut(window, button):
+    """The key that presses `button` from any page of `window` (and from its view): it does nothing while the button is off."""
+    from PyQt6.QtGui import QKeySequence, QShortcut
+    sh = QShortcut(QKeySequence(SOLVE_KEY), window)
+    sh.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+    sh.activated.connect(lambda: button.isEnabled() and button.click())
+    window.solve_key = sh
+    return sh
 
 
 def study_slot():
@@ -218,6 +252,9 @@ def study_slot():
     lay.setContentsMargins(4, 0, 4, 4)
     box.hide()
     return box
+
+
+SIDE_W = 420                                         # the width every analysis window's left panel opens at (1D, 2D and 3D alike); every page fits in it
 
 
 def make_panel(content, pinned_widgets, min_w=340, max_w=None):
@@ -240,7 +277,7 @@ def make_panel(content, pinned_widgets, min_w=340, max_w=None):
     if not pinned_widgets:
         panel.setMinimumWidth(min_w)
         panel.setMaximumWidth(max_w if max_w else 16777215)
-        panel.default_w = 400
+        panel.default_w = SIDE_W
         panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         panel.scroll = scroll
         soften(panel)
@@ -305,10 +342,21 @@ class plain_panels:
         _PLAIN[0] -= 1
 
 
+def _holds_widgets(lay):
+    """True when a layout holds a widget or another layout (stretches and spacers do not count)."""
+    if lay is None:
+        return False
+    for i in range(lay.count()):
+        it = lay.itemAt(i)
+        if it.widget() is not None or it.layout() is not None:
+            return True
+    return False
+
+
 def outlinize(panel, window=None, kind="sim"):
     """Makes the finished panel of a window (make_panel, with all its Sections in) the ANSYS-style column: the Sections move into an Outline (a tree of them, in the order a model is
-    built) with the Details of the selected one below it, and what else was in the panel (the Solve button, the progress bar, the study button) stays under them, always in
-    view.  -> the sim_outline.Outline, or None when the panel has no sections.  `window` may offer outline_items / outline_marks / outline_selected (see sim_outline)."""
+    built) with the Details of the selected one below it, and what else was in the panel stays under them, always in
+    view (the Solve button is not one of these: it is at the top of the Results page).  -> the sim_outline.Outline, or None when the panel has no sections.  `window` may offer outline_items / outline_marks / outline_selected (see sim_outline)."""
     if _PLAIN[0]:
         return None
     scroll = getattr(panel, "scroll", None)
@@ -331,9 +379,13 @@ def outlinize(panel, window=None, kind="sim"):
     scroll.hide()
     content.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
     pl.insertWidget(0, ol, 1)
-    pl.insertWidget(1, content, 0)
-    content.show()
-    panel.default_w = max(getattr(panel, "default_w", 400), 420)
+    if _holds_widgets(lay):
+        pl.insertWidget(1, content, 0)                 # something else is in the panel (not the Solve button: that is on the Results page): it stays under the Outline
+        content.show()
+    else:
+        content.setParent(panel)                       # nothing: no strip under the Details at all
+        content.hide()
+    panel.default_w = SIDE_W
     panel.outline = ol
     soften(panel)
     ol.select(next(iter(ol.keys())))
@@ -359,13 +411,14 @@ def soften_area(widget, tabs=False):
 
 
 def fit_side_panel(split, panel, content):
-    """The panel opens as wide as its sections need (nothing cut off, no sideways scroll bar at the start), between 340 and 640 pixels; the view
-    gets the rest.  The user can still drag the divider; the width is not remembered."""
+    """The panel opens SIDE_W wide in every analysis window (the same width everywhere, so moving between a 1D, 2D or 3D window does not move the
+    divider); the view gets the rest.  Every page is laid out to fit in it with no sideways scroll bar.  The user can still drag the divider; the width
+    is not remembered."""
     try:
         import ui_kit
-        ui_kit.fit_panel(split, panel, content, lo=max(340, panel.minimumWidth()), hi=640)
-    except ImportError:                                  # a program older than this add-on: the fixed start width it always had
-        split.setSizes([getattr(panel, "default_w", 400), 1000])
+        ui_kit.fit_panel(split, panel, content, lo=SIDE_W, hi=SIDE_W)
+    except ImportError:                                  # a program older than this add-on: the fixed start width
+        split.setSizes([SIDE_W, 1000])
 
 
 def tame(combo, chars=18):

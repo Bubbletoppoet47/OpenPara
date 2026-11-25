@@ -29,6 +29,9 @@ import result_style
 import physics_store as pstore
 import physics_geom as pg
 import physics_tab as pt
+import sim_mesh2d as sm2
+import sim_meshhost
+import sim_meshui
 import sim_ui
 import legend_draw
 import anim_export
@@ -530,7 +533,9 @@ class CFDCanvas(pt.PhysCanvas):
 # ----------------------------------------------------------------------------------------------
 # the tab
 # ----------------------------------------------------------------------------------------------
-class CFDTab(QWidget):
+class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
+    SIZE_BOX = "e_hb"                 # the element size the advanced mesh options are compared with
+    LOCAL_REGIONS = False             # a local size goes on edges and points of the bodies
     def __init__(self, win):
         super().__init__()
         self.win = win
@@ -628,7 +633,8 @@ class CFDTab(QWidget):
         self.row(form, "Top", self.e_mt, HELP["margin"])
         lay.addLayout(form)
 
-        lay = sec(4, "Mesh", False, help_text="Element sizes in sketch units. The boundary layer is used with the turbulence model.",
+        lay = sec(4, "Mesh", False, help_text="Element sizes in sketch units. The boundary layer is used with the turbulence model. Advanced mesh options: make the mesh "
+                  "finer at curved edges or on single edges and points of the bodies, set a smallest element, and read how good the elements are.",
                   summary=lambda: f"body {self.e_hb.text() or 'auto'}, far {self.e_hf.text() or 'auto'}")
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
@@ -651,10 +657,16 @@ class CFDTab(QWidget):
         lay.addLayout(form)
         self.bl_lbl = self.note("")
         lay.addWidget(self.bl_lbl)
+        self.mesh_opts = sm2.default_mesh()
+        sim_meshui.build_advanced(self, lay, "cfd", None, sm2.GROWTH_RANGE, sm2.CURV_RANGE)
         self.b_mesh = QPushButton("Mesh")
         self.b_mesh.setMinimumHeight(30)
         self.b_mesh.clicked.connect(self.run_mesh)
         lay.addWidget(self.b_mesh)
+        self.mesh_lbl = QLabel("")
+        self.mesh_lbl.setWordWrap(True)
+        lay.addWidget(self.mesh_lbl)
+        sim_meshui.build_quality(self, lay)
         self.cb_auto = QCheckBox("Auto-refine the mesh until the forces converge")
         self.cb_auto.toggled.connect(self.auto_toggled)
         lay.addWidget(with_help(self.cb_auto, HELP["auto"]))
@@ -702,16 +714,12 @@ class CFDTab(QWidget):
         self.b_stop.clicked.connect(self.stop_solve)
         self.b_stop.setEnabled(False)
         self.study_box = sim_ui.study_slot()
-        self.solve_row = QWidget()
-        sr = QHBoxLayout(self.solve_row)
-        sr.setContentsMargins(0, 0, 0, 0)
-        sr.addWidget(self.b_solve, 1)
-        sr.addWidget(self.b_stop)
+        self.solve_row = sim_ui.solve_row(self.b_solve, self.b_stop)
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
         self.prog_lbl = self.note("")
         self.plot = ConvergencePlot()
-        self.solve_status = QWidget()                 # progress under the Solve bar: the bar, its text and the change-per-step plot
+        self.solve_status = QWidget()                 # progress under the Solve button: the bar, its text and the change-per-step plot
         ssl = QVBoxLayout(self.solve_status)
         ssl.setContentsMargins(4, 0, 4, 0)
         ssl.setSpacing(2)
@@ -721,6 +729,8 @@ class CFDTab(QWidget):
 
         lay = sec(6, "Results", True, help_text="To load a surface of the body in the FEA tab: FEA tab - Pressure from CFD...",
                   summary=lambda: self.field.currentText())
+        sim_ui.results_head(lay, self.solve_row, self.solve_status, self.study_box)   # Solve, Stop, the progress and the chart are the first things of the Results page
+        sim_ui.solve_shortcut(self, self.b_solve)
         self.field = QComboBox()
         for name, key, _, _ in FIELD_LIST:
             self.field.addItem(name, key)
@@ -805,10 +815,6 @@ class CFDTab(QWidget):
         row.addWidget(b)
         lay.addLayout(row)
         for s_ in sorted(self.sections, key=lambda x: x.number):
-            if s_.number == 6:
-                lay0.addWidget(self.solve_row)        # the one big Solve button (with Stop) sits between the setup sections and the Results
-                lay0.addWidget(self.solve_status)     # with the progress bar and the change-per-step plot right under it
-                lay0.addWidget(self.study_box)
             lay0.addWidget(s_)
         lay0.addStretch(1)
 
@@ -944,6 +950,8 @@ class CFDTab(QWidget):
         self.lbl_speed.setText(f"Speed ({u['V']})")
         self.lbl_hb.setText(f"At the body ({u['L']})")
         self.lbl_hf.setText(f"Far away ({u['L']})")
+        if hasattr(self, "hmin_label"):
+            self.hmin_label.setText(f"Minimum size ({u['L']})")
         self.lbl_first.setText(f"First layer ({u['L']})")
         self.lbl_bt.setText(f"Thickness ({u['L']})")
         self.units_note.setText(f"Units: {u['name']}  (change in File > Units)")
@@ -978,6 +986,10 @@ class CFDTab(QWidget):
         self.b_mesh.setEnabled(self.geom is not None and "gmsh" in have and "numpy" in have and not busy)
         self.b_solve.setEnabled(self.mesh is not None and "scipy" in have and not busy)
         self.b_stop.setEnabled(busy)
+        self.refresh_mesh_info()
+
+    def mesh_kind_text(self):
+        return "quadratic velocity, linear pressure"
 
     def fluid_picked(self, *_):
         rho, mu = pcfd.FLUIDS[self.fluid_combo.currentText()]
@@ -1214,8 +1226,13 @@ class CFDTab(QWidget):
         if args is None:
             return
         m, g, ids, margins, hb, hf, tr, bl = args
+        try:
+            opts = self.mesher_options()
+        except ValueError as ex:
+            QMessageBox.warning(self, "Mesh", str(ex))
+            return
         kind, data = self.run_task("Meshing", lambda progress, cancel: pcfd.mesh_fluid(m, g, ids, margins, hb, hf, tr, progress,
-                                                                                         cancel, bl=bl))
+                                                                                         cancel, bl=bl, opts=opts))
         if kind != "ok":
             self.status("Meshing cancelled." if kind == "cancelled" else "Meshing failed.")
             return
@@ -1287,7 +1304,11 @@ class CFDTab(QWidget):
             args = self.read_mesh_inputs()
             if args is None:
                 return
-            refine = {"passes": passes, "max_tris": max_tris, "mesh_args": args}
+            try:
+                refine = {"passes": passes, "max_tris": max_tris, "mesh_args": args + (self.mesher_options(),)}
+            except ValueError as ex:
+                QMessageBox.warning(self, "Solve", str(ex))
+                return
         self.stop_motion()
         self.setup_used = setup
         self.result = None
@@ -1472,7 +1493,7 @@ class CFDTab(QWidget):
                 "inputs": pstore.get_inputs(self, self.INPUTS), "body_on": sorted(self.body_on), "body_size": self.body_size,
                 "mesh": self.mesh, "result": self.result, "frames": self.frames, "setup_used": getattr(self, "setup_used", None),
                 "field": self.field.currentData(), "frame_index": self.slider.value(), "res_html": self.res_lbl.text(),
-                "sel": list(self.canvas.sel), "sketch_id": getattr(self, "sketch_id", None)}
+                "sel": list(self.canvas.sel), "sketch_id": getattr(self, "sketch_id", None), "mesh_opts": self.mesh_state()}
 
     def import_state(self, st, out_of_date=False):
         m = sc.Model()
@@ -1480,6 +1501,7 @@ class CFDTab(QWidget):
         self.set_model(m, st.get("source") or "the saved sketch")
         self.sketch_id = st.get("sketch_id")
         pstore.set_inputs(self, st.get("inputs", {}))
+        self.restore_mesh_options(st)
         self.auto_toggled(self.cb_auto.isChecked())
         on = set(st.get("body_on", []))
         self.body_on = set()

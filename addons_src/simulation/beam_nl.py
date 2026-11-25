@@ -67,7 +67,7 @@ def _material(eps, eps_p, alpha, E, sy, su, eu):
 class Model:
     """Everything the iterations need, set up once."""
 
-    def __init__(self, nodes, members, supports, nodal, eu_pct):
+    def __init__(self, nodes, members, supports, nodal, eu_pct, moves=None):
         self.ids = list(nodes)
         self.index = {nid: i for i, nid in enumerate(self.ids)}
         nn = len(self.ids)
@@ -149,6 +149,12 @@ class Model:
                 fixed.add(3 * i + 2)
         self.fixed = np.array(sorted(fixed), dtype=int)
         self.free = np.array([d for d in range(self.ndof) if d not in fixed], dtype=int)
+        self.pres = np.zeros(self.ndof)                    # how far the held dofs are moved (a Displacement), reached in proportion to the load like the loads
+        for nid, vals in (moves or {}).items():
+            if nid in self.index and nid in supports:
+                for j in range(3):
+                    if supports[nid][j] and vals[j]:
+                        self.pres[3 * self.index[nid] + j] = float(vals[j])
 
     # ---------------------------------------------------------------------------------------------------------------------------
     def kinematics(self, u):
@@ -243,9 +249,17 @@ MAX_ATTEMPTS = 250
 
 def solve(nodes, members, supports, nodal, opts, n_st=41):
     """-> the result dict of beam1d.solve, plus "nl": {"lambda": load fraction carried, "converged", "steps", "iterations", "yielded": [...]}"""
-    mdl = Model(nodes, members, supports, nodal, opts.get("eu_pct", 10.0))
+    mdl = Model(nodes, members, supports, nodal, opts.get("eu_pct", 10.0), opts.get("moves"))
     free, P = mdl.free, mdl.P
     nref = float(np.linalg.norm(P[free])) + 1e-30
+    pd = np.nonzero(mdl.pres)[0]
+    if pd.size:                                            # a movement drives it: the force scale is what the first (straight) step asks of the structure
+        _F0, K0, _s0 = mdl.internal(np.zeros(mdl.ndof))
+        rows, cols, vals = K0
+        from_pd = np.isin(cols, pd) & np.isin(rows, free)
+        pushes = np.zeros(mdl.ndof)
+        np.add.at(pushes, rows[from_pd], vals[from_pd] * mdl.pres[cols[from_pd]])
+        nref = max(nref, float(np.linalg.norm(pushes[free])))
     u = np.zeros(mdl.ndof)
     lam, dlam, steps, iters = 0.0, 1.0 / float(opts.get("nl_steps", 10)), 0, 0
     reason = None
@@ -259,6 +273,8 @@ def solve(nodes, members, supports, nodal, opts, n_st=41):
             break
         dl = min(dlam, 1.0 - lam)
         ut = u.copy()
+        if pd.size:
+            ut[pd] = (lam + dl) * mdl.pres[pd]
         mdl.eps_p, mdl.alpha = state_ok[0].copy(), state_ok[1].copy()
         ok = False
         last = np.inf

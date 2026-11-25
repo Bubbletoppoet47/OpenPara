@@ -384,12 +384,15 @@ def face_geometry_ok(geom):
 # ----------------------------------------------------------------------------------------------
 # mesh (gmsh)
 # ----------------------------------------------------------------------------------------------
-def mesh_faces(m, geom, included, h, progress=None, cancel=None, algorithm=6, refine=None):
+def mesh_faces(m, geom, included, h, progress=None, cancel=None, algorithm=6, refine=None, opts=None):
     """Linear triangles for the chosen faces.  h = target element size (sketch units).
     -> mesh dict: nodes (N,2), tris (M,3) counter-clockwise, tri_face (M,), curve_segs {(kind,id): [(na, nb)]},
        point_node {point id: node}, stats.
     refine = None, or {"nodes", "tris", "sizes"} (a previous mesh and the element size wanted at each of its nodes): the new mesh follows
-    those sizes wherever they are smaller than h (adaptive refinement)."""
+    those sizes wherever they are smaller than h (adaptive refinement).
+    opts = None (the plain automatic mesh), or the advanced mesh options (sim_mesh2d.options): {"hmin": the smallest element edge (0 = no limit),
+    "growth": how fast elements grow away from a local size, "curv": elements around a full circle at curved edges (0 = off),
+    "local": [{"targets": [(kind, id)], "h": size}] a smaller size on single edges ("ln", "ar", "sp", "ci"), points ("pt") or regions ("rg")}."""
     import gmsh
     face_geometry_ok(geom)
     faces = [f for f in geom["faces"] if f["id"] in included]
@@ -431,6 +434,13 @@ def mesh_faces(m, geom, included, h, progress=None, cancel=None, algorithm=6, re
             next_extra[0] += 1
             return gmsh.model.geo.addPoint(x, y, 0.0, h, next_extra[0])
 
+        n_curv = int((opts or {}).get("curv") or 0)    # refine at curved edges: this many elements around a full circle (0 = off)
+        curv_size = {}                                 # gmsh point tag -> the element size the curvature asks for there
+
+        def curve_at(tag, radius):
+            if n_curv and radius and radius > 0:
+                curv_size[tag] = min(curv_size.get(tag, h), 2.0 * math.pi * radius / n_curv)
+
         curve_tag = {}                                # edge index -> list of gmsh curve tags in the edge's own direction
         next_curve = [0]
 
@@ -454,6 +464,8 @@ def mesh_faces(m, geom, included, h, progress=None, cancel=None, algorithm=6, re
                 ids.append(gpoint(*m.pts[e["b"]], e["b"]))
                 cc = gpoint(c[0], c[1], e["c"])
                 curve_tag[k] = [gcurve(gmsh.model.geo.addCircleArc, ids[i], cc, ids[i + 1]) for i in range(n)]
+                for t_ in ids:
+                    curve_at(t_, r)
             elif e["kind"] == "sp":
                 dense = sc.spline_curve([m.pts[p] for p in e["pts"]], 6)
                 ids = [gpoint(*m.pts[e["a"]], e["a"])]
@@ -461,11 +473,17 @@ def mesh_faces(m, geom, included, h, progress=None, cancel=None, algorithm=6, re
                     ids.append(gpoint(q[0], q[1]))
                 ids.append(gpoint(*m.pts[e["b"]], e["b"]))
                 curve_tag[k] = [gcurve(gmsh.model.geo.addSpline, ids)]
+                if n_curv:
+                    rad = [_radius_at(dense, i) for i in range(len(dense))]
+                    for t_, r_ in zip(ids, rad):
+                        curve_at(t_, r_)
             else:
                 c, r = m.pts[e["c"]], e["r"]
                 cc = gpoint(c[0], c[1], e["c"])
                 ids = [gpoint(c[0] + r * math.cos(i * math.pi / 2), c[1] + r * math.sin(i * math.pi / 2)) for i in range(4)]
                 curve_tag[k] = [gcurve(gmsh.model.geo.addCircleArc, ids[i], cc, ids[(i + 1) % 4]) for i in range(4)]
+                for t_ in ids:
+                    curve_at(t_, r)
 
         def loop_tags(cycle):
             tags = []
@@ -481,6 +499,8 @@ def mesh_faces(m, geom, included, h, progress=None, cancel=None, algorithm=6, re
                 loops.append(gmsh.model.geo.addCurveLoop(loop_tags(hole["cycle"])))
             surf_of_face[f["id"]] = gmsh.model.geo.addPlaneSurface(loops)
         gmsh.model.geo.synchronize()
+        for tag, size in curv_size.items():             # refinement at curved edges: the element size at the points of an arc, circle or spline (see curve_at)
+            gmsh.model.mesh.setSize([(0, tag)], float(size))
         gmsh.option.setNumber("Mesh.MeshSizeMax", h)
         gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
         gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
@@ -488,8 +508,15 @@ def mesh_faces(m, geom, included, h, progress=None, cancel=None, algorithm=6, re
         gmsh.option.setNumber("Mesh.Algorithm", algorithm)
         gmsh.option.setNumber("Mesh.ElementOrder", 1)
         gmsh.option.setNumber("Mesh.RecombineAll", 0)
+        if opts and opts.get("hmin"):
+            gmsh.option.setNumber("Mesh.MeshSizeMin", float(opts["hmin"]))
+        local = local_size_fields(gmsh, opts, edges, curve_tag, pt_tag, surf_of_face, float(h)) if opts and opts.get("local") else []
         if refine:
-            background_from_sizes(gmsh, refine)
+            background_from_sizes(gmsh, refine, local)
+        elif local:
+            low = gmsh.model.mesh.field.add("Min")
+            gmsh.model.mesh.field.setNumbers(low, "FieldsList", local)
+            gmsh.model.mesh.field.setAsBackgroundMesh(low)
         tick("Meshing (gmsh)", 0.3)
         gmsh.model.mesh.generate(2)
         tick("Reading the mesh", 0.8)
@@ -551,6 +578,69 @@ def mesh_faces(m, geom, included, h, progress=None, cancel=None, algorithm=6, re
             gmsh.finalize()
         except Exception:
             pass
+
+
+def _radius_at(pts, i):
+    """The radius of the circle through a point of a polyline and its two neighbours (the radius of curvature there; an end point uses its nearest inner point);
+    None on a straight run or when there are fewer than three points."""
+    n = len(pts)
+    if n < 3:
+        return None
+    j = min(max(i, 1), n - 2)
+    a, b, c = pts[j - 1], pts[j], pts[j + 1]
+    ab, bc, ca = math.dist(a, b), math.dist(b, c), math.dist(c, a)
+    area2 = abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]))
+    if area2 < 1e-12 * max(ab * bc, 1e-300):
+        return None
+    return ab * bc * ca / (2.0 * area2)
+
+
+def local_size_fields(gmsh, opts, edges, curve_tag, pt_tag, surf_of_face, h):
+    """The gmsh size fields of the local sizes of `opts`: near the edge, point or region the element size is the local one, and it grows to `h` over the distance at which
+    layers of elements, each `growth` times longer than the one before, have grown that far: (h - size) / (growth - 1).  -> [field tags]; a target that is not in the
+    sketch (or not in an included region) is a GeometryError."""
+    fld = gmsh.model.mesh.field
+    growth = float(opts.get("growth") or 1.3)
+    by_src = {}
+    for k, tags in curve_tag.items():
+        by_src.setdefault(tuple(edges[k]["src"]), []).extend(tags)
+    out = []
+    for n, item in enumerate(opts.get("local") or []):
+        hf = float(item["h"])
+        curves, points, surfs = [], [], []
+        for kind, ident in item["targets"]:
+            if kind in ("ln", "ar", "sp", "ci"):
+                got = by_src.get((kind, int(ident)))
+                if not got:
+                    raise GeometryError(f"Local size {n + 1}: its edge is not in the meshed regions any more (the sketch changed, or the region is switched off). Set it again.")
+                curves += got
+            elif kind == "pt":
+                if int(ident) not in pt_tag:
+                    raise GeometryError(f"Local size {n + 1}: its point is not on the meshed regions any more. Set it again.")
+                points.append(pt_tag[int(ident)])
+            elif kind == "rg":
+                if int(ident) not in surf_of_face:
+                    raise GeometryError(f"Local size {n + 1}: its region is not switched on any more. Set it again.")
+                surfs.append(surf_of_face[int(ident)])
+        if not (curves or points or surfs) or not hf < h:
+            continue
+        dist = fld.add("Distance")
+        if curves:
+            fld.setNumbers(dist, "CurvesList", curves)
+            fld.setNumber(dist, "Sampling", 100)
+        if points:
+            fld.setNumbers(dist, "PointsList", points)
+        if surfs:
+            fld.setNumbers(dist, "SurfacesList", surfs)
+            fld.setNumber(dist, "Sampling", 100)
+        thr = fld.add("Threshold")
+        fld.setNumber(thr, "InField", dist)
+        fld.setNumber(thr, "SizeMin", hf)
+        fld.setNumber(thr, "SizeMax", h)
+        fld.setNumber(thr, "DistMin", 0.0)
+        fld.setNumber(thr, "DistMax", (h - hf) / max(growth - 1.0, 1e-6))
+        out.append(thr)
+    return out
 
 
 def mesh_stats(nodes, tris):

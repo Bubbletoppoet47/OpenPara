@@ -19,7 +19,7 @@ def _rel(a, b, scale=None):
     return abs(a - b) / max(scale, 1e-300)
 
 
-def fea_auto(m, geom, included, h, mesh, mat, supports, loads, max_passes, max_tris, progress=None, cancel=None):
+def fea_auto(m, geom, included, h, mesh, mat, supports, loads, max_passes, max_tris, progress=None, cancel=None, opts=None):
     """-> {"mesh", "result", "log", "reason"}.  `mesh` is the pass-0 mesh the user already made."""
     def tick(txt, f):
         if cancel and cancel():
@@ -56,7 +56,7 @@ def fea_auto(m, geom, included, h, mesh, mat, supports, loads, max_passes, max_t
             ind = np.bincount(vm["parent"], weights=ind, minlength=len(mesh["tris"]))
         marked = pg.mark_elements(ind)
         sizes = pg.refined_sizes(mesh["nodes"], mesh["tris"], marked, floor=floor)
-        new = pg.mesh_faces(m, geom, included, h, None, cancel, refine={"nodes": mesh["nodes"], "tris": mesh["tris"], "sizes": sizes})
+        new = pg.mesh_faces(m, geom, included, h, None, cancel, refine={"nodes": mesh["nodes"], "tris": mesh["tris"], "sizes": sizes}, opts=opts)
         if new["stats"]["n_tris"] > max_tris:
             log.append({"pass": k + 1, "n_tris": int(new["stats"]["n_tris"]), "skipped": True})
             reason = "max_tris"
@@ -72,10 +72,11 @@ def fea_auto(m, geom, included, h, mesh, mat, supports, loads, max_passes, max_t
 
 
 def cfd_auto(mesh, setup, mesh_args, max_passes, max_tris, progress=None, frame=None, cancel=None, on_mesh=None):
-    """-> {"result", "mesh", "log", "reason", "all_history"}.  mesh_args = (model, geom, body ids, margins, h_body, h_far, transition, bl).
+    """-> {"result", "mesh", "log", "reason", "all_history"}.  mesh_args = (model, geom, body ids, margins, h_body, h_far, transition, bl[, advanced mesh options]).
     progress / frame as in physics_cfd.solve (the step numbers continue from pass to pass); on_mesh(mesh, pass_no) is called
     whenever a finer mesh replaces the old one."""
-    m, geom, ids, margins, hb, hf, tr, bl = mesh_args
+    m, geom, ids, margins, hb, hf, tr, bl, *more = mesh_args           # (a ninth item, when there is one: the advanced mesh options)
+    opts = more[0] if more else None
     log, prev, reason, all_hist, offset, res = [], None, "", [], 0, None
     if bl and mesh["stats"].get("bl"):
         bl = dict(mesh["stats"]["bl"])          # the boundary layer the first mesh really got (it may have been thinned to fit)
@@ -110,7 +111,7 @@ def cfd_auto(mesh, setup, mesh_args, max_passes, max_tris, progress=None, frame=
         marked = pg.mark_elements(pcfd.refine_indicator(mesh, res))
         sizes = pg.refined_sizes(mesh["nodes"], mesh["tris"], marked, floor=floor)
         try:
-            new = pcfd.mesh_fluid(m, geom, ids, margins, hb, hf, tr, None, cancel, bl=bl,
+            new = pcfd.mesh_fluid(m, geom, ids, margins, hb, hf, tr, None, cancel, bl=bl, opts=opts,
                                   refine={"nodes": mesh["nodes"], "tris": mesh["tris"], "sizes": sizes, "floor": floor})
         except pg.Cancelled:
             reason = "stopped"

@@ -139,7 +139,10 @@ for name, w in (("2D FEA", fea), ("1D FEA", beam), ("2D CFD", cfd)):
         side[0].setSizes([560, 520])
         settle()
         ok(side[0].sizes()[0] > w1, f"{name}: and it moves ({w1} -> {side[0].sizes()[0]})")
-    ok(w.b_solve.isVisible() and not w.b_solve.visibleRegion().isEmpty(), f"{name}: Solve stays in view under the Details")
+    ol.select("Results"); settle()
+    ok(w.b_solve.isVisible() and not w.b_solve.visibleRegion().isEmpty(), f"{name}: Solve is in view at the top of the Results page")
+    ol.select("Geometry"); settle()
+    ok(not w.b_solve.isVisible(), f"{name}: and only there: no Solve bar under the Details")
 
 # a real click on a node of the tree changes the Details
 fea.outline.select("Geometry")

@@ -12,7 +12,7 @@ from PyQt6.QtGui import QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QPi
 
 COLOUR = "#0e7f86"
 NAMES = ("pressure_cfd", "pressure", "fixed", "bolt", "screw", "contact", "line_load", "ux", "uy", "force", "moment", "wind", "snow",
-         "pinned", "pinned_joint", "rigid_joint")
+         "pinned", "pinned_joint", "rigid_joint", "disp")
 _cache = {}
 
 
@@ -112,6 +112,15 @@ def _force(p):
     _arrow(p, 3, 12, 21, 12)
 
 
+def _disp(p):
+    """Displacement: a held base and a point that has been moved off it by an arrow (the base is the support, the arrow is how far it is moved)."""
+    _line(p, (3, 19), (21, 19))
+    _ticks(p, 19, [7, 11, 15, 19], n=2.6)
+    p.drawEllipse(QPointF(7, 12), 2.2, 2.2)
+    _arrow(p, 10.2, 12, 20, 12)
+    _line(p, (7, 14.2), (7, 19))
+
+
 def _moment(p):
     path = QPainterPath()
     path.arcMoveTo(QRectF(4.5, 4.5, 15, 15), 31.6)
@@ -160,7 +169,7 @@ def _rigid_joint(p):
 
 _DRAW = {"pressure_cfd": _pressure_cfd, "pressure": _pressure, "fixed": _fixed, "bolt": _bolt, "screw": _screw, "contact": _contact,
          "line_load": _line_load, "ux": _ux, "uy": _uy, "force": _force, "moment": _moment, "wind": _wind, "snow": _snow,
-         "pinned": _pinned, "pinned_joint": _pinned_joint, "rigid_joint": _rigid_joint}
+         "pinned": _pinned, "pinned_joint": _pinned_joint, "rigid_joint": _rigid_joint, "disp": _disp}
 assert set(_DRAW) == set(NAMES)
 
 
@@ -186,8 +195,13 @@ def _legacy_pixmap(name, size):
     return pm
 
 
+def _kit_has(name):
+    """The core's icon kit has this icon (an icon added by an add-on after the kit was made is drawn by the drawings below)."""
+    return icon_kit is not None and icon_kit.has("l_" + name)
+
+
 def pixmap(name, size=48, ratio=2):
-    if icon_kit is not None:
+    if _kit_has(name):
         return icon_kit.pixmap("l_" + name, size, ratio)
     return _legacy_pixmap(name, size)
 
@@ -195,5 +209,5 @@ def pixmap(name, size=48, ratio=2):
 def icon(name):
     """The QIcon of one of NAMES (cached; needs a QApplication)."""
     if name not in _cache:
-        _cache[name] = icon_kit.qicon("l_" + name, 24) if icon_kit is not None else QIcon(_legacy_pixmap(name, 48))
+        _cache[name] = icon_kit.qicon("l_" + name, 24) if _kit_has(name) else QIcon(_legacy_pixmap(name, 48))
     return _cache[name]

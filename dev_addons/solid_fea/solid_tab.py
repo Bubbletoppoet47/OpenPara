@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, Q
 import anim_export
 import physics_materials as pm
 import result_style
+import sim_disp
 import sim_matdlg
 import sim_report as R
 import sim_ui
@@ -76,7 +77,7 @@ def r_in(x):
 class SolidWindow(SolidBase):
     kind = "solid"
     label = "3D FEA"
-    SUPPORT_TYPES = {"fixed": "Fixed", "slide": "One direction (normal)", "bearing": "Bearing"}
+    SUPPORT_TYPES = {"fixed": "Fixed", "disp": "Displacement", "slide": "One direction (normal)", "bearing": "Bearing"}
     CONDITION_KINDS = sm.CONDITION_KINDS
 
     # ------------------------------------------------------------------ what SolidBase asks the elasticity window for (its hooks)
@@ -239,11 +240,12 @@ class SolidWindow(SolidBase):
         v = self.sec(3, "Supports", True, summary=lambda: f"{len(self.setup['supports'])} support(s)")
         v.addWidget(self.hint("Select the face(s) first (click them in the view), then press a button."))
         for mode, icn, tip in (("fixed", "fixed", "Holds the selected faces in every direction."),
+                               ("disp", "disp", "Says for x, y and z what the selected faces do: blank = free, 0 = held, a number = moved by exactly that much."),
                                ("slide", "ux", "Holds the selected faces only in the direction normal to them; they slide freely along it."),
                                ("bearing", "bolt", "For the round (cylindrical) face of a hole: select that face itself, not its edge.  It holds the face against moving "
                                                    "sideways (in or out along the radius) and along the axis of the hole; the face can still turn about the axis.  "
                                                    "One bearing alone leaves the part free to turn about its hole: add a second one on another hole, or another support.")):
-            b = sim_ui.icon_button(self.SUPPORT_TYPES[mode] if mode != "bearing" else "Bearing (hole face)", icn, tip)
+            b = sim_ui.icon_button({"bearing": "Bearing (hole face)", "disp": "Displacement..."}.get(mode, self.SUPPORT_TYPES[mode]), icn, tip)
             b.clicked.connect(lambda _c=False, m_=mode: self.add_support(m_))
             v.addWidget(b)
         self.sup_list = QListWidget()                 # the plain-text copy of the supports (kept for scripts); the table under Loads shows them
@@ -641,7 +643,7 @@ class SolidWindow(SolidBase):
     def refresh_lists(self):
         self.sup_list.clear()
         for i, s in enumerate(self.setup["supports"]):
-            self.sup_list.addItem(f"{sm.name_of('Support', i, s)}: {s['mode']} on {len(s['faces'])} face(s)")
+            self.sup_list.addItem(f"{sm.name_of('Support', i, s)}: {self.support_text(s)} on {len(s['faces'])} face(s)")
         self.load_list.clear()
         for i, l in enumerate(self.setup["loads"]):
             self.load_list.addItem(f"{sm.name_of('Load', i, l)}: {self.load_text(l)}")
@@ -649,7 +651,7 @@ class SolidWindow(SolidBase):
         t.blockSignals(True)
         t.setRowCount(0)
         ro = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        rows = [(sm.name_of("Support", i, s), self.SUPPORT_TYPES.get(s["mode"], s["mode"]), f"{len(s['faces'])} face(s)", "") for i, s in enumerate(self.setup["supports"])]
+        rows = [(sm.name_of("Support", i, s),) + self.support_cells(s) for i, s in enumerate(self.setup["supports"])]
         rows += [(sm.name_of("Load", i, l),) + self.load_cells(l) for i, l in enumerate(self.setup["loads"])]
         for r, cells in enumerate(rows):
             t.insertRow(r)
@@ -659,6 +661,22 @@ class SolidWindow(SolidBase):
                 t.setItem(r, c, it)
         t.blockSignals(False)
         self.fill_face_table()
+
+    @staticmethod
+    def support_text(s):
+        """The plain words of a support for the list: 'fixed', 'displacement (ux free, uy held, uz 2 mm)' ..."""
+        if s["mode"] != "disp":
+            return s["mode"]
+        return "displacement (" + sim_disp.describe({k: (None if s.get(k) is None else l_out(s[k])) for k in sim_disp.KEYS[3]}, sim_disp.KEYS[3], lambda k: UD()["L"]) + ")"
+
+    @classmethod
+    def support_cells(cls, s):
+        """(type, applied to, value) of a support for the conditions table."""
+        n = f"{len(s['faces'])} face(s)"
+        if s["mode"] == "disp":
+            vals = ", ".join(sim_disp.fmt(None if s.get(k) is None else l_out(s[k])) or "free" for k in sim_disp.KEYS[3])
+            return f"Displacement (ux, uy, uz) ({UD()['L']})", n, vals
+        return cls.SUPPORT_TYPES.get(s["mode"], s["mode"]), n, ""
 
     @staticmethod
     def load_cells(l):
@@ -701,6 +719,8 @@ class SolidWindow(SolidBase):
         key, i = self.cond_ref(r)
         if key == "loads" and c != 0:
             QTimer.singleShot(0, lambda: self.edit_load(i))
+        elif key == "supports" and c != 0 and self.setup["supports"][i]["mode"] == "disp":
+            QTimer.singleShot(0, lambda: self.edit_displacement(i))
 
     def edit_condition(self):
         """Edit selected: a load opens its numbers again; a support lets you rename it."""
@@ -711,6 +731,8 @@ class SolidWindow(SolidBase):
             return False
         if key == "loads":
             return self.edit_load(i)
+        if self.setup["supports"][i]["mode"] == "disp":
+            return self.edit_displacement(i)
         it = self.cond_table.item(r, 0)
         self.cond_table.setCurrentItem(it)
         self.cond_table.editItem(it)
@@ -746,7 +768,29 @@ class SolidWindow(SolidBase):
             self.invalidate()
             self.colour()
 
-    def add_support(self, mode=None, fids=None):
+    def displacement_values(self, cur=None):
+        """The Displacement dialog (in the units of the program); -> {"ux", "uy", "uz"} in mm (None = free), or None when cancelled or when every direction is blank."""
+        shown = {k: (None if (cur or {}).get(k) is None else l_out(cur[k])) for k in sim_disp.KEYS[3]}
+        vals = sim_disp.ask(self, "Displacement", sim_disp.KEYS[3], {k: UD()["L"] for k in sim_disp.KEYS[3]}, shown)
+        if vals is None:
+            return None
+        why = sim_disp.check(vals, sim_disp.KEYS[3])
+        if why:
+            self.say(why)
+            return None
+        return {k: (None if v is None else l_in(v)) for k, v in vals.items()}
+
+    def edit_displacement(self, i):
+        s = self.setup["supports"][i]
+        vals = self.displacement_values(s)
+        if vals is None:
+            return False
+        s.update(vals)
+        self.after_edit()
+        return True
+
+    def add_support(self, mode=None, fids=None, values=None):
+        """Adds a support on the selected faces.  A Displacement takes `values` ({"ux", "uy", "uz"} in mm, None = free, 0 = held) or asks for them."""
         fids = self.sel_faces if fids is None else fids
         if self.geom is None or not fids:
             self.say("Select the face(s) of the support first.")
@@ -761,8 +805,18 @@ class SolidWindow(SolidBase):
                 self.say(f"A bearing needs the round (cylindrical) face of a hole: select that face, not an edge. {self.face_label(bad[0])} is a "
                          f"{self.geom['faces'][bad[0]]['kind']}.")
                 return False
+        extra = {}
+        if mode == "disp":
+            if values is None:
+                values = self.displacement_values()
+                if values is None:
+                    return False
+            elif all(values.get(k) is None for k in sim_disp.KEYS[3]):
+                self.say(sim_disp.check({}, sim_disp.KEYS[3]))
+                return False
+            extra = {k: (None if values.get(k) is None else float(values[k])) for k in sim_disp.KEYS[3]}
         n = sum(1 for s in self.setup["supports"] if s["mode"] == mode) + 1
-        self.setup["supports"].append({"mode": mode, "faces": [sg.face_sig(self.geom, f) for f in fids], "name": f"{mode.capitalize()} support {n}"})
+        self.setup["supports"].append({"mode": mode, "faces": [sg.face_sig(self.geom, f) for f in fids], "name": f"{'Displacement' if mode == 'disp' else mode.capitalize()} support {n}", **extra})
         self.after_edit()
         return True
 

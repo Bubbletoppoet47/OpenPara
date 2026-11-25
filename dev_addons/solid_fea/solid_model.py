@@ -6,7 +6,8 @@ setup = {
   "h": element size (mm, 0 = automatic): of a single part, or of the parts of an assembly that have no size of their own,
   "body_h": {body name: mm}              an ASSEMBLY: the element size of the parts that have one of their own (a blank or missing one gets "h"); the parts are
                                       still meshed as one mesh, so the nodes of the faces they share stay shared (see solid_mesh)
-  "supports": [{"mode": "fixed" | "slide" | "bearing", "faces": [face signature]}],      a bearing is for the round face(s) of a hole
+  "supports": [{"mode": "fixed" | "slide" | "bearing" | "disp", "faces": [face signature]}],      a bearing is for the round face(s) of a hole;
+              a "disp" (Displacement) also has "ux", "uy", "uz" (mm): None = free, 0 = held, a number = the faces are moved by exactly that much
   "loads":    [{"kind": "force", "faces": [sig], "f": [Fx, Fy, Fz]}              total force spread over the faces (N)
               | {"kind": "pressure", "faces": [sig], "p": MPa}                    positive pushes into the part
               | {"kind": "point", "vertex": vertex signature, "f": [Fx, Fy, Fz]}
@@ -34,7 +35,7 @@ import solid_fem as fem
 import solid_geom as sg
 import solid_mesh as smesh
 
-MODES = {"fixed": "Fixed (all directions)", "slide": "One direction (normal to the face)",
+MODES = {"fixed": "Fixed (all directions)", "slide": "One direction (normal to the face)", "disp": "Displacement (each direction free, held or moved)",
          "bearing": "Bearing (the hole face is held against moving sideways and along its axis; it can turn)"}
 KINDS = {"force": "Force on faces", "pressure": "Pressure on faces", "point": "Force at a vertex", "gravity": "Gravity"}
 
@@ -106,7 +107,12 @@ def resolve(geom, setup):
             for f in fids:
                 if not geom["faces"][f].get("cyl"):
                     raise fem.FemError(f"{nm}: a bearing needs the round (cylindrical) face of a hole, and that face is a {geom['faces'][f]['kind']}.")
-        r["supports"].append({"mode": s["mode"], "fids": fids, "name": nm})
+        it = {"mode": s["mode"], "fids": fids, "name": nm}
+        if s["mode"] == "disp":
+            it.update({k: (None if s.get(k) is None else float(s[k])) for k in ("ux", "uy", "uz")})
+            if all(it[k] is None for k in ("ux", "uy", "uz")):
+                raise fem.FemError(f"{nm}: every direction is blank, so this support holds nothing. Type 0 to hold a direction, or a number to move it.")
+        r["supports"].append(it)
     for i, l in enumerate(setup["loads"]):
         nm = name_of("Load", i, l)
         it = {k: copy.deepcopy(v) for k, v in l.items() if k not in ("faces", "vertex")}
@@ -214,8 +220,8 @@ def check_ready(setup, geom=None):
     """The reason why nothing can run yet, or None.  `geom` (when given and an assembly) also checks every body's material and that the bodies hold together."""
     if not setup["supports"]:
         return "Add at least one support."
-    if not setup["loads"]:
-        return "Add at least one load."
+    if not setup["loads"] and not any(s_.get("mode") == "disp" and any(s_.get(k) not in (None, 0, 0.0) for k in ("ux", "uy", "uz")) for s_ in setup["supports"]):
+        return "Add at least one load (or a Displacement that moves a face)."
     if geom is not None and geom.get("bodies"):
         import solid_asm
         why = solid_asm.check(geom)
@@ -295,6 +301,8 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
             if s["mode"] == "bearing":
                 cy = geom["faces"][fid]["cyl"]
                 cons.append((nd, {"bearing": (cy["origin"], cy["axis"])}))
+            elif s["mode"] == "disp":
+                cons.append((nd, {"disp": (s["ux"], s["uy"], s["uz"])}))
             else:
                 cons.append((nd, face_normal(q, geom, fid) if s["mode"] == "slide" else None))
             names.append(s["name"])
@@ -338,7 +346,8 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
             fb = fem.body_load(nodes, groups, b)
             force += fb
             applied += fb.reshape(-1, 3).sum(axis=0)
-    if not np.any(force):
+    imposed = any(s["mode"] == "disp" and any(s[k] not in (None, 0.0) for k in ("ux", "uy", "uz")) for s in r["supports"])      # a movement is a load too
+    if not np.any(force) and not imposed:
         raise fem.FemError("The loads are all zero.")
     u, reac, info, K, D = fem.solve(q, mat["E"], mat["nu"], cons, force, cancel, progress)
     progress("stresses")
@@ -360,7 +369,7 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
         per_body, sy_node = _per_body(geom, mats, groups, vm_el, vol, nn)
     s1, s3 = fem.principal(sig)
     total_reac = np.asarray(info["total_reaction"])
-    energy = 0.5 * float(force @ u.ravel())
+    energy = 0.5 * float(u.ravel() @ (K @ u.ravel())) if imposed else 0.5 * float(force @ u.ravel())      # (a displacement does the work, not only the loads)
     un = np.linalg.norm(u, axis=1)
     vmax = float(vm_el.max())
     fos_y = (mat["sy"] / vmax) if vmax > 0 and mat.get("sy") else None
@@ -377,7 +386,8 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None):
            "counts": {"tets": len(conn), "hexes": int(len(q.get("hexes", ()))), "pyramids": int(len(q.get("pyrs", ())))}, "viewcells": q.get("viewcells"),
            "hexdom_note": q.get("hexdom_note"), "tet_body": q.get("tet_body"),
            "order": int(q["order"]), "quality": q.get("quality"), "mesh_opts": r.get("mesh"),
-           "equilibrium": float(np.linalg.norm(total_reac + applied) / max(np.linalg.norm(applied), 1e-12)), "info": info,
+           "equilibrium": float(np.linalg.norm(total_reac + applied) / max(np.linalg.norm(applied), (float(np.linalg.norm(reac, axis=1).sum()) if imposed else 0.0), 1e-12)),
+           "info": info,
            "material": dict(mat)}
     if per_body is not None:
         res.update({"bodies": per_body, "sy_node": sy_node, "material": dict(mat, sy=0.0, su=0.0), "bond_tol": geom.get("tol"),

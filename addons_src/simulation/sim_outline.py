@@ -194,6 +194,12 @@ def generic_marks(w, nodes):
             marks[key] = "ok" if (mesh or (geom and not needs_mesh)) else ("update" if geom else "incomplete")
         elif low in ("supports", "loads", "conditions"):
             have = len(refs) if low == "conditions" else n.get(key, 0)
+            if low == "loads" and not have:                              # a support that moves its points by a given amount drives the analysis as a load does
+                try:
+                    import sim_disp
+                    have = 1 if sim_disp.has_imposed(getattr(w, "supports", None)) else 0
+                except ImportError:
+                    pass
             marks[key] = "ok" if have else "incomplete"
         elif low not in ("results", "solver"):
             marks[key] = "ok" if geom else "incomplete"

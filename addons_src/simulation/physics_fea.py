@@ -4,7 +4,7 @@ Physics Calc - 2D linear-elastic finite elements.
   * 3-node constant-strain triangles (linear) or 6-node quadratic triangles (mid-edge nodes are added here, so every other
     part of the program keeps working with the corner-node mesh), plane stress or plane strain
   * one isotropic material for the whole mesh
-  * supports: ux = 0, uy = 0 or both, on points or along curves; bolts and screws (a fixed patch of a given width on the edge,
+  * supports: Fixed, and Displacement (ux and uy each free, held or moved by a given amount), on points or along curves; bolts and screws (a fixed patch of a given width on the edge,
     a screw holds one way only); frictionless one-way contact against a surface
   * a one-way support is found by an active-set iteration (supports that would have to pull are released)
   * loads: point forces, edge pressure (normal), edge traction (fixed direction)
@@ -138,25 +138,34 @@ def out_normal(nodes, tris, owner, na, nb):
 
 def resolve(mesh, supports, loads, mid=None):
     """Turn supports / loads on sketch entities into node data.
-    -> fixed {dof: 0.0}, point_forces [(node, fx, fy)], edge_loads [(na, nb, fx_total, fy_total)], notes [str],
+    -> fixed {dof: the displacement it is held at (0.0, or the value a Displacement imposes)}, point_forces [(node, fx, fy)], edge_loads [(na, nb, fx_total, fy_total)], notes [str],
        edge_nodal [(na, nb, fax, fay, fbx, fby)]   (CFD loads: force per unit thickness on each end node of an element edge)
        edge load totals are the resultant force of that element edge (already including thickness is done later).
     Bolts, screws and contact supports are handled by resolve_fasteners."""
     nodes, tris = mesh["nodes"], mesh["tris"]
     notes = []
     fixed = {}
+    conflict = set()
     for s in supports:
-        if s["mode"] not in ("fixed", "x", "y"):
+        if s["mode"] not in ("fixed", "x", "y", "disp"):
             continue
+        # what is held: {0: value of ux, 1: value of uy}; a Displacement holds the directions that are not blank (0 = held, a number = imposed)
+        if s["mode"] == "disp":
+            want = {c: float(s[k]) for c, k in enumerate(("ux", "uy")) if s.get(k) is not None}
+        else:
+            want = {c: 0.0 for c in (0, 1) if s["mode"] == "fixed" or (s["mode"] == "x") == (c == 0)}
         for kind, i in s["targets"]:
             ns = entity_nodes(mesh, kind, i, mid)
             if not ns:
                 notes.append(f"Support on {kind} {i}: no mesh nodes there (is its region switched on?).")
             for n in ns:
-                if s["mode"] in ("fixed", "x"):
-                    fixed[2 * n] = 0.0
-                if s["mode"] in ("fixed", "y"):
-                    fixed[2 * n + 1] = 0.0
+                for c, v in want.items():
+                    dof = 2 * n + c
+                    if dof in fixed and abs(fixed[dof] - v) > 1e-12 * max(1.0, abs(v)):
+                        conflict.add(n)
+                    fixed[dof] = v
+    if conflict:
+        notes.append(f"{len(conflict)} node(s) are held to two different displacements by two supports: the later support was used there.")
     point_forces = []
     for ld in loads:
         if ld["kind"] == "force":
@@ -562,9 +571,9 @@ def check_rigid_body(nodes, tris, fixed_idx, extra=()):
                              "an edge, or a point fixed plus a second support that is not in line with it.")
 
 
-def _constrained_solve(K, f, N, fixed_global, rules, cancel=None, rb=None):
+def _constrained_solve(K, f, N, fixed_global, rules, cancel=None, rb=None, prescribed=None):
     """Solves K u = f with
-         fixed_global : sorted array of dofs held at zero (ux or uy of a node);
+         fixed_global : sorted array of dofs held (ux or uy of a node) at zero - or at the value `prescribed` gives for them ({dof: value}; a Displacement support);
          rules        : {node: {"n": (nx, ny), "normal": "fixed" | "oneway" | None, "tang": "fixed" | None}}
                         at those nodes the dofs are turned to (along n, along t = (-ny, nx)); "oneway" means u.n <= 0 (the node may
                         move away from the head / surface along -n, never along +n) and is found by an active-set iteration.
@@ -593,6 +602,12 @@ def _constrained_solve(K, f, N, fixed_global, rules, cancel=None, rb=None):
         rn = np.zeros(0, dtype=np.int64)
         T, Kl, fl = None, K, f
     base = set(int(d) for d in fixed_global)
+    up = np.zeros(nd)                                      # the displacement every held dof is moved to (zero for all but an imposed displacement)
+    for d, v in (prescribed or {}).items():
+        if v != 0.0:
+            if int(d) // 2 in rules:
+                raise ModelError("A displacement that is not zero cannot be on the same point as a bolt, screw or contact support: put them on different points.")
+            up[int(d)] = v
     one = []
     for n in rn:
         r = rules[int(n)]
@@ -604,6 +619,8 @@ def _constrained_solve(K, f, N, fixed_global, rules, cancel=None, rb=None):
             one.append(2 * int(n))
     active = set(one)
     fscale = float(np.max(np.abs(fl))) or 1.0
+    if up.any():                                           # the loading is a movement: the forces to compare with are the ones it needs
+        fscale = max(fscale, float(np.max(np.abs(Kl @ up - fl))))
     info = {"iterations": 0, "oneway": len(one), "released": 0, "cycled": False}
     u = np.zeros(nd)
     for it in range(80):
@@ -620,12 +637,13 @@ def _constrained_solve(K, f, N, fixed_global, rules, cancel=None, rb=None):
         mask = np.ones(nd, dtype=bool)
         mask[fix] = False
         free = np.nonzero(mask)[0]
-        u = np.zeros(nd)
+        u = up.copy()
         Kff = Kl[free][:, free].tocsc()
+        rhs0 = fl[free] if not up.any() else fl[free] - Kl[free] @ up
         with warnings.catch_warnings():
             warnings.simplefilter("error", category=spla.MatrixRankWarning)
             try:
-                u[free] = psolve.solve(Kff, fl[free])
+                u[free] = psolve.solve(Kff, rhs0)
             except spla.MatrixRankWarning:
                 if one:
                     raise ModelError("The one-way supports (screws / contact) cannot hold the body for this load: with the nodes "
@@ -654,10 +672,10 @@ def _constrained_solve(K, f, N, fixed_global, rules, cancel=None, rb=None):
     mask[fix] = False
     free = np.nonzero(mask)[0]
     Kff = Kl[free][:, free].tocsc()
-    fn = float(np.linalg.norm(fl[free])) or 1.0
+    fn = float(np.linalg.norm(fl[free] - Kl[free] @ up if up.any() else fl[free])) or 1.0
     info["refined"] = 0
     for _ in range(2):
-        rr = fl[free] - Kff @ u[free]
+        rr = (fl - Kl @ u)[free] if up.any() else fl[free] - Kff @ u[free]
         if float(np.linalg.norm(rr)) <= 1e-11 * fn:
             break
         try:
@@ -734,8 +752,9 @@ def solve(mesh, mat, supports, loads, progress=None, cancel=None):
                      "real extreme-fibre stress. The strengths and the factors of safety already include this factor.")
     if not fixed and not groups:
         raise ModelError("No supports: the body is free to fly away. Add a support first.")
-    if not point_forces and not edge_loads and not edge_nodal:
-        raise ModelError("No loads. Add a force, pressure or traction first.")
+    imposed = {d: v for d, v in fixed.items() if v != 0.0}                # displacements that are imposed (a Displacement support with a number)
+    if not point_forces and not edge_loads and not edge_nodal and not imposed:
+        raise ModelError("No loads. Add a force, pressure or traction first (or impose a displacement).")
 
     # bolts fix their nodes; screws and contact supports become rules (rotated dofs, one-way)
     rules = {}
@@ -847,7 +866,7 @@ def solve(mesh, mat, supports, loads, progress=None, cancel=None):
                 nx, ny = rules[n]["n"]
                 ex.append((n, nx, ny) if d % 2 == 0 else (n, -ny, nx))
         check_rigid_body(nodes_all, tris, np.array(plain, dtype=np.int64), ex)
-    u, react, info, fixmask = _constrained_solve(K, f, N, fixed_idx, rules, cancel, rb)
+    u, react, info, fixmask = _constrained_solve(K, f, N, fixed_idx, rules, cancel, rb, prescribed=imposed)
     times["solve"] = time.perf_counter() - t1
     if not np.all(np.isfinite(u)):
         raise ModelError("The solution contains NaN or infinity (singular or badly conditioned system).")
@@ -893,7 +912,7 @@ def solve(mesh, mat, supports, loads, progress=None, cancel=None):
         view = None
     # ---- automatic switch to the nonlinear solver (large displacements and yielding) when the linear result says it is needed
     f_lin_applied = f
-    solver, nlinfo, trigger, peeq, energy_val, residual_nl = "linear", None, "", None, float(0.5 * u @ f), None
+    solver, nlinfo, trigger, peeq, energy_val, residual_nl = "linear", None, "", None, float(0.5 * u @ (Ku if imposed else f)), None
     sy_, su_ = float(mat.get("sy") or 0.0), float(mat.get("su") or 0.0)
     umax_lin = float(np.max(np.hypot(u.reshape(-1, 2)[:, 0], u.reshape(-1, 2)[:, 1])))
     vm_lin = np.sqrt(sx ** 2 - sx * sy + sy ** 2 + 3 * txy ** 2)
@@ -940,7 +959,8 @@ def solve(mesh, mat, supports, loads, progress=None, cancel=None):
                 tick("Nonlinear solve (large displacements / yielding)", 0.6)
                 try:
                     nr = pnl.solve_nonlinear(nodes_all, conn, th, D, f, fixed_idx, rules, mat, u_lin=umax_lin, nl_disp=lim,
-                                             cancel=cancel, progress=lambda t, fr: tick(t, fr), geom=True, plastic=(mode == "stress"))
+                                             cancel=cancel, progress=lambda t, fr: tick(t, fr), geom=True, plastic=(mode == "stress"),
+                                             prescribed=imposed, f_scale=float(np.max(np.abs(react))) if imposed else None)
                 except RuntimeError:
                     raise Cancelled()
                 except pnl.NLFailed as ex:

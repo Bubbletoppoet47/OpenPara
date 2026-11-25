@@ -13,6 +13,8 @@ import numpy as np
 
 import physics_fea as pf
 import physics_geom as pg
+import sim_disp
+import sim_mesh2d as sm2
 import physics_materials as pmat
 import physics_refine as prefine
 import units
@@ -35,7 +37,7 @@ class FEAStudy(StudyAdapter):
         t = self.tab
         if getattr(t, "model", None) is None:
             return "Import a sketch or a slice in the simulation first."
-        if not t.supports or not t.loads:
+        if not t.supports or not (t.loads or sim_disp.has_imposed(t.supports)):
             return "The simulation has no supports or no loads yet."
         return None
 
@@ -55,6 +57,11 @@ class FEAStudy(StudyAdapter):
                 out.append({"id": f"fea.sup{i}.d", "group": "FEA load values", "kind": "text", "choices": None, "sup": (i, "d"),
                             "label": f"{t.cond_name(True, i)} ({sp_['mode']} on {t.names(sp_['targets'])}): head width",
                             "now": fmt_num(sp_.get("d", 0.0))})
+            elif sp_["mode"] == "disp":                       # an imposed displacement is a value a study can vary (a held or free direction is not)
+                for key in ("ux", "uy"):
+                    if sp_.get(key) not in (None, 0, 0.0):
+                        out.append({"id": f"fea.sup{i}.{key}", "group": "FEA load values", "kind": "text", "choices": None, "sup": (i, key),
+                                    "label": f"{t.cond_name(True, i)} (displacement on {t.names(sp_['targets'])}): {key}", "now": fmt_num(sp_[key])})
         return out
 
     def outputs(self):
@@ -99,7 +106,7 @@ class FEAStudy(StudyAdapter):
                 elif d is not None and d.get("sup") is not None:
                     i, k = d["sup"]
                     sups[i][k] = float(text)
-            if not sups or not loads:
+            if not sups or not (loads or sim_disp.has_imposed(sups)):
                 raise pf.ModelError("The simulation has no supports or no loads.")
             loads = s.resolved_loads(loads)
             unconv = any(l["kind"] == "cfd" and not l.get("converged", True) for l in loads)
@@ -109,7 +116,8 @@ class FEAStudy(StudyAdapter):
                 if auto["passes"] < 1 or auto["max_tris"] < 100:
                     raise ValueError("Auto-refine: passes must be at least 1 and the triangle limit at least 100.")
             m, g = s.model, s.geom
-            key = (hashlib.md5(m.to_json().encode("utf-8")).hexdigest(), h, tuple(sorted(included)))
+            opts = s.mesher_options()
+            key = (hashlib.md5(m.to_json().encode("utf-8")).hexdigest(), h, tuple(sorted(included)), sm2.key_text(opts))
             cache = ctx.setdefault("cache", {})
         except (pf.ModelError, pg.GeometryError, ValueError) as ex:
             spec["error"] = str(ex)
@@ -123,12 +131,12 @@ class FEAStudy(StudyAdapter):
                 base = cache.get(key)
                 if base is None:
                     progress("meshing")
-                    base = pg.mesh_faces(m, g, included, h, None, cancel)
+                    base = pg.mesh_faces(m, g, included, h, None, cancel, opts=opts)
                     cache[key] = base
                 progress("solving")
                 if auto:
                     out = prefine.fea_auto(m, g, included, h, base, mat, sups, loads, auto["passes"], auto["max_tris"],
-                                           progress=lambda t_, fr=0.0: progress(t_), cancel=cancel)
+                                           progress=lambda t_, fr=0.0: progress(t_), cancel=cancel, opts=opts)
                     res, mesh = out["result"], out["mesh"]
                     res["refine"] = {"log": out["log"], "reason": out["reason"]}
                 else:

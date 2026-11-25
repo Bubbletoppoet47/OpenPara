@@ -14,6 +14,7 @@ import numpy as np
 
 import physics_fea as pf
 import physics_geom as pg
+import sim_mesh2d as sm2
 import thermal_fem as tfem
 from study_iface import StudyAdapter, StudyCancelled, fmt_num, set_widget, widget_params
 
@@ -136,7 +137,8 @@ class ThermalStudy(StudyAdapter):
             included = {f["id"] for f in s.geom["faces"] if f["included"]}
             m, g = s.model, s.geom
             probes = [dict(q) for q in s.probes]
-            key = (hashlib.md5(m.to_json().encode("utf-8")).hexdigest(), h, tuple(sorted(included)))
+            opts = s.mesher_options()
+            key = (hashlib.md5(m.to_json().encode("utf-8")).hexdigest(), h, tuple(sorted(included)), sm2.key_text(opts))
             cache = ctx.setdefault("cache", {})
         except (pf.ModelError, pg.GeometryError, ValueError) as ex:
             spec["error"] = str(ex)
@@ -150,7 +152,7 @@ class ThermalStudy(StudyAdapter):
                 base = cache.get(key)
                 if base is None:
                     progress("meshing")
-                    base = pg.mesh_faces(m, g, included, h, None, cancel)
+                    base = pg.mesh_faces(m, g, included, h, None, cancel, opts=opts)
                     cache[key] = base
                 progress("solving")
                 res = tfem.solve(base, setup, None, cancel)
@@ -180,6 +182,8 @@ class ThermalStudy(StudyAdapter):
             if d.get("cond") is not None or d.get("gen") is not None or d.get("mat") is not None:
                 continue
             set_widget(s, d["attr"], d["kind"], text, d.get("choices"))
+            if d.get("attr") == "order_combo":
+                s.cb_adv.setChecked(True)                    # the element order is an advanced mesh option: a study that sets it uses it
         s.tr_box.setVisible(s.analysis_combo.currentIndex() == 1)
         s.plate_box.setVisible(s.cb_plate.isChecked())
 

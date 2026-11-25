@@ -196,12 +196,16 @@ g2 = w2.geom
 face2 = lambda n: next(f["id"] for f in g2["faces"] if np.dot(f["normal"], n) > 0.99)
 w2.select_faces([face2([-1, 0, 0])]); w2.add_support("fixed"); w2.select_faces([face2([1, 0, 0])]); w2.add_load("force", {"f": [1000.0, 0.0, 0.0]})
 w2.resize(1400, 900); w2.show(); app.processEvents()
-ok(not w2.prog.isVisible(), "no bar while nothing runs")
+w2.outline.select("Results"); app.processEvents()                      # the Solve button, its Cancel and its bar are the top of the Results page
+ok(w2.b_solve.isVisible() and w2.solve_row.isVisible() and not w2.prog.isVisible(), "no bar while nothing runs")
+ok(not w2.prog_mesh.isVisible() and not w2.b_mesh_cancel.isVisible(), "nor under the Mesh button")
 w2.set_size("2.2"); w2.inputs_changed()                     # about 5 000 elements: a couple of seconds
 vals, texts, vis = [], [], []
 assert w2.run_solve()
 t_start = time.time()
 ok(w2.job is not None and w2.prog.isVisible() and not w2.b_solve.isEnabled() and w2.b_cancel.isEnabled(), "Solve pressed: the bar is shown under the button, Solve is off, Cancel is on")
+ok(w2.prog.mapTo(w2, w2.prog.rect().topLeft()).y() > w2.b_solve.mapTo(w2, w2.b_solve.rect().topLeft()).y(), "and the bar is under the Solve button")
+ok(not w2.prog_mesh.isVisible() and not w2.b_mesh_cancel.isVisible(), "a solve shows nothing on the Mesh page")
 while w2.job is not None and time.time() - t_start < 200:
     app.processEvents(); time.sleep(0.03)
     vals.append(w2.prog.bar.value()); texts.append(w2.prog.lbl.text()); vis.append(w2.prog.isVisible())
@@ -249,11 +253,24 @@ ok(w2.b_solve.isEnabled() and not w2.b_cancel.isEnabled(), "the buttons are back
 
 # ---- 13. a mesh-only job has the bar too
 w2.set_size("3"); w2.inputs_changed(); w2.cache.clear()
+w2.outline.select("Mesh"); app.processEvents()
 assert w2.run_mesh()
-ok(w2.prog.isVisible(), "Mesh: the bar is shown")
+app.processEvents()
+ok(w2.prog_mesh.isVisible() and not w2.prog.isVisible(), "Mesh: the bar is shown on the Mesh page, under the Mesh button, and not under Solve")
+ok(w2.b_mesh_cancel.isVisible() and w2.b_mesh_cancel.isEnabled() and w2.b_mesh_cancel.text() == "Cancel" and w2.b_cancel.isEnabled(), "with a Cancel beside Mesh while it runs")
 t_start = time.time()
 while w2.job is not None and time.time() - t_start < 100:
     app.processEvents(); time.sleep(0.03)
-ok(w2.mesh_q is not None and w2.prog.bar.value() == 1000, "and it ends full")
+ok(w2.mesh_q is not None and w2.prog_mesh.bar.value() == 1000, "and it ends full")
+ok(not w2.b_mesh_cancel.isVisible() and w2.b_mesh.isEnabled(), "the Cancel beside Mesh goes away when the mesh is done")
+# Cancel beside Mesh stops a mesh
+w2.set_size("2.0"); w2.inputs_changed(); w2.cache.clear()
+assert w2.run_mesh()
+w2.b_mesh_cancel.click()
+ok("Cancelling" in w2.prog_mesh.lbl.text(), "Cancel beside Mesh: the line under Mesh says that it stops when the step that is running ends")
+t_start = time.time()
+while w2.job is not None and time.time() - t_start < 100:
+    app.processEvents(); time.sleep(0.03)
+ok(w2.job is None and not w2.b_mesh_cancel.isVisible() and w2.b_mesh.isEnabled(), "and the buttons are back")
 print("OK solid progress")
 os._exit(0)

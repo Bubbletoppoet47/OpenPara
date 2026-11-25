@@ -20,6 +20,7 @@ FOS_LOW, FOS_HIGH = 0.5, 3.0              # the factor-of-safety colours: red at
 
 
 import legend_draw
+import sim_disp
 import sim_tags
 
 
@@ -455,7 +456,9 @@ class BeamCanvas(sim_tags.FocusMixin, QWidget):
                 p.setPen(QPen(col, 1.6))
                 p.setBrush(QColor(26, 150, 65, 90))
                 mode = sp_["mode"]
-                if mode == "fixed":
+                if mode == "disp":
+                    self.paint_displacement(p, s, sp_)
+                elif mode == "fixed":
                     p.drawRect(QRectF(s.x() - 9, s.y() - 9, 18, 18))
                     p.drawLine(QPointF(s.x() - 9, s.y() + 9), QPointF(s.x() + 9, s.y() - 9))
                 elif mode == "pinned":
@@ -472,6 +475,41 @@ class BeamCanvas(sim_tags.FocusMixin, QWidget):
                     p.drawEllipse(QPointF(s.x() - 17.5, s.y() + 5), 3.5, 3.5)
                     p.drawLine(QPointF(s.x() - 21, s.y() - 14), QPointF(s.x() - 21, s.y() + 14))
         p.setBrush(Qt.BrushStyle.NoBrush)
+
+    def paint_displacement(self, p, s, sp_):
+        """A Displacement: the symbol of the directions it holds (a fixed block, a pin, a roller at the side or under the joint, a turn lock), and an arrow (or an arc,
+        for the rotation) for each direction that is moved by a number."""
+        held = sim_disp.held(sp_, sim_disp.KEYS[1])
+        hx, hy, hr = "ux" in held, "uy" in held, "rz" in held
+        if hx and hy and hr:
+            p.drawRect(QRectF(s.x() - 9, s.y() - 9, 18, 18))
+            p.drawLine(QPointF(s.x() - 9, s.y() + 9), QPointF(s.x() + 9, s.y() - 9))
+        elif hx and hy:
+            p.drawPolygon(QPolygonF([s, QPointF(s.x() - 10, s.y() + 16), QPointF(s.x() + 10, s.y() + 16)]))
+            p.drawLine(QPointF(s.x() - 14, s.y() + 16), QPointF(s.x() + 14, s.y() + 16))
+        else:
+            if hy:
+                p.drawPolygon(QPolygonF([s, QPointF(s.x() - 9, s.y() + 14), QPointF(s.x() + 9, s.y() + 14)]))
+                p.drawEllipse(QPointF(s.x() - 5, s.y() + 17.5), 3.5, 3.5)
+                p.drawEllipse(QPointF(s.x() + 5, s.y() + 17.5), 3.5, 3.5)
+                p.drawLine(QPointF(s.x() - 14, s.y() + 21), QPointF(s.x() + 14, s.y() + 21))
+            if hx:
+                p.drawPolygon(QPolygonF([s, QPointF(s.x() - 14, s.y() - 9), QPointF(s.x() - 14, s.y() + 9)]))
+                p.drawEllipse(QPointF(s.x() - 17.5, s.y() - 5), 3.5, 3.5)
+                p.drawEllipse(QPointF(s.x() - 17.5, s.y() + 5), 3.5, 3.5)
+                p.drawLine(QPointF(s.x() - 21, s.y() - 14), QPointF(s.x() - 21, s.y() + 14))
+            if hr:                                                     # the turn is held: a small block with a bar through it, above the joint
+                p.drawRect(QRectF(s.x() + 6, s.y() - 17, 11, 11))
+                p.drawLine(QPointF(s.x() + 6, s.y() - 6), QPointF(s.x() + 17, s.y() - 17))
+        p.setPen(QPen(QColor("#0b5d2a"), 2.2))                          # what is moved by a number: an arrow along it (y is up on the drawing), an arc for the turn
+        dx, dy = float(held.get("ux", 0.0)), float(held.get("uy", 0.0))
+        if dx or dy:
+            n = math.hypot(dx, dy)
+            tail = QPointF(s.x(), s.y())
+            self.arrow(p, tail, QPointF(s.x() + dx / n * 34, s.y() - dy / n * 34))
+        if held.get("rz"):
+            p.drawArc(QRectF(s.x() - 13, s.y() - 13, 26, 26), 30 * 16, 270 * 16 if held["rz"] > 0 else -270 * 16)
+        p.setPen(QPen(QColor("#1a9641"), 1.6))
 
     def arrow(self, p, tail, tip):
         dx, dy = tip.x() - tail.x(), tip.y() - tail.y()

@@ -311,31 +311,49 @@ assert sec(fea, "Mesh").isAncestorOf(fea.cb_auto) and sec(cfd, "Mesh").isAncesto
 assert not sec(cfd, "Solver").isAncestorOf(cfd.cb_auto) and not sec(cfd, "Solver").isAncestorOf(cfd.e_passes)
 assert sec(fea, "Results").isAncestorOf(fea.probe_table) and "Probe regions" not in [x.title for x in fea.sections]
 
-# --- the Solve bar: wide Solve with its Stop / Cancel, status and progress right under it
+# --- the Solve button: the first thing of the Results page, plain like Mesh, with its Stop / Cancel, status and progress right under it
 assert solid.b_cancel.text() == "Cancel" and cfd.b_stop.text() == "Stop"
-for t in tabs.values():
-    assert t.b_solve.minimumHeight() >= 40 and t.b_solve.text() == "Solve"
+for name_, t in tabs.items():
+    rs_ = sec(t, "Results")
+    assert t.b_solve.text() == "Solve" and rs_.isAncestorOf(t.b_solve), name_
+    assert t.b_solve.styleSheet() == "" and t.b_solve.property("simrole") not in ("solve", "solveside"), (name_, "a plain grey button, not the teal one")
+    assert not sec(t, "Geometry").isAncestorOf(t.b_solve) and not [b for b in t.findChildren(QPushButton) if b.parent() is not None and b.parent().objectName() == "pinned"]
 assert not cfd.b_stop.isEnabled() and not solid.b_cancel.isEnabled()
 cfd.worker = object(); cfd.enable_buttons()
-assert cfd.b_stop.isEnabled() and cfd.b_stop.text() == "Stop", "the Solve bar's Stop is the one that is enabled while a solve runs (it used to be replaced by the animation's)"
+assert cfd.b_stop.isEnabled() and cfd.b_stop.text() == "Stop", "the Solve button's Stop is the one that is enabled while a solve runs (it used to be replaced by the animation's)"
 cfd.worker = None; cfd.enable_buttons()
 assert not cfd.b_stop.isEnabled() and cfd.b_play_stop is not cfd.b_stop and cfd.b_play_stop.text() == "Stop"
-col = cfd.solve_row.parent().layout()
-holder = cfd.solve_row
-i = col.indexOf(holder)
-assert col.itemAt(i + 1).widget() is cfd.solve_status and cfd.solve_status.isAncestorOf(cfd.bar) and cfd.solve_status.isAncestorOf(cfd.plot) and cfd.solve_status.isAncestorOf(cfd.prog_lbl)
-col = beam.b_solve.parent().layout()
-i = col.indexOf(beam.b_solve)
-assert col.itemAt(i + 1).widget() is beam.cb_auto and beam.cb_auto.text() == "Solve automatically after every change"
+col = sec(cfd, "Results").body
+assert col.indexOf(cfd.solve_row) == 0 and col.itemAt(1).widget() is cfd.solve_status and cfd.solve_status.isAncestorOf(cfd.bar) and cfd.solve_status.isAncestorOf(cfd.plot) and cfd.solve_status.isAncestorOf(cfd.prog_lbl)
+assert cfd.solve_row.isAncestorOf(cfd.b_solve) and cfd.solve_row.isAncestorOf(cfd.b_stop)
+col = sec(beam, "Results").body
+assert col.indexOf(beam.b_solve) == 0 and col.itemAt(1).widget() is beam.cb_auto and beam.cb_auto.text() == "Solve automatically after every change"
+col = sec(solid, "Results").body
+assert col.indexOf(solid.solve_row) == 0 and col.itemAt(1).widget() is solid.prog and solid.solve_row.isAncestorOf(solid.b_cancel)
 # Solve and Stop / Cancel have the same height
 for t, side in ((cfd, cfd.b_stop), (solid, solid.b_cancel)):
     assert abs(t.b_solve.height() - side.height()) <= 4 or side.height() >= 34, (t.b_solve.height(), side.height())
+# F5 solves from any page of the window: the Geometry page is shown, the key presses the Solve button (and does nothing while it is off)
+import sim_ui as _ui
+for name_, t in tabs.items():
+    assert t.solve_key.key().toString() == _ui.SOLVE_KEY and t.solve_key.parent() is t, name_
+    pressed = []
+    t.b_solve.click = lambda p=pressed: p.append(1)          # (the real handler would start a solve)
+    t.outline.select("Geometry"); app.processEvents()
+    t.b_solve.setEnabled(True)
+    t.solve_key.activated.emit()
+    assert pressed == [1], (name_, "F5 pressed Solve from the Geometry page")
+    t.b_solve.setEnabled(False)
+    t.solve_key.activated.emit()
+    assert pressed == [1], (name_, "and does nothing while Solve is off")
+    del t.b_solve.click
+    t.enable_buttons()
 
 # --- Results end with the same row; the shared order of the parts
 assert btn_texts(beam, "Results")[-2:] == ["Member report...", "Zoom to fit"]
 assert btn_texts(fea, "Results")[-2:] == ["Diagnostics report...", "Zoom to fit"] or btn_texts(fea, "Results")[-1] == "Zoom to fit", btn_texts(fea, "Results")
 assert btn_texts(cfd, "Results")[-2:] == ["Diagnostics report...", "Zoom to fit"]
-assert btn_texts(solid, "Results")[-1] == "Zoom to fit"
+assert [t_ for t_ in btn_texts(solid, "Results") if t_ not in ("Solve", "Cancel", "Create parametric study", "Open parametric study")][-1] == "Zoom to fit"
 # field combo first, then Colours
 for name, field in (("1D FEA", "view_combo"), ("2D FEA", "field_combo"), ("3D FEA", "cb_field"), ("2D CFD", "field")):
     t = tabs[name]
@@ -355,20 +373,26 @@ for t in tabs.values():
     while pan is not None and not hasattr(pan, "default_w"):
         pan = pan.parent()
     assert pan is not None and pan.objectName() == "simpanel" and "QPushButton" in pan.styleSheet(), "the panel has the soft look"
-    sb = [b for b in t.findChildren(QPushButton) if b.property("simrole") == "solve"][0]
-    assert sb.styleSheet() == sim_style.SOLVE
+    assert t.b_solve.styleSheet() == "", "Solve has no look of its own: it takes the panel's, like Mesh"
     img = pan.outline.holder.grab().toImage()
     ratio = img.devicePixelRatio()
     assert ratio == SCALE, (ratio, SCALE)
     c = img.pixelColor(2, img.height() - 3)                      # the bare bottom of the panel: the face colour
     assert (c.red(), c.green(), c.blue()) == (0xee, 0xf1, 0xf6), (c.red(), c.green(), c.blue())
-    was = sb.isEnabled()
-    sb.setEnabled(True)
-    simg = sb.grab().toImage()
-    sb.setEnabled(was)
-    # the Solve face is teal (the text may sit under the centre pixel: look along a line off the text)
+    # the Solve face is the grey of the Mesh button (the text may sit under the centre pixel: look along a line off the text), not teal
+    t.outline.select("Results"); app.processEvents()
+    was = t.b_solve.isEnabled()
+    t.b_solve.setEnabled(True)
+    simg = t.b_solve.grab().toImage()
+    t.b_solve.setEnabled(was)
     row = [simg.pixelColor(int(x * simg.devicePixelRatio()), simg.height() // 2) for x in range(10, 40)]
-    assert any(c_.green() > c_.red() + 40 and c_.blue() > c_.red() + 40 for c_ in row), "teal Solve"
+    assert not any(c_.green() > c_.red() + 40 and c_.blue() > c_.red() + 40 for c_ in row), "Solve is not the teal call to action any more"
+    assert all(abs(c_.red() - c_.blue()) < 30 and c_.red() > 190 for c_ in row), "a light grey face"
+    if hasattr(t, "b_mesh"):
+        t.outline.select("Mesh"); app.processEvents()
+        mimg = t.b_mesh.grab().toImage()
+        mrow = [mimg.pixelColor(int(x * mimg.devicePixelRatio()), mimg.height() // 2) for x in range(10, 40)]
+        assert all(abs(a_.red() - b_.red()) <= 6 and abs(a_.green() - b_.green()) <= 6 and abs(a_.blue() - b_.blue()) <= 6 for a_, b_ in zip(row, mrow)), "the same face as the Mesh button"
 # check boxes and radio buttons use the drawn indicator pictures (teal tick) at this scale
 files = os.listdir(os.path.join(UD, "sim_style", "v1"))
 for n in ("check_on", "check_off", "radio_on", "radio_off", "down", "up"):

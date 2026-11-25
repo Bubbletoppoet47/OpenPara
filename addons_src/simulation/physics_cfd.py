@@ -129,7 +129,7 @@ def convex_corners(m, geom, loops, min_turn_deg=20.0):
 
 
 def mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progress=None, cancel=None, algorithm=6, bl=None,
-                    refine=None, use_corners=True):
+                    refine=None, use_corners=True, opts=None):
     """Triangles for the box around the bodies, minus the bodies.
     margins = (left, right, bottom, top) in multiples of the body size.  h_body / h_far = element size at the walls / far away
     (sketch units), `transition` = distance (in body sizes) over which the size grows.
@@ -137,7 +137,9 @@ def mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progr
        box_segs {side: [(na, nb)]}, box, size, stats.
     bl = None, or {"h1", "ratio", "thickness"} (sketch units): a wall-resolved boundary-layer mesh (triangles, stretched along the walls).
     refine = None, or {"nodes", "tris", "sizes", "floor"}: adaptive refinement - the element size wanted at each node of a previous mesh
-    (never below `floor`); the new mesh follows it wherever it is smaller than the normal sizes."""
+    (never below `floor`); the new mesh follows it wherever it is smaller than the normal sizes.
+    opts = None, or the advanced mesh options (sim_mesh2d.options): {"hmin", "growth", "curv", "local"} - a smaller size on single edges or points of the bodies (they grow back
+    to `h_body` at `growth`), refinement at the curved edges of the bodies (`curv` elements around a full circle), and a smallest element (not used with a boundary layer)."""
     import gmsh
     pg.face_geometry_ok(geom)
     faces = [f for f in geom["faces"] if f["id"] in face_ids and f["depth"] == 0]
@@ -284,6 +286,20 @@ def mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progr
             gmsh.model.mesh.field.setNumber(fct, "DistMin", 1.0 * h_body)
             gmsh.model.mesh.field.setNumber(fct, "DistMax", max(8.0 * h_body, 2.0 * dmin))
             base_fields.append(fct)
+        smallest_local = None
+        if opts:
+            local = [dict(x) for x in (opts.get("local") or [])]
+            if opts.get("curv"):
+                for k in used:
+                    e = edges[k]
+                    if e["kind"] in ("ar", "ci"):
+                        r = e["r"] if e["kind"] == "ci" else pg.arc_angles(m, e)[2]
+                        hc = 2.0 * math.pi * r / int(opts["curv"])
+                        if hc < h_body:
+                            local.append({"targets": [tuple(e["src"])], "h": hc})
+            base_fields += pg.local_size_fields(gmsh, {"growth": opts.get("growth") or 1.3, "local": local}, edges, curve_tag, pt_tag, {}, h_body)
+            sizes_l = [float(x["h"]) for x in local if float(x["h"]) < h_body]
+            smallest_local = min(sizes_l) if sizes_l else None
         if len(base_fields) > 1:
             bg = gmsh.model.mesh.field.add("Min")
             gmsh.model.mesh.field.setNumbers(bg, "FieldsList", base_fields)
@@ -299,6 +315,10 @@ def mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progr
         size_min = 0.5 * min(bl["h1"] if bl else h_body, h_corner if corner_tags else 1e300)
         if refine:
             size_min = min(size_min, float(refine.get("floor", size_min)))
+        if smallest_local is not None:
+            size_min = min(size_min, smallest_local)                     # (the automatic smallest element is half the size at the body: a local size may be smaller)
+        if opts and opts.get("hmin") and not bl:
+            size_min = float(opts["hmin"])                               # the smallest element the user allows
         gmsh.option.setNumber("Mesh.MeshSizeMin", size_min)
         gmsh.option.setNumber("Mesh.MeshSizeMax", h_far)
         gmsh.option.setNumber("Mesh.Smoothing", 5)
@@ -365,7 +385,7 @@ def mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progr
 
 
 def mesh_fluid(m, geom, face_ids, margins, h_body, h_far, transition, progress=None, cancel=None, algorithm=6, bl=None,
-               refine=None):
+               refine=None, opts=None):
     """Same as mesh_fluid_once, but when gmsh cannot build the mesh (typically 'Edge not recovered': the boundary-layer stack is
     thicker than the room between walls, so layers from two walls run into each other) it is tried again with a thinner
     boundary layer, then without the corner fans.  What had to be relaxed is listed in stats["relaxed"]; if nothing works a
@@ -384,7 +404,7 @@ def mesh_fluid(m, geom, face_ids, margins, h_body, h_far, transition, progress=N
             raise pg.Cancelled()
         try:
             mesh = mesh_fluid_once(m, geom, face_ids, margins, h_body, h_far, transition, progress, cancel, algorithm, bl_i, refine,
-                                   use_corners=corners)
+                                   use_corners=corners, opts=opts)
         except (pg.Cancelled, pg.GeometryError, ModelError):
             raise
         except Exception as ex:                                  # gmsh raises a bare Exception

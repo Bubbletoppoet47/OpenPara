@@ -47,7 +47,7 @@ ok(old["loads"] == keep["loads"] and old["material"] == keep["material"] and old
 ok(sm.migrate(old) == [], "a second call changes nothing and says nothing")
 fresh = sm.default_setup()
 ok(sm.migrate(fresh) == [] and not any(k in fresh for k in ("joint", "screws", "design")), "a new setup has nothing to migrate and no joint, screws or design")
-ok(set(sm.MODES) == {"fixed", "slide", "bearing"}, f"the support kinds (no bolt / pin hole any more, a bearing instead): {sorted(sm.MODES)}")
+ok(set(sm.MODES) == {"fixed", "slide", "bearing", "disp"}, f"the support kinds (no bolt / pin hole any more, a bearing instead): {sorted(sm.MODES)}")
 b_old = {"supports": [{"mode": "bearing", "faces": []}, {"mode": "bolt", "faces": []}], "loads": []}
 sm.migrate(b_old)
 ok([s_["mode"] for s_ in b_old["supports"]] == ["bearing", "fixed"], f"migrate leaves a bearing support alone and turns only the old bolt into a fixed one: {[s_['mode'] for s_ in b_old['supports']]}")

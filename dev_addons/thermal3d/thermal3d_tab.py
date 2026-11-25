@@ -399,6 +399,7 @@ class ThermalWindow(SolidBase):
         self.body_lbl.hide()
         self.body_table.hide()
         f = QFormLayout()
+        f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.e_k, self.e_rho, self.e_cp, self.e_gen = (QLineEdit() for _ in range(4))
         self.lbl_k, self.lbl_rho, self.lbl_cp, self.lbl_gen = QLabel(), QLabel(), QLabel(), QLabel()
         self.e_rho.setToolTip("Only a transient run needs the density and the specific heat (how much heat the material stores).")

@@ -3,7 +3,7 @@ sim_style.py - the look of the left panels of 1D FEA, 2D FEA, 3D FEA and 2D CFD:
 
   Raised parts (buttons, section bars, table headers, the "?" buttons) have a one pixel white top-left edge, a grey-blue bottom-right edge,
   rounded corners of 3 px and a very light top-to-bottom gradient.  Inputs, lists and tables are sunken and white.  The open part of a section
-  sits on a faint tile with a hairline border.  Selection is the pale blue of the rest of the program, the Solve button stays teal.
+  sits on a faint tile with a hairline border.  Selection is the pale blue of the rest of the program.  (SOLVE, the teal call-to-action button, is now only the Run button of the Study tab: the Solve button of an analysis is a plain button on its Results page.)
 
 Only the panel gets this look (sim_ui.soften(panel) sets the style sheet on it); nothing else in the program changes.
 

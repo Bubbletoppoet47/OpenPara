@@ -51,7 +51,7 @@ ok(all("cyl" not in f for f in g["faces"] if f["kind"] != "cylinder"), "flat fac
 hole_ids = [f["id"] for f in sorted(cyls, key=lambda f: f["center"][0])]
 top = next(f["id"] for f in g["faces"] if f["kind"] == "plane" and f["normal"][1] > 0.99)
 left = next(f["id"] for f in g["faces"] if f["kind"] == "plane" and f["normal"][0] < -0.99)
-ok(set(sm.MODES) == {"fixed", "slide", "bearing"}, f"the support kinds: {sorted(sm.MODES)}")
+ok(set(sm.MODES) == {"fixed", "slide", "bearing", "disp"}, f"the support kinds: {sorted(sm.MODES)}")
 
 
 def setup(supports, load=(0.0, -2000.0, 0.0), face=None, h=4.0):

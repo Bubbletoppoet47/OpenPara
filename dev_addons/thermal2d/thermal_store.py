@@ -48,6 +48,9 @@ def convert_state(st, old, new, convert):
         lf = units.length_factor(old, new)
         for n in LENGTH_BOXES:
             pstore._scale_text(st["inputs"], n, lf)
+        if st.get("mesh_opts"):
+            import sim_mesh2d
+            st["mesh_opts"] = sim_mesh2d.convert_lengths(st["mesh_opts"], lf)     # the minimum size and the local sizes are lengths
         if fo.key != fn.key:                                 # the same physical value, written in the other units
             for n, q in FAMILY_BOXES.items():
                 txt = str(st["inputs"].get(n, "")).strip()

@@ -147,9 +147,20 @@ def _lists(st, *keys):
     return all(bool(st.get(k)) for k in keys)
 
 
+def _driven(s):
+    """Loads, or a support that moves its points by a given amount (a Displacement): either one drives the analysis."""
+    if s.get("loads"):
+        return True
+    try:
+        import sim_disp
+    except ImportError:
+        return False
+    return sim_disp.has_imposed(s.get("supports"))
+
+
 def ready_solid(st):
     s = st.get("setup") or {}
-    return _lists(s, "supports", "loads")
+    return bool(s.get("supports")) and _driven(s)
 
 
 def ready_thermal3d(st):
@@ -163,7 +174,7 @@ def ready_thermal3d(st):
 
 def ready_fea(st):
     m = st.get("main") or {}
-    return _lists(m, "supports", "loads")
+    return bool(m.get("supports")) and _driven(m)
 
 
 def ready_beam(st):

@@ -244,9 +244,11 @@ class Model:
 
 
 def solve_nonlinear(nodes_all, conn, th, D, f_full, fixed_idx, rules, mat, u_lin=None, nl_disp=None, cancel=None, progress=None,
-                    geom=True, plastic=True, max_iter=25):
+                    geom=True, plastic=True, max_iter=25, prescribed=None, f_scale=None):
     """Load-stepped Newton solve.  -> dict(u, react, sx, sy, txy, peeq, energy, info).  Never raises for lack of convergence: the
-    last converged load level is returned with info['converged'] = False and info['load_fraction'] < 1."""
+    last converged load level is returned with info['converged'] = False and info['load_fraction'] < 1.
+    prescribed = {dof: value}: dofs of `fixed_idx` that are moved (a Displacement support) instead of held at zero; they are reached in proportion to the load
+    fraction, like the loads.  f_scale: the size of the forces to compare the residual with (the reactions, when the loading is a movement)."""
     t0 = time.perf_counter()
     N = len(nodes_all)
     nd = 2 * N
@@ -265,9 +267,14 @@ def solve_nonlinear(nodes_all, conn, th, D, f_full, fixed_idx, rules, mat, u_lin
         elif r.get("normal") == "oneway":
             one.append(2 * int(n))
     active = set(one)
-    Fmax = float(np.max(np.abs(f_full))) or 1.0
+    Fmax = max(float(np.max(np.abs(f_full))), float(f_scale or 0.0)) or 1.0
+    pres = np.zeros(nd)
+    for d_, v_ in (prescribed or {}).items():
+        pres[int(d_)] = v_
     tolF = 1e-7 * Fmax
     tolR = 1e-9 * Fmax
+    moved = np.nonzero(pres)[0]                               # the dofs that are imposed: the iteration is not finished while they are short of their value
+    tolU = 1e-12 * (float(np.max(np.abs(pres))) if len(moved) else 1.0)
     ep = np.zeros((M, 3, 3))
     kap = np.zeros((M, 3))
     u = np.zeros(nd)                                          # global dofs; the rotated copy is T u
@@ -303,7 +310,8 @@ def solve_nonlinear(nodes_all, conn, th, D, f_full, fixed_idx, rules, mat, u_lin
             rnorm = float(np.max(np.abs(R[free]))) if len(free) else 0.0
             if not np.isfinite(rnorm):
                 return fail
-            if rnorm <= tolF:
+            gap = float(np.max(np.abs(lam_new * pres[moved] - ur[moved]))) if len(moved) else 0.0
+            if rnorm <= tolF and gap <= tolU:
                 rel = {d for d in act if d in one_set and R[d] > tolR}
                 umaxl = float(np.max(np.abs(ur))) or 1.0
                 cap = {d for d in one if d not in act and ur[d] > 1e-9 * umaxl}
@@ -321,7 +329,7 @@ def solve_nonlinear(nodes_all, conn, th, D, f_full, fixed_idx, rules, mat, u_lin
                 return fail
             Kr = K if T is None else (T @ K @ T.T).tocsr()
             du = np.zeros(nd)
-            du[fix] = -ur[fix]                                   # constrained dofs go to zero (a newly captured one-way node is pushed back)
+            du[fix] = lam_new * pres[fix] - ur[fix]              # constrained dofs go to their displacement, zero unless imposed (a newly captured one-way node is pushed back)
             rhs = -R[free]
             if len(fix):
                 rhs = rhs - Kr[free][:, fix] @ du[fix]

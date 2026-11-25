@@ -470,6 +470,7 @@ def scale_cfd_result(r, lf, lm_new):
 
 def convert_fea_state(st, old, new, convert):
     """The FEA tab's state in the new unit system.  The mesh and the result are converted in place (not cleared)."""
+    import sim_disp
     import units
     st = dict(st)
     st["inputs"] = dict(st.get("inputs", {}))
@@ -483,9 +484,12 @@ def convert_fea_state(st, old, new, convert):
         _scale_text(st["inputs"], n, sf)
     for n in ("e_t", "e_h", "e_nld"):
         _scale_text(st["inputs"], n, lf)
+    if st.get("mesh_opts"):
+        import sim_mesh2d
+        st["mesh_opts"] = sim_mesh2d.convert_lengths(st["mesh_opts"], lf)         # the minimum size and the local sizes are lengths
     sup = []
     for s_ in st.get("supports", []):
-        s_ = dict(s_)
+        s_ = sim_disp.scale_values(sim_disp.upgrade(s_, 2), lf)      # an imposed displacement is a length too
         if s_.get("d") is not None:
             s_["d"] = s_["d"] * lf                      # the head width keeps its physical size; only the unit changes
         sup.append(s_)
@@ -549,6 +553,8 @@ def convert_beam_state(st, old, new, convert):
         _sc(m, ("depth",), lf)
         mems.append(m)
     st["members"] = mems
+    import sim_disp
+    st["supports"] = [sim_disp.scale_values(sim_disp.upgrade(s_, 1), lf, ("ux", "uy")) for s_ in st.get("supports", [])]       # imposed lengths (the rotation is in degrees)
     if st.get("profs"):                                   # the profile sketches: their outlines are lengths too
         st["profs"] = [dict(p, outline=profiles1d.scale_outline(p["outline"], lf)) for p in st["profs"]]
     loads = []
@@ -585,6 +591,9 @@ def convert_cfd_state(st, old, new, convert):
         _scale_text(st["inputs"], "e_rho", units.density_factor(old, new))
         _scale_text(st["inputs"], "e_mu", units.viscosity_factor(old, new))
         st["body_size"] = st.get("body_size", 1.0) * lf
+        if st.get("mesh_opts"):
+            import sim_mesh2d
+            st["mesh_opts"] = sim_mesh2d.convert_lengths(st["mesh_opts"], lf)         # the minimum size and the local sizes are lengths
         lm_new = units.get(new)["L_m"]
         if st.get("mesh") is not None:
             st["mesh"] = scale_cfd_mesh(st["mesh"], lf)

@@ -45,6 +45,12 @@ class SolidStudy(StudyAdapter):
                     now = l[k]
                 out.append({"id": f"sf.load{i}.{k}", "group": "3D FEA load values", "label": f"{sm.name_of('Load', i, l)}: {lab}", "kind": "text",
                             "choices": None, "now": fmt_num(now)})
+        for i, sp_ in enumerate(t.setup["supports"]):
+            if sp_["mode"] == "disp":                              # a displacement that moves its faces is a value a study can vary (a held or free direction is not)
+                for k in ("ux", "uy", "uz"):
+                    if sp_.get(k) not in (None, 0, 0.0):
+                        out.append({"id": f"sf.sup{i}.{k}", "group": "3D FEA load values", "label": f"{sm.name_of('Support', i, sp_)}: {k} (mm)", "kind": "text",
+                                    "choices": None, "now": fmt_num(sp_[k])})
         return out
 
     def outputs(self):
@@ -107,6 +113,9 @@ class SolidStudy(StudyAdapter):
                 setup["h"] = v
             else:
                 head, key = pid.split(".")[1], pid.split(".")[2]
+                if head.startswith("sup"):
+                    setup["supports"][int(head[3:])][key] = v
+                    continue
                 l = setup["loads"][int(head[4:])]
                 if l["kind"] in ("force", "point"):
                     l["f"]["xyz".index(key[1])] = v

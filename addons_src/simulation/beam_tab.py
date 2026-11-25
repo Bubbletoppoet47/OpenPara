@@ -21,6 +21,7 @@ import traceback
 import numpy as np
 from PyQt6.QtCore import QItemSelectionModel, Qt, QTimer
 from PyQt6.QtGui import QBrush, QColor, QFont, QGuiApplication, QKeySequence, QShortcut
+import sim_disp
 import sim_icons  # noqa: F401
 import sim_matdlg
 import sim_ui
@@ -43,10 +44,17 @@ from sketch_pick import SketchPicker
 import sketcher_script as scr
 import units
 
-SUP_NAME = {"fixed": "Fixed", "pinned": "Pinned", "x": "ux = 0", "y": "uy = 0"}
-SUP_FLAGS = {"fixed": (True, True, True), "pinned": (True, True, False), "x": (True, False, False), "y": (False, True, False)}
+SUP_NAME = {"fixed": "Fixed", "pinned": "Pinned", "disp": "Displacement", "x": "ux = 0", "y": "uy = 0"}
+SUP_FLAGS = {"fixed": (True, True, True), "pinned": (True, True, False), "x": (True, False, False), "y": (False, True, False)}       # (a Displacement: support_flags)
 SUP_LONG = {"fixed": "Fixed (ux = uy = rotation = 0)", "pinned": "Pinned (ux = uy = 0)", "x": "Roller, ux = 0 (free in y)",
             "y": "Roller, uy = 0 (free in x)"}
+
+
+def support_flags(s):
+    """(holds ux, holds uy, holds the rotation) of a support: a Displacement holds the directions that are not blank."""
+    if s["mode"] == "disp":
+        return tuple(s.get(k) is not None for k in sim_disp.KEYS[1])
+    return SUP_FLAGS[s["mode"]]
 LOAD_NAME = {"force": "Force", "moment": "Moment", "dist": "Line load", "wind": "Wind", "snow": "Snow"}
 LINE_KINDS = ("dist", "wind", "snow")      # loads whose targets are members (line ids)
 VIEWS = [("(none - geometry only)", None), ("Displacement magnitude", "umag"), ("Displacement X", "ux"), ("Displacement Y", "uy"),
@@ -103,7 +111,7 @@ class BeamTab(QWidget):
         self.model = None
         self.source = ""
         self.members = []        # {"lid", "name", "a", "b", "mat": None | {"name", "E", "sy", "su"}, "profile": dict | None, "rel_a", "rel_b", "depth": None | float}
-        self.supports = []       # {"mode": "fixed"|"pinned"|"x"|"y", "targets": [point id], "name"?}
+        self.supports = []       # {"mode": "fixed"|"pinned"|"disp", "targets": [point id], "name"?}; a Displacement also has "ux", "uy" (window length unit) and "rz" (degrees): None = free, 0 = held, a number = imposed
         self.loads = []          # {"kind": "force", "fx", "fy", "targets": [point id]} | {"kind": "moment", "mz", "targets"} |
         #                          {"kind": "dist", "frame": "global"|"local", "q1", "q2", "targets": [line id]} |
         #                          {"kind": "wind", "V", "angle", "cp", "rho", "targets": [line id]} |
@@ -263,16 +271,19 @@ class BeamTab(QWidget):
             b.clicked.connect(lambda _=False, p_=pinned: self.set_joint(p_))
             lay.addWidget(b)
 
-        lay = sec(5, "Supports", True, help_text="Select joints (or members) on the drawing first, then press a button.",
+        lay = sec(5, "Supports", True, help_text="Select joints (or members) on the drawing first, then press a button. Displacement asks, for x, y and the rotation, whether "
+                  "the joint is free (blank), held (0) or moved by a given amount (a number).",
                   summary=lambda: self.count_text(self.supports, "support"))
         lay.addWidget(self.note("Select the joints (or members) first (click them in the view), then press a button."))
         for text, mode, icn, tip in (("Fixed", "fixed", "fixed", "Holds x, y and rotation."),
-                                     ("Pinned", "pinned", "pinned", "Holds x and y; rotation is free."),
-                                     ("ux = 0", "x", "ux", "Holds x only (a roller that rolls in y)."),
-                                     ("uy = 0", "y", "uy", "Holds y only (a roller that rolls in x).")):
+                                     ("Pinned", "pinned", "pinned", "Holds x and y; rotation is free.")):
             b = sim_ui.icon_button(text, icn, tip)
             b.clicked.connect(lambda _=False, m_=mode: self.add_support(m_))
             lay.addWidget(b)
+        b = sim_ui.icon_button("Displacement...", "disp", "Says for x, y and the rotation what the joint does: blank = free, 0 = held, a number = moved by exactly "
+                               "that much (a roller is a held x or y with the other free; a settlement or a rotated support is a number).")
+        b.clicked.connect(self.add_displacement)
+        lay.addWidget(b)
 
         lay = sec(6, "Loads", True, help_text="Select joints or members first. Double-click a Name in the table to rename it (the Parameterization "
                   "tab uses these names). Forces, moments and line loads can be edited in the Value column (force: Fx, Fy; moment: Mz; line "
@@ -365,6 +376,8 @@ class BeamTab(QWidget):
         self.b_solve = sim_ui.solve_button()
         self.study_box = sim_ui.study_slot()
         self.b_solve.clicked.connect(lambda: self.solve(auto=False))
+        sim_ui.results_head(lay, self.b_solve, self.cb_auto, self.study_box)   # Solve (with "solve automatically") is the first thing of the Results page
+        sim_ui.solve_shortcut(self, self.b_solve)
         self.view_combo = QComboBox()
         for text, key in VIEWS:
             self.view_combo.addItem(text, key)
@@ -445,10 +458,6 @@ class BeamTab(QWidget):
         lay.addLayout(row)
 
         for s_ in sorted(self.sections, key=lambda x: x.number):
-            if s_.number == 8:
-                lay0.addWidget(self.b_solve)          # the one big Solve button sits between the setup sections and the Results
-                lay0.addWidget(self.cb_auto)          # with its "solve automatically" choice right under it
-                lay0.addWidget(self.study_box)
             lay0.addWidget(s_)
         lay0.addStretch(1)
         scroll = sim_ui.make_panel(left, [], 340)
@@ -536,7 +545,8 @@ class BeamTab(QWidget):
         lin, nl = self.cb_lin.isChecked(), self.cb_nl.isChecked()
         return {"elements": int(n), "size": num(self.e_msize, "The element size"), "shear": self.cb_shear.isChecked(), "nu": nu,
                 "linear": lin or not nl, "nonlinear": nl, "disp_trigger": num(self.e_nld, "The displacement trigger"),
-                "stress_pct": num(self.e_nly, "The stress trigger"), "eu_pct": num(self.e_eu, "The plastic strain at ultimate", empty=10.0)}
+                "stress_pct": num(self.e_nly, "The stress trigger"), "eu_pct": num(self.e_eu, "The plastic strain at ultimate", empty=10.0),
+                "moves": self.support_moves()}
 
     @staticmethod
     def count_text(items, word):
@@ -1403,6 +1413,36 @@ class BeamTab(QWidget):
         self.supports.append({"mode": mode, "targets": pts})
         self.after_conditions()
 
+    def displacement_units(self):
+        L = self.U()["L"]
+        return {"ux": L, "uy": L, "rz": "deg"}
+
+    def add_displacement(self):
+        pts = self.need_points("Support")
+        if not pts:
+            return
+        vals = sim_disp.ask(self, "Displacement", sim_disp.KEYS[1], self.displacement_units())
+        if vals is None:
+            return
+        why = sim_disp.check(vals, sim_disp.KEYS[1])
+        if why:
+            self.status(why)
+            return
+        self.supports.append({"mode": "disp", "targets": pts, "ux": vals["ux"], "uy": vals["uy"], "rz": vals["rz"]})
+        self.after_conditions()
+
+    def support_moves(self):
+        """{point id: (dx, dy, rotation in radians)}: how far the Displacement supports move their joints (0 where a direction is only held)."""
+        out = {}
+        for s_ in self.supports:
+            if s_["mode"] != "disp":
+                continue
+            v = (float(s_.get("ux") or 0.0), float(s_.get("uy") or 0.0), math.radians(float(s_.get("rz") or 0.0)))
+            for pid in s_["targets"]:
+                old = out.get(pid, (0.0, 0.0, 0.0))
+                out[pid] = tuple(n if (s_.get(k) is not None) else o for o, n, k in zip(old, v, sim_disp.KEYS[1]))
+        return {pid: v for pid, v in out.items() if any(v)}
+
     def add_force(self):
         pts = self.need_points("Force")
         if not pts:
@@ -1692,6 +1732,8 @@ class BeamTab(QWidget):
 
     def cond_value_text(self, item, is_sup):
         if is_sup:
+            if item["mode"] == "disp":
+                return ", ".join(sim_disp.fmt(item.get(k)) or "free" for k in sim_disp.KEYS[1])
             return ""
         k = item["kind"]
         if k == "force":
@@ -1714,7 +1756,8 @@ class BeamTab(QWidget):
         u = self.U()
         r = 0
         for i, s in enumerate(self.supports):
-            self.fill_cond_row(r, True, i, SUP_LONG[s["mode"]], s, ro, rw)
+            typ = f"Displacement (ux, uy, rotation) ({u['L']}, {u['L']}, deg)" if s["mode"] == "disp" else SUP_LONG[s["mode"]]
+            self.fill_cond_row(r, True, i, typ, s, ro, rw)
             r += 1
         for k, ld in enumerate(self.loads):
             if ld["kind"] == "force":
@@ -1775,6 +1818,20 @@ class BeamTab(QWidget):
         if not (0 <= r < len(self.supports) + len(self.loads)):
             return False
         is_sup, idx, item = self._cond_ref(r)
+        if is_sup and item["mode"] == "disp":
+            try:
+                parts = [x.strip() for x in text.replace(";", ",").split(",")]
+                assert len(parts) == 3
+                new = dict(zip(sim_disp.KEYS[1], (sim_disp.parse(x) for x in parts)))
+                assert not sim_disp.is_all_free(new, sim_disp.KEYS[1])
+            except (AssertionError, ValueError):
+                self.status("That value was not understood: give 'ux, uy, rotation' with a number, 0 (held) or blank / 'free' for each (not all free).")
+                QTimer.singleShot(0, self.refresh_lists)
+                return False
+            if any(item.get(k) != v for k, v in new.items()):
+                item.update(new)
+                QTimer.singleShot(0, self.after_conditions)
+            return True
         if is_sup:
             return False
         try:
@@ -1900,7 +1957,7 @@ class BeamTab(QWidget):
                     notes.append(f"'{nm}': {gone} member(s) are not part of the analysis and were ignored.")
         sups = {}
         for i, s in enumerate(self.supports):
-            flags = SUP_FLAGS[s["mode"]]
+            flags = support_flags(s)
             for pid in s["targets"]:
                 if pid in nodes:
                     old = sups.get(pid, (False, False, False))
@@ -1961,7 +2018,7 @@ class BeamTab(QWidget):
             elif not mems:
                 problem = "Give the members a profile (the Profile button in the members table) to analyse them."
             elif not sups:
-                problem = "Add at least one support (select a joint, then Fixed / Pinned / ux = 0 / uy = 0)."
+                problem = "Add at least one support (select a joint, then Fixed / Pinned / Displacement)."
             if problem is None:
                 self.result = beam1d.solve(nodes, mems, sups, nodal, 41, self.solver_opts())
                 self.result["notes"] = list(notes) + list(self.result.get("notes", []))
@@ -2142,7 +2199,7 @@ class BeamTab(QWidget):
         self.fill_profs()
         nodes = self.node_ids()
         lids = {mm["lid"] for mm in self.members}
-        self.supports = [dict(copy.deepcopy(s), targets=[t for t in s["targets"] if t in nodes]) for s in st.get("supports", [])]
+        self.supports = [dict(copy.deepcopy(s), targets=[t for t in s["targets"] if t in nodes]) for s in sim_disp.upgrade_all(st.get("supports"), 1)]      # ux = 0 / uy = 0 of an old file -> a Displacement
         self.supports = [s for s in self.supports if s["targets"]]
         self.loads = []
         for ld in st.get("loads", []):

@@ -33,6 +33,7 @@ import physics_store as pstore
 import physics_tab as pt
 import result_style
 import sim_report as R
+import sim_mesh2d as sm2
 import sim_ui
 import sketcher_core as sc
 import thermal_fem as tfem
@@ -277,7 +278,7 @@ class ThermalTab(pt.PhysicsTab):
     ANIM_FILE = "Thermal_animation"
     kind = KIND
 
-    INPUTS = ("e_k", "e_rho", "e_cp", "e_t", "e_h", "order_combo", "analysis_combo", "e_T0", "e_tend", "time_combo", "e_steps", "method_combo", "e_nframes",
+    INPUTS = ("e_k", "e_rho", "e_cp", "e_t", "e_h", "analysis_combo", "e_T0", "e_tend", "time_combo", "e_steps", "method_combo", "e_nframes",
               "cb_plate", "e_hplate", "e_Tamb", "e_eps_plate", "e_Tsur", "cb_mesh", "cb_anim", "e_frames", "e_dur", "loop_combo")
 
     def __init__(self, win):
@@ -341,7 +342,9 @@ class ThermalTab(pt.PhysicsTab):
         self.info = QLabel("Nothing imported yet.")
         self.info.setWordWrap(True)
         lay.addWidget(self.info)
-        lay.addWidget(QLabel("<b>Regions</b> (tick = part of the model; the materials are in Material and analysis)"))
+        reg_lbl = QLabel("<b>Regions</b> (tick = part of the model; the materials are in Material and analysis)")
+        reg_lbl.setWordWrap(True)
+        lay.addWidget(reg_lbl)
         self.regions = QListWidget()
         self.regions.setMaximumHeight(110)
         self.regions.itemChanged.connect(self.region_toggled)
@@ -468,9 +471,6 @@ class ThermalTab(pt.PhysicsTab):
         self.mat_note = self.note("")
         lay.addWidget(self.mat_note)
         self.library = []
-        self.order_combo = QComboBox()
-        self.order_combo.addItems(["Quadratic (6-node triangles)", "Linear (3-node triangles)"])
-        self.order_combo.setToolTip("Quadratic elements have a node in the middle of every edge and follow a curved temperature far better than linear ones.")
         self.fill_materials(select=tmat.DEFAULT)
         self.mat_combo.currentIndexChanged.connect(self.material_picked)
         for e in (self.e_k, self.e_rho, self.e_cp):
@@ -487,16 +487,15 @@ class ThermalTab(pt.PhysicsTab):
         self.b_solve = sim_ui.solve_button()
         self.study_box = sim_ui.study_slot()
         self.b_solve.clicked.connect(self.run_solve)
-        lay = sec(5, "Mesh", True, summary=lambda: f"size {self.e_h.text()}, {'quadratic' if self.order_combo.currentIndex() == 0 else 'linear'}",
-                  help_text="Choose the element size and the element type, then press Mesh. Make the mesh finer where the temperature changes quickly "
-                            "(near a heat source, a sharp corner, a thin wall) and solve again: when the result stops changing, the mesh is fine enough.")
-        mf = QFormLayout()
+        lay = sec(5, "Mesh", True, summary=lambda: self.mesh_lbl.text() or "not meshed",
+                  help_text="Element size: the length of an element edge. Smaller elements are more accurate and slower. Advanced mesh options: choose linear or "
+                            "quadratic elements, make the mesh finer at curved edges or on single edges, points and regions, and read how good the elements are. "
+                            "Make the mesh finer where the temperature changes quickly (near a heat source, a sharp corner, a thin wall) and solve again: when "
+                            "the result stops changing, the mesh is fine enough.")
         self.e_h = QLineEdit("")
         self.lbl_h = QLabel("Element size")
-        mf.addRow(self.lbl_h, self.e_h)
-        mf.addRow("Elements", self.order_combo)
-        lay.addLayout(mf)
-        lay.addWidget(self.b_mesh)
+        self.build_mesh_page(lay)
+        self.build_mesh_foot(lay)
 
         # ---- 3 Temperatures, 4 Heat conditions
         lay = sec(3, "Conditions", True, summary=lambda: self.count_text(self.supports + self.loads, "condition"),
@@ -550,6 +549,8 @@ class ThermalTab(pt.PhysicsTab):
                             "geometry whose average temperature and heat flux are reported. Node probe: click near a node to read every result there. "
                             "Heat flows are in watts through the depth; a positive flow through a temperature condition means that edge feeds heat into the body. "
                             "Heat flow: moving tracer particles (as in the 2D CFD) or arrows show where the heat goes (display only; works for a steady result too).")
+        sim_ui.results_head(lay, self.b_solve, self.study_box)            # Solve is the first thing of the Results page
+        sim_ui.solve_shortcut(self, self.b_solve)
         self.field = QComboBox()
         self.field.addItem("(none - show the mesh)", None)
         for name, key, _k, _q in FIELDS:
@@ -673,9 +674,6 @@ class ThermalTab(pt.PhysicsTab):
         lay.addStretch(1)
 
         for s_ in sorted(self.sections, key=lambda x: x.number):
-            if s_.number == 6:
-                lay0.addWidget(self.b_solve)
-                lay0.addWidget(self.study_box)
             lay0.addWidget(s_)
         lay0.addStretch(1)
         panel = sim_ui.make_panel(left, [])
@@ -725,6 +723,8 @@ class ThermalTab(pt.PhysicsTab):
         self.lbl_cp.setText(f"Specific heat ({fam.unit('cp')})")
         self.lbl_t.setText(f"Thickness (depth) ({u['L']})")
         self.lbl_h.setText(f"Element size ({u['L']})")
+        if hasattr(self, "hmin_label"):
+            self.hmin_label.setText(f"Minimum size ({u['L']})")
         self.lbl_T0.setText(f"Start temperature ({fam.temp})")
         self.lbl_hplate.setText(f"Convection coefficient ({fam.unit('h')})")
         self.lbl_Tamb.setText(f"Fluid temperature ({fam.temp})")
@@ -771,6 +771,8 @@ class ThermalTab(pt.PhysicsTab):
                     w.setText(f"{float(w.text()) * lf:.10g}")
                 except ValueError:
                     pass
+        self.mesh_opts = sm2.convert_lengths(self.mesh_state(), lf)
+        self.put_mesh_options()
         self.apply_units(new)
 
     def unit_name(self):
@@ -783,6 +785,7 @@ class ThermalTab(pt.PhysicsTab):
         have = {n for n, (v, _) in self.deps.items() if v is not None}
         self.b_mesh.setEnabled(self.geom is not None and "gmsh" in have and "numpy" in have)
         self.b_solve.setEnabled(self.mesh is not None and "scipy" in have)
+        self.refresh_mesh_info()
 
     def signature_extra(self):
         return (sorted((self.region_q or {}).items()), sorted((f, m.get("name"), m.get("k"), m.get("rho"), m.get("cp")) for f, m in (self.region_mats or {}).items()))
@@ -1514,7 +1517,7 @@ class ThermalTab(pt.PhysicsTab):
         included = {f["id"] for f in self.geom["faces"] if f["included"]}
         rmats = {f: {"k": m["k"], "rho": m["rho"], "cp": m["cp"]} for f, m in self.region_mats.items() if f in included}
         first = rmats[min(rmats)] if rmats else self.default_region_material()         # (the solver keeps one as the fallback of a region without its own)
-        setup = {"lscale": self.lscale(), "t": t, "order": 1 if self.order_combo.currentIndex() == 1 else 2,
+        setup = {"lscale": self.lscale(), "t": t, "order": self.element_order(),
                  "mat": {"k": first["k"], "rho": first["rho"], "cp": first["cp"]},
                  "region_mats": rmats,
                  "region_q": {f: v for f, v in (self.region_q or {}).items() if f in included and v != 0.0}, "conds": []}
@@ -1934,7 +1937,8 @@ class ThermalTab(pt.PhysicsTab):
                 "supports": self.supports, "loads": self.loads, "mesh": self.mesh, "result": self.result, "probes": [dict(q) for q in self.probes],
                 "probe_fos": None, "probe_trig": None, "profile": None, "field": self.field.currentData(), "sketch_id": getattr(self, "sketch_id", None),
                 "region_mats": getattr(self, "region_mats", {}), "region_mats_all": True, "region_names": getattr(self, "region_names", {}),
-                "region_q": getattr(self, "region_q", {}), "frame": self.frame_idx, "last_vals": dict(self.last_vals)}
+                "region_q": getattr(self, "region_q", {}), "frame": self.frame_idx, "last_vals": dict(self.last_vals),
+                "mesh_opts": self.mesh_state()}
 
     def import_state(self, st, out_of_date=False):
         m = sc.Model()
@@ -1948,6 +1952,7 @@ class ThermalTab(pt.PhysicsTab):
         self.last_vals = dict(st.get("last_vals") or {})
         self.unset_regions = set()
         pstore.set_inputs(self, st.get("inputs", {}))
+        self.restore_mesh_options(st)
         self.tr_box.setVisible(self.analysis_combo.currentIndex() == 1)
         self.plate_box.setVisible(self.cb_plate.isChecked())
         self.cur_unit = st.get("cur_unit", self.cur_unit)
@@ -2036,6 +2041,8 @@ class ThermalTab(pt.PhysicsTab):
             add(f"setup: {ex}")
         add("materials: one per region (listed under regions above), k in W/(m K), rho in kg/m3, cp in J/(kg K)")
         add(f"thickness {self.e_t.text()} {units.get(self.unit_name())['L']}, element size {self.e_h.text()}, unit system {self.unit_name()} (temperatures in {fam.temp})")
+        for ln_ in self.mesh_diag_lines():
+            add(ln_)
         if s is not None:
             add(f"analysis: {s['analysis']}" + (f", start {s['T0']:.2f} K, end {s['t_end']:g} s, {s['steps']} steps, theta {s['theta']}" if s["analysis"] == "transient" else ""))
             add(f"flat faces: {s.get('plate') or 'insulated'}")

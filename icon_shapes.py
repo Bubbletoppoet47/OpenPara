@@ -79,6 +79,7 @@ CORE = {
     "l_ux": ('<path class="n" stroke-width="1.800" d="M3 12h18M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/><path class="l" stroke-width="2.200" d="M10 17l4-10"/>', "ana"),
     "l_uy": ('<path class="n" stroke-width="1.800" d="M12 3v18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3"/><path class="l" stroke-width="2.200" d="M7 10l10 4"/>', "ana"),
     "l_force": ('<path class="n" stroke-width="2.200" d="M3 12h17M15 7l5 5-5 5"/>', "ana"),
+    "l_disp": ('<path class="l" stroke-width="2" d="M3 18h18"/><path class="l" d="M5 22l3-4M10 22l3-4M15 22l3-4"/><path class="l" d="M7 12.500V18"/><circle class="b" cx="7" cy="10" r="2.500"/><path class="n" stroke-width="2.200" d="M11.500 10H20M16.500 6.500L20 10l-3.500 3.500"/>', "ana"),
     "l_moment": ('<path class="n" stroke-width="2" d="M19 12a7 7 0 1 1-2.300-5.200"/><path class="n" stroke-width="2" d="M19.500 3.500v4h-4"/>', "ana"),
     "l_wind": ('<path class="n" stroke-width="2" d="M3 9h11a3 3 0 1 0-3-3M3 14h15a3 3 0 1 1-3 3M3 19h8"/>', "ana"),
     "l_snow": ('<path class="n" stroke-width="1.800" d="M12 3v18M4.200 7.500l15.600 9M4.200 16.500l15.600-9"/><circle class="d" cx="12" cy="12" r="1.800"/>', "ana"),

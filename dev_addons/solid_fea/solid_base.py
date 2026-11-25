@@ -40,6 +40,7 @@ import addons
 import ext
 import sim_project
 import sim_tags
+import sim_meshui
 import sim_ui
 import sim_source
 import solid_asm as sasm
@@ -136,6 +137,7 @@ class SolidBase(QWidget):
         self.sel_faces = []
         self.sel_vertex = None
         self.job = None
+        self.job_page = "solve"
         self.last_tracker = None
         self.saved_sig = None
         self.pending_dims = False
@@ -180,7 +182,7 @@ class SolidBase(QWidget):
         rl.addWidget(self.status_lbl)
         split.addWidget(right)
         split.setStretchFactor(1, 1)
-        split.setSizes([400, 1000])                  # the panel starts about 400 wide; drag the divider for more (not remembered)
+        split.setSizes([sim_ui.SIDE_W, 1000])        # the panel starts as wide as in every other analysis window; drag the divider for more (not remembered)
         lay.addWidget(split, 1)
         self.build_panel()
         self.show_source()
@@ -259,8 +261,11 @@ class SolidBase(QWidget):
         self.b_unsplit = QPushButton("Unsplit")
         self.b_unsplit.setToolTip("Puts the patches of the selected face back together into one face.")
         self.b_unsplit.clicked.connect(lambda: self.unsplit_selected())
+        v.addLayout(row)
+        row = QHBoxLayout()                                              # (Split and Unsplit on a line of their own: the row above is as wide as the sidebar allows)
         row.addWidget(self.b_split)
         row.addWidget(self.b_unsplit)
+        row.addStretch(1)
         v.addLayout(row)
         self.split_hdr = QLabel("Split faces (click one to see and change the sizes of its columns and rows):")
         self.split_hdr.setWordWrap(True)
@@ -323,33 +328,27 @@ class SolidBase(QWidget):
         self.build_advanced_mesh(v)
         self.build_mesh_extras(v)
         self.b_mesh = QPushButton("Mesh")
+        self.b_mesh.setMinimumHeight(30)
         self.b_mesh.clicked.connect(self.run_mesh)
-        v.addWidget(self.b_mesh)
+        self.b_mesh_cancel = sim_ui.solve_side_button("Cancel")        # beside Mesh while a mesh is being made (the Solve button has its own on the Results page)
+        self.b_mesh_cancel.clicked.connect(self.cancel)
+        self.b_mesh_cancel.setVisible(False)
+        v.addWidget(sim_ui.solve_row(self.b_mesh, self.b_mesh_cancel))
+        self.prog_mesh = solid_progress.make_row()                       # the progress of a mesh, under the Mesh button
+        v.addWidget(self.prog_mesh)
         self.mesh_lbl = QLabel("")
         self.mesh_lbl.setWordWrap(True)
         v.addWidget(self.mesh_lbl)
-        self.quality_box = QWidget()                                    # the quality of the mesh just made (only with the advanced options)
-        ql = QVBoxLayout(self.quality_box)
-        ql.setContentsMargins(0, 0, 0, 0)
-        ql.addWidget(QLabel("<b>Mesh quality</b>"))
-        self.quality_lbl = QLabel("")
-        self.quality_lbl.setWordWrap(True)
-        self.quality_lbl.setTextFormat(Qt.TextFormat.RichText)
-        self.quality_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        ql.addWidget(self.quality_lbl)
-        self.quality_box.setVisible(False)
-        v.addWidget(self.quality_box)
+        sim_meshui.build_quality(self, v)                                # the quality of the mesh just made (only with the advanced options)
 
     def finish_panel(self):
-        # --- the Solve button (wide), the study slot, then the Results
-        row = QHBoxLayout()
+        # --- the Solve button (with Cancel and the progress bar) and the study slot are the first things of the Results page
         self.b_solve = sim_ui.solve_button()
         self.b_solve.clicked.connect(self.run_solve)
-        row.addWidget(self.b_solve, 1)
         self.b_cancel = sim_ui.solve_side_button("Cancel")
         self.b_cancel.setEnabled(False)
         self.b_cancel.clicked.connect(self.cancel)
-        row.addWidget(self.b_cancel)
+        self.solve_row = sim_ui.solve_row(self.b_solve, self.b_cancel)
         self.study_box = QWidget()
         sl = QVBoxLayout(self.study_box)
         sl.setContentsMargins(4, 0, 4, 4)
@@ -357,13 +356,18 @@ class SolidBase(QWidget):
         self.b_study.setMinimumHeight(30)
         self.b_study.clicked.connect(self.open_study)
         sl.addWidget(self.b_study)
+        self.prog = solid_progress.make_row()                # the progress bar: under the Solve button, shown while a solve runs (a mesh has its own under the Mesh button)
+        results = None
         for s_ in sorted(self.sections, key=lambda x: x.number):
             if s_.number == self.RESULTS_SEC:
-                self.col.addLayout(row)
-                self.prog = solid_progress.make_row()                # the progress bar: under the Solve button, shown while a mesh or a solve runs
-                self.col.addWidget(self.prog)
-                self.col.addWidget(self.study_box)
+                results = s_
             self.col.addWidget(s_)
+        if results is not None:
+            sim_ui.results_head(results.body, self.solve_row, self.prog, self.study_box)
+        else:                                                 # a window with no Results page (a bare one, for a test): they stay under the sections
+            for w_ in (self.solve_row, self.prog, self.study_box):
+                self.col.addWidget(w_)
+        sim_ui.solve_shortcut(self, self.b_solve)
         self.study_box.setVisible(False)
         self.col.addStretch(1)
         sim_ui.soften(self.panel)                    # the sections were added after make_panel: give them the soft bevel look too
@@ -386,101 +390,8 @@ class SolidBase(QWidget):
 
     # ------------------------------------------------------------------ advanced mesh options
     def build_advanced_mesh(self, v):
-        """The 'Advanced mesh options' tick box and what it reveals (see solid_mesh for what each option does)."""
-        self.cb_adv = QCheckBox("Advanced mesh options")
-        self.cb_adv.setToolTip("Mesh type (tetrahedra or hex-dominant), element order, a minimum size and a growth rate, refinement at curved surfaces and on "
-                               "single faces, and a quality report. Off = the plain automatic mesh (quadratic tetrahedra).")
-        v.addWidget(self.cb_adv)
-        self.adv_box = QWidget()
-        al = QVBoxLayout(self.adv_box)
-        al.setContentsMargins(14, 0, 0, 0)
-        al.setSpacing(3)
-        f = QFormLayout()
-        self.type_combo = QComboBox()
-        for k, text in smesh.TYPES.items():
-            self.type_combo.addItem(text, k)
-        self.type_combo.setToolTip("Tetrahedra: the whole part is filled with them. Hex-dominant: a block of brick elements (hexahedra) inside the part, and "
-                                   "tetrahedra, joined to the bricks by pyramids, between it and the surface. The surface mesh is the same either way, so the "
-                                   "borders of split patches stay mesh edges. A part with no room for bricks (thin, small, or a fine element size) gets "
-                                   "tetrahedra, and the mesh quality box says so. The share of bricks grows as the elements get small compared to the part.")
-        sim_ui.tame(self.type_combo, 24)
-        f.addRow("Mesh type", self.type_combo)
-        self.order_combo = QComboBox()
-        for k, text in smesh.ORDERS.items():
-            self.order_combo.addItem(text, k)
-        self.order_combo.setToolTip("Quadratic elements (mid-edge nodes: 10-node tetrahedra, 20-node bricks) bend and carry stress gradients much better, so they "
-                                    "are the right choice almost always. Linear elements (corner nodes only) are quicker but stiffer in bending: they need a "
-                                    "much finer mesh for the same accuracy.")
-        sim_ui.tame(self.order_combo, 24)
-        f.addRow("Element order", self.order_combo)
-        self.e_hmin = QLineEdit()
-        self.e_hmin.setPlaceholderText("auto")
-        self.e_hmin.setToolTip("The smallest element edge the mesher may make (blank = a sixth of the smallest element size).")
-        self.hmin_label = QLabel("Minimum size")
-        f.addRow(self.hmin_label, self.e_hmin)
-        self.e_growth = QLineEdit("1.3")
-        self.e_growth.setToolTip(f"How fast elements grow away from a refined face: 1.3 = every layer of elements is 30 % longer than the one before. "
-                                 f"{smesh.GROWTH_RANGE[0]:g} to {smesh.GROWTH_RANGE[1]:g}. Smaller = a smoother mesh with more elements.")
-        f.addRow("Growth rate", self.e_growth)
-        al.addLayout(f)
-        row = QHBoxLayout()
-        self.cb_curv = QCheckBox("Refine at curved surfaces")
-        self.cb_curv.setChecked(True)
-        self.cb_curv.setToolTip("Makes the elements smaller where a surface is curved (holes, fillets), so the curve is followed.")
-        row.addWidget(self.cb_curv)
-        self.sp_curv = QSpinBox()
-        self.sp_curv.setRange(*smesh.CURV_RANGE)
-        self.sp_curv.setValue(10)
-        self.sp_curv.setToolTip("Elements around a full circle (a hole, a round edge). 10 is the automatic choice; more gives a rounder, finer mesh.")
-        self.sp_curv.setSuffix(" per circle")
-        row.addWidget(self.sp_curv)
-        al.addLayout(row)
-        self.local_hdr = QLabel("Smaller elements on single faces: select the face(s) in the view (or the Faces list), type a size, press the button.")
-        self.local_hdr.setWordWrap(True)
-        self.local_hdr.setStyleSheet("color:#555555; font-size:11px;")
-        al.addWidget(self.local_hdr)
-        row = QHBoxLayout()
-        self.e_face_h = QLineEdit()
-        self.e_face_h.setPlaceholderText("size")
-        row.addWidget(self.e_face_h, 1)
-        self.b_face_size = QPushButton("Set on selected faces")
-        self.b_face_size.setToolTip("Gives the selected faces (or patches of a split face) a smaller element size than the global one. The elements grow "
-                                    "back to the global size away from them, at the growth rate above.")
-        self.b_face_size.clicked.connect(self.set_face_size)
-        row.addWidget(self.b_face_size)
-        al.addLayout(row)
-        self.face_table = QTableWidget(0, 2)
-        self.face_table.setHorizontalHeaderLabels(["Face", "Size"])
-        self.face_table.verticalHeader().hide()
-        self.face_table.setMinimumHeight(70)
-        self.face_table.setMaximumHeight(130)
-        self.face_table.horizontalHeader().setStretchLastSection(True)
-        self.face_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.face_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.face_table.setToolTip("Double-click a size to change it.")
-        self.face_table.itemChanged.connect(self.face_item_changed)
-        al.addWidget(self.face_table)
-        self.b_face_size_del = QPushButton("Remove selected size")
-        self.b_face_size_del.clicked.connect(self.remove_face_size)
-        al.addWidget(self.b_face_size_del)
-        f = QFormLayout()
-        self.follows_combo = QComboBox()
-        for k, text in smesh.FOLLOWS.items():
-            self.follows_combo.addItem(text, k)
-        self.follows_combo.setToolTip("What the mesh follows: the borders of the patches of a split face lie on mesh edges, so a load or support on a patch "
-                                      "covers exactly the patch.")
-        f.addRow("Mesh follows", self.follows_combo)
-        al.addLayout(f)
-        self.adv_box.setVisible(False)
-        v.addWidget(self.adv_box)
-        self.cb_adv.toggled.connect(self.adv_toggled)
-        self.order_combo.activated.connect(lambda _i: self.inputs_changed())
-        self.type_combo.activated.connect(lambda _i: self.inputs_changed())
-        self.follows_combo.activated.connect(lambda _i: self.inputs_changed())
-        self.e_hmin.editingFinished.connect(self.inputs_changed)
-        self.e_growth.editingFinished.connect(self.inputs_changed)
-        self.cb_curv.toggled.connect(self.curv_toggled)
-        self.sp_curv.valueChanged.connect(lambda _v: self.inputs_changed())
+        """The 'Advanced mesh options' tick box and what it reveals (see solid_mesh for what each option does): the piece the 2D windows have too (sim_meshui)."""
+        sim_meshui.build_advanced(self, v, 3, smesh.ORDERS, smesh.GROWTH_RANGE, smesh.CURV_RANGE, types=smesh.TYPES, follows=smesh.FOLLOWS)
 
     def adv_toggled(self, on):
         self.adv_box.setVisible(bool(on))
@@ -1004,6 +915,7 @@ class SolidBase(QWidget):
         self.b_mesh.setEnabled(have and not busy)
         self.b_solve.setEnabled(have and not busy)
         self.b_cancel.setEnabled(busy)
+        self.b_mesh_cancel.setVisible(busy and self.job_page == "mesh")
         self.enable_results_buttons()
         self.b_study.setEnabled(have and not busy)
         if hasattr(self, "b_split"):
@@ -1756,6 +1668,7 @@ class SolidBase(QWidget):
         if self.job is not None:
             return False
         self.say(title + "...")
+        self.job_page = "mesh" if title.lower().startswith("mesh") else "solve"        # which page shows the progress: the Mesh page for a mesh, the Results page for the rest
         trk = solid_progress.Tracker()
         if plan:
             trk.expect(plan)
@@ -1783,9 +1696,13 @@ class SolidBase(QWidget):
         j.done.connect(lambda r: self.finished(j, done, r))
         j.failed.connect(lambda m, c: self.finished(j, None, None, m, c))
         self.enable_buttons()
-        self.prog.begin(trk)
+        self.job_prog().begin(trk)
         j.start()
         return True
+
+    def job_prog(self):
+        """The progress bar of the job that runs (or ran last): under the Mesh button for a mesh, under the Solve button for anything else."""
+        return self.prog_mesh if self.job_page == "mesh" else self.prog
 
     def finished(self, j, done, r, msg=None, cancelled=False):
         j.wait()
@@ -1794,7 +1711,7 @@ class SolidBase(QWidget):
         if j.tracker is not None:
             j.tracker.finish(ok)
             self.note_job(getattr(j, "title", "Job"), j.tracker, getattr(j, "t0", time.monotonic()), ok)
-        self.prog.end(ok)
+        self.job_prog().end(ok)
         self.enable_buttons()
         if done is not None:
             done(r)
@@ -1824,7 +1741,7 @@ class SolidBase(QWidget):
         if self.job is not None:
             self.job.stop = True
             self.say("Cancelling...")
-            self.prog.cancelling()
+            self.job_prog().cancelling()
 
     def run_mesh(self):
         why = None

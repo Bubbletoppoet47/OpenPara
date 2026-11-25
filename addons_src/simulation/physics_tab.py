@@ -34,8 +34,11 @@ import section_props as secp
 import sketcher_core as sc
 from sketch_pick import SketchPicker
 import sketcher_script as scr
+import sim_disp
 import sim_icons
 import sim_matdlg
+import sim_mesh2d as sm2
+import sim_meshhost
 import sim_ui
 import sim_tags
 import sim_report
@@ -780,7 +783,7 @@ class PhysCanvas(sim_tags.FocusMixin, QWidget):
 # ----------------------------------------------------------------------------------------------
 # the tab
 # ----------------------------------------------------------------------------------------------
-class PhysicsTab(QWidget):
+class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
     ANIM_LABEL = "2D FEA"                  # what the animation export calls this tab (the window title and the default file name)
     ANIM_FILE = "FEA_animation"
 
@@ -791,7 +794,7 @@ class PhysicsTab(QWidget):
         self.geom = None
         self.mesh = None
         self.result = None
-        self.supports = []       # {"mode": "fixed"|"x"|"y", "targets": [(kind, id)]}
+        self.supports = []       # {"mode": "fixed"|"disp"|"bolt"|"screw"|"contact", "targets": [(kind, id)]}; a Displacement also has "ux", "uy" (None = free, 0 = held, number = imposed)
         self.loads = []          # {"kind": "force"|"pressure"|"traction", ..., "targets": [...]}
         self.profile = None      # imported profile properties: {"name", "A_w", "I_w", "c_top", "c_bottom"} in the sketch's units
         self.probes = []         # {"name", "shape": "rect"|"circle", x0 y0 x1 y1 | cx cy r}  (original geometry, sketch units)
@@ -939,10 +942,6 @@ class PhysicsTab(QWidget):
         lay.addWidget(self.units_note)
         self.mat_note = self.note("")
         lay.addWidget(self.mat_note)
-        self.order_combo = QComboBox()
-        self.order_combo.addItems(["Quadratic (6-node triangles)", "Linear (3-node triangles)"])
-        self.order_combo.setToolTip("Quadratic elements have a node in the middle of every edge. They bend far more accurately than linear "
-                                    "ones for the same mesh (linear triangles are far too stiff in bending). The mesh and its size do not change.")
         self.library = []
         self.fill_materials(select="Structural steel (A36)")
         self.material_picked()
@@ -961,43 +960,25 @@ class PhysicsTab(QWidget):
         self.b_solve = sim_ui.solve_button()
         self.study_box = sim_ui.study_slot()
         self.b_solve.clicked.connect(self.run_solve)
-        lay = sec(5, "Mesh", True, help_text="Choose the element size and the element type, then press Mesh. Auto-refine is optional: it starts "
-                  "from this mesh when you press Solve and refines it where the stress changes fastest.",
-                  summary=lambda: f"size {self.e_h.text()}, {'quadratic' if self.order_combo.currentIndex() == 0 else 'linear'}"
-                                  + (", auto-refine" if self.cb_auto.isChecked() else ""))
-        mf = QFormLayout()
-        mf.addRow(self.lbl_h, self.e_h)
-        mf.addRow("Elements", self.order_combo)
-        lay.addLayout(mf)
-        lay.addWidget(self.b_mesh)
-        self.cb_auto = QCheckBox("Auto-refine the mesh until the result converges")
-        self.cb_auto.setToolTip("Solve, then refine the mesh where the stress changes fastest and solve again, until the strain energy "
-                                "and the largest displacement change by less than 1 % between two meshes, or a limit below is reached. "
-                                "Starts from the mesh you made with Mesh.")
-        lay.addWidget(self.cb_auto)
-        self.auto_box = QWidget()
-        af = QFormLayout(self.auto_box)
-        af.setContentsMargins(14, 0, 0, 0)
-        self.e_passes = QLineEdit("4")
-        self.e_maxtris = QLineEdit("100000")
-        af.addRow("Maximum refinement passes", self.e_passes)
-        af.addRow("Maximum triangles", self.e_maxtris)
-        af.addRow(self.note("Press Solve (it refines from the mesh above). Convergence is judged on the strain energy and the largest displacement. The largest stress is "
-                            "listed for each pass but not used: at a sharp corner or a point load it never converges."))
-        self.auto_box.setVisible(False)
-        self.cb_auto.toggled.connect(self.auto_box.setVisible)
-        lay.addWidget(self.auto_box)
+        lay = sec(5, "Mesh", True, help_text="Element size: the length of an element edge. Smaller elements are more accurate and slower. Advanced mesh options: "
+                  "choose linear or quadratic elements, make the mesh finer at curved edges or on single edges, points and regions, and read how good the "
+                  "elements are. Adaptive mesh: starts from the mesh you made, and refines it where the stress changes fastest, until the result stops changing.",
+                  summary=lambda: self.mesh_lbl.text() or "not meshed")
+        self.build_mesh_page(lay)
+        self.build_adaptive(lay)
+        self.build_mesh_foot(lay)
 
-        lay = sec(3, "Supports", True, help_text="Select edges or points on the drawing first, then press a button. Bolt and Screw ask for the head "
+        lay = sec(3, "Supports", True, help_text="Select edges or points on the drawing first, then press a button. Displacement asks, for x and for y, whether the "
+                  "selection is free (blank), held (0) or moved by a given amount (a number). Bolt and Screw ask for the head "
                   "width. Contact lets the selected edges rest against a frictionless surface: they cannot move into it but are free to lift off.",
                   summary=lambda: self.count_text(self.supports, "support"))
         lay.addWidget(self.note("Select the edge(s) or point(s) first (click them in the view), then press a button."))
-        for text, mode, icn, tip in (("Fixed", "fixed", "fixed", "Holds x and y."), ("ux = 0", "x", "ux", "Holds x only."),
-                                     ("uy = 0", "y", "uy", "Holds y only.")):
-            b = sim_ui.icon_button(text, icn, tip)
-            b.clicked.connect(lambda _, m_=mode: self.add_support(m_))
-            lay.addWidget(b)
-        for text, icn, fn, tip in (("Bolt...", "bolt", lambda: self.add_fastener("bolt"),
+        b = sim_ui.icon_button("Fixed", "fixed", "Holds x and y.")
+        b.clicked.connect(lambda _: self.add_support("fixed"))
+        lay.addWidget(b)
+        for text, icn, fn, tip in (("Displacement...", "disp", self.add_displacement,
+                                    "Says for each direction what the selected edges and points do: blank = free, 0 = held, a number = moved by exactly that much."),
+                                   ("Bolt...", "bolt", lambda: self.add_fastener("bolt"),
                                     "A bolt through the sheet at the selected points: a fixed patch of the width you give, held in every direction."),
                                    ("Screw...", "screw", lambda: self.add_fastener("screw"),
                                     "A screw head at the selected points: a patch of the width you give that is held sideways and "
@@ -1049,6 +1030,8 @@ class PhysicsTab(QWidget):
                             "FoS: the marked probe's average von Mises stress is used for the factors of safety (none marked = the largest stress). "
                             "Trigger: the marked probe's average is tested against the nonlinear stress trigger (none marked = the largest stress). "
                             "Rectangle: x0, y0, x1, y1. Circle: centre x, y, radius. Node probe: click near a node on the result.")
+        sim_ui.results_head(lay, self.b_solve, self.study_box)            # Solve is the first thing of the Results page
+        sim_ui.solve_shortcut(self, self.b_solve)
         self.field = QComboBox()
         self.field.addItem("(none - show the mesh)", None)
         for name, key, _ in FIELDS:
@@ -1157,9 +1140,6 @@ class PhysicsTab(QWidget):
         lay.addStretch(1)
 
         for s_ in sorted(self.sections, key=lambda x: x.number):
-            if s_.number == 6:
-                lay0.addWidget(self.b_solve)          # the one big Solve button sits between the setup sections and the Results
-                lay0.addWidget(self.study_box)
             lay0.addWidget(s_)
         lay0.addStretch(1)
         panel = sim_ui.make_panel(left, [])
@@ -1211,6 +1191,7 @@ class PhysicsTab(QWidget):
         have = {n for n, (v, _) in self.deps.items() if v is not None}
         self.b_mesh.setEnabled(self.geom is not None and "gmsh" in have and "numpy" in have)
         self.b_solve.setEnabled(self.mesh is not None and "scipy" in have)
+        self.refresh_mesh_info()
 
     def geom_used(self):
         return self.geom["used_edges_src"] if self.geom is not None else set()
@@ -1270,6 +1251,8 @@ class PhysicsTab(QWidget):
         self.lbl_E.setText(f"E ({u['S']})")
         self.lbl_t.setText(f"Thickness ({u['L']})")
         self.lbl_h.setText(f"Element size ({u['L']})")
+        if hasattr(self, "hmin_label"):
+            self.hmin_label.setText(f"Minimum size ({u['L']})")
         self.lbl_sy.setText(f"Yield strength ({u['S']})")
         self.lbl_su.setText(f"Ultimate strength ({u['S']})")
         self.lbl_nld.setText(f"Displacement trigger ({u['L']})")
@@ -1354,6 +1337,24 @@ class PhysicsTab(QWidget):
         if not t:
             return
         self.supports.append({"mode": mode, "targets": t})
+        self.after_conditions()
+
+    def displacement_units(self):
+        L = units.get(self.unit_name())["L"]
+        return {"ux": L, "uy": L}
+
+    def add_displacement(self):
+        t = self.targets(("pt", "ln", "ar", "ci"), "Support")
+        if not t:
+            return
+        vals = sim_disp.ask(self, "Displacement", sim_disp.KEYS[2], self.displacement_units())
+        if vals is None:
+            return
+        why = sim_disp.check(vals, sim_disp.KEYS[2])
+        if why:
+            self.status(why)
+            return
+        self.supports.append({"mode": "disp", "ux": vals["ux"], "uy": vals["uy"], "targets": t})
         self.after_conditions()
 
     def add_fastener(self, mode):
@@ -1538,7 +1539,7 @@ class PhysicsTab(QWidget):
     def names(targets):
         return ", ".join(f"{KIND_NAME[k]} {i}" for k, i in targets)
 
-    SUP_NAME = {"fixed": "Fixed", "x": "Slide x", "y": "Slide y", "bolt": "Bolt", "screw": "Screw", "contact": "Contact"}
+    SUP_NAME = {"fixed": "Fixed", "disp": "Displacement", "x": "Slide x", "y": "Slide y", "bolt": "Bolt", "screw": "Screw", "contact": "Contact"}
     LOAD_NAME = {"force": "Force", "pressure": "Pressure", "traction": "Traction", "cfd": "CFD pressure"}
 
     def default_name(self, is_sup, idx):
@@ -1554,6 +1555,8 @@ class PhysicsTab(QWidget):
 
     def cond_value_text(self, item, is_sup):
         if is_sup:
+            if item["mode"] == "disp":
+                return ", ".join(sim_disp.fmt(item.get(k)) or "free" for k in sim_disp.KEYS[2])
             return f"{item['d']:.10g}" if item["mode"] in ("bolt", "screw") else ""
         k = item["kind"]
         return {"force": lambda: f"{item['fx']:.10g}, {item['fy']:.10g}", "pressure": lambda: f"{item['p']:.10g}",
@@ -1563,6 +1566,7 @@ class PhysicsTab(QWidget):
         return condition_anchor_2d(self, item)
 
     def refresh_lists(self):
+        sim_disp.upgrade_inplace(self.supports, 2)               # a support of an older file or script (x = ux held, y = uy held) is a Displacement now
         self.refresh_sections()
         self.cond_list.clear()
         t = self.cond_table
@@ -1570,8 +1574,13 @@ class PhysicsTab(QWidget):
         t.setRowCount(len(self.supports) + len(self.loads))
         r = 0
         for s in self.supports:
-            lab = {"fixed": "Fixed (ux = uy = 0)", "x": "ux = 0", "y": "uy = 0", "bolt": "Bolt", "screw": "Screw",
-                   "contact": "Contact (one-way, frictionless)"}[s["mode"]]
+            lab = {"fixed": "Fixed (ux = uy = 0)", "bolt": "Bolt", "screw": "Screw", "contact": "Contact (one-way, frictionless)",
+                   "disp": "Displacement (ux, uy) (" + units.get(self.unit_name())["L"] + ")"}[s["mode"]]
+            if s["mode"] == "disp":
+                self.cond_list.addItem(f"Support Displacement {sim_disp.describe(s, sim_disp.KEYS[2], lambda k: units.get(self.unit_name())['L'])}: {self.names(s['targets'])}")
+                self.fill_cond_row(r, True, r, lab, s)
+                r += 1
+                continue
             if s["mode"] in ("bolt", "screw"):
                 lab += f", head width {s['d']:g}" + (", head inside" if s.get("flip") else "")
             self.cond_list.addItem(f"Support {lab}: {self.names(s['targets'])}")
@@ -1648,8 +1657,13 @@ class PhysicsTab(QWidget):
             return False
         is_sup, idx, item = self._cond_ref(r)
         try:
-            nums = [float(x) for x in text.replace(";", ",").split(",") if x.strip()]
-            if is_sup and item["mode"] in ("bolt", "screw"):
+            nums = [] if (is_sup and item["mode"] == "disp") else [float(x) for x in text.replace(";", ",").split(",") if x.strip()]
+            if is_sup and item["mode"] == "disp":
+                parts = [x.strip() for x in text.replace(";", ",").split(",")]
+                assert len(parts) == 2
+                new = dict(zip(sim_disp.KEYS[2], (sim_disp.parse(x) for x in parts)))
+                assert not sim_disp.is_all_free(new, sim_disp.KEYS[2])
+            elif is_sup and item["mode"] in ("bolt", "screw"):
                 assert len(nums) == 1 and nums[0] > 0
                 new = {"d": nums[0]}
             elif not is_sup and item["kind"] in ("force", "traction"):
@@ -1661,7 +1675,8 @@ class PhysicsTab(QWidget):
             else:
                 return False
         except (AssertionError, ValueError):
-            self.status("That value was not understood: give one number (or two separated by a comma) and a positive head width.")
+            self.status("That value was not understood: give one number (or two separated by a comma), a positive head width, or for a displacement "
+                        "'ux, uy' with blank or 'free' for a free direction (not both free).")
             QTimer.singleShot(0, self.refresh_lists)
             return False
         if any(item.get(k) != v for k, v in new.items()):
@@ -2490,7 +2505,7 @@ class PhysicsTab(QWidget):
             raise pf.ModelError("Tick the linear solver, the nonlinear solver, or both.")
         ny = opt(self.e_nly, "Stress trigger")
         return {"E": E, "nu": nu, "t": t, "mode": "strain" if self.rb_strain.isChecked() else "stress",
-                "order": 1 if self.order_combo.currentIndex() == 1 else 2,
+                "order": self.element_order(),
                 "sy": sy, "su": su, "eps_u": eu, "nl_on": self.cb_nl.isChecked(), "lin_on": self.cb_lin.isChecked(),
                 "nl_disp": opt(self.e_nld, "Displacement trigger"), "nl_yield": None if ny is None else ny / 100.0,
                 "probes": [dict(q) for q in self.probes], "probe_fos": self.probe_fos, "probe_trig": self.probe_trig,
@@ -2513,6 +2528,28 @@ class PhysicsTab(QWidget):
         return {fid: {"E": pm.from_mpa(m_["E_MPa"], u), "nu": m_["nu"], "sy": pm.from_mpa(m_.get("Sy_MPa") or 0.0, u),
                       "su": pm.from_mpa(m_.get("Su_MPa") or 0.0, u)} for fid, m_ in rm.items()}
 
+    def build_adaptive(self, lay):
+        """The 'Adaptive mesh (h)' tick box and the small menu it reveals (the same words as the 3D window; the loops are physics_refine.fea_auto)."""
+        self.cb_auto = QCheckBox("Adaptive mesh (h)")
+        self.cb_auto.setToolTip("Solve, then refine the mesh where the stress changes fastest and solve again, until the strain energy "
+                                "and the largest displacement change by less than 1 % between two meshes, or a limit below is reached. "
+                                "Starts from the mesh you made with Mesh.")
+        lay.addWidget(self.cb_auto)
+        self.auto_box = QWidget()
+        af = QFormLayout(self.auto_box)
+        af.setContentsMargins(14, 0, 0, 0)
+        self.e_passes = QLineEdit("4")
+        self.e_passes.setToolTip("The most refinements. Loop 0 is your own mesh; every loop after it refines and solves again.")
+        self.e_maxtris = QLineEdit("100000")
+        self.e_maxtris.setToolTip("The largest mesh you allow, in triangles. The loops stop before a mesh would go above it.")
+        af.addRow("Maximum loops", self.e_passes)
+        af.addRow("Largest mesh (elements)", self.e_maxtris)
+        af.addRow(self.note("Press Solve (on the Results page): it refines from the mesh above. Convergence is judged on the strain energy and the largest displacement. "
+                            "The largest stress is listed for each loop but not used: at a sharp corner or a point load it never converges."))
+        self.auto_box.setVisible(False)
+        self.cb_auto.toggled.connect(self.auto_box.setVisible)
+        lay.addWidget(self.auto_box)
+
     # --- mesh and solve
     def run_task(self, title, fn):
         dlg = TaskDialog(self, title, fn)
@@ -2529,9 +2566,14 @@ class PhysicsTab(QWidget):
         except ValueError:
             QMessageBox.warning(self, "Mesh", "The element size must be a number.")
             return
+        try:
+            opts = self.mesher_options()
+        except ValueError as ex:
+            QMessageBox.warning(self, "Mesh", str(ex))
+            return
         included = {f["id"] for f in self.geom["faces"] if f["included"]}
         m, g = self.model, self.geom
-        kind, data = self.run_task("Meshing", lambda progress, cancel: pg.mesh_faces(m, g, included, h, progress, cancel))
+        kind, data = self.run_task("Meshing", lambda progress, cancel: pg.mesh_faces(m, g, included, h, progress, cancel, opts=opts))
         if kind != "ok":
             self.status("Meshing cancelled." if kind == "cancelled" else "Meshing failed.")
             return
@@ -2576,13 +2618,18 @@ class PhysicsTab(QWidget):
             if passes < 1 or max_tris < 100:
                 raise ValueError
         except ValueError:
-            QMessageBox.warning(self, "Solve", "Maximum refinement passes must be a whole number of at least 1, and the maximum "
-                                "number of triangles a number of at least 100.")
+            QMessageBox.warning(self, "Solve", "Maximum loops must be a whole number of at least 1, and the largest mesh "
+                                "a number of elements of at least 100.")
+            return
+        try:
+            opts = self.mesher_options()
+        except ValueError as ex:
+            QMessageBox.warning(self, "Solve", str(ex))
             return
         included = {f["id"] for f in self.geom["faces"] if f["included"]}
         m, g = self.model, self.geom
         kind, data = self.run_task("Solving with auto-refinement", lambda progress, cancel: prefine.fea_auto(
-            m, g, included, h, mesh, mat, sup, lds, passes, max_tris, progress, cancel))
+            m, g, included, h, mesh, mat, sup, lds, passes, max_tris, progress, cancel, opts=opts))
         if kind != "ok":
             self.status("Solve cancelled." if kind == "cancelled" else "Solve failed.")
             return
@@ -2688,7 +2735,7 @@ class PhysicsTab(QWidget):
             self.status(f"Solved in {data['total_time']:.2f} s.  Deformation scale (auto) = {self.auto_def:.4g}.")
 
     # --- save / restore with the sketch file
-    INPUTS = ("e_E", "e_nu", "e_t", "e_h", "order_combo", "rb_strain", "rb_stress", "unit_combo", "cb_def", "cb_mesh", "e_def", "cb_anim",
+    INPUTS = ("e_E", "e_nu", "e_t", "e_h", "rb_strain", "rb_stress", "unit_combo", "cb_def", "cb_mesh", "e_def", "cb_anim",
               "e_frames", "e_dur", "loop_combo", "cb_auto", "e_passes", "e_maxtris",
               "e_sy", "e_su", "e_eu", "cb_lin", "cb_nl", "e_nld", "e_nly")
 
@@ -2701,7 +2748,8 @@ class PhysicsTab(QWidget):
                 "profile": dict(self.profile) if self.profile else None,
                 "last_mat": getattr(self, "last_mat", None), "auto_def": getattr(self, "auto_def", None),
                 "field": self.field.currentData(), "sketch_id": getattr(self, "sketch_id", None),
-                "region_mats": getattr(self, "region_mats", {}), "region_names": getattr(self, "region_names", {})}
+                "region_mats": getattr(self, "region_mats", {}), "region_names": getattr(self, "region_names", {}),
+                "mesh_opts": self.mesh_state()}
 
     def import_state(self, st, out_of_date=False):
         m = sc.Model()
@@ -2713,6 +2761,7 @@ class PhysicsTab(QWidget):
         self.region_mats, self.region_names = dict(st.get("region_mats") or {}), dict(st.get("region_names") or {})
         self.fill_regions()
         pstore.set_inputs(self, st.get("inputs", {}))
+        self.restore_mesh_options(st)
         self.solver_boxes()
         self.auto_box.setVisible(self.cb_auto.isChecked())
         self.cur_unit = st.get("cur_unit", self.unit_combo.currentText())
@@ -2721,7 +2770,7 @@ class PhysicsTab(QWidget):
         self.mat_combo.setCurrentIndex(i if i >= 0 else max(0, self.mat_combo.findData(None)))
         self.mat_combo.blockSignals(False)
         self.update_mat_note()
-        self.supports, self.loads = st.get("supports", []), st.get("loads", [])
+        self.supports, self.loads = sim_disp.upgrade_all(st.get("supports"), 2), st.get("loads", [])      # ux = 0 / uy = 0 of an old file -> a Displacement
         self.probes, self.probe_fos, self.probe_trig = [dict(q) for q in st.get("probes", [])], st.get("probe_fos"), st.get("probe_trig")
         self.profile = dict(st["profile"]) if st.get("profile") else None
         self.update_profile_label()
@@ -2874,9 +2923,15 @@ class PhysicsTab(QWidget):
         except pf.ModelError as ex:
             add(f"material: {ex}")
         add(f"element size: {self.e_h.text()}")
+        for ln_ in self.mesh_diag_lines():
+            add(ln_)
         add("supports:")
         for s in self.supports:
-            add(f"  {s['mode']}: {self.names(s['targets'])}")
+            if s["mode"] == "disp":
+                Lu = units.get(self.unit_name())["L"]
+                add(f"  displacement ({sim_disp.describe(s, sim_disp.KEYS[2], lambda k: Lu)}): {self.names(s['targets'])}")
+            else:
+                add(f"  {s['mode']}: {self.names(s['targets'])}")
         add("loads:")
         for ld in self.loads:
             if ld["kind"] == "cfd":

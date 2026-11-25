@@ -10,6 +10,7 @@ import traceback
 import physics_cfd as pcfd
 import physics_geom as pg
 import physics_refine as prefine
+import sim_mesh2d as sm2
 from study_iface import StudyAdapter, StudyCancelled, set_widget, widget_params
 
 CFD_PARAMS = [("e_speed", "Wind speed"), ("e_angle", "Wind direction (deg)"), ("e_rho", "Density"), ("e_mu", "Viscosity"),
@@ -76,7 +77,8 @@ class CFDStudy(StudyAdapter):
             if args is None:
                 raise pcfd.ModelError(getattr(s, "last_input_problem", "The CFD mesh settings are not valid."))
             m, g, ids, margins, hb, hf, tr, bl = args
-            key = (tuple(margins), hb, hf, tr, tuple(sorted(bl.items())) if bl else None, tuple(sorted(ids)), hash(m.to_json()))
+            opts = s.mesher_options()
+            key = (tuple(margins), hb, hf, tr, tuple(sorted(bl.items())) if bl else None, tuple(sorted(ids)), hash(m.to_json()), sm2.key_text(opts))
             auto = None
             if s.cb_auto.isChecked():
                 auto = {"passes": int(float(s.e_passes.text())), "max_tris": int(float(s.e_maxtris.text()))}
@@ -95,7 +97,7 @@ class CFDStudy(StudyAdapter):
                 base = cache.get(key)
                 if base is None:
                     progress("meshing")
-                    base = pcfd.mesh_fluid(m, g, ids, margins, hb, hf, tr, None, cancel, bl=bl)
+                    base = pcfd.mesh_fluid(m, g, ids, margins, hb, hf, tr, None, cancel, bl=bl, opts=opts)
                     cache[key] = base
                 st = dict(setup)
                 st["on_stall"] = lambda info: "stop"                     # a batch cannot ask: a run that stops improving ends
@@ -108,7 +110,7 @@ class CFDStudy(StudyAdapter):
                 def frame(fr):
                     last[0] = fr
                 if auto:
-                    out = prefine.cfd_auto(base, st, args, auto["passes"], auto["max_tris"], progress=prog, frame=frame, cancel=cancel)
+                    out = prefine.cfd_auto(base, st, args + (opts,), auto["passes"], auto["max_tris"], progress=prog, frame=frame, cancel=cancel)
                     res, mesh = out["result"], out["mesh"]
                     res["refine"] = {"log": out["log"], "reason": out["reason"]}
                     res["all_history"] = out["all_history"]

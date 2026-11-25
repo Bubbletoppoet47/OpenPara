@@ -930,9 +930,11 @@ def solve_system(Kff, ff, progress=None, cancel=None, extent=None, B=None):
 
 
 def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t: None):
-    """q = quadratic mesh.  constraints: [(node array, direction (3,) or None for all three or {"bearing": (a point of the axis, the axis)})]; force: (3 nn,)
-    vector.  A bearing holds every node of its (cylindrical) face against moving along the radius from the axis, in and out, and along the axis: only the
-    turn about the axis (a slide along the face) stays free.  Returns u (nn, 3), reactions per constraint, info."""
+    """q = quadratic mesh.  constraints: [(node array, direction (3,) or None for all three or {"bearing": (a point of the axis, the axis)}
+    or {"disp": (ux, uy, uz)})]; force: (3 nn,) vector.  A bearing holds every node of its (cylindrical) face against moving along the radius from the axis,
+    in and out, and along the axis: only the turn about the axis (a slide along the face) stays free.  A displacement says for each of x, y and z: None = free,
+    0 = held, a number = the nodes are moved by exactly that much (the unit of the mesh, mm); its reaction is the force of the held directions only.
+    Returns u (nn, 3), reactions per constraint, info."""
     nodes = q["nodes"]
     nn = len(nodes)
     check_memory(3 * nn)                                     # before the work: a model that cannot fit is refused at once, in words
@@ -942,9 +944,31 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     held = []                                                # (nodes, (3,) direction for all of them or (len(nodes), 3)), one entry per held direction
     special = np.zeros(nn, bool)                             # the nodes held in a direction that is not along an axis: they get a frame of their own
     full = np.zeros(nn, bool)                                # the nodes held in all three directions
-    for nd, d in constraints:
+    imposed = np.zeros(3 * nn)                               # the displacement the held dofs are moved to (zero for a plain hold)
+    dispcons = []                                            # (index of the constraint, its nodes, the directions it holds)
+    for ci, (nd, d) in enumerate(constraints):
         nd = np.unique(nd)
-        if isinstance(d, dict):                              # a bearing: along the axis (the same direction for every node) and along the radius (another at each)
+        if isinstance(d, dict) and "disp" in d:              # a displacement: every direction is free, held (0) or moved (a number)
+            vals = d["disp"]
+            comps = [c for c in range(3) if vals[c] is not None]
+            if not comps:
+                raise FemError("A displacement support holds nothing: every direction is free.")
+            dispcons.append((ci, nd, comps))
+            for c in comps:
+                e = np.zeros(3)
+                e[c] = 1
+                rows += [(int(n), e) for n in nd]
+                if float(vals[c]) != 0.0:
+                    imposed[3 * nd + c] = float(vals[c])
+            if len(comps) == 3:
+                fixed[(3 * nd[:, None] + np.arange(3)[None, :]).ravel()] = True
+                full[nd] = True
+            else:
+                for c in comps:
+                    e = np.zeros(3)
+                    e[c] = 1
+                    held.append((nd, e))
+        elif isinstance(d, dict):                            # a bearing: along the axis (the same direction for every node) and along the radius (another at each)
             bearing = True
             a, rad = bearing_dirs(nodes, nd, d["bearing"])
             held += [(nd, a), (nd, rad)]
@@ -991,6 +1015,10 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
                 fixed[3 * nd[alg] + k] = True
         ti, tj, tv = [], [], []
         framed = np.zeros(nn, bool)
+        for n in vecs:
+            if imposed[3 * n:3 * n + 3].any():
+                raise FemError("A displacement is imposed on nodes that also belong to a bearing or a one-direction support (the nodes along an edge they share). "
+                               "Impose it on faces that do not touch those supports, or hold that direction at 0.")
         for n, vs in vecs.items():
             _u, sv, vt = np.linalg.svd(np.array(vs), full_matrices=True)
             k = int((sv > 1e-6 * sv[0]).sum())
@@ -1010,8 +1038,13 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     t0 = time.time()
     extent = np.ptp(np.asarray(nodes, float), axis=0).tolist()                 # the sides of the bounding box: what the progress bar's time estimate looks at
     Kt, ft = (K, force) if T is None else ((T.T @ K @ T).tocsr(), T.T @ force)
-    Kff = Kt[free][:, free]
+    pd = np.nonzero(imposed)[0]                              # the dofs that are moved: they are fixed, at their value, and what they push on the free ones is a load
+    Kfr = Kt[free]
+    Kff = Kfr[:, free]
     ff = ft[free]
+    if len(pd):
+        ff = ff - Kfr[:, pd] @ imposed[pd]
+    del Kfr
     if T is not None:
         del Kt                                               # the turned copy of K is not needed any more (K itself stays: the reactions come from it)
     B = None
@@ -1025,6 +1058,7 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     uf, how = solve_system(Kff, ff, progress=progress, cancel=cancel, extent=extent, B=B)
     u = np.zeros(3 * nn)
     u[free] = uf
+    u[pd] = imposed[pd]
     if T is not None:
         u = T @ u
     res = float(np.linalg.norm(Kff @ uf - ff) / max(np.linalg.norm(ff), 1e-300))
@@ -1034,14 +1068,34 @@ def solve(q, E, nu, constraints, force, cancel=lambda: False, progress=lambda t:
     reac = []
     allnodes = set()
     owner = {}                                   # a node held by several constraints (a support on a whole face and one on a patch of it, or two faces
+    is_disp = lambda d: isinstance(d, dict) and "disp" in d
     for ci, (nd, d) in enumerate(constraints):   # that share an edge) is counted for ONE of them: the strictest, and the later one among equals
+        if is_disp(d):
+            continue                             # a displacement is counted by direction, below
         for n in np.unique(nd):
             key = (1 if d is None else 0, ci)
             if int(n) not in owner or key >= owner[int(n)]:
                 owner[int(n)] = key
+    dof_owner = np.full(3 * nn, -1, dtype=np.int64)          # a direction of a node held by several displacements is counted for the last of them
+    whole = np.zeros(nn, bool)                               # the nodes of a Fixed support: it takes all three directions of them
+    for ci, (nd, d) in enumerate(constraints):
+        if d is None:
+            whole[np.unique(nd)] = True
+    for ci, nd, comps in dispcons:
+        for c in comps:
+            dof_owner[3 * nd + c] = ci
     for ci, (nd, d) in enumerate(constraints):
         nd = np.unique(nd)
         allnodes.update(int(n) for n in nd)
+        if is_disp(d):
+            comps = next(c_ for i_, _n, c_ in dispcons if i_ == ci)
+            v = np.zeros(3)
+            for c in comps:
+                dofs = 3 * nd + c
+                keep = (dof_owner[dofs] == ci) & ~whole[nd]
+                v[c] = float(r[dofs[keep]].sum())
+            reac.append(v)
+            continue
         mine = np.array([n for n in nd if owner[int(n)][1] == ci], dtype=int)
         if not len(mine):
             reac.append(np.zeros(3))

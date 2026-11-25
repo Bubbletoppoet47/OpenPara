@@ -119,8 +119,9 @@ def _merge_pieces(out):
     return final
 
 
-def _solve(nodes, members, supports, nodal, n_st=41, shear=False, nu=0.3):
-    """nodes {id: (x, y)}; members [dict]; supports {node id: (fix_ux, fix_uy, fix_rz)}; nodal {node id: (fx, fy, mz)}.
+def _solve(nodes, members, supports, nodal, n_st=41, shear=False, nu=0.3, moves=None):
+    """nodes {id: (x, y)}; members [dict]; supports {node id: (fix_ux, fix_uy, fix_rz)}; nodal {node id: (fx, fy, mz)};
+    moves {node id: (dx, dy, rz)}: how far a held direction of a support is MOVED instead of held at zero (a settlement, a rotation of the support; rz in radians).
     Returns the result dict (see the end of this function).  Raises BeamError."""
     if not members:
         raise BeamError("There are no members to solve.")
@@ -185,6 +186,14 @@ def _solve(nodes, members, supports, nodal, n_st=41, shear=False, nu=0.3):
                 notes.append(f"A moment applied at a node where every member is pinned cannot be carried and is ignored (node {nid}).")
     free = np.array([d for d in range(ndof) if d not in fixed], dtype=int)
     d = np.zeros(ndof)
+    dpres = np.zeros(ndof)                            # the movement of the held dofs
+    for nid, vals in (moves or {}).items():
+        if nid in index and nid in supports:
+            for j in range(3):
+                if supports[nid][j] and vals[j]:
+                    dpres[3 * index[nid] + j] = float(vals[j])
+    pd = np.nonzero(dpres)[0]
+    d[pd] = dpres[pd]
     if free.size:
         Kff = K[np.ix_(free, free)]
         dg = np.sqrt(np.abs(np.diag(Kff)))
@@ -214,7 +223,7 @@ def _solve(nodes, members, supports, nodal, n_st=41, shear=False, nu=0.3):
         except np.linalg.LinAlgError:
             pass
         try:
-            d[free] = np.linalg.solve(Kff, P[free])
+            d[free] = np.linalg.solve(Kff, P[free] - K[np.ix_(free, pd)] @ dpres[pd] if pd.size else P[free])      # what the moved dofs push on the others is a load
         except np.linalg.LinAlgError:
             raise BeamError("The equations could not be solved (the structure is unstable).")
         if not np.all(np.isfinite(d)):
@@ -294,6 +303,12 @@ def _solve(nodes, members, supports, nodal, n_st=41, shear=False, nu=0.3):
         fr += (rx, ry, mz + x_ * ry - y_ * rx)
     resid = fa + fr
     scale = max(float(np.abs(fa).max()), float(np.abs(fr).max()), 1e-300)
+    if pd.size:                                       # a movement drives it: the reactions may cancel (a settlement), so they are compared with each other
+        fra = np.zeros(3)
+        for nid, (rx, ry, mz) in reactions.items():
+            x_, y_ = nodes[nid]
+            fra += np.abs((rx, ry, mz + x_ * ry - y_ * rx))
+        scale = max(scale, float(fra.max()))
     eq = {"applied": tuple(float(v) for v in fa), "reactions": tuple(float(v) for v in fr),
           "residual": tuple(float(v) for v in resid), "relative": float(np.abs(resid).max() / scale)}
     node_disp = {nid: (float(d[3 * i]), float(d[3 * i + 1]), float(d[3 * i + 2])) for i, nid in enumerate(ids)}
@@ -393,12 +408,13 @@ def solve(nodes, members, supports, nodal, n_st=41, opts=None):
       "elements" / "size"  the mesh (see refine); "shear" Timoshenko members (needs "As" on the members); "nu" Poisson's ratio (default 0.3)
       "linear" (default True) / "nonlinear" (default False)  which solvers are allowed: both = linear first, nonlinear when a trigger is passed;
       only nonlinear = always nonlinear.  "disp_trigger" (a length), "stress_pct" (% of the yield strength), "eu_pct" (plastic strain in % at the
-      ultimate strength).  The result has "nl": None (linear) or the nonlinear summary."""
+      ultimate strength).  "moves" {node id: (dx, dy, rz)}: how far the held directions of a support are moved (a Displacement; rz in radians).
+      The result has "nl": None (linear) or the nonlinear summary."""
     opts = dict(opts or {})
     opts.setdefault("n_st", n_st)
     meshed = bool(opts.get("elements") or opts.get("size"))
     nodes2, pieces, count = refine(nodes, members, opts) if meshed else (nodes, members, {})
-    res = _solve(nodes2, pieces, supports, nodal, n_st, bool(opts.get("shear")), float(opts.get("nu", 0.3)))     # also finds mechanisms
+    res = _solve(nodes2, pieces, supports, nodal, n_st, bool(opts.get("shear")), float(opts.get("nu", 0.3)), opts.get("moves"))     # also finds mechanisms
     res = _mesh_post(res, nodes, nodes2, count, opts)
     res["nl"] = None
     if not opts.get("nonlinear"):

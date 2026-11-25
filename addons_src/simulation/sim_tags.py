@@ -15,7 +15,7 @@ KIND_COLOURS = {"support": "#2f6fdc", "slide": "#e0b000", "bearing": "#7a4dc2", 
                 "gravity": "#1f7a2c", "moment": "#a61e4d", "temperature": "#d12f2f", "flux": "#e8742a", "power": "#a61e4d", "convection": "#1f7a2c", "radiation": "#7a4dc2",
                 "insulated": "#5b6770", "size": "#0e7f86", "load": "#d12f2f"}
 # what the Type text of a condition says -> its kind (the first word that matches wins)
-WORDS = (("fixed", "support"), ("pinned", "support"), ("insulat", "insulated"), ("convect", "convection"), ("radiat", "radiation"), ("heat flux", "flux"), ("flux", "flux"), ("heat flow", "power"), ("heat gen", "power"),
+WORDS = (("fixed", "support"), ("pinned", "support"), ("displacement", "support"), ("insulat", "insulated"), ("convect", "convection"), ("radiat", "radiation"), ("heat flux", "flux"), ("flux", "flux"), ("heat flow", "power"), ("heat gen", "power"),
          ("temperature", "temperature"), ("gravity", "gravity"), ("pressure", "pressure"), ("moment", "moment"), ("vertex", "point"), ("force", "force"), ("wind", "pressure"),
          ("snow", "pressure"), ("line load", "force"), ("bearing", "bearing"), ("contact", "contact"), ("bolt", "bearing"), ("screw", "bearing"), ("one direction", "slide"),
          ("ux = 0", "slide"), ("uy = 0", "slide"), ("slide", "slide"))
