@@ -345,7 +345,7 @@ ok(r["refreshed"] == ["Bar"] and len(t.d.views) == n, "a wired part that changed
 bx = cv.r.view_box(t.d.view(v1["id"]))
 ok(near(bx[2] - bx[0], 150.0), "the Front view is now 150 mm long (the model is the new bar)")
 r = t.sync_models([{"src": "n1", "name": "Bar", "kind": "part", "data": bar2}])
-ok(r == {"added": [], "refreshed": [], "removed": [], "failed": []} and not t.undo_stack[1:], "the same data again changes nothing")
+ok(r == {"added": [], "refreshed": [], "removed": [], "failed": [], "lost": 0} and not t.undo_stack[1:], "the same data again changes nothing")
 r = t.sync_models([{"src": "n1", "name": "Bar", "kind": "part", "data": {"bad": "model"}}])
 ok(r["failed"] and "Bar" == r["failed"][0][0], "a model that cannot be built is reported, not raised")
 r = t.sync_models([])
