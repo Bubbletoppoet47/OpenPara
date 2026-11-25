@@ -172,6 +172,13 @@ def ready_thermal3d(st):
         return False
 
 
+def ready_fluid3d(st):
+    """3D Fluid Flow: the setup is ready when the fluid has a flow in it (a speed and a direction) and the box of fluid around the part is set."""
+    s = st.get("setup") or {}
+    fl = s.get("flow") or {}
+    return bool(fl) and bool(s.get("domain")) and bool(s.get("fluid"))
+
+
 def ready_fea(st):
     m = st.get("main") or {}
     return bool(m.get("supports")) and _driven(m)
@@ -660,6 +667,7 @@ class AnalysisAdapter(nodes.Adapter):
 def register_all():
     for args in (("solid", "solid", "solid", ready_solid, "3D FEA (parametric parts)"),
                  ("thermal3d", "thermal3d", "thermal3d", ready_thermal3d, "3D Thermal"),
+                 ("fluid3d", "fluid3d", "fluid3d", ready_fluid3d, "3D Fluid Flow"),
                  ("fea", "fea", "fea", ready_fea, "Simulation (1D FEA, 2D FEA, 2D CFD)", True),
                  ("cfd", "cfd", "cfd", ready_has_model, "Simulation (1D FEA, 2D FEA, 2D CFD)", True),
                  ("beam", "beam", "beam", ready_beam, "Simulation (1D FEA, 2D FEA, 2D CFD)", True),

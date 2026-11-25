@@ -110,6 +110,7 @@ _PROFILE = ("profile", "Profile", "import", (), ("profile",), False, True)
 for _k, _l, _tip, _cells in (
         ("solid", "3D Static Structural", "3D FEA: stress and displacement of a part or an assembly", [_SOLID]),
         ("thermal3d", "3D Thermal", "Heat conduction in a part or an assembly", [_SOLID]),
+        ("fluid3d", "3D Fluid Flow", "Steady laminar flow of air or water around a part, with the temperature of the fluid", [_SOLID]),
         ("fea", "2D Static Structural", "2D FEA of a sketch", [_SKETCH]),
         ("thermal", "2D Thermal", "Heat conduction in a sketch", [_SKETCH]),
         ("cfd", "2D Fluid Flow", "2D CFD of a sketch", [_SKETCH]),

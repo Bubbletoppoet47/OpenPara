@@ -75,6 +75,16 @@ def _g_thermal3d(p):
     _thermo(p, 19, 5, ORANGE)
 
 
+def _g_fluid3d(p):
+    _cube(p, 9, 4.5, 6.5, BLUE)
+    p.setPen(_pen(NAVY, 1.5))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    for dy in (-5, 0, 5):
+        path = QPainterPath(QPointF(14.5, 12 + dy))
+        path.cubicTo(16.5, 10 + dy, 19, 14 + dy, 22, 12 + dy)
+        p.drawPath(path)
+
+
 def _g_fea(p):
     p.setPen(_pen(BLUE, 1.5))
     p.setBrush(QBrush(QColor(43, 125, 233, 60)))
@@ -234,7 +244,7 @@ def _g_coupled(p):
     p.drawLine(QPointF(8, 8.5), QPointF(10, 6.5))
 
 
-KIND_GLYPH = {"coupled": _g_coupled, "part": _g_part, "assembly": _g_assembly, "solid": _g_solid, "thermal3d": _g_thermal3d, "fea": _g_fea, "thermal": _g_thermal, "cfd": _g_cfd,
+KIND_GLYPH = {"coupled": _g_coupled, "part": _g_part, "assembly": _g_assembly, "solid": _g_solid, "thermal3d": _g_thermal3d, "fluid3d": _g_fluid3d, "fea": _g_fea, "thermal": _g_thermal, "cfd": _g_cfd,
               "beam": _g_beam, "sheets": _g_sheets, "pdf": _g_pdf, "controls": _g_controls, "circuits": _g_circuits, "visualize": _g_visualize, "motor": _g_motor,
               "trainer": _g_trainer, "annotator": _g_annotator, "truss": _g_truss, "study": _g_study, "drawing": _g_drawing}
 

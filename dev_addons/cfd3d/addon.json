@@ -1,0 +1,28 @@
+{
+ "name": "3D Fluid Flow",
+ "order": 7,
+ "status": "workshopping",
+ "needs": [
+  "simulation"
+ ],
+ "description": "Steady laminar flow of air or water around a 3D parametric part, with the temperature of the fluid: the part is cut out of a box of fluid (you set how far the box reaches upstream, downstream and sideways), the fluid enters on one face and leaves on the opposite one, and sticks to the faces of the part. Wall temperature, wall heat flux and adiabatic faces are picked on faces in the view. Stabilised linear tetrahedra from gmsh (small at the part, growing away from it); speed, pressure and temperature on the part, on a slice through the fluid and along flow lines; the force on the part split into pressure and friction, the drag coefficient, the heat of every condition, a mass balance and a heat balance that must close, and a node probe. The method is first order and laminar: it is right for slow flows (Reynolds number up to about 100 to 150 for a blunt part); the window shows the Reynolds number, the share of the box the part blocks and warnings before and after the solve. Units follow File > Units and File > Units > Heat transfer. A .gpw project folder with its own copy of the part. Under development: it comes with a TEST EXAMPLE (button Load test example in the tab: a block with a hole in air at Reynolds number about 100, a hot top face, a heated side face and an insulated bottom), a SELF-CHECK that solves problems with known answers (plane Poiseuille flow, a round pipe, heat put into a flowing fluid, the iterative solver, a cube in air) and prints PASS or FAIL beside the numbers, and a DIAGNOSTICS REPORT (computer, program, mesh, setup, time of every stage, solver, warnings and errors; also saved as diagnostics.txt in the project folder). Not yet: assemblies (one part only), turbulence, a flow that changes with time, a moving part, buoyancy, a parametric study, face patches, conjugate heat transfer and the pressure on a 3D structure (the Coupled Physics block does not yet take 3D fluid).",
+ "extension": "cfd3d_ext",
+ "tabs": [
+  {
+   "kind": "fluid3d",
+   "label": "3D Fluid Flow",
+   "short": "3D Fluid",
+   "module": "cfd3d_tab",
+   "factory": "make_fluid3d",
+   "args": [
+    "host",
+    "path"
+   ],
+   "project_folder": {
+    "marker": "simulation.json",
+    "format": "openpara-sim-fluid3d"
+   },
+   "home": "workbench"
+  }
+ ]
+}

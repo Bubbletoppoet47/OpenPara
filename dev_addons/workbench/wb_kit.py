@@ -25,6 +25,8 @@ SHAPES = {
                      '<circle class="a" cx="18.750" cy="17.500" r="3"/><path class="n" stroke-width="2" d="M18.750 6.500v10"/>', "ana"),
     "wb_thermal3d": ('<path class="b" d="M9.500 3l6.500 3.750v7.500L9.500 18 3 14.250v-7.500z"/><path class="n" d="M3 6.750l6.500 3.750 6.500-3.750M9.500 10.500V18"/>'
                      '<rect class="p" x="17" y="6" width="4" height="10" rx="2"/><circle class="a" cx="19" cy="18.500" r="2.800"/><path class="n" stroke-width="2" d="M19 8.500v9"/>', "ana"),
+    "wb_fluid3d": ('<path class="b" d="M9.500 3l6.500 3.750v7.500L9.500 18 3 14.250v-7.500z"/><path class="n" d="M3 6.750l6.500 3.750 6.500-3.750M9.500 10.500V18"/>'
+                   '<path class="n" stroke-width="1.800" d="M17 6.500c1.500-1.500 2.500 1.500 4 0M17 10.500c1.500-1.500 2.500 1.500 4 0M17 14.500c1.500-1.500 2.500 1.500 4 0"/>', "ana"),
     "wb_coupled": ('<rect class="b" x="2.500" y="10" width="10" height="10"/><path class="n" d="M2.500 15h10M7.500 10v10"/><rect class="p" x="15" y="3" width="4" height="10" rx="2"/>'
                    '<circle class="a" cx="17" cy="15.500" r="2.800"/><path class="n" stroke-width="2" d="M17 5.500v9"/><path class="n" stroke-width="2" d="M3 6h7M8 4l2 2-2 2"/>', "ana"),
     "wb_sheets": ('<rect class="p" x="3" y="4" width="18" height="16" rx="1"/><path class="l" d="M3 9.300h18M3 14.600h18M9 4v16M15 4v16"/><rect class="a" x="3" y="4" width="18" height="5.300"/>', "dat"),
@@ -51,12 +53,12 @@ SHAPES = {
     "wb_failed": ('<circle class="p" cx="12" cy="12" r="9"/><path class="n" stroke-width="2.800" d="M8.500 8.500l7 7M15.500 8.500l-7 7"/>', "cut"),
 }
 
-KIND = {"part": "tab_part", "assembly": "assembly", "solid": "tab_solid", "thermal3d": "wb_thermal3d", "coupled": "wb_coupled", "fea": "tab_fea", "thermal": "wb_thermal2d", "cfd": "tab_cfd",
+KIND = {"part": "tab_part", "assembly": "assembly", "solid": "tab_solid", "thermal3d": "wb_thermal3d", "fluid3d": "wb_fluid3d", "coupled": "wb_coupled", "fea": "tab_fea", "thermal": "wb_thermal2d", "cfd": "tab_cfd",
         "beam": "tab_beam", "sheets": "wb_sheets", "pdf": "wb_pdf", "controls": "wb_controls", "circuits": "wb_circuits", "visualize": "wb_visualize", "motor": "wb_motor",
         "trainer": "wb_trainer", "annotator": "wb_annotator", "truss": "wb_truss", "study": "wb_params", "drawing": "wb_drawing"}
 STATUS = {"ok": "wb_ok", "incomplete": "wb_incomplete", "update": "wb_update", "refresh": "wb_refresh", "failed": "wb_failed"}
 CELL = {"profile": "wb_profile", "setup": "wb_params", "solution": "wb_solve", "results": "wb_results", "models": "wb_models"}
-SOLID_KINDS = ("solid", "thermal3d")                         # their Geometry cell holds a solid (a part or an assembly); the other analyses hold a sketch
+SOLID_KINDS = ("solid", "thermal3d", "fluid3d")                         # their Geometry cell holds a solid (a part or an assembly); the other analyses hold a sketch
 
 _state = {"ok": None}
 

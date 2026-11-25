@@ -10,7 +10,7 @@ A project schematic in the style of ANSYS Workbench, as the first tab of Full de
 |---|---|---|
 | Part | the part (`.gpd` content) | the part window |
 | Assembly | the assembly with its OWN COPY of every component (no live link to the Part blocks; Insert Component can copy from the project's parts) | the assembly window |
-| 3D Static Structural, 3D Thermal | the analysis project folder without meshes and results | the 3D window |
+| 3D Static Structural, 3D Thermal, 3D Fluid Flow | the analysis project folder without meshes and results (3D Fluid Flow takes one Part, not an Assembly, and is not yet offered to Coupled Physics) | the 3D window |
 | 2D Static Structural, 2D Fluid Flow, 2D Thermal, 1D Beam / Truss | the same | the 2D / 1D window |
 | Coupled Physics | a heat analysis and a stress analysis of the same geometry (both 2D or both 3D), solved together; the project folder holds the options only | the Coupled Physics window (`dev_addons/coupled`) |
 | Sheets, Systems and Controls, Circuits | the document (`.opsheet`, `.opctl`, `.opcirc`) | the tool's tab |
