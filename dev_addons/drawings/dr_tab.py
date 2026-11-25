@@ -25,7 +25,7 @@ import ui_kit
 FILTER = "Drawing (*.opdraw);;All files (*)"
 RIBBON_QSS = "QToolButton{font-size:11px; padding:2px;} QToolButton:disabled{color:#a0a0a0;} QToolButton:checked{background:#cfe3fb; border:1px solid #6aa0e0;}"
 UNDO_LIMIT = 60
-TOOL_KEYS = ("dim", "center_mark", "centerline", "note", "balloon", "line", "rect", "circle", "arc")
+TOOL_KEYS = ("dim", "center_mark", "centerline", "note", "balloon", "note_pattern", "line", "rect", "circle", "arc")
 NEEDS_VIEW = ("dim", "center_mark", "centerline", "balloon")           # the tools that pick things on the views (the others work on the bare sheet)
 
 
@@ -86,7 +86,7 @@ class DrawingTab(QWidget):
             ("center_mark", "dr_center_mark", "Center\nMark", "A cross at the middle of a circle or an arc", lambda: self.start_tool("center_mark")),
             ("centerline", "dr_centerline", "Centerline", "A dash-dot line along the axis between two lines", lambda: self.start_tool("centerline")),
             "|",
-            (None, "dr_note_pattern", "Linear Note\nPattern", "Repeat a note along a line", None),
+            ("note_pattern", "dr_note_pattern", "Linear Note\nPattern", "Repeat a note along a direction: the spacing and how many, in one or two directions", lambda: self.start_tool("note_pattern")),
         ]), "Annotation")
         self.ribbon.addTab(self.ribbon_page([
             ("select", "dr_select", "Select", "Pick and move things (ends the tool that is open)", lambda: self.finish_tool()),
@@ -159,6 +159,7 @@ class DrawingTab(QWidget):
         self.canvas.annot_selected.connect(self.on_annot_selected)
         self.canvas.tool_changed.connect(self.on_tool_changed)
         self.canvas.edit_requested.connect(self.edit_item_text)
+        self.canvas.direction_picked.connect(self.pattern_direction)
         for seq, fn in (("Ctrl+Z", self.do_undo), ("Ctrl+Y", self.do_redo), ("Ctrl+Shift+Z", self.do_redo)):
             QShortcut(QKeySequence(seq), self, activated=fn, context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.set_hint("Open Model View to put a view of a part or an assembly on the sheet.")
@@ -220,6 +221,8 @@ class DrawingTab(QWidget):
         self.outline.rebuild()
         self.model_panel.refresh()
         self.canvas.refresh(reset=reset)
+        if getattr(self, "tool_panel", None) is not None and self.canvas.tool == "note_pattern":
+            self.tool_panel.sync()
         w, h = self.d.sheet_dims()
         s = S.size(self.d.sheet["size"])[1].split("  ")[0]
         self.sheet_lbl.setText(f"{s}   {'landscape' if self.d.sheet['landscape'] else 'portrait'}   {'1st' if self.d.sheet['first_angle'] else '3rd'} angle" +
@@ -564,7 +567,7 @@ class DrawingTab(QWidget):
             self.start_projected(vid)
 
     def on_canvas_changed(self, what):
-        if what in ("place", "move", "delete", "dim", "mark", "annot_move", "annot_delete", "note", "balloon", "draw"):
+        if what in ("place", "move", "delete", "dim", "mark", "annot_move", "annot_delete", "note", "balloon", "draw", "pattern"):
             self.commit(what)
         elif what == "place_end":
             self.after_change()
@@ -610,6 +613,29 @@ class DrawingTab(QWidget):
             self.commit("note")
         else:
             self.after_change()                                      # the boxes show what the note says again
+
+    def set_note_pattern(self, aid, remove=False, **fields):
+        """The Linear Note Pattern of a note changed (a1, s1, c1 / a2, s2, c2, or remove=True; the panels)."""
+        try:
+            n = self.d.annot(aid)
+        except M.DrawingError:
+            return
+        cur = n.get("pattern")
+        if remove and not cur:
+            return
+        if not remove and cur and all(abs(float(cur[k]) - float(v)) < 1e-9 for k, v in fields.items()):
+            return
+        ok, _ = self.guard(self.d.set_pattern, aid, remove, **fields)
+        if ok:
+            self.commit("pattern")
+        else:
+            self.after_change()
+
+    def pattern_direction(self, which, angle):
+        """A line of a view was clicked to give the direction `which` of the pattern of the note the tool works on."""
+        aid = self.canvas.pattern_note
+        if aid is not None:
+            self.set_note_pattern(aid, **{"a%d" % which: round(angle, 2)})
 
     def set_balloon_text(self, aid, text):
         try:

@@ -2,7 +2,9 @@
 (line, rectangle, circle, arc: no constraints, just where they were put).  The geometry, the shapes the renderer paints and the canvas picks, the handles a person drags.
 
     A note:    {"id": "n1", "type": "note", "text": "...", "pos": [x, y] (the top-left corner of the text, sheet mm, y up), "size": points,
-                "leader": None | {"kind": "straight" | "bent", "view": vid | None, "p": [x, y]}}
+                "leader": None | {"kind": "straight" | "bent", "view": vid | None, "p": [x, y]},
+                "pattern": None | {"a1", "s1", "c1", "a2", "s2", "c2"}}     a linear pattern: c1 notes (the note itself is the first) s1 mm apart along the direction a1 (degrees,
+                                                                         0 = to the right, counter-clockwise), and c2 rows of them s2 mm apart along a2; every copy has its own copy of the leader
                the tip of the leader is a point in the frame of a view (so it follows the view when the view moves or changes scale), or a point of the sheet (view None)
     A balloon: {"id": "b1", "type": "balloon", "text": "1", "view": vid, "tip": [x, y] (in the view's frame), "snap": bool (the tip is on an edge: an arrow; else a dot),
                 "pos": [x, y] (the middle of the circle, sheet mm)}
@@ -10,7 +12,7 @@
                arc "c", "r", "a0", "a1" (counter-clockwise from a0 to a1, radians, a1 - a0 in (0, 2 pi])
 
     note_shape(n, tip, metrics) / balloon_shape(b, tip, metrics) / item_shape(it)     what is painted: "segs" (polylines), "heads" [(tip, direction away from the tip along the line, size)],
-        "dots" [(point, radius)], "lines" [(text, (x, baseline y))], "size" (points), "box", "circle" (c, r), "arc" (c, r, a0, a1), "kind"
+        "dots" [(point, radius)], "lines" [(text, (x, baseline y))], "size" (points), "box" (all of it), "boxes" (one for each copy of a note), "circle" (c, r), "arc" (c, r, a0, a1), "kind"
     distance(shape, p)                  how far a point is from it (0 on a note's text, inside a balloon)
     handles(item) / drag_handle(item, name, p) / translate(item, dx, dy)
     Metrics(size, width, cap, pitch)    how big text is (the renderer measures it with the real font; without one a plain estimate is used)
@@ -32,6 +34,8 @@ DOT_R = 0.8                         # the dot at the end of a leader that ends o
 DRAW_W = 0.35                       # the weight of the lines that are drawn on the sheet (mm)
 DRAW_TYPES = ("line", "rect", "circle", "arc")
 MIN_R = 0.05
+MAX_COPIES = 400                    # a pattern of notes is at most this many
+MIN_SPACING = 0.1
 
 
 # ---------------------------------------------------------------------------------------------------------------------------- text metrics
@@ -144,9 +148,40 @@ def valid(it):
     return False
 
 
+# ---------------------------------------------------------------------------------------------------------------------------- linear note patterns
+def pattern_offsets(pat):
+    """Where the copies of a note are, relative to the note itself: [(dx, dy)], the note's own (0, 0) first, then along direction 1, then the next row."""
+    a1, a2 = math.radians(pat["a1"]), math.radians(pat["a2"])
+    u1, u2 = (math.cos(a1), math.sin(a1)), (math.cos(a2), math.sin(a2))
+    return [(i * pat["s1"] * u1[0] + j * pat["s2"] * u2[0], i * pat["s1"] * u1[1] + j * pat["s2"] * u2[1]) for j in range(pat["c2"]) for i in range(pat["c1"])]
+
+
+def default_pattern(box):
+    """A first pattern for a note whose text fills `box`: three copies in a row, each a little way from the next."""
+    return {"a1": 0.0, "s1": round(box[2] - box[0] + 5.0, 1), "c1": 3, "a2": 90.0, "s2": round(box[3] - box[1] + 3.0, 1), "c2": 1}
+
+
+def clean_pattern(pat):
+    """The pattern with every number in range: ValueError (in plain words) when it cannot be made one."""
+    try:
+        out = {"a1": float(pat["a1"]) % 360.0, "s1": float(pat["s1"]), "c1": int(pat["c1"]), "a2": float(pat["a2"]) % 360.0, "s2": float(pat["s2"]), "c2": int(pat["c2"])}
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("A pattern needs a direction, a spacing and a number of notes for each direction.")
+    if any(v != v or abs(v) == float("inf") for v in out.values()):
+        raise ValueError("A pattern needs a direction, a spacing and a number of notes for each direction.")
+    if out["c1"] < 1 or out["c2"] < 1:
+        raise ValueError("A pattern has at least one note in each direction (the note itself).")
+    if out["c1"] * out["c2"] > MAX_COPIES:
+        raise ValueError(f"A pattern is at most {MAX_COPIES} notes.")
+    for k in (("s1", "c1"), ("s2", "c2")):
+        if out[k[1]] > 1 and abs(out[k[0]]) < MIN_SPACING:
+            raise ValueError(f"The spacing must be at least {MIN_SPACING} mm.")
+    return out
+
+
 # ---------------------------------------------------------------------------------------------------------------------------- shapes
 def _empty(kind, **kw):
-    out = {"kind": kind, "segs": [], "heads": [], "dots": [], "lines": [], "size": 0.0, "box": None, "circle": None, "arc": None}
+    out = {"kind": kind, "segs": [], "heads": [], "dots": [], "lines": [], "size": 0.0, "box": None, "boxes": [], "circle": None, "arc": None}
     out.update(kw)
     return out
 
@@ -159,10 +194,29 @@ def note_shape(n, tip, mt=default_metrics):
     w = max(m.width(t) for t in lines)
     h = m.cap + (len(lines) - 1) * m.pitch
     box = (x, y - h, x + w, y)
-    out = _empty("note", size=m.size, box=box, lines=[(t, (x, y - m.cap - i * m.pitch)) for i, t in enumerate(lines)])
+    out = _empty("note", size=m.size, box=box, boxes=[box], lines=[(t, (x, y - m.cap - i * m.pitch)) for i, t in enumerate(lines)])
     ld = n.get("leader")
-    if tip is None or not ld:
-        return out
+    if tip is not None and ld:
+        _leader(out, box, tip, ld)
+    pat = n.get("pattern")
+    if pat:
+        try:
+            offs = pattern_offsets(clean_pattern(pat))[1:]
+        except ValueError:
+            offs = []
+        base = {k: list(v) if isinstance(v, list) else v for k, v in out.items()}      # the note as it is alone: every copy is made from this
+        for dx, dy in offs:
+            out["boxes"].append((box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy))
+            out["lines"] += [(t, (q[0] + dx, q[1] + dy)) for t, q in base["lines"]]
+            out["segs"] += [[(q[0] + dx, q[1] + dy) for q in sg] for sg in base["segs"]]
+            out["heads"] += [((tp[0] + dx, tp[1] + dy), d, sz) for tp, d, sz in base["heads"]]
+        if offs:
+            out["box"] = (min(b[0] for b in out["boxes"]), min(b[1] for b in out["boxes"]), max(b[2] for b in out["boxes"]), max(b[3] for b in out["boxes"]))
+    return out
+
+
+def _leader(out, box, tip, ld):
+    """The leader of a note into `out`: the lines and the arrow."""
     cx, cy = (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
     left, right = (box[0] - LEAD_GAP, cy), (box[2] + LEAD_GAP, cy)
     bent = ld.get("kind") == "bent"
@@ -178,7 +232,6 @@ def note_shape(n, tip, mt=default_metrics):
     L = _hyp(pts[0], pts[1])
     if L > 1e-6:
         out["heads"].append((pts[0], _unit(pts[0], pts[1]), min(A.ARROW, 0.45 * L)))
-    return out
 
 
 def balloon_shape(b, tip, mt=default_metrics):
@@ -232,8 +285,8 @@ def distance(shp, p):
         for i in range(len(sg) - 1):
             best = min(best, A._seg_dist(p, sg[i], sg[i + 1]))
     if kind == "note":
-        x0, y0, x1, y1 = shp["box"]
-        best = min(best, math.hypot(max(x0 - p[0], 0.0, p[0] - x1), max(y0 - p[1], 0.0, p[1] - y1)))
+        for x0, y0, x1, y1 in shp["boxes"]:
+            best = min(best, math.hypot(max(x0 - p[0], 0.0, p[0] - x1), max(y0 - p[1], 0.0, p[1] - y1)))
     elif kind == "balloon":
         c, r = shp["circle"]
         best = min(best, max(0.0, _hyp(c, p) - r))
@@ -373,6 +426,21 @@ def label(it):
     if t == "balloon":
         return "Balloon  " + str(it.get("text", ""))
     return {"line": "Line", "rect": "Rectangle", "circle": "Circle", "arc": "Arc"}.get(t, "Item")
+
+
+def pattern_text(pat):
+    """A note pattern in words: '3 notes along 0°, 25 mm apart', '3 × 2 notes: 25 mm along 0°, 8 mm along 90°'."""
+    n = A.number_text
+    c1, c2 = int(pat["c1"]), int(pat["c2"])
+    d1 = f"{n(abs(pat['s1']), 2)} mm along {n(pat['a1'] % 360.0 if pat['s1'] >= 0 else (pat['a1'] + 180.0) % 360.0, 1)}°"
+    d2 = f"{n(abs(pat['s2']), 2)} mm along {n(pat['a2'] % 360.0 if pat['s2'] >= 0 else (pat['a2'] + 180.0) % 360.0, 1)}°"
+    if c1 == 1 and c2 == 1:
+        return "1 note (no copies)"
+    if c2 == 1:
+        return f"{c1} notes, {d1}"
+    if c1 == 1:
+        return f"{c2} notes, {d2}"
+    return f"{c1} × {c2} notes: {d1}; {d2}"
 
 
 def describe(it):

@@ -12,6 +12,8 @@ annotations.  Saved as an .opdraw file (JSON).
                                                 the opposite side).  It keeps the scale of its parent and stays ALIGNED: it can only slide along its axis
     d.move_view(vid, x, y)                      moves a view (a projected one only along its axis; its own projected views move with it)
     d.set_scale(vid, s), d.set_style(vid, style), d.set_orient(vid, name)
+    d.add_note / set_note / add_balloon / set_balloon_text / add_item / set_tip / move_item / drag_handle      notes, balloons and the lines, rectangles, circles and arcs of the sheet
+    d.set_pattern(note, remove=False, a1=, s1=, c1=, a2=, s2=, c2=)     the Linear Note Pattern of a note: c1 notes s1 mm apart along a1 degrees, in c2 rows s2 mm apart along a2
     d.to_json() / Drawing.from_json(text)       the file; the lines of every view are in it (a drawing opens at once and shows without its models)
 
 A view has: id, name ("Drawing View1"), kind ("model" | "projected"), model, orient, eye / up (the direction it looks from, in the model's frame), parent, side, origin (where the model's
@@ -562,6 +564,23 @@ class Drawing:
                 n["leader"] = {"kind": "bent" if leader == "bent" else "straight", "view": None, "p": [n["pos"][0] - 20.0, n["pos"][1] - 14.0]}
         return n
 
+    def set_pattern(self, aid, remove=False, **fields):
+        """The linear pattern of a note (dr_items): a1, s1, c1 (direction in degrees, spacing in mm, how many) for the first direction and a2, s2, c2 for the second.  A note that has no pattern
+        starts with three copies in a row.  remove=True takes the pattern away.  -> the note."""
+        n = self.annot(aid)
+        if n.get("type") != "note":
+            raise DrawingError("Only a note can be repeated in a pattern.")
+        if remove:
+            n["pattern"] = None
+            return n
+        pat = dict(n.get("pattern") or IT.default_pattern(IT.note_shape(n, None, IT.default_metrics)["box"]))
+        pat.update({k: v for k, v in fields.items() if k in ("a1", "s1", "c1", "a2", "s2", "c2") and v is not None})
+        try:
+            n["pattern"] = IT.clean_pattern(pat)
+        except ValueError as ex:
+            raise DrawingError(str(ex))
+        return n
+
     def set_balloon_text(self, aid, text):
         b = self.annot(aid)
         if b.get("type") != "balloon":
@@ -667,6 +686,14 @@ class Drawing:
             setattr(o, k, [dict(x) for x in d.get(k, []) if isinstance(x, dict)])
         for k in ("notes", "balloons", "lines"):                  # what is not a whole record is left out: the rest of the drawing opens
             setattr(o, k, [dict(x) for x in d.get(k, []) if isinstance(x, dict) and IT.valid(x)])
+        for n in o.notes:                                          # a pattern that is damaged goes; the note is kept
+            if n.get("pattern"):
+                try:
+                    n["pattern"] = IT.clean_pattern(n["pattern"])
+                except (ValueError, TypeError, AttributeError):
+                    n["pattern"] = None
+            else:
+                n["pattern"] = None
         view_ids = {v["id"] for v in o.views}
         o.balloons = [b for b in o.balloons if b["view"] in view_ids]
         return o

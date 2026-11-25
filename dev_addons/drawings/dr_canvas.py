@@ -5,13 +5,14 @@ Placing (like SolidWorks): begin_model(vid)       the view `vid` (just made by t
                            begin_projected(pid)  pick a side of the view `pid` by moving the pointer to it: the projected view appears there and slides along its axis; a click puts it
                                                  down (and the next one can be placed from the same parent), Esc / right click ends
 
-Annotation tools (tool_begin(name): "dim" Smart Dimension, "center_mark", "centerline", "note", "balloon"; the Sketch tools "line", "rect", "circle", "arc"):
+Annotation tools (tool_begin(name): "dim" Smart Dimension, "center_mark", "centerline", "note", "balloon", "note_pattern"; the Sketch tools "line", "rect", "circle", "arc"):
           dim          click a line, a circle or an arc (a point for a distance between two points); a second click on another point / line / circle makes a distance or an angle;
                        the dimension follows the pointer until a click puts it down.  Esc / right click: takes away what is half done, then ends the tool
           center_mark  click a circle or an arc (or its centre)
           centerline   click two parallel lines
           note         (with a leader) click what the leader points at, then where the text goes; (without) click where the text goes.  The text, size and leader come from `opts`
           balloon      click what the balloon points at (an edge: an arrow; a face: a dot), then where the circle goes; the number counts on
+          note_pattern click a note: it is repeated along a direction (the panel sets the direction, the spacing and the number; "pick a line" takes the direction from a line of a view)
           line, rect, circle, arc    drawn on the sheet by clicking points (they snap to the corners of the views and to the ends of what is already drawn); a line carries on from its end
           A click on a dimension / mark / note / balloon / drawn item with no tool selects it (blue); drag it to move it, drag the squares on it (a leader's tip, the ends of a line, the radius of a
           circle ...) to change it; double-click a note or a balloon to edit its text; Delete removes it.
@@ -47,6 +48,7 @@ class SheetCanvas(QWidget):
     annot_selected = pyqtSignal(object)
     tool_changed = pyqtSignal(object)
     edit_requested = pyqtSignal(str)
+    direction_picked = pyqtSignal(int, float)
     options_changed = pyqtSignal()
 
     def __init__(self, drawing, parent=None):
@@ -80,6 +82,8 @@ class SheetCanvas(QWidget):
         self.draft = None                           # a drawing item that is being clicked: {"pts": [the points so far]}
         self.tool_pt = None                         # the pointer for a drawing tool, snapped
         self.snap_mark = None                       # where it snapped to
+        self.pattern_note = None                    # the note the pattern tool is working on
+        self.pattern_pick = 0                       # 1 or 2: the next click on a line of a view gives the direction of that direction of the pattern
 
     # ---- coordinates
     def sheet_h(self):
@@ -244,6 +248,7 @@ class SheetCanvas(QWidget):
                  "line": "Click the start of the line, then its end.  The next click carries on from the end.  Esc ends the chain, then the tool.",
                  "rect": "Click one corner of the rectangle, then the opposite corner.  Esc ends.",
                  "circle": "Click the centre of the circle, then a point on it.  Esc ends.",
+                 "note_pattern": "Click the note to repeat.  Then set the direction, the spacing and the number of copies in the panel.  Esc ends.",
                  "arc": "Click the centre of the arc, then where it starts, then where it ends (counter-clockwise from the start).  Esc ends."}
     DRAW_TOOLS = ("line", "rect", "circle", "arc")
     DRAW_NEED = {"line": 2, "rect": 2, "circle": 2, "arc": 3}
@@ -253,12 +258,18 @@ class SheetCanvas(QWidget):
     def tool_begin(self, name):
         if name not in self.TOOL_HINT:
             return False
+        keep = None
+        if name == "note_pattern" and self.sel_annot is not None and any(n["id"] == self.sel_annot for n in self.d.notes):
+            keep = self.sel_annot                                          # a note that is selected is the one the pattern is for
         self.end_place(emit=False)
         self.tool_end(emit=False)
         self.set_selected(None)
         self.set_selected_annot(None)
         self.tool, self.picks, self.hover_pick = name, [], None
         self.draft, self.tool_pt, self.snap_mark = None, None, None
+        self.pattern_note, self.pattern_pick = None, 0
+        if keep is not None:
+            self._pattern_pick_note(keep)
         if name == "balloon":
             self.opts["balloon"] = IT.next_balloon_text(self.d.balloons)
             self.options_changed.emit()
@@ -269,6 +280,8 @@ class SheetCanvas(QWidget):
         return True
 
     def _tool_hint(self, name):
+        if name == "note_pattern" and self.pattern_pick:
+            return "Click a line of a view: the copies go along it.  Esc takes this back."
         if name == "note" and self.opts.get("leader") in ("straight", "bent"):
             return "Click what the leader points at (an edge of a view, or anywhere).  Then click where the text goes.  Esc ends."
         return self.TOOL_HINT.get(name, "")
@@ -280,6 +293,7 @@ class SheetCanvas(QWidget):
         self._drop_float()
         self.tool, self.picks, self.hover_pick = None, [], None
         self.draft, self.tool_pt, self.snap_mark = None, None, None
+        self.pattern_note, self.pattern_pick = None, 0
         self.unsetCursor()
         if emit:
             self.tool_changed.emit(None)
@@ -296,6 +310,18 @@ class SheetCanvas(QWidget):
 
     def tool_cancel(self):
         """Esc: what is half done goes first (the dimension that follows the pointer, the first pick); then the tool ends."""
+        if self.pattern_pick:
+            self.pattern_pick = 0
+            self.options_changed.emit()
+            self.hint.emit(self._tool_hint(self.tool))
+            self.update()
+            return
+        if self.tool == "note_pattern" and self.pattern_note is not None:
+            self.pattern_note = None
+            self.set_selected_annot(None)
+            self.options_changed.emit()
+            self.hint.emit(self._tool_hint(self.tool))
+            return
         if self.float_annot is not None or self.picks or self.draft:
             self._drop_float()
             self.picks, self.draft = [], None
@@ -347,6 +373,9 @@ class SheetCanvas(QWidget):
             return
         if self.tool in self.DRAW_TOOLS:
             self._draw_press(x, y)
+            return
+        if self.tool == "note_pattern":
+            self._pattern_press(x, y)
             return
         hit = self.pick_at(x, y)
         if self.tool == "center_mark":
@@ -437,7 +466,9 @@ class SheetCanvas(QWidget):
         self.update()
 
     def _tool_move(self, x, y):
-        if self.tool in self.DRAW_TOOLS:
+        if self.tool == "note_pattern":
+            self.hover_pick = self.pick_at(x, y) if self.pattern_pick else None
+        elif self.tool in self.DRAW_TOOLS:
             self.tool_pt = self._snap(x, y)
             self.snap_mark = self.tool_pt if self.tool_pt != (x, y) else None
         elif self.float_annot is not None and self.tool in ("note", "balloon"):
@@ -452,6 +483,39 @@ class SheetCanvas(QWidget):
             hit = self.pick_at(x, y)
             self.hover_pick = hit
         self.update()
+
+    # ---- the pattern of a note
+    def _pattern_pick_note(self, aid):
+        """The note the pattern tool works on: selected, and given a first pattern if it has none."""
+        self.pattern_note = aid
+        self.set_selected_annot(aid)
+        n = self.d.annot(aid)
+        if not n.get("pattern"):
+            self.d.set_pattern(aid)
+            self.changed.emit("pattern")
+        self.options_changed.emit()
+        self.hint.emit("Set the direction, the spacing and the number of copies in the panel.  Click another note for another pattern.  Esc ends.")
+        self.update()
+
+    def _pattern_press(self, x, y):
+        if self.pattern_pick:
+            hit = self.pick_at(x, y)
+            if hit is None:
+                self.hint.emit("That is not a line of a view.  Click a line, or press Esc.")
+                return
+            ref = hit[1]
+            ang = math.degrees(math.atan2(ref["b"][1] - ref["a"][1], ref["b"][0] - ref["a"][0])) % 180.0      # a line has no front end: 0 to 180, a negative spacing goes the other way
+            ang = 0.0 if ang > 179.999999 else ang
+            which, self.pattern_pick = self.pattern_pick, 0
+            self.direction_picked.emit(which, ang)
+            self.options_changed.emit()
+            self.hint.emit("Direction taken from the line.  A negative spacing goes the other way.")
+            return
+        aid = self.r.hit_annot(x, y, PICK_PX / self.k)
+        if aid is None or not any(n["id"] == aid for n in self.d.notes):
+            self.hint.emit("That is not a note.  Click the note to repeat.")
+            return
+        self._pattern_pick_note(aid)
 
     # ---- notes, balloons, drawing items
     def _tip_at(self, x, y):

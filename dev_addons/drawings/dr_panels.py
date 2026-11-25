@@ -3,16 +3,16 @@
     NewDrawingDialog(sheet)       the first thing a new drawing asks: the sheet (standard sizes only, landscape or portrait, a preview) and the kind of projection
     ModelViewPanel(tab)           Model View: the models, the nine orientations, the display style, the scale; picking an orientation lets the view follow the pointer to the sheet
     ProjectedPanel(tab)           Projected View: the view to project from, the display style; the pointer picks the side
-    ToolPanel(tab)                Smart Dimension / Center Mark / Centerline / Note / Balloon / Line / Rectangle / Circle / Arc: what to click, the options of the tool (a note's text, size
-                                  and leader; the number of the next balloon), and ✔ OK to leave the tool
+    ToolPanel(tab)                Smart Dimension / Center Mark / Centerline / Note / Balloon / Linear Note Pattern / Line / Rectangle / Circle / Arc: what to click, the options of the tool
+                                  (a note's text, size and leader; the number of the next balloon; the direction, spacing and number of a note pattern), and ✔ OK to leave the tool
     OutlinePanel(tab)             the tree of the drawing (sheet, models, views and what is drawn on each, the notes, what is drawn on the sheet) with the Details of the selected item below it
 
 A panel never changes the document itself: it asks the tab (dr_tab.DrawingTab), which keeps the undo and the dirty mark.
 """
 from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
-from PyQt6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                             QPlainTextEdit, QPushButton, QSplitter, QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                             QListWidgetItem, QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 import dr_annot as A
 import dr_icons as I
@@ -372,10 +372,66 @@ class FocusTextEdit(QPlainTextEdit):
         self.finished.emit()
 
 
+class PatternDirection(QWidget):
+    """One direction of a note pattern: its angle (with Horizontal, Vertical and Pick line), the spacing between the notes and how many notes."""
+
+    def __init__(self, panel, which):
+        super().__init__()
+        self.panel, self.which = panel, which
+        f = QFormLayout(self)
+        f.setContentsMargins(0, 0, 0, 0)
+        self.angle = QDoubleSpinBox()
+        self.angle.setRange(0.0, 359.99)
+        self.angle.setDecimals(2)
+        self.angle.setSuffix(" °")
+        self.angle.setWrapping(True)
+        self.angle.setToolTip("The direction, counter-clockwise from the right-hand side of the sheet.")
+        self.space = QDoubleSpinBox()
+        self.space.setRange(-2000.0, 2000.0)
+        self.space.setDecimals(2)
+        self.space.setSuffix(" mm")
+        self.space.setToolTip("From a note to the next one (corner to corner).  A negative spacing goes the other way.")
+        self.count = QSpinBox()
+        self.count.setRange(1, IT.MAX_COPIES)
+        self.count.setToolTip("The notes in this direction, the first one included.")
+        row = QHBoxLayout()
+        self.horiz = QPushButton("Horizontal")
+        self.vert = QPushButton("Vertical")
+        self.pick = QPushButton("Pick line")
+        self.pick.setCheckable(True)
+        self.pick.setToolTip("Then click a line of a view: the notes follow its direction.")
+        for b in (self.horiz, self.vert, self.pick):
+            b.setAutoDefault(False)
+            row.addWidget(b)
+        f.addRow(row)
+        f.addRow("Angle", self.angle)
+        f.addRow("Spacing", self.space)
+        f.addRow("Notes", self.count)
+        self.horiz.clicked.connect(lambda _c=False: self.set_angle(0.0))
+        self.vert.clicked.connect(lambda _c=False: self.set_angle(90.0))
+        self.pick.toggled.connect(lambda on: panel.pattern_pick_line(which, on))
+        for w in (self.angle, self.space, self.count):
+            w.editingFinished.connect(lambda: panel.pattern_edited(which))
+        self.count.valueChanged.connect(lambda _v: panel.pattern_edited(which))
+
+    def set_angle(self, a):
+        self.angle.setValue(a)
+        self.panel.pattern_edited(self.which)
+
+    def show_values(self, a, s, c):
+        for w, v in ((self.angle, a), (self.space, s), (self.count, c)):
+            w.blockSignals(True)
+            w.setValue(v)
+            w.blockSignals(False)
+
+    def values(self):
+        return self.angle.value(), self.space.value(), self.count.value()
+
+
 class ToolPanel(QWidget):
     """The PropertyManager of a tool: a title, what to click, the options of the tool, and OK (leave the tool)."""
-    TITLES = {"dim": "Smart Dimension", "center_mark": "Center Mark", "centerline": "Centerline", "note": "Note", "balloon": "Balloon", "line": "Line", "rect": "Rectangle",
-              "circle": "Circle", "arc": "Arc"}
+    TITLES = {"dim": "Smart Dimension", "center_mark": "Center Mark", "centerline": "Centerline", "note": "Note", "balloon": "Balloon", "note_pattern": "Linear Note Pattern",
+              "line": "Line", "rect": "Rectangle", "circle": "Circle", "arc": "Arc"}
     HELP = {"dim": ["Click a line: its length.", "Click a circle: its diameter.  An arc: its radius.",
                     "Click two points, a point and a line, or two circles: the distance.", "Click two parallel lines: the distance between them.",
                     "Click two lines that meet: the angle between them."],
@@ -383,12 +439,14 @@ class ToolPanel(QWidget):
             "centerline": ["Click two parallel lines: a dash-dot line is put midway between them."],
             "note": ["Type the text, choose its size and a leader.", "Without a leader: click where the text goes.", "With a leader: click what it points at, then where the text goes."],
             "balloon": ["Click the edge or the face of a view that the balloon points at, then where the circle goes.", "The number counts on by itself."],
+            "note_pattern": ["Click the note to repeat.", "Set the direction, the spacing and how many notes in each direction.", "Direction 2 is a second row: leave it at 1 note for a single row."],
             "line": ["Click the start, then the end.  The next click carries on from the end."], "rect": ["Click one corner, then the opposite corner."],
             "circle": ["Click the centre, then a point on the circle."], "arc": ["Click the centre, the start, then the end.  The arc runs counter-clockwise from the start."]}
     AFTER = {"dim": "After the picks, move the pointer to where the dimension should go and click.  Drag a dimension later to move it; the number is always the model's, whatever the scale.",
              "center_mark": "Pick as many as you like, then OK.", "centerline": "Pick pairs of lines, one pair after another, then OK.",
              "note": "Double-click a note later to change its text.  Drag the square at the end of its leader to point it somewhere else.",
              "balloon": "Drag the square at the end of the leader to point it at something else.  Double-click a balloon to change its number.",
+             "note_pattern": "The first note is the one you clicked; the others are copies of it, so changing its text changes them all.  A negative spacing goes the other way.",
              "line": "Points snap to the corners of the views and to the ends of what is drawn.  Drag the squares on a selected line to change it.",
              "rect": "Points snap to the corners of the views and to the ends of what is drawn.  Drag the squares on a selected rectangle to change it.",
              "circle": "Points snap to the corners of the views and to the ends of what is drawn.  Drag the squares on a selected circle to change it.",
@@ -441,6 +499,23 @@ class ToolPanel(QWidget):
         self.b_text.textChanged.connect(self.options_edited)
         bf.addRow("Next number", self.b_text)
         lay.addWidget(self.opt_balloon)
+        # ---- the options of a note pattern
+        self.opt_pattern = QWidget()
+        pl = QVBoxLayout(self.opt_pattern)
+        pl.setContentsMargins(0, 0, 0, 0)
+        self.p_note = QLabel("")
+        self.p_note.setWordWrap(True)
+        pl.addWidget(self.p_note)
+        self.p_dir = {}
+        for which, title in ((1, "Direction 1"), (2, "Direction 2")):
+            pl.addWidget(section(title))
+            self.p_dir[which] = box = PatternDirection(self, which)
+            pl.addWidget(box)
+        self.p_remove = QPushButton("Remove the pattern")
+        self.p_remove.setToolTip("The note stays; its copies go away.")
+        self.p_remove.clicked.connect(lambda _c=False: self.pattern_removed())
+        pl.addWidget(self.p_remove)
+        lay.addWidget(self.opt_pattern)
         lay.addWidget(section("What to click"))
         self.what = QLabel("")
         self.what.setWordWrap(True)
@@ -457,6 +532,7 @@ class ToolPanel(QWidget):
         self.after.setText(self.AFTER.get(name, ""))
         self.opt_note.setVisible(name == "note")
         self.opt_balloon.setVisible(name == "balloon")
+        self.opt_pattern.setVisible(name == "note_pattern")
         self.sync()
 
     def sync(self):
@@ -470,8 +546,58 @@ class ToolPanel(QWidget):
             self.n_leader.setCurrentIndex(max(0, self.n_leader.findData(o.get("leader"))))
             if self.b_text.text() != o.get("balloon", ""):
                 self.b_text.setText(o.get("balloon", ""))
+            self.sync_pattern()
         finally:
             self.busy = False
+
+    def pattern_note(self):
+        """The note the pattern tool is working on, or None."""
+        aid = self.tab.canvas.pattern_note
+        if aid is None:
+            return None
+        try:
+            n = self.tab.d.annot(aid)
+        except M.DrawingError:
+            return None
+        return n if n.get("type") == "note" else None
+
+    def sync_pattern(self):
+        n = self.pattern_note()
+        pat = (n or {}).get("pattern")
+        self.p_note.setText("Click the note to repeat." if n is None else "Note:  " + IT.label(n))
+        for which, box in self.p_dir.items():
+            box.setEnabled(bool(pat))
+            if pat:
+                box.show_values(pat["a%d" % which], pat["s%d" % which], pat["c%d" % which])
+        self.p_remove.setEnabled(bool(pat))
+        for which, box in self.p_dir.items():
+            box.pick.setChecked(self.tab.canvas.pattern_pick == which)
+
+    def pattern_edited(self, which):
+        """A box of direction `which` was changed: the whole pattern is set from the boxes of that direction."""
+        if self.busy:
+            return
+        n = self.pattern_note()
+        if n is None:
+            return
+        a, s, c = self.p_dir[which].values()
+        self.tab.set_note_pattern(n["id"], **{"a%d" % which: a, "s%d" % which: s, "c%d" % which: c})
+
+    def pattern_pick_line(self, which, on):
+        """Pick line: the next click on a line of a view gives the direction."""
+        cv = self.tab.canvas
+        if self.busy or self.pattern_note() is None:
+            return
+        cv.pattern_pick = which if on else 0
+        cv.options_changed.emit()
+        cv.hint.emit(cv._tool_hint("note_pattern"))
+        cv.setFocus()
+        cv.update()
+
+    def pattern_removed(self):
+        n = self.pattern_note()
+        if n is not None:
+            self.tab.set_note_pattern(n["id"], remove=True)
 
     def options_edited(self):
         if self.busy:
@@ -663,6 +789,17 @@ class OutlinePanel(QWidget):
         f.addRow("Text", self.n_text)
         f.addRow("Size (pt)", self.n_size)
         f.addRow("Leader", self.n_leader)
+        self.n_pat = QLabel("")
+        self.n_pat.setWordWrap(True)
+        f.addRow("Pattern", self.n_pat)
+        prow = QHBoxLayout()
+        self.n_pat_edit = QPushButton("Repeat...")
+        self.n_pat_edit.clicked.connect(lambda _c=False: self.tab.start_tool("note_pattern"))
+        self.n_pat_off = QPushButton("Remove pattern")
+        self.n_pat_off.clicked.connect(lambda _c=False: self.tab.set_note_pattern(self.cur_id, remove=True))
+        prow.addWidget(self.n_pat_edit)
+        prow.addWidget(self.n_pat_off)
+        f.addRow(prow)
         self.n_del = QPushButton("Delete")
         self.n_del.clicked.connect(lambda _c=False: self.tab.delete_annot(self.cur_id))
         lay.insertWidget(2, self.n_del)
@@ -850,6 +987,10 @@ class OutlinePanel(QWidget):
                     self.n_text.setPlainText(a["text"])
                 self.n_size.setEditText(A.number_text(a.get("size", IT.NOTE_SIZE), 2))
                 self.n_leader.setCurrentIndex(max(0, self.n_leader.findData((a.get("leader") or {}).get("kind"))))
+                pat = a.get("pattern")
+                self.n_pat.setText("none" if not pat else IT.pattern_text(pat))
+                self.n_pat_edit.setText("Edit pattern..." if pat else "Repeat...")
+                self.n_pat_off.setVisible(bool(pat))
                 self.details.setCurrentIndex(5)
             elif k == "annot" and d.annot(self.cur_id).get("type") == "balloon":
                 a = d.annot(self.cur_id)
