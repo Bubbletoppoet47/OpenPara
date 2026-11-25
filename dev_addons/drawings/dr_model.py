@@ -17,11 +17,13 @@ annotations.  Saved as an .opdraw file (JSON).
 A view has: id, name ("Drawing View1"), kind ("model" | "projected"), model, orient, eye / up (the direction it looks from, in the model's frame), parent, side, origin (where the model's
 origin is on the sheet, mm: the lines are drawn at origin + scale * point), scale (a number: 2 means 2:1, 0.5 means 1:2), style, geom (the projection).
 """
+import copy
 import hashlib
 import json
 import math
 import re
 
+import dr_annot as A
 import dr_geom as G
 import dr_proj as P
 import dr_sheet as S
@@ -97,9 +99,10 @@ class Drawing:
         self.models = []
         self.views = []
         self.notes, self.dims, self.balloons, self.marks, self.lines = [], [], [], [], []
-        self.counter = {"view": 0, "model": 0}
+        self.counter = {"view": 0, "model": 0, "dim": 0, "mark": 0}
         self.scale = 1.0                                          # the sheet scale: what a new model view starts at
         self.cache = {}                                           # model id -> its build123d shape (not saved)
+        self._pcache = {}                                         # view id -> (its geom, the Projection made of it) (not saved)
 
     # ---- the sheet
     def sheet_dims(self):
@@ -156,7 +159,8 @@ class Drawing:
     def refresh_model(self, mid, data, name=None):
         """The model changed (a wired block changed): the views of it are projected again.  -> the ids of the views."""
         m = self.model(mid)
-        old = (m["data"], m["hash"], m["name"], self.cache.get(mid), [(v, v["geom"], v["eye"], v["up"]) for v in self.views if v["model"] == mid])
+        old = (m["data"], m["hash"], m["name"], self.cache.get(mid), [(v, v["geom"], v["eye"], v["up"]) for v in self.views if v["model"] == mid],
+               copy.deepcopy((self.dims, self.marks)))
         m["data"], m["hash"] = data, model_hash(data)
         if name:
             m["name"] = str(name)
@@ -175,14 +179,16 @@ class Drawing:
                 self.cache.pop(mid, None)
             for v, geom, eye, up in old[4]:
                 v["geom"], v["eye"], v["up"] = geom, eye, up
+            self.dims, self.marks = old[5]
             raise
         return out
 
     def sync_models(self, items):
         """A Drawing block of the Workbench: `items` = [{"src", "name", "kind", "data"}] is what is wired into the block now.  A model that is new is added, one whose data (or name)
         changed is refreshed (its views are drawn again; one that cannot be built is reported and left as it was), one that is no longer wired goes with its views.  A model that
-        was not wired in (it came from a file) is left alone.  -> {"added", "refreshed", "removed": [names], "failed": [(name, message)]}."""
-        out = {"added": [], "refreshed": [], "removed": [], "failed": []}
+        was not wired in (it came from a file) is left alone.  -> {"added", "refreshed", "removed": [names], "failed": [(name, message)], "lost": the number of dimensions and marks
+        whose geometry is not in their view any more}."""
+        out = {"added": [], "refreshed": [], "removed": [], "failed": [], "lost": 0}
         want = {it["src"] for it in items}
         for m in [m for m in self.models if m.get("src") and m["src"] not in want]:
             self.remove_model(m["id"])
@@ -198,6 +204,7 @@ class Drawing:
                     out["refreshed"].append(it["name"])
                 except (DrawingError, G.GeometryError) as ex:
                     out["failed"].append((it["name"], str(ex)))
+        out["lost"] = len(self.lost_annots())
         return out
 
     # ---- the views
@@ -233,9 +240,15 @@ class Drawing:
         return pr
 
     def projection(self, v):
+        """The lines of a view as a Projection (kept until the view is projected again)."""
         if v["geom"] is None:
             return self.project(v)
-        return P.Projection.from_json(v["geom"])
+        hit = self._pcache.get(v["id"])
+        if hit is not None and hit[0] is v["geom"]:
+            return hit[1]
+        pr = P.Projection.from_json(v["geom"])
+        self._pcache[v["id"]] = (v["geom"], pr)
+        return pr
 
     def bbox(self, v):
         """(xmin, ymin, xmax, ymax) of the view's visible lines on the SHEET (mm)."""
@@ -303,11 +316,13 @@ class Drawing:
 
     def reproject(self, v):
         """The lines of a view again (the model, the style, the sheet's projection changed); a projected view takes the direction its side now means."""
+        before = (v["eye"], v["up"])
         if v["kind"] == "projected":
             par = self.view(v["parent"])
             eye, up = self.projected_axes(par, v["side"])
             v["eye"], v["up"] = [float(x) for x in eye], [float(x) for x in up]
         self.project(v)
+        self._annots_follow(v, _same_dir(before, (v["eye"], v["up"])))
         for c in self.children(v["id"]):
             self.reproject(c)
 
@@ -379,8 +394,10 @@ class Drawing:
         if v["kind"] != "model":
             raise DrawingError("A projected view looks along its parent: change the orientation of the parent.")
         eye, up, _r = P.view_axes(name)
+        before = (v["eye"], v["up"])
         v["orient"], v["eye"], v["up"] = name, [float(x) for x in eye], [float(x) for x in up]
         self.project(v)
+        self._annots_follow(v, _same_dir(before, (v["eye"], v["up"])))
         for c in self.children(vid):
             self.reproject(c)
 
@@ -391,6 +408,74 @@ class Drawing:
         self.views = [v for v in self.views if v["id"] not in gone]
         for k in ("notes", "dims", "balloons", "marks"):
             setattr(self, k, [a for a in getattr(self, k) if a.get("view") not in gone])
+
+    # ---- dimensions and marks (what is drawn on a view; dr_annot.py)
+    def annots(self, vid=None):
+        """The dimensions and marks (of one view)."""
+        return [a for a in self.dims + self.marks if vid is None or a.get("view") == vid]
+
+    def annot(self, aid):
+        for a in self.dims + self.marks:
+            if a.get("id") == aid:
+                return a
+        raise DrawingError("That dimension is not in the drawing.")
+
+    def add_dim(self, vid, refs, kind=None):
+        """A dimension on a view from what was picked on it (A.pick: points, lines, circles, arcs in the view's frame); -> the dimension.  Where it is drawn comes from place_annot."""
+        v = self.view(vid)
+        d = A.new_dim(refs, self.projection(v).bbox(), kind)
+        if d is None:
+            raise DrawingError("That does not make a dimension: pick a line, a circle, two points, a point and a line, or two lines.")
+        self.counter["dim"] += 1
+        d["id"], d["view"] = f"d{self.counter['dim']}", vid
+        self.dims.append(d)
+        return d
+
+    def add_mark(self, vid, refs):
+        """A center mark (one circle or arc) or a centerline (two parallel lines) on a view; -> the mark."""
+        v = self.view(vid)
+        kind = A.mark_kind_for(refs)
+        if kind is None:
+            raise DrawingError("A center mark goes on a circle or an arc, a centerline between two parallel lines.")
+        m = A.new_mark(kind, refs, self.projection(v).bbox())
+        self.counter["mark"] += 1
+        m["id"], m["view"] = f"k{self.counter['mark']}", vid
+        self.marks.append(m)
+        return m
+
+    def place_annot(self, aid, pointer):
+        """Draws a dimension where the pointer is (sheet mm)."""
+        a = self.annot(aid)
+        if "refs" in a and a.get("type") in ("linear", "diameter", "radius", "angle"):
+            v = self.view(a["view"])
+            A.place(a, v["scale"], v["origin"], pointer)
+        return a
+
+    def remove_annot(self, aid):
+        self.annot(aid)
+        self.dims = [a for a in self.dims if a.get("id") != aid]
+        self.marks = [a for a in self.marks if a.get("id") != aid]
+
+    def lost_annots(self):
+        """The dimensions and marks whose geometry is not in the model any more."""
+        return [a for a in self.dims + self.marks if a.get("lost")]
+
+    def dim_shape(self, a):
+        v = self.view(a["view"])
+        return A.mark_shape(a, v["scale"], v["origin"]) if a["type"] in ("center_mark", "centerline") else A.shape(a, v["scale"], v["origin"])
+
+    def _annots_follow(self, v, same_dir):
+        """The lines of a view were drawn again: the dimensions and marks of it find their geometry again in them; when the view looks another way now they have nothing to hold on to
+        and go."""
+        mine = [a for a in self.dims + self.marks if a.get("view") == v["id"]]
+        if not mine:
+            return
+        if not same_dir:
+            self.dims = [a for a in self.dims if a.get("view") != v["id"]]
+            self.marks = [a for a in self.marks if a.get("view") != v["id"]]
+            return
+        pr = self.projection(v)
+        A.rematch(mine, pr, pr.bbox())
 
     # ---- the file
     def to_json(self):
@@ -425,21 +510,24 @@ class Drawing:
 
     def snapshot(self):
         """Everything that can change, as a value to come back to (undo): the models are shared, not copied (their data never changes in place)."""
-        import copy
         return {"sheet": dict(self.sheet), "scale": self.scale, "counter": dict(self.counter), "models": [dict(m) for m in self.models], "views": copy.deepcopy(self.views),
                 "annot": {k: copy.deepcopy(getattr(self, k)) for k in ANNOT}}
 
     def restore(self, snap):
-        import copy
         self.sheet, self.scale, self.counter = dict(snap["sheet"]), snap["scale"], dict(snap["counter"])
         self.models = [dict(m) for m in snap["models"]]
         self.views = copy.deepcopy(snap["views"])
         for k in ANNOT:
             setattr(self, k, copy.deepcopy(snap["annot"][k]))
         self.cache = {}
+        self._pcache = {}
 
     def used_counters(self):
         return self.counter
+
+
+def _same_dir(a, b, tol=1e-6):
+    return all(abs(x - y) <= tol for u, w in zip(a, b) for x, y in zip(u, w))
 
 
 def _plain(o):

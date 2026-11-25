@@ -3,7 +3,8 @@
     NewDrawingDialog(sheet)       the first thing a new drawing asks: the sheet (standard sizes only, landscape or portrait, a preview) and the kind of projection
     ModelViewPanel(tab)           Model View: the models, the nine orientations, the display style, the scale; picking an orientation lets the view follow the pointer to the sheet
     ProjectedPanel(tab)           Projected View: the view to project from, the display style; the pointer picks the side
-    OutlinePanel(tab)             the tree of the drawing (sheet, models, views) with the Details of the selected item below it
+    ToolPanel(tab)                Smart Dimension / Center Mark / Centerline: what to click, and ✔ OK to leave the tool
+    OutlinePanel(tab)             the tree of the drawing (sheet, models, views, and the dimensions and marks of each view) with the Details of the selected item below it
 
 A panel never changes the document itself: it asks the tab (dr_tab.DrawingTab), which keeps the undo and the dirty mark.
 """
@@ -12,6 +13,7 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                              QPushButton, QSplitter, QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
+import dr_annot as A
 import dr_icons as I
 import dr_model as M
 import dr_proj as P
@@ -358,6 +360,58 @@ class ProjectedPanel(QWidget):
                 self.sbtn[k].setChecked(True)
 
 
+# ---------------------------------------------------------------------------------------------------------------------------- Smart Dimension, Center Mark, Centerline
+class ToolPanel(QWidget):
+    """The PropertyManager of an annotation tool: a title, what to click, and OK (leave the tool)."""
+    TITLES = {"dim": "Smart Dimension", "center_mark": "Center Mark", "centerline": "Centerline"}
+    HELP = {"dim": ["Click a line: its length.", "Click a circle: its diameter.  An arc: its radius.",
+                    "Click two points, a point and a line, or two circles: the distance.", "Click two parallel lines: the distance between them.",
+                    "Click two lines that meet: the angle between them."],
+            "center_mark": ["Click a circle or an arc (or its centre point): a cross is put on it."],
+            "centerline": ["Click two parallel lines: a dash-dot line is put midway between them."]}
+    AFTER = {"dim": "After the picks, move the pointer to where the dimension should go and click.  Drag a dimension later to move it; the number is always the model's, whatever the scale.",
+             "center_mark": "Pick as many as you like, then OK.", "centerline": "Pick pairs of lines, one pair after another, then OK."}
+
+    def __init__(self, tab):
+        super().__init__()
+        self.tab = tab
+        self.name = "dim"
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.addLayout(ok_cancel(lambda: tab.finish_tool(), lambda: tab.finish_tool()))
+        self.title = QLabel("")
+        self.title.setStyleSheet("font-weight:bold; font-size:13px; padding:4px 0;")
+        lay.addWidget(self.title)
+        lay.addWidget(section("What to click"))
+        self.what = QLabel("")
+        self.what.setWordWrap(True)
+        lay.addWidget(self.what)
+        self.after = ui_kit.note("")
+        lay.addWidget(self.after)
+        lay.addStretch(1)
+
+    def set_tool(self, name):
+        self.name = name
+        self.title.setText(self.TITLES.get(name, name))
+        self.what.setText("\n".join("•  " + t for t in self.HELP.get(name, [])))
+        self.after.setText(self.AFTER.get(name, ""))
+
+
+ANNOT_LABEL = {"linear": "Dimension", "diameter": "Diameter", "radius": "Radius", "angle": "Angle", "center_mark": "Center Mark", "centerline": "Centerline"}
+ANNOT_ICON = {"linear": "dr_dim", "diameter": "dr_dim_dia", "radius": "dr_dim_rad", "angle": "dr_dim_ang", "center_mark": "dr_center_mark", "centerline": "dr_centerline"}
+
+
+def annot_text(a, fmt=None):
+    """How a dimension / mark reads in the Outline: 'Diameter  ⌀6', 'Center Mark', '... (lost)'."""
+    t = ANNOT_LABEL.get(a.get("type"), "Dimension")
+    if a.get("type") in ("linear", "diameter", "radius", "angle"):
+        try:
+            t += "   " + A.text(a, fmt)
+        except (KeyError, ValueError, IndexError, ZeroDivisionError):
+            pass
+    return t + ("   (lost)" if a.get("lost") else "")
+
+
 # ---------------------------------------------------------------------------------------------------------------------------- Outline and Details
 class OutlinePanel(QWidget):
     """The tree of the drawing and the Details of the selected item (sheet, model, view)."""
@@ -382,6 +436,7 @@ class OutlinePanel(QWidget):
         self.details.addWidget(self._page_sheet())
         self.details.addWidget(self._page_model())
         self.details.addWidget(self._page_view())
+        self.details.addWidget(self._page_annot())
         split.addWidget(self.details)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
@@ -475,13 +530,29 @@ class OutlinePanel(QWidget):
         self.v_form = f
         return w
 
+    def _page_annot(self):
+        w, f, lay = self._wrap("Dimension")
+        self.a_type = QLabel("")
+        self.a_value = QLabel("")
+        self.a_view = QLabel("")
+        self.a_state = QLabel("")
+        self.a_state.setWordWrap(True)
+        f.addRow("Kind", self.a_type)
+        f.addRow("Says", self.a_value)
+        f.addRow("On", self.a_view)
+        f.addRow("", self.a_state)
+        self.a_del = QPushButton("Delete")
+        self.a_del.clicked.connect(lambda _c=False: self.tab.delete_annot(self.cur_id))
+        lay.insertWidget(2, self.a_del)
+        return w
+
     # ---- the tree
     cur_kind, cur_id = "none", None
 
     def rebuild(self):
         d = self.tab.d
         self.busy = True
-        keep = ("view", self.tab.canvas.sel) if self.tab.canvas.sel else (self.cur_kind, self.cur_id)
+        keep = ("view", self.tab.canvas.sel) if self.tab.canvas.sel else ("annot", self.tab.canvas.sel_annot) if self.tab.canvas.sel_annot else (self.cur_kind, self.cur_id)
         self.tree.clear()
         w, h = d.sheet_dims()
         root = QTreeWidgetItem([f"Sheet1   {S.size(d.sheet['size'])[1].split('  ')[0]}, {'landscape' if d.sheet['landscape'] else 'portrait'}"])
@@ -498,13 +569,18 @@ class OutlinePanel(QWidget):
         vroot = QTreeWidgetItem(root, ["Views"])
         vroot.setIcon(0, I.icon("dr_view", 18))
         vroot.setData(0, Qt.ItemDataRole.UserRole, ("folder", None))
-        items = {}
+        items, aitems = {}, {}
 
         def add(v, parent):
             it = QTreeWidgetItem(parent, [f"{v['name']}   {v['orient']}, {M.scale_text(v['scale'])}"])
             it.setIcon(0, I.icon(I.ORIENT_ICON.get(v["orient"], "dr_view"), 18))
             it.setData(0, Qt.ItemDataRole.UserRole, ("view", v["id"]))
             items[v["id"]] = it
+            for a in d.annots(v["id"]):
+                at = QTreeWidgetItem(it, [annot_text(a, self.tab.canvas.r.fmt)])
+                at.setIcon(0, I.icon(ANNOT_ICON.get(a.get("type"), "dr_dim"), 18))
+                at.setData(0, Qt.ItemDataRole.UserRole, ("annot", a["id"]))
+                aitems[a["id"]] = at
             for c in d.children(v["id"]):
                 add(c, it)
         for v in d.views:
@@ -514,11 +590,13 @@ class OutlinePanel(QWidget):
         target = None
         if keep[0] == "view" and keep[1] in items:
             target = items[keep[1]]
+        elif keep[0] == "annot" and keep[1] in aitems:
+            target = aitems[keep[1]]
         elif keep[0] == "model":
             target = next((mroot.child(i) for i in range(mroot.childCount()) if mroot.child(i).data(0, Qt.ItemDataRole.UserRole)[1] == keep[1]), None)
         elif keep[0] == "sheet":
             target = root
-        self.items = items
+        self.items, self.aitems = items, aitems
         if target is not None:
             self.tree.setCurrentItem(target)
             self.cur_kind, self.cur_id = keep
@@ -535,8 +613,11 @@ class OutlinePanel(QWidget):
         self.cur_kind, self.cur_id = kind, ident
         if kind == "view":
             self.tab.canvas.set_selected(ident, emit=False)
-        elif kind != "view":
+        elif kind == "annot":
+            self.tab.canvas.set_selected_annot(ident, emit=False)
+        else:
             self.tab.canvas.set_selected(None, emit=False)
+            self.tab.canvas.set_selected_annot(None, emit=False)
         self.show_details()
 
     def select_view(self, vid):
@@ -552,6 +633,21 @@ class OutlinePanel(QWidget):
             if self.cur_kind == "view":
                 self.tree.setCurrentItem(None)
                 self.cur_kind, self.cur_id = "none", None
+        self.busy = False
+        self.show_details()
+
+    def select_annot(self, aid):
+        """The sheet selected a dimension / mark (or none): the tree follows."""
+        if self.busy:
+            return
+        it = getattr(self, "aitems", {}).get(aid) if aid else None
+        self.busy = True
+        if it is not None:
+            self.tree.setCurrentItem(it)
+            self.cur_kind, self.cur_id = "annot", aid
+        elif self.cur_kind == "annot":
+            self.tree.setCurrentItem(None)
+            self.cur_kind, self.cur_id = "none", None
         self.busy = False
         self.show_details()
 
@@ -591,6 +687,14 @@ class OutlinePanel(QWidget):
                 self.v_style.setCurrentIndex(max(0, self.v_style.findData(v["style"])))
                 self.v_scale.setCurrentText(M.scale_text(v["scale"]))
                 self.details.setCurrentIndex(3)
+            elif k == "annot":
+                a = d.annot(self.cur_id)
+                self.a_type.setText(ANNOT_LABEL.get(a["type"], "Dimension"))
+                self.a_value.setText(A.text(a, self.tab.canvas.r.fmt) if a["type"] in ("linear", "diameter", "radius", "angle") else "-")
+                self.a_view.setText(d.view(a["view"])["name"])
+                self.a_state.setText("Its geometry is not in the model any more.  Delete it, or change the model back." if a.get("lost") else "")
+                self.a_state.setStyleSheet("color:#c0392b;")
+                self.details.setCurrentIndex(4)
             else:
                 self.details.setCurrentIndex(0)
         except M.DrawingError:

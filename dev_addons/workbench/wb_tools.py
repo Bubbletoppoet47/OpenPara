@@ -313,6 +313,8 @@ class DrawingAdapter(FileToolAdapter):
     def say_of(out):
         bits = [f"{k} {', '.join(out[k])}" for k in ("added", "refreshed", "removed") if out.get(k)]
         bits += [f"{n}: {why}" for n, why in out.get("failed", [])]
+        if out.get("lost"):
+            bits.append(f"{out['lost']} dimension{'s' if out['lost'] != 1 else ''} / mark{'s' if out['lost'] != 1 else ''} lost their geometry (open the drawing: they are red in its Outline)")
         return "; ".join(bits)
 
     def refresh(self, tab, node, key):
@@ -324,13 +326,15 @@ class DrawingAdapter(FileToolAdapter):
             out = w.sync_models(items)
         else:
             out = self.refresh_file(tab, node, items)
+        if out.get("lost"):
+            tab.note(f"{node.label} {node.title}: {self.say_of({'lost': out['lost']})}")
         if out["failed"]:
             return "; ".join(f"{n}: {why}" for n, why in out["failed"])
         return None
 
     def refresh_file(self, tab, node, items):
         """The models of a drawing that is not open are brought up to date and the drawing is saved back into the block."""
-        none = {"added": [], "refreshed": [], "removed": [], "failed": []}
+        none = {"added": [], "refreshed": [], "removed": [], "failed": [], "lost": 0}
         if not node.data.get(self.slot):
             return none                                          # never opened: the models are taken when it is
         import dr_model

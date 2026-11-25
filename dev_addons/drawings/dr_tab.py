@@ -24,6 +24,7 @@ import ui_kit
 FILTER = "Drawing (*.opdraw);;All files (*)"
 RIBBON_QSS = "QToolButton{font-size:11px; padding:2px;} QToolButton:disabled{color:#a0a0a0;} QToolButton:checked{background:#cfe3fb; border:1px solid #6aa0e0;}"
 UNDO_LIMIT = 60
+TOOL_KEYS = ("dim", "center_mark", "centerline")
 
 
 class DrawingTab(QWidget):
@@ -67,7 +68,7 @@ class DrawingTab(QWidget):
             ("fit", "dr_fit", "Fit to\nWindow", "Show the whole sheet", lambda: self.canvas.fit()),
             "|",
             ("refresh", "dr_refresh", "Refresh\nViews", "Draw the lines of every view again from its model", lambda: self.refresh_views()),
-            ("delete", "dr_delete", "Delete\nView", "Delete the selected view (and the views projected from it)", lambda: self.delete_view(self.canvas.sel)),
+            ("delete", "dr_delete", "Delete", "Delete the selected view (and the views projected from it) or the selected dimension", lambda: self.delete_selected()),
             "|",
             ("save", "dr_save", "Save", "Save the drawing (.opdraw)", lambda: self.save()),
             ("pdf", "dr_pdf", "Export\nPDF", "Write the sheet as a PDF at its true paper size", lambda: self.export_pdf_dialog()),
@@ -76,12 +77,12 @@ class DrawingTab(QWidget):
             ("redo", "dr_redo", "Redo", "Redo", lambda: self.do_redo()),
         ]), "View Layout")
         self.ribbon.addTab(self.ribbon_page([
-            (None, "dr_dim", "Smart\nDimension", "Dimension what you click: a length, a diameter, a radius, an angle", None),
+            ("dim", "dr_dim", "Smart\nDimension", "Dimension what you click: a length, a diameter, a radius, an angle", lambda: self.start_tool("dim")),
             (None, "dr_note", "Note", "Text on the sheet, with or without a leader", None),
             (None, "dr_balloon", "Balloon", "A circle with a number and a leader", None),
             "|",
-            (None, "dr_center_mark", "Center\nMark", "A cross at the middle of a circle or an arc", None),
-            (None, "dr_centerline", "Centerline", "A dash-dot line along the axis between two lines", None),
+            ("center_mark", "dr_center_mark", "Center\nMark", "A cross at the middle of a circle or an arc", lambda: self.start_tool("center_mark")),
+            ("centerline", "dr_centerline", "Centerline", "A dash-dot line along the axis between two lines", lambda: self.start_tool("centerline")),
             "|",
             (None, "dr_note_pattern", "Linear Note\nPattern", "Repeat a note along a line", None),
         ]), "Annotation")
@@ -93,6 +94,8 @@ class DrawingTab(QWidget):
             (None, "dr_draw_arc", "Arc", "Draw an arc on the sheet", None),
         ]), "Sketch")
         self.ribbon.setCurrentIndex(0)
+        for k in TOOL_KEYS:
+            self.act[k].setCheckable(True)
         # ---- the left column: Outline + Details, and the property panel of the command that is open
         self.left = QTabWidget()
         self.left.setTabPosition(QTabWidget.TabPosition.North)
@@ -103,9 +106,11 @@ class DrawingTab(QWidget):
         self.props = QStackedWidget()
         self.model_panel = PN.ModelViewPanel(self)
         self.proj_panel = PN.ProjectedPanel(self)
+        self.tool_panel = PN.ToolPanel(self)
         self.props.addWidget(QLabel("  Pick a command from the ribbon."))
         self.props.addWidget(self.model_panel)
         self.props.addWidget(self.proj_panel)
+        self.props.addWidget(self.tool_panel)
         self.left.addTab(self.props, I.icon("dr_model_view", 26), "")
         self.left.setTabToolTip(1, "Properties of the command that is open")
         self.left.setMinimumWidth(340)
@@ -148,6 +153,8 @@ class DrawingTab(QWidget):
         self.canvas.hint.connect(self.set_hint)
         self.canvas.coords.connect(lambda x, y: self.coord_lbl.setText(f"x {x:.1f}   y {y:.1f} mm"))
         self.canvas.placing.connect(lambda on: self.model_panel.clear_pick() if not on else None)
+        self.canvas.annot_selected.connect(self.on_annot_selected)
+        self.canvas.tool_changed.connect(self.on_tool_changed)
         for seq, fn in (("Ctrl+Z", self.do_undo), ("Ctrl+Y", self.do_redo), ("Ctrl+Shift+Z", self.do_redo)):
             QShortcut(QKeySequence(seq), self, activated=fn, context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.set_hint("Open Model View to put a view of a part or an assembly on the sheet.")
@@ -217,9 +224,10 @@ class DrawingTab(QWidget):
             if k in self.act:
                 self.act[k].setEnabled(bool(self.undo_stack if k == "undo" else self.redo_stack))
         if "delete" in self.act:
-            self.act["delete"].setEnabled(self.canvas.sel is not None)
+            self.act["delete"].setEnabled(self.canvas.sel is not None or self.canvas.sel_annot is not None)
 
     def do_undo(self):
+        self.canvas.tool_end()
         if self.canvas.mode != "select":
             self.canvas.end_place()
         if not self.undo_stack:
@@ -232,6 +240,7 @@ class DrawingTab(QWidget):
         return True
 
     def do_redo(self):
+        self.canvas.tool_end()
         if self.canvas.mode != "select" or not self.redo_stack:
             return False
         self.undo_stack.append(self.state)
@@ -251,6 +260,7 @@ class DrawingTab(QWidget):
         return True
 
     def shutdown(self):
+        self.canvas.tool_end(emit=False)
         self.canvas.end_place(emit=False)
 
     def guard(self, fn, *args, **kw):
@@ -298,6 +308,7 @@ class DrawingTab(QWidget):
         return True
 
     def save(self, as_new=False):
+        self.canvas.tool_end()
         self.canvas.end_place()
         if not self.path or as_new:
             p, _ = QFileDialog.getSaveFileName(self, "Save drawing", self.path or "drawing" + M.EXT, FILTER)
@@ -330,6 +341,7 @@ class DrawingTab(QWidget):
         return self.export_pdf(p)
 
     def export_pdf(self, path):
+        self.canvas.tool_end()
         self.canvas.end_place()
         try:
             dr_pdf.export_pdf(self.d, path)
@@ -357,7 +369,7 @@ class DrawingTab(QWidget):
                 self.set_sheet(r["size"], r["landscape"], r["first_angle"])
 
     def set_sheet(self, size, landscape, first_angle):
-        old = dict(self.d.sheet)
+        old, had = dict(self.d.sheet), len(self.d.annots())
         ok, _ = self.guard(self.d.set_sheet, size, landscape, first_angle)
         if not ok:
             return False
@@ -366,6 +378,9 @@ class DrawingTab(QWidget):
         self.canvas.r.cache.clear()
         self.commit("sheet")
         self.canvas.fit()
+        gone = had - len(self.d.annots())
+        if gone:
+            self.status.say(f"The projected views look from the other side now: {gone} dimension{'s' if gone != 1 else ''} / mark{'s' if gone != 1 else ''} on them {'were' if gone != 1 else 'was'} removed (Undo brings {'them' if gone != 1 else 'it'} back).", "warn")
         return True
 
     # ------------------------------------------------------------------------------------------------------------------------ models
@@ -406,7 +421,13 @@ class DrawingTab(QWidget):
         if out["added"] or out["refreshed"] or out["removed"]:
             self.canvas.r.cache.clear()
             self.commit("models")
+        if out.get("lost"):
+            self.status.say(self.lost_text(out["lost"]), "warn")
         return out
+
+    @staticmethod
+    def lost_text(n):
+        return f"{n} dimension{'s' if n != 1 else ''} / mark{'s' if n != 1 else ''} lost their geometry: it is not in the model any more (shown in red in the Outline).  Delete them, or change the model back."
 
     def remove_model(self, mid):
         if mid is None:
@@ -423,10 +444,13 @@ class DrawingTab(QWidget):
             n += 1 if ok else 0
         self.canvas.r.cache.clear()
         self.commit("refresh")
-        self.status.say(f"Drew {n} view{'s' if n != 1 else ''} again from the models." if n else "There is no view to refresh.")
+        lost = len(self.d.lost_annots())
+        self.status.say((f"Drew {n} view{'s' if n != 1 else ''} again from the models." if n else "There is no view to refresh.") + (("  " + self.lost_text(lost)) if lost else ""),
+                        "warn" if lost else "info")
 
     # ------------------------------------------------------------------------------------------------------------------------ commands (Model View, Projected View)
     def open_command(self, name):
+        self.canvas.tool_end()
         self.canvas.end_place(emit=False)
         self.cmd = name
         if name == "model":
@@ -449,6 +473,52 @@ class DrawingTab(QWidget):
                 self.set_hint("Click the view on the sheet that the new view is projected from.")
         for k in ("model", "projected"):
             self.act[k].setDown(False)
+
+    def start_tool(self, name):
+        """Smart Dimension, Center Mark or Centerline: the pointer picks things on the views."""
+        self.cmd = None
+        self.model_panel.clear_pick()
+        self.canvas.end_place(emit=False)
+        self.tool_panel.set_tool(name)
+        self.props.setCurrentWidget(self.tool_panel)
+        self.left.setCurrentIndex(1)
+        if not self.d.views:
+            self.status.say("There is no view on the sheet to dimension yet.", "warn")
+        self.canvas.tool_begin(name)
+        self.canvas.setFocus()
+        for k in TOOL_KEYS:
+            self.act[k].setChecked(k == name)
+
+    def finish_tool(self):
+        self.canvas.tool_end()
+
+    def on_tool_changed(self, name):
+        for k in TOOL_KEYS:
+            self.act[k].setChecked(k == name)
+        if name is None and self.props.currentWidget() is self.tool_panel:
+            self.props.setCurrentIndex(0)
+            self.left.setCurrentIndex(0)
+        self.set_hint("" if name is None else self.canvas.TOOL_HINT.get(name, ""))
+
+    def on_annot_selected(self, aid):
+        self.outline.select_annot(aid)
+        if "delete" in self.act:
+            self.act["delete"].setEnabled(aid is not None or self.canvas.sel is not None)
+
+    def delete_selected(self):
+        if self.canvas.sel_annot:
+            self.delete_annot(self.canvas.sel_annot)
+        else:
+            self.delete_view(self.canvas.sel)
+
+    def delete_annot(self, aid):
+        if not aid:
+            return
+        ok, _ = self.guard(self.d.remove_annot, aid)
+        if ok:
+            if self.canvas.sel_annot == aid:
+                self.canvas.sel_annot = None
+            self.commit("delete dimension")
 
     def finish_command(self, ok=True):
         self.canvas.end_place()
@@ -488,7 +558,7 @@ class DrawingTab(QWidget):
             self.start_projected(vid)
 
     def on_canvas_changed(self, what):
-        if what in ("place", "move", "delete"):
+        if what in ("place", "move", "delete", "dim", "mark", "annot_move", "annot_delete"):
             self.commit(what)
         elif what == "place_end":
             self.after_change()
@@ -527,10 +597,14 @@ class DrawingTab(QWidget):
         v = self.d.view(vid)
         if v["orient"] == name:
             return
+        had = len(self.d.annots())
         ok, _ = self.guard(self.d.set_orient, vid, name)
         if ok:
             self.canvas.r.cache.clear()
             self.commit("orientation")
+            gone = had - len(self.d.annots())
+            if gone:
+                self.status.say(f"The view looks another way now: its {gone} dimension{'s' if gone != 1 else ''} / mark{'s' if gone != 1 else ''} had nothing to hold on to and {'were' if gone != 1 else 'was'} removed (Undo brings {'them' if gone != 1 else 'it'} back).", "warn")
 
     def set_view_scale(self, vid, text):
         try:

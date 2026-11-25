@@ -7,13 +7,21 @@
     r.hit_view(x, y, tol)             the id of the view the point is on (its lines within tol mm, else inside its box), None when there is none
     r.segments(v)                     numpy (n, 2, 2) array of the visible segments of the view on the sheet (y up)
 
-The line weights follow the usual drawing practice: visible edges thick, hidden edges thin and dashed.
+The line weights follow the usual drawing practice: visible edges thick, hidden edges thin and dashed; dimensions, extension lines and center lines thin; the numbers of a dimension
+are text in the PDF (the same text as on the screen), at ISO 3.5 mm.
+
+    r.paint(..., sel_annot, hover_annot, float_annot)     the dimensions and marks of the drawing are painted over the views (one selected, one hovered, one that follows the pointer)
+    r.hit_annot(x, y, tol)                                the id of the dimension / mark the point is on (its lines or its number within tol mm), None when there is none
+    r.paint_ref(p, vid, ref, col, ...)                    a picked point / line / circle / arc of a view, highlighted
+    r.fmt(mm)                                             how a length reads in a dimension (the units of the program); settable
 """
 import math
 
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QPainterPath, QPen
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPainterPath, QPen, QPolygonF
+
+import dr_annot as A
 
 VISIBLE_W = 0.50                 # mm on paper
 HIDDEN_W = 0.25
@@ -22,12 +30,26 @@ INK = QColor("#111111")
 SELECT = QColor("#1a56c4")
 HOVER = QColor("#6aa0e0")
 GHOST = QColor("#7a8fb5")
+LOST = QColor("#c0392b")
+DIM_W = 0.25                     # dimension, extension and center lines, mm on paper
+MARK_DASH = (6.0, 1.2, 1.2, 1.2)  # a centerline: long dash, gap, short dash, gap (mm)
+FONT_PX = 100                    # the numbers are set at this size and scaled down to TEXT_H
+
+
+def default_fmt(mm):
+    """A length in the units of the program (File > Units), no unit written: 25.4 -> '1' in inches."""
+    try:
+        import unitctl
+        return unitctl.num(unitctl.to_disp(mm), 4)
+    except Exception:                                              # noqa: BLE001 (no units module: millimetres)
+        return A.number_text(mm)
 
 
 class Renderer:
-    def __init__(self, drawing):
+    def __init__(self, drawing, fmt=None):
         self.d = drawing
         self.cache = {}                                           # view id -> (key, paths, segments)
+        self.fmt = fmt or default_fmt
 
     # ---- the lines of a view on the sheet
     def _key(self, v):
@@ -83,7 +105,7 @@ class Renderer:
         return min(boxes)[1] if boxes else None
 
     # ---- painting
-    def paint(self, p, min_px=None, selected=(), hover=None, ghost=(), show_box=True):
+    def paint(self, p, min_px=None, selected=(), hover=None, ghost=(), show_box=True, sel_annot=None, hover_annot=None, float_annot=None):
         H = self.d.sheet_dims()[1]
         k = _scale_of(p)
         floor = (min_px / k) if (min_px and k > 0) else 0.0
@@ -96,6 +118,7 @@ class Renderer:
             elif v["id"] == hover:
                 col = HOVER
             self._paint_view(p, v, H, col, floor)
+        self._paint_annots(p, H, floor, sel_annot, hover_annot, float_annot)
         for vid in selected:
             try:
                 v = self.d.view(vid)
@@ -103,6 +126,136 @@ class Renderer:
                 continue
             if show_box and len(self.segments(v)):
                 self._paint_box(p, v, H, floor)
+
+    # ---- dimensions, center marks and centerlines
+    def _view_of(self, a):
+        try:
+            return self.d.view(a["view"])
+        except Exception:                                          # noqa: BLE001 (a view that has just gone)
+            return None
+
+    def _paint_annots(self, p, H, floor, sel, hover, float_):
+        for a in self.d.dims + self.d.marks:
+            v = self._view_of(a)
+            if v is None:
+                continue
+            col = SELECT if a["id"] in (sel, float_) else HOVER if a["id"] == hover else LOST if a.get("lost") else INK
+            s, o = v["scale"], v["origin"]
+            try:
+                if a["type"] in ("center_mark", "centerline"):
+                    self._paint_mark(p, A.mark_shape(a, s, o), H, col, floor)
+                else:
+                    self._paint_dim(p, a, A.shape(a, s, o), H, col, floor)
+            except (KeyError, ValueError, IndexError, ZeroDivisionError):      # a record that cannot be drawn (a damaged file) is skipped
+                continue
+
+    def _pen(self, col, width, dash=None):
+        pen = QPen(col)
+        pen.setWidthF(width)
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        if dash:
+            pen.setDashPattern([x / width for x in dash])
+        return pen
+
+    def _poly(self, p, segs, H):
+        path = QPainterPath()
+        for sg in segs:
+            if len(sg) < 2:
+                continue
+            path.moveTo(QPointF(float(sg[0][0]), H - float(sg[0][1])))
+            for q in sg[1:]:
+                path.lineTo(QPointF(float(q[0]), H - float(q[1])))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+
+    def _paint_mark(self, p, shp, H, col, floor):
+        w = max(DIM_W, floor)
+        p.setPen(self._pen(col, w, MARK_DASH if shp["style"] == "dashdot" else None))
+        self._poly(p, shp["segs"], H)
+
+    def _paint_dim(self, p, a, shp, H, col, floor):
+        w = max(DIM_W, floor)
+        p.setPen(self._pen(col, w))
+        self._poly(p, shp["segs"], H)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(col))
+        for tip, inward, size in shp["heads"]:
+            nx, ny = -inward[1], inward[0]
+            bx, by = tip[0] + inward[0] * size, tip[1] + inward[1] * size
+            half = size / 6.0
+            p.drawPolygon(QPolygonF([QPointF(tip[0], H - tip[1]), QPointF(bx + nx * half, H - (by + ny * half)), QPointF(bx - nx * half, H - (by - ny * half))]))
+        self._text(p, A.text(a, self.fmt), shp["at"], shp["ang"], shp["anchor"], col, H)
+
+    def _text(self, p, text, at, ang, anchor, col, H):
+        """The numbers of a dimension: real text (a PDF keeps it as text), TEXT_H tall in capitals, centred / left / right of `at`, turned by ang (radians, y up)."""
+        f = QFont()
+        f.setPixelSize(FONT_PX)
+        fm = QFontMetricsF(f)
+        cap = fm.capHeight() or fm.ascent() * 0.72
+        width = fm.horizontalAdvance(text)
+        p.save()
+        p.translate(QPointF(at[0], H - at[1]))
+        p.rotate(-math.degrees(ang))
+        k = A.TEXT_H / cap
+        p.scale(k, k)
+        p.setFont(f)
+        p.setPen(col)
+        x0 = -width / 2.0 if anchor == "center" else 0.0 if anchor == "left" else -width
+        p.drawText(QPointF(x0, cap / 2.0), text)
+        p.restore()
+
+    def hit_annot(self, x, y, tol):
+        """The dimension / mark whose lines (or number) are within tol mm of the point; the nearest one; None when there is none."""
+        best, bd = None, tol
+        for a in self.d.dims + self.d.marks:
+            v = self._view_of(a)
+            if v is None:
+                continue
+            try:
+                shp = A.mark_shape(a, v["scale"], v["origin"]) if a["type"] in ("center_mark", "centerline") else A.shape(a, v["scale"], v["origin"])
+            except (KeyError, ValueError, IndexError, ZeroDivisionError):
+                continue
+            d = A.distance(shp, (x, y))
+            if d <= bd:
+                best, bd = a["id"], d
+        return best
+
+    def paint_ref(self, p, vid, ref, col, width=0.7, floor=0.0):
+        """A picked reference of a view (a point, a line, a circle, an arc) drawn over the view in a colour, so the person sees what a click took."""
+        try:
+            v = self.d.view(vid)
+        except Exception:                                          # noqa: BLE001
+            return
+        H = self.d.sheet_dims()[1]
+        s, (ox, oy) = v["scale"], v["origin"]
+        T = lambda q: QPointF(ox + s * q[0], H - (oy + s * q[1]))
+        k = ref["k"]
+        w = max(width, floor)
+        if k == "pt":
+            c = T(ref["p"])
+            r = max(1.0, floor * 3.0)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(col))
+            p.drawEllipse(c, r, r)
+            return
+        pen = QPen(col)
+        pen.setWidthF(w)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        if k == "line":
+            p.drawLine(T(ref["a"]), T(ref["b"]))
+        elif k == "circle":
+            c = T(ref["c"])
+            p.drawEllipse(c, s * ref["r"], s * ref["r"])
+        else:
+            c, r = ref["c"], s * ref["r"]
+            path = QPainterPath()
+            a0 = ref["a0"]
+            path.moveTo(QPointF(ox + s * c[0] + r * math.cos(a0), H - (oy + s * c[1] + r * math.sin(a0))))
+            path.arcTo(QRectF(ox + s * c[0] - r, H - (oy + s * c[1]) - r, 2 * r, 2 * r), math.degrees(a0), math.degrees(ref["a1"] - a0))
+            p.drawPath(path)
 
     def _paint_view(self, p, v, H, col, floor):
         _key, vis, hid, _arr = self._entry(v)
