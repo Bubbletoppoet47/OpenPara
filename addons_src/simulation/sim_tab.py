@@ -557,7 +557,7 @@ class SimWindow(QWidget):
                 if rp.get(f["id"]) is None:
                     f["included"] = False              # inside a hole of a part: no material there
             t.region_names = names
-            t.region_mats = {f: {"E_MPa": e[0], "nu": e[1], "Sy_MPa": e[2], "Su_MPa": e[3],
+            t.region_mats = {f: {"E_MPa": e[0], "nu": e[1], "Sy_MPa": e[2], "Su_MPa": e[3], "name": m.get("name"),
                                  **({"alpha": x[0], "Tref_K": x[1]} if x is not None else {})} for f, m in mats.items()
                              for e in [mat_lib.elastic(m)] if e is not None for x in [mat_lib.expansion(m)]}
             missing = [names[f] for f, m in mats.items() if mat_lib.elastic(m) is None]
@@ -565,7 +565,8 @@ class SimWindow(QWidget):
             t.refresh_lists()
             t.canvas.invalidate()
             if missing:
-                self.status_lbl.setText("No elastic properties for: " + ", ".join(sorted(set(missing))) + ". These regions use the material boxes of the tab.")
+                self.status_lbl.setText("No elastic properties for: " + ", ".join(sorted(set(missing))) + ". These regions start with the material of the boxes "
+                                        "(Material and analysis): select a region there and give it its numbers.")
         elif hasattr(t, "sim_apply_regions"):
             for f in t.geom["faces"]:
                 if rp.get(f["id"]) is None:

@@ -113,6 +113,11 @@ for name in ("1D FEA", "2D FEA", "3D FEA"):
     t = tabs[name]
     title = "Material and analysis"
     ws = first_widgets(t, title, 3)
+    if name == "2D FEA":              # the regions come first (a table of them), then the material of the selected region: [combo][Add material...][Delete]
+        ws = first_widgets(t, title, 12)
+        assert ws[2] is t.region_table, [w for w in ws[:4]]
+        i = ws.index(t.mat_combo)
+        ws = ws[i:i + 3]
     assert ws[0] is t.mat_combo and ws[1].text() == "Add material..." and ws[2] is t.b_del_mat and ws[2].text() == "Delete", (name, [w.text() if hasattr(w, "text") else w for w in ws])
     assert not t.b_del_mat.isEnabled() or t.mat_combo.currentData() not in {n for n, _, _ in pm.DEFAULTS}, name
 assert sec(beam, "Material and analysis").isAncestorOf(beam.cb_shear) and not sec(beam, "Mesh").isAncestorOf(beam.cb_shear), "Timoshenko is a material / analysis option"
@@ -192,11 +197,18 @@ j1, j2 = [b for b in sec(beam, "Joints").frame.findChildren(QPushButton)]
 assert j1.mapTo(beam, j1.rect().topLeft()).y() < j2.mapTo(beam, j2.rect().topLeft()).y() and abs(j1.x() - j2.x()) < 3, "stacked, not side by side"
 
 # --- Loads end with the shared conditions table and the Edit selected / Remove selected row
-for name in ("1D FEA", "2D FEA", "3D FEA"):
+for name in ("1D FEA", "3D FEA"):
     t = tabs[name]
     assert t.cond_table.columnCount() == 4 and [t.cond_table.horizontalHeaderItem(i).text() for i in range(4)] == ["Name", "Type", "Applied to", "Value"], name
     assert sec(t, "Loads").isAncestorOf(t.cond_table), name
     assert btn_texts(t, "Loads")[-2:] == ["Edit selected...", "Remove selected"], (name, btn_texts(t, "Loads"))
+# 2D: the Supports page and the Loads page each have their own table and buttons (the list of all conditions behind them is not shown)
+t = tabs["2D FEA"]
+for title, tb in (("Supports", t.sup_table), ("Loads", t.load_table)):
+    assert [tb.horizontalHeaderItem(i).text() for i in range(4)] == ["Name", "Type", "Applied to", "Value"], title
+    assert sec(t, title).isAncestorOf(tb) and not sec(t, other := ("Loads" if title == "Supports" else "Supports")).isAncestorOf(tb), (title, other)
+    assert btn_texts(t, title)[-2:] == ["Edit selected...", "Remove selected"], (title, btn_texts(t, title))
+assert not t.cond_table.isVisibleTo(t), "the list of all conditions is only the model behind the two tables"
 solid.outline.select("Loads"); app.processEvents()
 assert not solid.sup_list.isVisibleTo(solid) and not solid.load_list.isVisibleTo(solid), "3D: the two plain lists are hidden; the table shows both"
 

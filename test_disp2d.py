@@ -134,7 +134,7 @@ t.show(); app.processEvents()
 from PyQt6.QtWidgets import QPushButton
 sec = [x for x in t.sections if x.title == "Supports"][0]
 buttons = [b.text().strip() for b in sec.frame.findChildren(QPushButton)]
-assert buttons == ["Fixed", "Displacement...", "Bolt...", "Screw...", "Contact"], buttons
+assert buttons == ["Fixed", "Displacement...", "Bolt...", "Screw...", "Contact", "Edit selected...", "Remove selected"], buttons   # the page also ends with its own table's buttons
 # the dialog: Displacement with nothing selected asks for a selection first
 from PyQt6.QtWidgets import QMessageBox
 shown = []
@@ -162,6 +162,8 @@ tb = t.cond_table
 rows = [[tb.item(r, c).text() for c in range(4)] for r in range(tb.rowCount())]
 assert rows[0] == ["Displacement 1", "Displacement (ux, uy) (mm)", "Line %d" % ls[1], "free, 0.25"] or rows[0][:2] == ["Displacement 1", "Displacement (ux, uy) (mm)"], rows
 assert rows[0][3] == "free, 0.25" and rows[1][3] == "0, free" and rows[1][0] == "Displacement 2", rows
+st_rows = [[t.sup_table.item(r, c).text() for c in range(4)] for r in range(t.sup_table.rowCount())]
+assert st_rows == rows and t.load_table.rowCount() == 0, "the Supports page lists the supports, the Loads page none of them"
 assert "uy 0.25 mm" in "\n".join(t.cond_list.item(i).text() for i in range(t.cond_list.count())) and "ux held" in t.cond_list.item(1).text()
 # editing the value
 assert t.set_condition_value(0, "0.5, held") and t.supports[0]["ux"] == 0.5 and t.supports[0]["uy"] == 0.0

@@ -210,6 +210,19 @@ def generic_marks(w, nodes):
     return marks
 
 
+class _ClickBar(QLabel):
+    """The bar above the Outline: a click on it is a request (squeeze / open the Outline)."""
+    clicked = pyqtSignal()
+
+    def __init__(self, text):
+        super().__init__(text)
+        self.setStyleSheet("background:#e4ebf2; color:#16324f; font-weight:bold; padding:4px 8px; border-top:1px solid #c9d3df; border-bottom:1px solid #c9d3df;")
+
+    def mousePressEvent(self, ev):
+        super().mousePressEvent(ev)
+        self.clicked.emit()
+
+
 class Outline(QWidget):
     """Outline on top, Details below, a draggable divider between them."""
     selected = pyqtSignal(str, object)               # (node key, the tag of the item or None)
@@ -227,6 +240,10 @@ class Outline(QWidget):
         self._auto = False                           # True while the outline selects a node itself
         self.touched = False                         # True once somebody selected a node (until then a result that turns up is shown at once)
         self._busy = False
+        self.compact = False                         # True while the Outline is squeezed to its selected row so that a long page (the Mesh page with the advanced options) shows whole
+        self.user_open = False                       # True when the person opened the squeezed Outline themselves (it stays open until the page or the tick box changes)
+        self._sizes_before = None
+        self.split = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -239,7 +256,10 @@ class Outline(QWidget):
         tl = QVBoxLayout(top)
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(0)
-        tl.addWidget(self._bar("Outline"))
+        self.bar = _ClickBar("Outline")
+        self.bar.clicked.connect(self._bar_clicked)
+        tl.addWidget(self.bar)
+        self.top = top
         self.tree = QTreeWidget()
         self.tree.setObjectName("simoutline")
         self.tree.setHeaderHidden(True)
@@ -251,6 +271,7 @@ class Outline(QWidget):
         self.tree.setFrameShape(QFrame.Shape.NoFrame)
         self.tree.setStyleSheet("QTreeWidget#simoutline { background:#ffffff; border:none; outline:0; } QTreeWidget#simoutline::item { height:%dpx; padding-left:2px; } "
                                 "QTreeWidget#simoutline::item:selected { background:#cfe8ea; color:#12323a; } QTreeWidget#simoutline::item:hover { background:#e8f3f4; }" % ROW_H)
+        self.tree.setMinimumHeight(ROW_H)                 # (so the column can be squeezed to one row: see set_compact)
         self.tree.currentItemChanged.connect(self._clicked)
         tl.addWidget(self.tree, 1)
         self.split.addWidget(top)
@@ -271,6 +292,7 @@ class Outline(QWidget):
         self.hl.setContentsMargins(6, 6, 6, 6)
         self.hl.setSpacing(0)
         self.holder.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self.hl.addStretch(1)                         # a page takes the height it needs and starts at the top of the Details; the rest of the height is empty space below it
         self.scroll.setWidget(self.holder)
         bl.addWidget(self.scroll, 1)
         self.split.addWidget(bottom)
@@ -299,7 +321,7 @@ class Outline(QWidget):
         it.setData(0, Qt.ItemDataRole.UserRole, (key, None))
         self.nodes[key] = {"section": section, "item": it}
         section.hide()
-        self.hl.addWidget(section)
+        self.hl.insertWidget(max(0, self.hl.count() - 1), section)        # (before the stretch that keeps the page at the top)
         it.setExpanded(True)
         return it
 
@@ -331,8 +353,10 @@ class Outline(QWidget):
         self.current = (key, tag)
         for k, n in self.nodes.items():
             n["section"].setVisible(k == key)
-        self.head.setText(f"Details of “{cur.text(0)}”" if tag is not None else f"Details of “{key}”")
+        self.head.setText(f"Details of “{(tag.get('details_title') or cur.text(0))}”" if tag is not None else f"Details of “{key}”")
         self.holder.adjustSize()
+        self.user_open = False
+        self.make_room()
         if tag is not None and callable(tag.get("select")):
             try:
                 tag["select"]()
@@ -348,6 +372,70 @@ class Outline(QWidget):
             except Exception:                         # noqa: BLE001
                 pass
 
+    # ------------------------------------------------------------------ room for a long page
+    # The Mesh page with "Advanced mesh options" ticked is as long as the Details.  Instead of a scroll bar, the Outline is squeezed to the row of the page (its bar says so, and a
+    # click on the bar opens it again) and the divider is pulled up; unticking, or going to another page, puts the divider back.
+    def room_page(self):
+        """The key of the node whose page holds the advanced mesh options, or None."""
+        adv = getattr(self.window, "cb_adv", None) if self.window is not None else None
+        if adv is None:
+            return None
+        for k, n in self.nodes.items():
+            if n["section"].isAncestorOf(adv):
+                return k
+        return None
+
+    def make_room(self):
+        """Squeezes the Outline while the page with the ticked advanced options is shown, and opens it again otherwise (unless the person opened it themselves)."""
+        k = self.room_page()
+        want = bool(k is not None and self.current is not None and self.current[0] == k and self.window.cb_adv.isChecked())
+        if want and self.user_open:
+            return
+        self.set_compact(want)
+
+    def _advanced_toggled(self, _on):
+        self.user_open = False
+        self.make_room()
+
+    def _bar_clicked(self):
+        if self.compact:
+            self.user_open = True
+            self.set_compact(False)
+        elif self.room_page() is not None and self.current is not None and self.current[0] == self.room_page() and self.window.cb_adv.isChecked():
+            self.user_open = False
+            self.set_compact(True)
+
+    def compact_height(self):
+        return self.bar.sizeHint().height() + ROW_H + 2
+
+    def set_compact(self, on):
+        """The Outline shows only the selected row (on), or its own height again (off)."""
+        on = bool(on)
+        if on == self.compact:
+            return
+        sizes = self.split.sizes()
+        total = sum(sizes) or self.split.height()
+        if on:
+            self._sizes_before = list(sizes)
+            top = self.compact_height()
+            self.tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.compact = True
+            self.bar.setText("▸ Outline")
+            self.bar.setToolTip("Click to show the whole Outline again")
+            self.split.setSizes([top, max(total - top, 1)])
+            it = self.tree.currentItem()
+            if it is not None:
+                self.tree.scrollToItem(it, QTreeWidget.ScrollHint.PositionAtTop)
+        else:
+            before = self._sizes_before or [260, max(total - 260, 1)]
+            top = min(before[0], max(total - 120, self.compact_height()))
+            self.compact = False
+            self.tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.bar.setText("Outline")
+            self.bar.setToolTip("")
+            self.split.setSizes([top, max(total - top, 1)])
+            self.tree.scrollToTop()
+
     # ------------------------------------------------------------------ what the window says
     def attach(self, window):
         """The window that offers outline_items / outline_marks / outline_selected / view_focus; they are asked for while the column is shown."""
@@ -356,6 +444,9 @@ class Outline(QWidget):
             b = getattr(window, attr, None)
             if b is not None and node in self.nodes:
                 b.clicked.connect(lambda _=False, n=node: self.expect_node(n))
+        adv = getattr(window, "cb_adv", None)
+        if adv is not None:
+            adv.toggled.connect(self._advanced_toggled)
         t = getattr(window, "cond_table", None)
         if t is not None:
             m = t.model()
@@ -434,7 +525,7 @@ class Outline(QWidget):
         if f not in ("supports", "loads", "conditions"):
             return []
         want = {"supports": "Supports", "loads": "Loads"}.get(f)
-        out = [t for t in self.tags if (want is None or t["group"] == want)]
+        out = [t for t in self.tags if (want is None or t.get("group") == want)]
         if item is not None:
             out = [t for t in out if t["item"] is item]
         return out
@@ -479,7 +570,7 @@ class Outline(QWidget):
         """The items inserted under the nodes: {node key: [(text, tag)]}.  Only a change of the list rebuilds the tree, and the selection is kept."""
         def sig_of(d):
             return {k: [(t, tg.get("kind"), tg.get("letter", ""), tg.get("value", "")) for t, tg in v] for k, v in d.items() if k in self.nodes}
-        new_tags = [tg for v in items.values() for _t, tg in v if "letter" in tg]
+        new_tags = [tg for v in items.values() for _t, tg in v if "letter" in tg and tg.get("kind") != "region"]      # (a region's row has a number, but is not a tag drawn on the model)
         new_tags.sort(key=lambda t: t.get("row", 0))
         sig, old = sig_of(items), sig_of(self.items)
         self.tags = new_tags

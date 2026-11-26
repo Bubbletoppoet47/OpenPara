@@ -252,6 +252,56 @@ def field_values(result, key):
 # ----------------------------------------------------------------------------------------------
 # the drawing
 # ----------------------------------------------------------------------------------------------
+# the tints of the regions in the view (a region keeps its colour whatever the others do) and the helpers to find a place for its name
+REGION_TINTS = [(205, 224, 247), (252, 222, 192), (206, 236, 208), (240, 210, 236), (255, 243, 178), (198, 236, 236), (232, 222, 200), (222, 222, 246)]
+
+
+def region_tint(fid, strong=False):
+    c = REGION_TINTS[int(fid) % len(REGION_TINTS)]
+    if not strong:
+        return c
+    sw = REGION_SWATCHES[int(fid) % len(REGION_SWATCHES)]                 # the selected region: its tint towards its swatch colour
+    return tuple(int(0.62 * v + 0.38 * int(sw[1 + 2 * k:3 + 2 * k], 16)) for k, v in enumerate(c))
+
+
+REGION_SWATCHES = ["#5b8fd6", "#e08a3c", "#4aa06a", "#b062a8", "#c9a227", "#2e9aa0", "#9a8a5a", "#7878c8"]      # the same hues as the tints, stronger
+
+
+def region_swatch(fid):
+    """The colour (hex) of the swatch of a region in the Outline and the table: the hue of its tint, stronger."""
+    return REGION_SWATCHES[int(fid) % len(REGION_SWATCHES)]
+
+
+def inside_face(f, pt):
+    """Is the point inside the material of the region f (inside its outline, outside its holes)?"""
+    return pg.point_in_poly(pt, f["poly"]) and not any(pg.point_in_poly(pt, h["poly"]) for h in f["holes"])
+
+
+def label_point(f):
+    """A point inside the region, away from its edges, for its name: the centroid when that is inside, else the best point of a grid over the region."""
+    lp = f.get("label_pt")
+    if lp is not None:
+        return lp
+    c = f["centroid"]
+    if inside_face(f, c):
+        f["label_pt"] = c
+        return c
+    xs, ys = [q[0] for q in f["poly"]], [q[1] for q in f["poly"]]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    edge = [q for poly in [f["poly"]] + [h["poly"] for h in f["holes"]] for q in poly]
+    best = None
+    n = 24
+    for i in range(1, n):
+        for j in range(1, n):
+            q = (x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * j / n)
+            if inside_face(f, q):
+                d = min(math.hypot(q[0] - e[0], q[1] - e[1]) for e in edge)
+                if best is None or d > best[0]:
+                    best = (d, q)
+    f["label_pt"] = best[1] if best else c
+    return f["label_pt"]
+
+
 class PhysCanvas(sim_tags.FocusMixin, QWidget):
     export_bg = None                      # None = the normal white; 0 / 255 while the animation export draws a frame on black / white
 
@@ -439,6 +489,10 @@ class PhysCanvas(sim_tags.FocusMixin, QWidget):
             if abs(a.x() - b.x()) > 4 or abs(a.y() - b.y()) > 4:
                 n = self.box_select(a, b, add)
                 self.tab.status(f"Box selected {len(self.sel)} object(s)." if n else "Nothing inside the box.")
+            elif not add and getattr(self.tab, "REGION_VIEW", False) and self.shows_region_names() and self.mode == "select":
+                fid = self.region_at(b)                           # a click in empty space inside a region: that region
+                if fid is not None:
+                    self.tab.select_region(fid, via="view")
             self.tab.selection_changed()
             self.update()
         if ev.button() == Qt.MouseButton.MiddleButton and self.pan_from is not None:
@@ -509,14 +563,21 @@ class PhysCanvas(sim_tags.FocusMixin, QWidget):
         else:
             if self.pan_from is not None:
                 p.translate(self.pan_off)
+            tinted = getattr(tab, "REGION_VIEW", False)
             for f in tab.geom["faces"]:
                 path = self.face_path(f)
                 if f["included"]:
-                    p.fillPath(path, QColor(190, 215, 245, 140 if f["id"] != self.hl_face else 230))
+                    if tinted:
+                        r_, g_, b_ = region_tint(f["id"], strong=(f["id"] == self.hl_face and self.shows_region_names()))
+                        p.fillPath(path, QColor(r_, g_, b_, 235))
+                    else:
+                        p.fillPath(path, QColor(190, 215, 245, 140 if f["id"] != self.hl_face else 230))
                 else:
                     p.fillPath(path, QBrush(QColor(110, 110, 110, 160), Qt.BrushStyle.BDiagPattern))
         # 2. geometry
         self.paint_geometry(p)
+        if getattr(tab, "REGION_VIEW", False) and not (want_field or mesh_only):
+            self.paint_region_marks(p)
         self.paint_conditions(p)
         self.paint_fasteners(p)
         if self.shows("result"):
@@ -536,6 +597,61 @@ class PhysCanvas(sim_tags.FocusMixin, QWidget):
             p.setBrush(Qt.BrushStyle.NoBrush)
         if want_field:
             self.paint_legend(p)
+
+    def shows_region_names(self):
+        return self.focus in (None, "geometry")
+
+    def paint_region_marks(self, p):
+        """The selected region's outline (teal) and, on the pages about the part, every region's name and material."""
+        tab = self.tab
+        faces = [f for f in tab.geom["faces"] if f["included"]]
+        for f in faces:
+            if f["id"] == self.hl_face and self.shows_region_names():
+                p.setPen(QPen(QColor("#00897b"), 3.4))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawPath(self.face_path(f))
+        if not self.shows_region_names():
+            return
+        font = QFont("Arial", 9)
+        for f in faces:
+            lines = [tab.region_title(f), tab.region_mat_name(f)]
+            c = self.w2s(*label_point(f))
+            xs = [self.w2s(*q).x() for q in f["poly"]]
+            room = max(xs) - min(xs)
+            for size in (9, 8, 7):
+                font.setPointSizeF(size)
+                p.setFont(font)
+                fm = p.fontMetrics()
+                w = max(fm.horizontalAdvance(t) for t in lines) + 10
+                if w <= room * 0.95 or size == 7:
+                    break
+            if w > room * 1.1:
+                lines = [str(f["id"] + 1)]                              # no room for the words: just the number
+                w = fm.horizontalAdvance(lines[0]) + 10
+            h = fm.height() * len(lines) + 4
+            box = QRectF(c.x() - w / 2, c.y() - h / 2, w, h)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 255, 255, 205))
+            p.drawRoundedRect(box, 4, 4)
+            p.setPen(QColor("#12323a"))
+            for k, t in enumerate(lines):
+                f2 = QFont(font)
+                f2.setBold(k == 0)
+                p.setFont(f2)
+                p.drawText(QRectF(box.x(), box.y() + 2 + k * fm.height(), w, fm.height()), int(Qt.AlignmentFlag.AlignCenter), t)
+        p.setFont(font)
+
+    def region_at(self, sp):
+        """The material region under the screen point (the smallest one when they are nested), else None."""
+        tab = self.tab
+        if tab.geom is None:
+            return None
+        pt = self.s2w(sp)
+        best = None
+        for f in tab.geom["faces"]:
+            if f["included"] and inside_face(f, pt) and (best is None or f["net_area"] < best["net_area"]):
+                best = f
+        return None if best is None else best["id"]
 
     def paint_geometry(self, p):
         tab = self.tab
@@ -786,6 +902,7 @@ class PhysCanvas(sim_tags.FocusMixin, QWidget):
 class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
     ANIM_LABEL = "2D FEA"                  # what the animation export calls this tab (the window title and the default file name)
     ANIM_FILE = "FEA_animation"
+    REGION_VIEW = True                     # the regions are tinted and named in the view, each has its own material (a window built on this one that does it its own way sets False)
 
     def __init__(self, win):
         super().__init__()
@@ -864,9 +981,32 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         lay.addLayout(row)
 
         lay = sec(2, "Material and analysis", False,
-                  help_text="One material for everything. Quadratic elements need only a coarse mesh to capture bending (at least 2 elements "
-                            "through a thin sheet); linear ones are much too stiff in bending.",
-                  summary=lambda: f"{self.mat_combo.currentText()}, {'plane stress' if self.rb_stress.isChecked() else 'plane strain'}")
+                  help_text="Every region has its own material: choose it in the table, or select a region (in the table, in the view or in the Outline) and type its "
+                            "numbers. Regions that touch along an edge are fully bonded: the mesh shares its nodes along that edge, so they move together. "
+                            "Quadratic elements need only a coarse mesh to capture bending (at least 2 elements through a thin sheet); linear ones are much too "
+                            "stiff in bending. With different materials the solve is linear.",
+                  summary=lambda: self.material_summary())
+        self.sel_region = None                                   # the region whose material the boxes below show (None: the one material of the tab)
+        self.region_mats, self.region_names = {}, {}
+        lay.addWidget(QLabel("<b>Regions</b>"))
+        self.region_note = self.note("Regions that touch along an edge are fully bonded: the mesh shares its nodes there, so they move together.")
+        lay.addWidget(self.region_note)
+        self.region_table = QTableWidget(0, 3)
+        self.region_table.setHorizontalHeaderLabels(["Region", "Material", "Bonded to"])
+        self.region_table.verticalHeader().hide()
+        self.region_table.horizontalHeader().setStretchLastSection(True)
+        self.region_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.region_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.region_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.region_table.setToolTip("Click a row to select the region (it is outlined in the view too). Choose its material in the Material column.")
+        hh = self.region_table.horizontalHeader()
+        hh.setSectionResizeMode(0, hh.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(1, hh.ResizeMode.Stretch)
+        hh.setSectionResizeMode(2, hh.ResizeMode.ResizeToContents)
+        self.region_table.currentCellChanged.connect(self.region_row_picked)
+        lay.addWidget(self.region_table)
+        self.props_lbl = QLabel("<b>Material properties</b>")
+        lay.addWidget(self.props_lbl)
         self.mat_combo = QComboBox()
         row = QHBoxLayout()
         row.addWidget(self.mat_combo, 1)
@@ -878,13 +1018,6 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         self.b_del_mat.setToolTip("Deletes a material you added. The built-in ones stay.")
         self.b_del_mat.clicked.connect(self.delete_material)
         row.addWidget(self.b_del_mat)
-        lay.addLayout(row)
-        row = QHBoxLayout()
-        self.rb_stress = QRadioButton("Plane stress")
-        self.rb_strain = QRadioButton("Plane strain")
-        self.rb_stress.setChecked(True)
-        row.addWidget(self.rb_stress)
-        row.addWidget(self.rb_strain)
         lay.addLayout(row)
         form = QFormLayout()
         self.unit_combo = QComboBox()
@@ -919,19 +1052,43 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         self.lbl_sy, self.lbl_su, self.lbl_nld = QLabel("Yield strength"), QLabel("Ultimate strength"), QLabel("Displacement trigger")
         form.addRow(self.lbl_E, self.e_E)
         form.addRow("Poisson's ratio", self.e_nu)
-        form.addRow(self.lbl_t, self.e_t)
         form.addRow(self.lbl_sy, self.e_sy)
         form.addRow(self.lbl_su, self.e_su)
-        form.addRow("Plastic strain at ultimate (%)", self.e_eu)
         form.addRow("Thermal expansion α (1/K)", self.e_alpha)
         form.addRow("Reference temperature (°C)", self.e_tref)
+        lay.addLayout(form)
+        self.mat_note = self.note("")
+        lay.addWidget(self.mat_note)
+        lay.addWidget(QLabel("<b>Analysis</b> (all regions)"))
+        row = QHBoxLayout()
+        self.rb_stress = QRadioButton("Plane stress")
+        self.rb_strain = QRadioButton("Plane strain")
+        self.rb_stress.setChecked(True)
+        row.addWidget(self.rb_stress)
+        row.addWidget(self.rb_strain)
+        lay.addLayout(row)
+        form = QFormLayout()
+        form.addRow(self.lbl_t, self.e_t)
+        lay.addLayout(form)
+        self.b_solver_set = QPushButton("▸ Solver settings (linear, nonlinear, triggers)")
+        self.b_solver_set.setCheckable(True)
+        self.b_solver_set.setFlat(True)
+        self.b_solver_set.setStyleSheet("QPushButton { text-align:left; padding:3px 2px; border:none; color:#16324f; } QPushButton:hover { background:#e8f3f4; }")
+        self.b_solver_set.setToolTip("The linear and nonlinear solver, the triggers that switch from one to the other, and the plastic strain at the ultimate strength.")
+        lay.addWidget(self.b_solver_set)
+        self.solver_box = QWidget()
+        sf = QFormLayout(self.solver_box)
+        sf.setContentsMargins(14, 0, 0, 0)
         rowc = QHBoxLayout()
         rowc.addWidget(self.cb_lin)
         rowc.addWidget(self.cb_nl)
-        form.addRow(rowc)
-        form.addRow(self.lbl_nld, self.e_nld)
-        form.addRow("Stress trigger (% of yield)", self.e_nly)
-        lay.addLayout(form)
+        sf.addRow(rowc)
+        sf.addRow("Plastic strain at ultimate (%)", self.e_eu)
+        sf.addRow(self.lbl_nld, self.e_nld)
+        sf.addRow("Stress trigger (% of yield)", self.e_nly)
+        self.solver_box.setVisible(False)
+        lay.addWidget(self.solver_box)
+        self.b_solver_set.toggled.connect(self.solver_settings_toggled)
         rowp = QHBoxLayout()
         b_pi = QPushButton("Import profile properties...")
         b_pi.setToolTip("Idealise a ribbed panel as a thin strip: reads a .profprops file written by Edit > Section properties in the "
@@ -946,8 +1103,6 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         lay.addWidget(self.profile_lbl)
         self.units_note = self.note("")
         lay.addWidget(self.units_note)
-        self.mat_note = self.note("")
-        lay.addWidget(self.mat_note)
         self.library = []
         self.fill_materials(select="Structural steel (A36)")
         self.material_picked()
@@ -996,6 +1151,8 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
             b = sim_ui.icon_button(text, icn, tip)
             b.clicked.connect(fn)
             lay.addWidget(b)
+        self.cond_table = self.hidden_cond_table()
+        self.sup_table = self.build_cond_page(lay, "Supports")
 
         lay = sec(4, "Loads", True, help_text="Force: on points, total force. Pressure: on edges, positive pushes into the material. "
                   "Pressure from CFD: loads the selected edges with the pressure (and optionally wall shear) of a solved CFD result, interpolated "
@@ -1013,25 +1170,8 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
             lay.addWidget(b)
         self.cond_list = QListWidget()                       # plain-text copy of the table (kept for scripts and tests)
         self.cond_list.hide()
-        lay.addWidget(QLabel("Conditions on this model"))
-        self.cond_table = QTableWidget(0, 4)
-        self.cond_table.setHorizontalHeaderLabels(["Name", "Type", "Applied to", "Value"])
-        self.cond_table.verticalHeader().hide()
-        self.cond_table.setMinimumHeight(110)
-        self.cond_table.setMaximumHeight(190)
-        self.cond_table.horizontalHeader().setStretchLastSection(True)
-        self.cond_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.cond_table.itemChanged.connect(self.cond_item_changed)
-        lay.addWidget(self.cond_table)
-        row = QHBoxLayout()
-        b = QPushButton("Edit selected...")
-        b.setToolTip("Edit the Value of the selected row (a force, a pressure, a head width); a row without a value lets you rename it.")
-        b.clicked.connect(self.edit_condition)
-        row.addWidget(b)
-        b = QPushButton("Remove selected")
-        b.clicked.connect(self.remove_condition)
-        row.addWidget(b)
-        lay.addLayout(row)
+        lay.addWidget(self.cond_list)
+        self.load_table = self.build_cond_page(lay, "Loads")
 
         lay = sec(6, "Results", True, summary=lambda: self.field.currentText(),
                   help_text="Probe: a probe is an area of the original geometry whose average stress is reported. "
@@ -1277,6 +1417,7 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         self.result = None
         self.supports, self.loads = [], []
         self.region_mats, self.region_names = {}, {}          # per-region materials (an assembly slice), see sim_tab.py
+        self.sel_region = None
         self.probes, self.probe_fos, self.probe_trig = [], None, None
         self.profile = None
         self.update_profile_label()
@@ -1313,6 +1454,7 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
             it.setCheckState(Qt.CheckState.Checked if f["included"] else Qt.CheckState.Unchecked)
             self.regions.addItem(it)
         self.regions.blockSignals(False)
+        self.regions_changed()
 
     def region_toggled(self, item):
         r = self.regions.row(item)
@@ -1323,11 +1465,309 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         self.field.setCurrentIndex(0)
         self.canvas.invalidate()
         self.enable_buttons()
+        self.regions_changed()
         self.status("Region changed: mesh again.")
 
     def region_picked(self, row):
+        if getattr(self, "REGION_VIEW", False) and self.geom is not None and 0 <= row < len(self.geom["faces"]):
+            self.select_region(self.geom["faces"][row]["id"], via="list")
+            return
         self.canvas.hl_face = row if row >= 0 else None
         self.canvas.update()
+
+    # --- one material per region (the Material page), fully bonded where regions touch
+    def face_by_id(self, fid):
+        return next((f for f in (self.geom or {}).get("faces", []) if f["id"] == fid), None)
+
+    def included_faces(self):
+        return [f for f in (self.geom or {}).get("faces", []) if f["included"]]
+
+    def region_title(self, f):
+        """What the view and the Outline call the region: the part it comes from, else 'Region N'."""
+        return (getattr(self, "region_names", None) or {}).get(f["id"]) or f"Region {f['id'] + 1}"
+
+    def library_name_of(self, e):
+        """The name of the library material with the numbers of the entry e (MPa), or None."""
+        for m_ in self.library:
+            if (abs(m_["E_MPa"] - e["E_MPa"]) <= 1e-6 * abs(e["E_MPa"]) + 1e-9 and abs(m_["nu"] - e["nu"]) <= 1e-9 and
+                    abs((m_.get("Sy_MPa") or 0.0) - (e.get("Sy_MPa") or 0.0)) <= 1e-6 * abs(e.get("Sy_MPa") or 0.0) + 1e-9 and
+                    abs((m_.get("Su_MPa") or 0.0) - (e.get("Su_MPa") or 0.0)) <= 1e-6 * abs(e.get("Su_MPa") or 0.0) + 1e-9):
+                return m_["name"]
+        return None
+
+    def region_mat_name(self, f):
+        """The name of the material of the region f for the view, the table and the Outline."""
+        e = (self.region_mats or {}).get(f["id"])
+        if e is None:
+            return self.mat_combo.currentData() or "custom values"
+        return e.get("name") or self.library_name_of(e) or "custom values"
+
+    def edge_sets(self):
+        """{region id: the sketch edges (indices of geom['edges']) around it, holes included}, kept with the analysed geometry."""
+        g = self.geom
+        es = g.get("_edge_sets")
+        if es is None:
+            es = {f["id"]: {h[0] for h in f["cycle"]} | {h[0] for hole in f["holes"] for h in hole["cycle"]} for f in g["faces"]}
+            g["_edge_sets"] = es
+        return es
+
+    def bonded_with(self, f):
+        """The material regions that touch the region f along an edge: they are fully bonded to it (the mesh shares the nodes along that edge)."""
+        if self.geom is None or not f["included"]:
+            return []
+        es = self.edge_sets()
+        return [g for g in self.included_faces() if g["id"] != f["id"] and es[f["id"]] & es[g["id"]]]
+
+    def box_entry(self):
+        """The material boxes as a region's material (MPa, kelvin), or None while they hold half-typed text."""
+        u = self.unit_combo.currentText()
+        try:
+            e = {"E_MPa": pm.to_mpa(float(self.e_E.text()), u), "nu": float(self.e_nu.text()),
+                 "Sy_MPa": pm.to_mpa(float(self.e_sy.text() or 0.0), u), "Su_MPa": pm.to_mpa(float(self.e_su.text() or 0.0), u)}
+            a_ = self.e_alpha.text().strip()
+            e["alpha"] = float(a_) if a_ else None
+            t_ = self.e_tref.text().strip()
+            e["Tref_K"] = float(t_) + 273.15 if t_ else pm.TREF_K
+        except ValueError:
+            return None
+        e["name"] = self.mat_combo.currentData()
+        return e
+
+    def edit_target(self):
+        """The region whose own material the boxes show and edit now, or None (they are then the one material of the tab)."""
+        fid = getattr(self, "sel_region", None)
+        return fid if (fid is not None and fid in (getattr(self, "region_mats", None) or {})) else None
+
+    def store_target(self):
+        """The boxes were changed: they are the material of the selected region (when it has its own)."""
+        fid = self.edit_target()
+        if fid is None:
+            return
+        e = self.box_entry()
+        if e is None:
+            return
+        self.region_mats[fid] = {**self.region_mats[fid], **e}
+        self.regions_view_refresh()
+
+    def load_target(self):
+        """The boxes show the material of the selected region (when it has its own), and the page says whose it is."""
+        self.update_props_title()
+        fid = self.edit_target()
+        if fid is None:
+            return
+        e = self.region_mats[fid]
+        u = self.unit_combo.currentText()
+        self.e_E.setText(f"{pm.from_mpa(e['E_MPa'], u):.10g}")
+        self.e_nu.setText(f"{e['nu']:.6g}")
+        self.e_sy.setText(f"{pm.from_mpa(e.get('Sy_MPa') or 0.0, u):.10g}")
+        self.e_su.setText(f"{pm.from_mpa(e.get('Su_MPa') or 0.0, u):.10g}")
+        self.e_alpha.setText("" if e.get("alpha") is None else f"{e['alpha']:.6g}")
+        self.e_tref.setText(f"{e.get('Tref_K', pm.TREF_K) - 273.15:.6g}")
+        name = e.get("name") or self.library_name_of(e)
+        i = self.mat_combo.findData(name) if name is not None else -1
+        self.mat_combo.blockSignals(True)
+        self.mat_combo.setCurrentIndex(i if i >= 0 else 0)
+        self.mat_combo.blockSignals(False)
+        self.update_mat_note()
+
+    def update_props_title(self):
+        fid = self.edit_target()
+        f = self.face_by_id(fid) if fid is not None else None
+        self.props_lbl.setText(f"<b>Properties of {self.region_title(f)}</b>" if f is not None else "<b>Material properties</b>")
+
+    def material_summary(self):
+        mode = "plane stress" if self.rb_stress.isChecked() else "plane strain"
+        inc = self.included_faces()
+        if len(inc) >= 2:
+            names = {self.region_mat_name(f) for f in inc}
+            txt = next(iter(names)) if len(names) == 1 else f"{len(names)} materials"
+        else:
+            txt = self.mat_combo.currentText()
+        return f"{txt}, {mode}"
+
+    def ensure_region_materials(self):
+        """With two or more material regions every one of them has a material of its own (a new one starts as a copy of the material the boxes show)."""
+        inc = self.included_faces()
+        if len(inc) < 2 or getattr(self, "_defer_entries", False):
+            return
+        base = None
+        for f in inc:
+            if f["id"] not in self.region_mats:
+                base = base or self.box_entry()
+                if base is None:
+                    return
+                self.region_mats[f["id"]] = dict(base)
+
+    def ensure_selection(self):
+        """A region is always selected when there are regions with a material of their own: the boxes are its numbers."""
+        inc = self.included_faces()
+        ids = {f["id"] for f in (self.geom or {}).get("faces", [])}
+        if self.sel_region not in ids:
+            self.sel_region = None
+        own = [f for f in inc if f["id"] in self.region_mats]
+        if own and self.sel_region not in {f["id"] for f in own}:
+            self.sel_region = own[0]["id"]
+        self.canvas.hl_face = self.sel_region
+
+    def regions_changed(self):
+        """The regions (which are material, their names, their materials, their number) changed: everything that shows them follows."""
+        if not getattr(self, "REGION_VIEW", False) or self.geom is None:
+            return
+        self.ensure_region_materials()
+        self.ensure_selection()
+        self.fill_region_table()
+        self.load_target()
+        self.region_list_row()
+        self.refresh_outline()
+        self.canvas.update()
+
+    def regions_view_refresh(self):
+        """A material of a region changed (nothing else): the table, the Outline and the view show it."""
+        self.fill_region_table()
+        self.refresh_sections()
+        self.refresh_outline()
+        self.canvas.update()
+
+    def region_list_row(self):
+        """The row of the list on the Geometry page follows the selected region."""
+        rows = [i for i, f in enumerate(self.geom["faces"]) if f["id"] == self.sel_region]
+        self.regions.blockSignals(True)
+        self.regions.setCurrentRow(rows[0] if rows else -1)
+        self.regions.blockSignals(False)
+
+    def fill_region_table(self):
+        t = self.region_table
+        t.blockSignals(True)
+        t.setRowCount(0)
+        faces = self.included_faces() if self.geom is not None else []
+        t.setRowCount(len(faces))
+        import sim_outline
+        for r, f in enumerate(faces):
+            it = QTableWidgetItem(sim_outline.swatch_icon(region_swatch(f["id"]), str(f["id"] + 1)), self.region_title(f))
+            it.setData(Qt.ItemDataRole.UserRole, f["id"])
+            it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            t.setItem(r, 0, it)
+            cb = QComboBox()
+            cb.addItem("(custom values)", None)
+            names = []
+            for m_ in self.library:
+                cb.addItem(m_["name"], m_["name"])
+                names.append(m_["name"])
+            cur = self.region_mat_name(f)
+            if cur != "custom values" and cur not in names:
+                cb.addItem(cur, cur)                                  # the material of a part that is not in the library
+            cb.setCurrentIndex(max(0, cb.findData(cur)) if cur != "custom values" else 0)
+            cb.setToolTip("The material of this region. Choose another one, or select the region and type its numbers below.")
+            cb.currentIndexChanged.connect(lambda _i, fid=f["id"], cb=cb: self.region_material_chosen(fid, cb))
+            t.setCellWidget(r, 1, cb)
+            bonded = self.bonded_with(f)
+            b = QTableWidgetItem(", ".join(self.region_title(g) for g in bonded) if bonded else "-")
+            b.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            if bonded:
+                b.setToolTip("Fully bonded: the mesh shares its nodes along the common edge, so the regions move together.")
+            t.setItem(r, 2, b)
+        rows = max(len(faces), 1)
+        t.setFixedHeight(max(70, min(170, t.horizontalHeader().height() + 4 + rows * 30)))
+        for r, f in enumerate(faces):
+            if f["id"] == self.sel_region:
+                t.setCurrentCell(r, 0)
+                t.selectRow(r)
+        t.blockSignals(False)
+        multi = len(faces) >= 2
+        self.region_note.setVisible(multi and any(self.bonded_with(f) for f in faces))
+
+    def region_material_chosen(self, fid, cb):
+        """A material was chosen for a region in the table."""
+        name = cb.currentData()
+        m_ = self.library_entry(name) if name is not None else None
+        if fid in self.region_mats:
+            e = dict(self.region_mats[fid])
+            if m_ is not None:
+                e.update({"E_MPa": m_["E_MPa"], "nu": m_["nu"], "Sy_MPa": m_.get("Sy_MPa") or 0.0, "Su_MPa": m_.get("Su_MPa") or 0.0,
+                          "alpha": m_.get("alpha"), "Tref_K": m_.get("Tref_K", pm.TREF_K)})
+            e["name"] = name if m_ is not None else None
+            self.region_mats[fid] = e
+            self.result = None
+            self.canvas.field = None
+            self.field.blockSignals(True)
+            self.field.setCurrentIndex(0)
+            self.field.blockSignals(False)
+            if fid == self.sel_region:
+                self.load_target()
+            self.regions_view_refresh()
+            self.status(f"{self.region_title(self.face_by_id(fid))}: {name or 'custom values'}.")
+        elif m_ is not None:                                         # one region and no material of its own: the material of the tab
+            self.mat_combo.setCurrentIndex(max(0, self.mat_combo.findData(name)))
+            self.regions_view_refresh()
+
+    def region_row_picked(self, r, _c=0, _pr=-1, _pc=0):
+        it = self.region_table.item(r, 0) if r >= 0 else None
+        if it is not None:
+            self.select_region(it.data(Qt.ItemDataRole.UserRole), via="table")
+
+    def select_region(self, fid, via=None):
+        """Selects a region: it is outlined in the view, its row is picked in the table of the Material page and in the list of the Geometry page, the boxes show its
+        material, and the Outline selects its row when the Material page is the one shown.  `via` says where the selection came from ("view", "table", "list", "outline")."""
+        f = self.face_by_id(fid)
+        if f is None:
+            return False
+        self.sel_region = fid
+        self.canvas.hl_face = fid
+        self.region_list_row()
+        t = self.region_table
+        t.blockSignals(True)
+        for r in range(t.rowCount()):
+            if t.item(r, 0).data(Qt.ItemDataRole.UserRole) == fid:
+                t.setCurrentCell(r, 0)
+                t.selectRow(r)
+        t.blockSignals(False)
+        self.load_target()
+        ol = getattr(self, "outline", None)
+        if ol is not None and via != "outline" and ol.current is not None:
+            key = self.material_node()
+            if key is not None and ol.current[0] == key:
+                for _txt, tg in ol.items.get(key, []):
+                    if tg.get("item") is f:
+                        ol.select(key, tg)
+                        break
+        self.canvas.update()
+        return True
+
+    def material_node(self):
+        ol = getattr(self, "outline", None)
+        return next((k for k in ol.nodes if k.strip().lower() == "material and analysis"), None) if ol is not None else None
+
+    def solver_settings_toggled(self, on):
+        self.solver_box.setVisible(on)
+        self.b_solver_set.setText(("▾" if on else "▸") + " Solver settings (linear, nonlinear, triggers)")
+
+    def refresh_outline(self):
+        ol = getattr(self, "outline", None)
+        if ol is not None:
+            try:
+                ol.sync()
+            except RuntimeError:
+                pass
+
+    def outline_items(self):
+        """The conditions under Supports and Loads (the lettered tags), and the regions under Material and analysis (a number, the material, and 'bonded' where it
+        touches another region)."""
+        import sim_outline
+        nodes = self.outline.nodes
+        items = sim_outline.generic_items(self, nodes)
+        key = self.material_node()
+        if key is not None and getattr(self, "REGION_VIEW", False) and self.geom is not None:
+            rows = []
+            for f in self.included_faces():
+                bonded = self.bonded_with(f)
+                text = f"{self.region_title(f)} · {self.region_mat_name(f)}" + ("   bonded" if bonded else "")
+                tip = ("Fully bonded to " + ", ".join(self.region_title(g) for g in bonded) + ": the mesh shares its nodes along the common edge.") if bonded else ""
+                rows.append((text, {"kind": "region", "colour": region_swatch(f["id"]), "letter": str(f["id"] + 1), "item": f, "name": self.region_title(f),
+                                    "value": self.region_mat_name(f), "tip": tip, "details_title": key, "row": f["id"],
+                                    "select": (lambda fid=f["id"]: self.select_region(fid, via="outline"))}))
+            if rows:
+                items[key] = rows
+        return items
 
     # --- supports and loads
     def selection_changed(self):
@@ -1556,6 +1996,155 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         fea_geoms = {e["src"]: pcfd.edge_geometry(self.model, e) for e in self.geom["edges"]}
         return prefine.resolve_cfd_links(lds, info, fea_geoms, pm.from_mpa(1e-6, self.stress_unit()))
 
+    # --- the conditions tables: one on the Supports page, one on the Loads page.  Behind them sits cond_table, the list of ALL conditions (supports first, then loads) that the
+    # outline, the Parameterization tab and the scripts read; it is never shown.  The two tables are filled from it (fill_cond_views) and every edit goes through it.
+    def hidden_cond_table(self):
+        t = QTableWidget(0, 4, self)
+        t.setHorizontalHeaderLabels(["Name", "Type", "Applied to", "Value"])
+        t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        t.itemChanged.connect(self.cond_item_changed)
+        t.currentCellChanged.connect(self.mirror_cond_selection)
+        t.hide()
+        return t
+
+    def build_cond_page(self, lay, group):
+        """The table of one page ("Supports" or "Loads": its name, type, place and value) with Edit selected... / Remove selected under it.  -> the table."""
+        word = group.lower()
+        lay.addWidget(QLabel(f"<b>{group} on this model</b>"))
+        t = QTableWidget(0, 4)
+        t.setObjectName(word + "_table")
+        t.setHorizontalHeaderLabels(["Name", "Type", "Applied to", "Value"])
+        t.verticalHeader().hide()
+        t.setMinimumHeight(110)
+        t.setMaximumHeight(190)
+        t.horizontalHeader().setStretchLastSection(True)
+        t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        t.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        t.setToolTip("Double-click a Name to rename it" + ("; the Value of a force, a pressure or a head width can be edited too." if group == "Loads" else
+                                                           "; the Value of a displacement or a head width can be edited too."))
+        t.itemChanged.connect(lambda it, g=group: self.cond_view_changed(g, it))
+        t.currentCellChanged.connect(lambda r, _c, _pr, _pc, g=group: self.cond_view_picked(g, r))
+        lay.addWidget(t)
+        row = QHBoxLayout()
+        b = QPushButton("Edit selected...")
+        b.setToolTip("Edit the Value of the selected row (a force, a pressure, a head width); a row without a value lets you rename it.")
+        b.clicked.connect(lambda _=False, g=group: self.edit_condition_in(g))
+        row.addWidget(b)
+        b = QPushButton("Remove selected")
+        b.clicked.connect(lambda _=False, g=group: self.remove_condition_in(g))
+        row.addWidget(b)
+        lay.addLayout(row)
+        return t
+
+    def cond_views(self):
+        """[(group, table, first row of the group in cond_table)] of the two pages."""
+        n = len(self.supports)
+        out = []
+        if getattr(self, "sup_table", None) is not None:
+            out.append(("Supports", self.sup_table, 0))
+        if getattr(self, "load_table", None) is not None:
+            out.append(("Loads", self.load_table, n))
+        return out
+
+    def master_row(self, group, r):
+        """The row of cond_table (all conditions) that row `r` of the table of `group` is."""
+        return r if group == "Supports" else len(self.supports) + r
+
+    def fill_cond_views(self):
+        """Copies the rows of cond_table into the table of the Supports page (the supports) and the table of the Loads page (the loads)."""
+        m = self.cond_table
+        keep = {}
+        for g, t, _first in self.cond_views():
+            keep[g] = t.currentRow()
+        for g, t, first in self.cond_views():
+            n = len(self.supports) if g == "Supports" else len(self.loads)
+            t.blockSignals(True)
+            t.setRowCount(n)
+            for r in range(n):
+                for c in range(4):
+                    src = m.item(first + r, c)
+                    if src is None:
+                        continue
+                    it = QTableWidgetItem(src.text())
+                    it.setFlags(src.flags())
+                    t.setItem(r, c, it)
+            t.resizeColumnsToContents()
+            if 0 <= keep.get(g, -1) < n:
+                t.setCurrentCell(keep[g], 0)
+            t.blockSignals(False)
+
+    def sync_cond_views(self):
+        """cond_table changed in place (a rename): the two tables show the same texts (no rows added or removed)."""
+        m = self.cond_table
+        for g, t, first in self.cond_views():
+            t.blockSignals(True)
+            for r in range(t.rowCount()):
+                for c in range(4):
+                    src, dst = m.item(first + r, c), t.item(r, c)
+                    if src is not None and dst is not None and dst.text() != src.text():
+                        dst.setText(src.text())
+            t.blockSignals(False)
+
+    def mirror_cond_selection(self, r, _c=0, _pr=-1, _pc=0):
+        """The row of cond_table that became current (the outline selects a condition there) is the selected row of the page it belongs to."""
+        n = len(self.supports)
+        for g, t, _first in self.cond_views():
+            t.blockSignals(True)
+            if (g == "Supports" and 0 <= r < n) or (g == "Loads" and r >= n):
+                row = r if g == "Supports" else r - n
+                if 0 <= row < t.rowCount():
+                    t.setCurrentCell(row, 0)
+                    t.selectRow(row)
+            else:
+                t.clearSelection()
+                t.setCurrentCell(-1, -1)
+            t.blockSignals(False)
+
+    def cond_view_picked(self, group, r):
+        """A row was picked in the table of a page: it is the current row of cond_table too (Edit selected / Remove selected and the outline work on it)."""
+        if r < 0:
+            return
+        row = self.master_row(group, r)
+        if 0 <= row < self.cond_table.rowCount():
+            self.cond_table.blockSignals(True)
+            self.cond_table.setCurrentCell(row, 0)
+            self.cond_table.blockSignals(False)
+
+    def cond_view_changed(self, group, it):
+        """A cell of the table of a page was edited: the same edit on cond_table (name or value)."""
+        row = self.master_row(group, it.row())
+        if it.column() == 0:
+            self.rename_condition(row, it.text())
+        elif it.column() == 3:
+            self.set_condition_value(row, it.text())
+
+    def edit_condition_in(self, group):
+        """Edit selected... on a page: starts editing the Value of the selected row of its table (a row without a value lets you rename it)."""
+        t = self.sup_table if group == "Supports" else self.load_table
+        r = t.currentRow()
+        if not (0 <= r < t.rowCount()):
+            self.status("Select a row of the list first.")
+            return False
+        it = t.item(r, 3)
+        if it is None or not (it.flags() & Qt.ItemFlag.ItemIsEditable):
+            it = t.item(r, 0)
+        t.setCurrentItem(it)
+        t.editItem(it)
+        return True
+
+    def remove_condition_in(self, group):
+        """Remove selected on a page: removes the support / load of the selected row of its table."""
+        t = self.sup_table if group == "Supports" else self.load_table
+        r = t.currentRow()
+        if not (0 <= r < t.rowCount()):
+            self.status("Select a row of the list first.")
+            return False
+        self.cond_table.blockSignals(True)
+        self.cond_table.setCurrentCell(self.master_row(group, r), 0)
+        self.cond_table.blockSignals(False)
+        self.remove_condition()
+        return True
+
     def after_conditions(self):
         self.result = None
         self.canvas.field = None
@@ -1631,6 +2220,7 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
             r += 1
         t.resizeColumnsToContents()
         t.blockSignals(False)
+        self.fill_cond_views()
         self.fill_probe_table()
 
     def fill_cond_row(self, r, is_sup, idx, typ, item):
@@ -1672,6 +2262,7 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         self.cond_table.blockSignals(True)
         self.cond_table.item(r, 0).setText(self.cond_name(is_sup, idx))
         self.cond_table.blockSignals(False)
+        self.sync_cond_views()
         param = getattr(self.win, "param", None)
         if param is not None:
             try:
@@ -2282,6 +2873,8 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         self.mat_combo.setCurrentIndex(idx)
         self.mat_combo.blockSignals(False)
         self.update_mat_note()
+        if getattr(self, "REGION_VIEW", False) and getattr(self, "geom", None) is not None and hasattr(self, "region_table"):
+            self.fill_region_table()
 
     def library_entry(self, name):
         return next((x for x in self.library if x["name"] == name), None)
@@ -2314,6 +2907,7 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
             self.e_alpha.setText("" if m_.get("alpha") is None else f"{m_['alpha']:.6g}")
             self.e_tref.setText(f"{m_.get('Tref_K', pm.TREF_K) - 273.15:.6g}")
         self.update_mat_note()
+        self.store_target()
 
     def unit_changed(self, *_):
         new, old = self.unit_combo.currentText(), self.cur_unit
@@ -2352,6 +2946,7 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
             self.mat_combo.setCurrentIndex(0)
             self.mat_combo.blockSignals(False)
             self.update_mat_note()
+        self.store_target()
 
     def stress_unit(self):
         return self.unit_combo.currentText()
@@ -2367,6 +2962,7 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
     def delete_material(self):
         if sim_matdlg.delete_material(self, self.mat_combo.currentData(), self.library):
             self.fill_materials()
+            self.store_target()
 
     # --- animation (a ramp of the finished linear result)
     def anim_toggled(self, on):
@@ -2808,7 +3404,11 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         for f, inc in zip(self.geom["faces"], st.get("faces_included", [])):
             f["included"] = bool(inc)
         self.region_mats, self.region_names = dict(st.get("region_mats") or {}), dict(st.get("region_names") or {})
-        self.fill_regions()
+        self._defer_entries = True                       # a file from before every region had a material of its own: they start as the saved boxes (below), not as the boxes now
+        try:
+            self.fill_regions()
+        finally:
+            self._defer_entries = False
         pstore.set_inputs(self, st.get("inputs", {}))
         self.restore_mesh_options(st)
         self.solver_boxes()
@@ -2819,6 +3419,7 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         self.mat_combo.setCurrentIndex(i if i >= 0 else max(0, self.mat_combo.findData(None)))
         self.mat_combo.blockSignals(False)
         self.update_mat_note()
+        self.regions_changed()
         self.supports, self.loads = sim_disp.upgrade_all(st.get("supports"), 2), st.get("loads", [])      # ux = 0 / uy = 0 of an old file -> a Displacement
         self.probes, self.probe_fos, self.probe_trig = [dict(q) for q in st.get("probes", [])], st.get("probe_fos"), st.get("probe_trig")
         self.profile = dict(st["profile"]) if st.get("profile") else None
@@ -2889,6 +3490,11 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
         self.field.setCurrentIndex(0)
         self.field.blockSignals(False)
         self.regions.clear()
+        self.region_mats, self.region_names, self.sel_region = {}, {}, None
+        self.canvas.hl_face = None
+        if hasattr(self, "region_table"):
+            self.region_table.setRowCount(0)
+            self.update_props_title()
         self.refresh_lists()
         self.info.setText("Nothing imported yet.")
         self.res_lbl.setText("")

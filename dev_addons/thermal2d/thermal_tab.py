@@ -277,6 +277,7 @@ class ThermalTab(pt.PhysicsTab):
     ANIM_LABEL = LABEL
     ANIM_FILE = "Thermal_animation"
     kind = KIND
+    REGION_VIEW = False        # its regions and their materials are shown in its own way (the Geometry list and the Material page)
 
     coupled_fluid = None       # a Coupled Physics block sets {edge key: {"h": f(points) -> W/(m2 K), "Tinf": f(points) -> K}}: the exchange with a flowing fluid, on those edges
     coupled_dropped = ()       # what the last read_setup left out because the fluid replaces it: [(condition name, [edges])]

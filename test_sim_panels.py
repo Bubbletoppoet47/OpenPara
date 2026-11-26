@@ -73,7 +73,7 @@ def texts(t, title):
     s = [x for x in t.sections if x.title == title][0]
     return [b.text().strip() for b in s.frame.findChildren(QPushButton)]
 fea = tabs["2D FEA"]
-assert texts(fea, "Supports") == ["Fixed", "Displacement...", "Bolt...", "Screw...", "Contact"], texts(fea, "Supports")
+assert texts(fea, "Supports") == ["Fixed", "Displacement...", "Bolt...", "Screw...", "Contact", "Edit selected...", "Remove selected"], texts(fea, "Supports")   # (and its own table's buttons)
 assert texts(fea, "Loads")[:3] == ["Force...", "Pressure...", "Pressure from CFD..."] and "Traction..." not in texts(fea, "Loads")
 beam = tabs["1D FEA"]
 assert texts(beam, "Supports") == ["Fixed", "Pinned", "Displacement..."]

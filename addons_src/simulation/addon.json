@@ -2,7 +2,7 @@
  "id": "simulation",
  "name": "Simulation (1D FEA, 2D FEA, 2D CFD)",
  "version": "0.8.6",
- "description": "Frames and trusses (1D FEA), plane stress / strain FEA (2D FEA) and 2D CFD of a sketch or a slice of a part or assembly, with animation export. Each simulation is a project folder (.gpb, .gpf, .gpc) with its own copy of the part. Needs gmsh for meshing.",
+ "description": "Frames and trusses (1D FEA), plane stress / strain FEA (2D FEA, with a material for every closed region of the sketch, fully bonded where regions touch) and 2D CFD of a sketch or a slice of a part or assembly, with animation export. Each simulation is a project folder (.gpb, .gpf, .gpc) with its own copy of the part. Needs gmsh for meshing.",
  "requires": [
   {
    "pip": "gmsh==4.15.2",
