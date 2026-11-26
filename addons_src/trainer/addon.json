@@ -1,8 +1,8 @@
 {
  "id": "trainer",
  "name": "Trainer",
- "version": "0.9.0",
- "description": "Merge annotator datasets (zips) into one training project, choose training and validation sets and distortions, and train in the background: a YOLO model (saved as a model version the Annotator lists), or a model that gives the distance of a box alone (a formula, four regressors, a small neural network; they need only numpy and are kept in the project). Needs the Annotator add-on, and torch, ultralytics and (to be practical) a GPU in the Python you train with. A training project is a .training folder.",
+ "version": "0.10.0",
+ "description": "Merge annotator datasets (zips) into one training project, choose training and validation sets and distortions, and train in the background: a YOLO model (saved as a model version the Annotator lists), or a model that gives the distance of a box alone (a formula, four regressors, a small neural network, with charts of its runs; they need only numpy and are kept in the project). Needs the Annotator add-on, and torch, ultralytics and (to be practical) a GPU in the Python you train with. A training project is a .training folder.",
  "requires": [],
  "tabs": [
   {

@@ -15,11 +15,12 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, 
                              QProgressBar,
                              QListWidget,
                              QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QSplitter, QStackedWidget, QTableWidget,
-                             QTableWidgetItem, QVBoxLayout, QWidget)
+                             QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
+import trainer_charts as tch  # noqa: E402
 import trainer_core as tc  # noqa: E402
 import ui_kit  # noqa: E402
 
@@ -541,7 +542,13 @@ class TrainerTab(QWidget):
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(5000)
         self.log.setStyleSheet("font-family: Consolas, monospace;")
-        rv.addWidget(self.log, 1)
+        self.charts = tch.ChartsPane()                         # the charts of a distance-network run (learning curves, learning rates, layer by layer, ...)
+        self.run_tabs = QTabWidget()
+        self.run_tabs.setDocumentMode(True)
+        self.run_tabs.addTab(self.log, "Log")
+        self.run_tabs.addTab(self.charts, "Charts")
+        self.run_tabs.setTabToolTip(1, "Charts of a distance-network run: learning curves, the learning-rate sweep, layer by layer, the error and the epochs by rung, a momentum toy.")
+        rv.addWidget(self.run_tabs, 1)
         rv.addWidget(pane_head("Models trained in this project"))
         self.models_note = ui_kit.note("They are also offered in the Annotator's AI model box.")
         rv.addWidget(self.models_note)
@@ -697,6 +704,8 @@ class TrainerTab(QWidget):
         self.refresh_bar()
 
     def refresh_models(self):
+        if getattr(self, "charts", None) is not None:
+            self.charts.set_runs_dir(self.tp.runs_dir)
         self.models_list.clear()
         for v in self.tp.list_models():
             sc = v.get("scores") or {}
@@ -1441,6 +1450,10 @@ class TrainerTab(QWidget):
         self.btn_stop.setEnabled(False)
         self.btn_train.setEnabled(True)
         res = job.result()
+        if res and res.get("ok") and res.get("kind") == "nn_ladder" and not job.stopped:
+            self.charts.set_runs_dir(self.tp.runs_dir)
+            if self.charts.load(job.run_dir):
+                self.run_tabs.setCurrentWidget(self.charts)      # (a network run has charts to look at)
         if job.stopped:
             self.run_label.setText("Stopped. Nothing was saved from this run.")
         elif res and res.get("ok") and res.get("warning"):

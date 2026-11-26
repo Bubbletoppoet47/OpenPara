@@ -141,6 +141,15 @@ assert os.path.isfile(w.models_list.item(0).data(0x100)) and w.models_list.item(
 assert not os.path.exists(os.path.join(tc.annotator_models_dir(), "Scratch")) and not os.path.exists(os.path.join(tc.annotator_models_dir(), "Assist"))
 ok("Start training runs the network in the background without torch; the model is listed as 'network, rung 6 - distance only' with its error")
 
+# ---- the run has charts
+assert w.run_tabs.tabText(0) == "Log" and w.run_tabs.tabText(1) == "Charts" and w.run_tabs.currentWidget() is w.charts, "a finished network run opens its charts"
+assert w.charts.data is not None and w.charts.data.keys == ["rung6"] and w.charts.run_box.count() == 1 and w.charts.fig_box.currentData() == "learning"
+sp = w.charts.spec()
+assert any(len(s["points"]) == 4 for s in sp["series"] if s["legend"]) and not sp["empty"], "four epochs of the run"
+w.charts.fig_box.setCurrentIndex(w.charts.fig_box.findData("final")); app.processEvents()
+assert w.charts.spec()["xcat"] == ["rung6"] and w.charts.plot.spec["hlines"]
+ok("a finished network run opens the Charts tab on its learning curves (the four epochs it had) and the other figures draw the same run")
+
 # ---- export, import, remove
 w.models_list.setCurrentRow(0)
 out = os.path.join(TMP, "exported", "net")
