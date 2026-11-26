@@ -32,12 +32,19 @@ HINTS = {
     "noise": "Adds random grain, like a camera in low light. Higher numbers are grainier.",
     "jpeg": "Re-saves the picture at lower JPEG quality so it picks up compression blocks. Lower numbers look worse (100 = no loss).",
     "count": "How many distorted versions are made of each training picture. 3 copies means about 4 times as many training pictures, and every epoch takes about 4 times as long.",
-    "type": "Classes + boxes: a YOLO model that finds objects and says what they are. "
+    "type": "Distance only: no boxes are found. The model is told a box (where it is and how big) and answers how far away it is. A formula and four regressors "
+            "(k / height, log-linear, nearest neighbours, gradient boosting, Gaussian process), or a small neural network on a ladder of recipes from 1986 to today. "
+            "They train in seconds to minutes on the processor, need no torch, and are kept in this project (the Annotator cannot use them: it needs a detector).\n\n"
+            "Classes + boxes: a YOLO model that finds objects and says what they are. "
             "Classes + boxes + distance: two models trained one after the other. First that same YOLO model; then a separate, small distance "
             "model that is told a box and its class and answers how far away it is, in metres. It learns that from the LiDAR distances picked on "
             "boxes in the Annotator. Each is scored by itself, then both together, and they are saved as one model (the kind the Gimble uses to "
             "show distance). Every model starts from random weights: nothing pretrained is used, so it needs many pictures and epochs.",
-    "size": "Bigger models can be more accurate but are slower to train and run, and need more GPU memory. n = nano (smallest), s = small, m = medium, l = large.",
+    "size": "Bigger models can be more accurate but are slower to train and run, and need more GPU memory. n = nano (smallest), s = small, m = medium, l = large.\n"
+            "For a distance-only model this chooses what is trained: which of the formula and regressors, or which rung of the ladder of network recipes.",
+    "seeds": "How many times each network is trained from different random weights. 1 is a quick look; 5 shows how much of a result is luck, and is what a claim should rest on.",
+    "lrs": "The learning rate is the size of each step. Default: the one the rung starts with. The grid: eight rates (five for Adam) from very small to very large, which shows "
+           "which rates work and which make the training blow up. The one with the best median error is kept.",
     "epochs": "One epoch is one pass over all the training pictures. More epochs train longer; it usually helps until the validation score stops improving.",
     "patience": "Training ends early when the validation score has not improved for this many epochs.",
     "batch": "How many pictures the GPU handles at once. Higher is faster but needs more GPU memory. If training runs out of memory, lower it.",
@@ -452,6 +459,23 @@ class TrainerTab(QWidget):
             mf.addRow(label + ":", sp)
             mf.addRow(hint(key))
             self.more[key] = sp
+        self.seeds = QSpinBox()
+        self.seeds.setRange(1, 10)
+        self.seeds.valueChanged.connect(lambda _v: self._model_changed())
+        tip(self.seeds, "seeds")
+        self.seeds_row = (QLabel("Seeds per learning rate:"), self.seeds)
+        mf.addRow(*self.seeds_row)
+        self.seeds_hint = hint("seeds")
+        mf.addRow(self.seeds_hint)
+        self.lrs_box = QComboBox()
+        self.lrs_box.addItem("The rung's own", None)
+        self.lrs_box.addItem("The grid (8 rates, 5 for Adam)", "grid")
+        self.lrs_box.currentIndexChanged.connect(lambda _i: self._model_changed())
+        tip(self.lrs_box, "lrs")
+        self.lrs_row = (QLabel("Learning rates:"), self.lrs_box)
+        mf.addRow(*self.lrs_row)
+        self.lrs_hint = hint("lrs")
+        mf.addRow(self.lrs_hint)
         lv.addStretch(1)
         sc = QScrollArea()
         sc.setWidgetResizable(True)
@@ -568,6 +592,9 @@ class TrainerTab(QWidget):
             self.cont_on.setChecked(bool(m.get("continue_from")))
             self.dist_only.setChecked(bool(m.get("distance_only", True)))
             self.name_edit.setText(m.get("name") or "")
+            prm = m.get("params") or {}
+            self.seeds.setValue(int(prm.get("seeds") or 1))
+            self.lrs_box.setCurrentIndex(max(0, self.lrs_box.findData(prm.get("lrs") if prm.get("lrs") == "grid" else None)))
             self._continue_enable()
         finally:
             self._loading = False
@@ -577,7 +604,7 @@ class TrainerTab(QWidget):
 
     def _fill_sizes(self, want=None):
         spec = tc.model_types().get(self.type_box.currentData() or "yolo", {})
-        names = {"n": "Nano", "s": "Small", "m": "Medium", "l": "Large"}
+        names = dict({"n": "Nano", "s": "Small", "m": "Medium", "l": "Large"}, **(spec.get("size_names") or {}))
         self.size_box.blockSignals(True)
         self.size_box.clear()
         for s in spec.get("sizes", ()):
@@ -673,6 +700,14 @@ class TrainerTab(QWidget):
         self.models_list.clear()
         for v in self.tp.list_models():
             sc = v.get("scores") or {}
+            if v.get("kind") == "distance":
+                what = tc.model_types().get("nn_ladder" if v.get("family") == "mlp" else "classical_regress", {}).get("size_names", {})
+                name = (f"network, rung {(v.get('info') or {}).get('rung')}" if v.get("family") == "mlp" else what.get(v.get("family"), v.get("family")))
+                it = QListWidgetItem(f"{name}   distance only   {time.strftime('%Y-%m-%d %H:%M', time.localtime(v['ts']))}" + self.ml.distance_text(sc, "   "))
+                it.setData(Qt.ItemDataRole.UserRole, v["path"])
+                it.setToolTip(v["file"] + ("\nThis file holds a pickle: it is opened only if you say you trust it." if v.get("pickled") else ""))
+                self.models_list.addItem(it)
+                continue
             kind = {"two": "classes + boxes + distance", "old": "classes + boxes + distance (earlier kind)"}.get(tc.checkpoint_kind(v["path"]), "classes + boxes")
             it = QListWidgetItem(f"{self.ml.mr.SIZE_NAMES.get(v['size'], '?')}   {kind}   {time.strftime('%Y-%m-%d %H:%M', time.localtime(v['ts']))}"
                                  + (f"   mAP50 {sc['map50']}" if "map50" in sc else "") + self.ml.distance_text(sc))
@@ -726,7 +761,7 @@ class TrainerTab(QWidget):
         if not path:
             QMessageBox.information(self, "Export model", "Choose a model in the list of models first.")
             return
-        dest, _ = QFileDialog.getSaveFileName(self, "Export the model as a file", os.path.basename(path), "Model (*.pt)")
+        dest, _ = QFileDialog.getSaveFileName(self, "Export the model as a file", os.path.basename(path), "Distance model (*.opdm)" if path.lower().endswith(tc.DISTANCE_EXT) else "Model (*.pt)")
         if not dest:
             return
         try:
@@ -734,23 +769,25 @@ class TrainerTab(QWidget):
         except OSError as e:
             QMessageBox.critical(self, "Export model", f"Could not write the model: {e}")
             return
-        self.status.setText(f"Exported {os.path.basename(out)}, with its information in {os.path.basename(self.ml.info_path(out))}.")
+        self.status.setText(f"Exported {os.path.basename(out)}." if out.lower().endswith(tc.DISTANCE_EXT)
+                            else f"Exported {os.path.basename(out)}, with its information in {os.path.basename(self.ml.info_path(out))}.")
 
     def import_model(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Import model file(s)", "", "Model (*.pt)")
+        paths, _ = QFileDialog.getOpenFileNames(self, "Import model file(s)", "", "Models (*.pt *.opdm);;Model (*.pt);;Distance model (*.opdm)")
         if paths:
             self.import_model_files(paths)
 
     def import_model_files(self, paths):
         """Takes model files into the project (the Workbench block then keeps each inside its project file up to 500 MB, or linked).  A .pt file can run code when it is loaded:
         the person is asked once."""
-        paths = [p for p in paths if p.lower().endswith(".pt") and os.path.isfile(p)]
+        paths = [p for p in paths if p.lower().endswith((".pt", tc.DISTANCE_EXT)) and os.path.isfile(p)]
         if not paths:
             return 0
-        r = QMessageBox.question(self, "Import model", "A model file (.pt) can contain code that runs when it is loaded.\n\nImport only models you made or trust. Import " + (
-            f"these {len(paths)} files?" if len(paths) > 1 else os.path.basename(paths[0]) + "?"), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-        if r != QMessageBox.StandardButton.Yes:
-            return 0
+        if any(p.lower().endswith(".pt") for p in paths):                  # (a distance model is numbers, and is only copied here; the one with a pickle asks when it is opened)
+            r = QMessageBox.question(self, "Import model", "A model file (.pt) can contain code that runs when it is loaded.\n\nImport only models you made or trust. Import " + (
+                f"these {len(paths)} files?" if len(paths) > 1 else os.path.basename(paths[0]) + "?"), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+            if r != QMessageBox.StandardButton.Yes:
+                return 0
         done, failed = [], []
         for p in paths:
             try:
@@ -776,7 +813,7 @@ class TrainerTab(QWidget):
         self._models_changed_here()
 
     def dragEnterEvent(self, e):
-        if any(u.toLocalFile().lower().endswith(".pt") for u in e.mimeData().urls()):
+        if any(u.toLocalFile().lower().endswith((".pt", tc.DISTANCE_EXT)) for u in e.mimeData().urls()):
             e.acceptProposedAction()
 
     def dropEvent(self, e):
@@ -810,7 +847,9 @@ class TrainerTab(QWidget):
     def _dist_note(self):
         """Says what the next start has to make, so a long wait is known before Start training is pressed."""
         p = self.tp.distortion_plan(self._distort_pictures)
-        if not p["enabled"] or not p["pictures"]:
+        if self._spec().get("numpy_only") and p["enabled"]:
+            self.dist_note.setText("This model type learns from the original pictures' boxes: no distorted copies are made for it, whatever is set here. (They are made again for a YOLO type.)")
+        elif not p["enabled"] or not p["pictures"]:
             self.dist_note.setText("")
         elif p["to_make"] == 0:
             self.dist_note.setText(f"All {p['pictures'] * p['count']:,} copies are made ({p['pictures']:,} training pictures x {p['count']}). "
@@ -835,6 +874,7 @@ class TrainerTab(QWidget):
              "name": self.name_edit.text().strip(), "continue_from": self.cont_box.currentData() if self.cont_on.isChecked() else None,
              "distance_only": self.dist_only.isChecked()}
         m.update({k: s.value() for k, s in self.more.items()})
+        m["params"] = {"seeds": self.seeds.value(), "lrs": self.lrs_box.currentData()}          # (only the network type reads them)
         self.tp.set_settings({"model": m})
         self._update_env_view()
 
@@ -862,8 +902,33 @@ class TrainerTab(QWidget):
         else:
             wdg.setVisible(on)
 
+    def _spec(self):
+        return tc.model_types().get(self.type_box.currentData() or "yolo", {})
+
+    def _show_row(self, row, on):
+        self._row_visible(row[1], on)
+        row[0].setVisible(on)
+
+    def _type_rows(self):
+        """What the chosen type uses: a distance-only model is trained from random weights (nothing to continue from) on the processor, from the original pictures; the
+        seeds and learning rates belong to the network type; the early-stopping and batch settings are those of YOLO."""
+        spec = self._spec()
+        numeric = bool(spec.get("numpy_only"))
+        self.cont_on.setEnabled(not numeric)
+        for wdg in (self.cont_row, self.cont_box, self.cont_browse):
+            wdg.setEnabled(not numeric and self.cont_on.isChecked())
+        for key in ("patience", "batch"):
+            self.more[key].setEnabled(not numeric)
+        net = self.type_box.currentData() == "nn_ladder"
+        for row in (self.seeds_row, self.lrs_row):
+            self._show_row(row, net)
+        for wdg in (self.seeds_hint, self.lrs_hint):
+            self._row_visible(wdg, net)
+
     def _continue_enable(self):
-        on = self.cont_on.isChecked()
+        self._type_rows()
+        numeric = bool(self._spec().get("numpy_only"))
+        on = self.cont_on.isChecked() and not numeric
         path = self.cont_box.currentData() if on else None
         kind = tc.checkpoint_kind(path) if path and os.path.isfile(path) else "plain"
         builtin = (self.type_box.currentData() or "") in ("yolo", "yolo_distance")
@@ -1039,7 +1104,7 @@ class TrainerTab(QWidget):
             self.py_box.setCurrentIndex(self.py_box.findData(want))
         self._loading = was
         self._python_chosen(save=bool(saved) and want == saved)
-        if not self._offered and not self._closed and self.env and tc.can_download(self.env):
+        if not self._offered and not self._closed and self.env and tc.can_download(self.env) and not self._spec().get("numpy_only"):
             self._offered = True                               # asked once on its own; the button below the text asks again
             QTimer.singleShot(300, self.offer_download)
 
@@ -1196,15 +1261,17 @@ class TrainerTab(QWidget):
                 self.env_label.setText("No Python was found. Use Browse... to pick the python.exe that has torch and ultralytics.")
             self._pkg_buttons(False)
             return
-        text = tc.env_text(self.env)
-        if self.env["problems"]:
+        spec = self._spec()
+        problems, warnings = tc.env_problems(self.env, spec)
+        text = tc.env_text(self.env, spec)
+        if problems:
             self.env_label.setStyleSheet("color: #b00020;")
             text = "Training is not possible with this Python yet:\n" + text
-        elif self.env["warnings"]:
+        elif warnings:
             self.env_label.setStyleSheet("color: #b36b00;")
         else:
             self.env_label.setStyleSheet("")
-        offer = tc.can_download(self.env) and not self._pkg
+        offer = tc.can_download(self.env) and not self._pkg and not spec.get("numpy_only")
         if offer:
             text += "\nOpenPara can download what is missing: press the button below."
         self.env_label.setText(text)
@@ -1216,8 +1283,8 @@ class TrainerTab(QWidget):
         it is doing; the window stays usable and Cancel ends it.  Then the training program starts."""
         if self.running() or self._bg or self.preparing():
             return
-        if self.env is None or self.env["problems"]:
-            QMessageBox.warning(self, "Training", tc.env_text(self.env) if self.env else "No usable Python yet. Wait for the scan to finish, or use Browse... to pick one.")
+        if self.env is None or tc.env_problems(self.env, self._spec())[0]:
+            QMessageBox.warning(self, "Training", tc.env_text(self.env, self._spec()) if self.env else "No usable Python yet. Wait for the scan to finish, or use Browse... to pick one.")
             return
         me = self._ensure_me()
         if not me:

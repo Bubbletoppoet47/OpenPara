@@ -8,10 +8,13 @@ A training project (a ".training" folder, marker training.json):
     models/         Assist/ Scratch/  every model this project trained (as dated versions, the annotator's Models folder layout)
     runs/<id>/      one folder per training run: dataset/ (the frozen copy it trains on), job.json, log.txt, result.json, the training output
 
-Two kinds of model can be trained (model_types()), both from random weights (nothing pretrained):
+Four kinds of model can be trained (model_types()), all from random weights (nothing pretrained):
     classes + boxes              a stock Ultralytics YOLO model                                            -> models/Assist
     classes + boxes + distance   that detector, then a separate distance model trained after it; one file  -> models/Scratch
+    distance only (formulas)     a formula and four classical regressors that look at a box alone (numpy)  -> models/Distance  (.opdm)
+    distance only (network)      a small neural network written in numpy, one rung of a ladder of recipes  -> models/Distance  (.opdm)
 The distance model learns from the LiDAR distances picked per box in the annotator; the frozen copy carries them in distances.csv.
+A distance-only model finds no boxes, so the Annotator cannot use it as a detector: it is kept in this project (and in the Workbench project), not in the Annotator's Models folder.
 
 Distortions are made only for TRAINING pictures; pictures of sets marked Validation are never distorted (the annotator's rule).
 A run trains on a frozen copy of the data, so importing or editing while it runs changes nothing about that run.
@@ -34,6 +37,10 @@ MARKER = "training.json"
 FORMAT = "openpara-training"
 HELPER_SCRIPT = os.path.join(HERE, "train_helper_job.py")
 DISTANCE_SCRIPT = os.path.join(HERE, "train_distance_job.py")
+CLASSICAL_SCRIPT = os.path.join(HERE, "train_classical_job.py")
+NN_SCRIPT = os.path.join(HERE, "train_nn_job.py")
+DISTANCE_DIR = "Distance"                   # models/Distance: the distance-only models (.opdm files)
+DISTANCE_EXT = ".opdm"
 TWO_FORMAT = b"opara-two-model"             # a detector with a distance model added carries this at its start (distance_model.FORMAT)
 OLD_DISTANCE_FORMAT = b"gimble-det-dist"    # the earlier kind: one network for boxes and distance (gimble_model.MODEL_FORMAT)
 OLD_KIND_TEXT = ("This model is the earlier kind, where one network gave boxes and distance together. It still works in the Annotator and on "
@@ -51,7 +58,7 @@ DISTORTION_TYPES = [   # key, label, range key, low limit, high limit, decimals,
 DEFAULTS = {
     "distortions": {"enabled": False, "count": 5, "types": {t[0]: True for t in DISTORTION_TYPES}, "ranges": {}, "blur_chance": 0.5},
     "model": {"type": "yolo", "size": "m", "epochs": 100, "patience": 30, "batch": 16, "imgsz": 640, "classes": None,
-              "continue_from": None, "distance_only": True, "name": ""},
+              "continue_from": None, "distance_only": True, "name": "", "params": {}},
     "python": "",
 }
 
@@ -97,8 +104,18 @@ def model_types():
     A spec with distance=True trains a model that also gives a distance per box and is saved with the Scratch models."""
     common = {"script": HELPER_SCRIPT, "sizes": ("n", "s", "m", "l"), "default_size": "m", "models_key": "assist", "needs": [],
               "cfg": "yolo26{size}.yaml", "fallback": "yolo11{size}.yaml", "distance": False}
+    numeric = {"script": CLASSICAL_SCRIPT, "models_key": "distance", "needs": [], "distance": True, "numpy_only": True, "distortions": False, "continue": False,
+               "cfg": None, "fallback": None, "optional_packages": []}
+    rung_names = {"ladder": "The whole ladder (rungs 0 - 8)", "demo_sigmoid": "Demo: 8 layers of sigmoid", "demo_relu_he": "Demo: 8 layers of ReLU + He", "demo_bn": "Demo: 8 layers with batch norm"}
+    rung_names.update({str(k): f"Rung {k}" for k in range(9)})
     out = {"yolo": dict(common, label="Classes + boxes"),
-           "yolo_distance": dict(common, label="Classes + boxes + distance", script=DISTANCE_SCRIPT, models_key="scratch", distance=True)}
+           "yolo_distance": dict(common, label="Classes + boxes + distance", script=DISTANCE_SCRIPT, models_key="scratch", distance=True),
+           "classical_regress": dict(numeric, label="Distance only: formula and regressors", script=CLASSICAL_SCRIPT, optional_packages=["scikit-learn", "scipy"],
+                                     sizes=("all", "pinhole", "loglinear", "knn", "boosting", "gp"), default_size="all",
+                                     size_names={"all": "All five, compared", "pinhole": "Formula k / height", "loglinear": "Log-linear regression", "knn": "k nearest neighbours",
+                                                 "boosting": "Gradient boosting", "gp": "Gaussian process"}),
+           "nn_ladder": dict(numeric, label="Distance only: neural network", script=NN_SCRIPT,
+                             sizes=("6", "ladder") + tuple(str(k) for k in (0, 1, 2, 3, 4, 5, 7, 8)) + ("demo_sigmoid", "demo_relu_he", "demo_bn"), default_size="6", size_names=rung_names)}
     try:
         import ext
         for k, spec in ext.MODEL_TRAINERS.items():
@@ -120,6 +137,14 @@ class Cancelled(Exception):
 
 
 OLD_TYPES = {"helper": "yolo", "yolo_scratch": "yolo", "yolo_distance_scratch": "yolo_distance"}     # type names of earlier versions
+
+
+def distance_models():
+    """The dist_models module (numpy only; it lives beside this file)."""
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    import dist_models
+    return dist_models
 
 
 def checkpoint_kind(path):
@@ -193,6 +218,9 @@ SITE_HOOK = ("import os as _os, sys as _sys\n_p = _os.environ.get('OPARA_TRAIN_S
 _PROBE = (SITE_HOOK + "import json,importlib.util as u\nd={}\n"
           "for m in ('torch','ultralytics'):\n"
           "    try:\n        d[m]=__import__(m).__version__\n    except Exception as e:\n        d[m]=None;d[m+'_error']=type(e).__name__+': '+str(e)[:400]\n"
+          "import importlib.metadata as _md\n"
+          "for m,k in (('numpy','numpy_version'),('scikit-learn','sklearn_version'),('scipy','scipy_version')):\n"
+          "    try:\n        d[k]=_md.version(m)\n    except Exception:\n        d[k]=None\n"
           "d['cuda']=False;d['gpu']=None;d['cuda_build']=None\n"
           "if d['torch']:\n    import torch\n    d['cuda']=bool(torch.cuda.is_available())\n    d['cuda_build']=torch.version.cuda\n"
           "    d['gpu']=torch.cuda.get_device_name(0) if d['cuda'] else None\n"
@@ -234,8 +262,25 @@ def check_env(python=None):
                 warnings.append(f"torch {info['torch']} is the CUDA build ({info['cuda_build']}) but sees no GPU: check the NVIDIA driver "
                                 "(run nvidia-smi) and that the GPU is not in use by something else.")
             warnings.append("Without a GPU, training runs on the CPU, which is very slow (fine for a tiny test).")
-    info.update(ok=not problems, problems=problems, warnings=warnings)
+    info.update(ok=not problems, problems=problems, warnings=warnings, started=ran)
     return info
+
+
+def env_problems(info, spec=None):
+    """(problems, warnings) of a check_env result for a model type.  The YOLO types need torch and ultralytics (what check_env found); a distance-only type is plain numpy:
+    it needs only numpy, and scikit-learn / scipy for the variants that use them (a missing one is a warning: that variant is skipped, the others go on)."""
+    if not spec or not spec.get("numpy_only"):
+        return list(info["problems"]), list(info["warnings"])
+    if not info.get("started", True):
+        return [p for p in info["problems"] if "could not be started" in p] or ["Python for training could not be started."], []
+    problems, warnings = [], []
+    if not info.get("numpy_version"):
+        problems.append("numpy is not installed in the training Python.  Install it:  pip install numpy")
+    missing = [n for n, k in (("scikit-learn", "sklearn_version"), ("scipy", "scipy_version")) if n in spec.get("optional_packages", ()) and not info.get(k)]
+    if missing:
+        warnings.append(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} not installed in this Python, so gradient boosting and the Gaussian process cannot be made "
+                        f"(the others can).  To get them:  pip install {' '.join(missing)}")
+    return problems, warnings
 
 
 def find_pythons():
@@ -313,8 +358,12 @@ _YOLO_CKPT = ("import json,re,sys\nfrom ultralytics import YOLO\nm=YOLO(sys.argv
               "print('CKPT'+json.dumps({'size':sc,'classes':[n[k] for k in sorted(n)] if isinstance(n,dict) else list(n)}))\n")
 
 
-def env_text(info):
+def env_text(info, spec=None):
     lines = [f"Training Python: {info['python']}"]
+    if spec and spec.get("numpy_only"):
+        problems, warnings = env_problems(info, spec)
+        have = [f"{n} {info[k]}" for n, k in (("numpy", "numpy_version"), ("scikit-learn", "sklearn_version"), ("scipy", "scipy_version")) if info.get(k)]
+        return "\n".join(lines + ([", ".join(have)] if have else []) + ["No GPU is used: this model is trained on the processor."] * (not problems) + problems + warnings)
     if info.get("torch"):
         lines.append(f"torch {info['torch']}" + (f"  -  GPU: {info['gpu']}" if info.get("cuda") else "  -  no GPU"))
     if info.get("ultralytics"):
@@ -897,8 +946,30 @@ class TrainingProject:
         return yaml_path, counts
 
     # ---- models
+    def distance_dir(self):
+        return os.path.join(self.models_dir, DISTANCE_DIR)
+
+    def list_distance_models(self):
+        """The distance-only models of this project (models/Distance/*.opdm), newest first, in the shape of ml.list_versions plus 'kind': 'distance', 'family' and 'id'.
+        Only the head of each file is read (never a pickle)."""
+        dmod = distance_models()
+        out, d = [], self.distance_dir()
+        if not os.path.isdir(d):
+            return out
+        for f in os.listdir(d):
+            p = os.path.join(d, f)
+            h = dmod.read_header(p) if f.lower().endswith(DISTANCE_EXT) else None
+            if h is None:
+                continue
+            tr = h.get("trained") or {}
+            out.append({"path": p, "file": f, "key": "distance", "kind": "distance", "size": None, "ts": h.get("created") or os.path.getmtime(p), "trainer": tr.get("trainer"),
+                        "classes": h.get("names") or tr.get("classes"), "scores": h.get("scores"), "based_on": None, "family": h.get("family"), "id": h.get("id"),
+                        "pickled": bool(h.get("pickled")), "info": h.get("info")})
+        out.sort(key=lambda v: (v["ts"], v["file"]), reverse=True)
+        return out
+
     def list_models(self):
-        out = []
+        out = self.list_distance_models()
         for key in self.ml.FOLDERS:
             out += self.ml.list_versions(self.models_dir, key)
         return sorted(out, key=lambda v: v["ts"], reverse=True)
@@ -907,6 +978,8 @@ class TrainingProject:
         """Takes a model file (a .pt, with its .json information when there is one next to it) into this project's models.  -> the path of the copy.
         The kind is read from the file (a distance model goes with the Scratch models); a file that is here already (same name and size) is not copied again."""
         ml = self.ml
+        if path.lower().endswith(DISTANCE_EXT):
+            return self._import_distance_model(path)
         key = "scratch" if checkpoint_kind(path) in ("two", "old") else "assist"
         d = ml.folder_path(self.models_dir, key)
         os.makedirs(d, exist_ok=True)
@@ -928,9 +1001,36 @@ class TrainingProject:
             ml.ensure_info(key, dest)                    # the size is read from the model itself (needs torch; without it the model is listed with no size)
         return dest
 
+    def _import_distance_model(self, path):
+        """A .opdm file into models/Distance (a file that is there already, same name and size, is not copied again).  It must be a distance model file."""
+        if distance_models().read_header(path) is None:
+            raise ValueError(f"{os.path.basename(path)} is not an OpenPara distance model file.")
+        d = self.distance_dir()
+        os.makedirs(d, exist_ok=True)
+        stem, n = os.path.splitext(os.path.basename(path))[0], 1
+        dest = os.path.join(d, stem + DISTANCE_EXT)
+        while os.path.exists(dest):
+            if os.path.getsize(dest) == os.path.getsize(path):
+                return dest
+            n += 1
+            dest = os.path.join(d, f"{stem}_{n}{DISTANCE_EXT}")
+        tmp = dest + ".part"
+        shutil.copyfile(path, tmp)
+        os.replace(tmp, dest)
+        return dest
+
     def export_model(self, path, dest):
-        """Writes the model `path` out as a file: the .pt as `dest` (made to end in .pt) and its information as the .json beside it.  -> the .pt written."""
+        """Writes the model `path` out as a file: the .pt as `dest` (made to end in .pt) and its information as the .json beside it.  -> the .pt written.
+        A distance-only model is one file, written as `dest` (made to end in .opdm)."""
         ml = self.ml
+        if path.lower().endswith(DISTANCE_EXT):
+            if not dest.lower().endswith(DISTANCE_EXT):
+                dest += DISTANCE_EXT
+            os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+            tmp = dest + ".part"
+            shutil.copyfile(path, tmp)
+            os.replace(tmp, dest)
+            return dest
         if not dest.lower().endswith(".pt"):
             dest += ".pt"
         os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
@@ -943,8 +1043,8 @@ class TrainingProject:
         return dest
 
     def remove_model(self, path):
-        """Deletes a model of this project (the .pt and its .json)."""
-        for f in (path, self.ml.info_path(path)):
+        """Deletes a model of this project (the .pt and its .json, or the one .opdm file)."""
+        for f in ((path,) if path.lower().endswith(DISTANCE_EXT) else (path, self.ml.info_path(path))):
             try:
                 os.remove(f)
             except OSError:
@@ -980,6 +1080,9 @@ class TrainingProject:
             raise ValueError(f"Unknown model type: {m['type']}")
         python = python or s.get("python") or train_python()
         prev = None
+        spec = types[m["type"]]
+        if not spec.get("continue", True):
+            m["continue_from"] = None                                # a distance-only model is trained from random weights: there is nothing to go on from
         if m.get("continue_from"):
             if not os.path.isfile(m["continue_from"]):
                 raise ValueError(f"The model to continue from is not there: {m['continue_from']}")
@@ -990,7 +1093,7 @@ class TrainingProject:
             tell("model")
             prev = checkpoint_info(python, m["continue_from"], stop)
             m["size"] = prev["size"] or m["size"]
-        spec = types[m["type"]]
+        spec = types[m["type"]]                                      # (continuing a model can change the type)
         if m["size"] not in spec["sizes"]:
             m["size"] = spec["default_size"]
         names = [c for c in self.data.classes if m.get("classes") is None or c in m["classes"]]
@@ -998,7 +1101,8 @@ class TrainingProject:
             raise ValueError("The model you are continuing from knows these classes:\n    " + ", ".join(prev["classes"])
                              + "\n\nbut the classes ticked here are:\n    " + ", ".join(names)
                              + "\n\nThey must be the same, in the same order. Tick exactly those classes, or untick \"Continue from existing model\".")
-        if s["distortions"]["enabled"]:
+        distort = bool(s["distortions"]["enabled"]) and spec.get("distortions", True)       # (a distance-only model learns from the original pictures' boxes: no copies)
+        if distort:
             tell("distortions")
             self.prepare_distortions(lambda d, t: tell("distortions", d, t), stop)
         run_id = time.strftime("%Y%m%d_%H%M%S") + f"_{m['type']}_{m['size']}"
@@ -1009,7 +1113,7 @@ class TrainingProject:
         os.makedirs(run_dir)
         try:
             tell("copy")
-            yaml_path, counts = self.freeze(os.path.join(run_dir, "dataset"), m.get("classes"), s["distortions"]["enabled"],
+            yaml_path, counts = self.freeze(os.path.join(run_dir, "dataset"), m.get("classes"), distort,
                                             lambda d, t: tell("copy", d, t), stop)
         except BaseException:
             shutil.rmtree(run_dir, ignore_errors=True)          # nothing is left of a run that did not start
@@ -1022,10 +1126,10 @@ class TrainingProject:
             raise ValueError("There are no validation pictures. Mark at least one fully annotated set as Validation (the scores come from it).")
         if spec.get("distance") and counts["dist"]["train"] == 0:
             shutil.rmtree(run_dir, ignore_errors=True)
-            raise ValueError("None of the training boxes" + (" of the ticked classes" if m.get("classes") else "") + " has a distance, so the distance part "
-                             "of this model has nothing to learn from.\n\nDistances come from LiDAR recordings: in the Annotator, pick the distance "
+            raise ValueError(("None of the training boxes" + (" of the ticked classes" if m.get("classes") else "") + " has a distance, so "
+                             + ("this model" if spec.get("numpy_only") else "the distance part of this model") + " has nothing to learn from.\n\nDistances come from LiDAR recordings: in the Annotator, pick the distance "
                              "of a box on a picture that has depth, then make the dataset zip again.\n\n"
-                             "To train without distance, choose a \"Classes + boxes\" model type.")
+                             + ("" if spec.get("numpy_only") else "To train without distance, choose a \"Classes + boxes\" model type.")).rstrip())
         job = {"data_yaml": yaml_path, "run_dir": run_dir, "type": m["type"], "size": m["size"], "epochs": int(m["epochs"]),
                "patience": int(m["patience"]), "batch": int(m["batch"]), "imgsz": int(m["imgsz"]), "workers": 2, "device": None,
                "classes": counts["classes"], "counts": {"train": counts["train"], "val": counts["val"]},
@@ -1035,7 +1139,8 @@ class TrainingProject:
                "distance_only": bool(prev and spec.get("distance") and m.get("distance_only", True)),
                "cfg": spec.get("cfg", "yolo26{size}.yaml"), "fallback": spec.get("fallback", "yolo11{size}.yaml"),
                "models_key": spec["models_key"], "models_dirs": [self.models_dir] + ([annotator_models_dir()] if self.publish_shared else []),
-               "trainer": (m.get("name") or "").strip() or me_name or "trainer", "lib_dir": ANNOTATOR_APP}
+               "trainer": (m.get("name") or "").strip() or me_name or "trainer", "lib_dir": ANNOTATOR_APP,
+               "params": {k: v for k, v in (m.get("params") or {}).items() if v is not None}}
         with open(os.path.join(run_dir, "job.json"), "w", encoding="utf-8") as f:
             json.dump(job, f, indent=2)
         if stop and stop():

@@ -163,6 +163,25 @@ boxes). The result is one file: the detector's `.pt` with the distance model add
 existing model" goes on from a model you trained; a Classes + boxes model can get a distance model on top, and "Keep the detector as
 it is" trains only the distance model. The earlier one-network distance models (`gimble_model.py`) still work in the Annotator and on
 the Gimble but cannot be trained further.
+**Trainer: distance-only models** (`addons_src/trainer/`, no torch, no GPU; numpy, and scikit-learn / scipy for two of them). Two more model types
+look at a box alone (its place and size in the letterboxed picture, the six numbers of `dist_data.geometry`, and its class) and answer metres; they find no
+boxes, so the Annotator cannot use them as a detector and they are kept in the project (`models/Distance/*.opdm`, or inside the Workbench project's file),
+never in the Annotator's Models folder. They learn from the original pictures' labelled boxes with a distance (never from the distorted copies), are
+scored on the validation boxes only (whole recordings, never distorted) with `eval_harness.py` (median relative error, within 20 %, mean error, signed bias,
+by range; 95 % intervals by a bootstrap that resamples recordings first; paired differences between two models), and every run folder has the tables and
+per-box predictions the figures are drawn from.
+- **Distance only: formula and regressors** (`train_classical_job.py`, `dist_models.py`): `d = k / height` (2a), log-linear regression (2b), k nearest
+  neighbours (2c), gradient boosting (2d, saved with a pickle: it is opened only when you say you trust the file) and a Gaussian process that also says how
+  sure it is (2e). k, the boosting grid and the like are chosen by cross-validation grouped by recording, on training boxes only.
+- **Distance only: neural network** (`train_nn_job.py`, `np_net.py`, written out in numpy, its gradient checked against central differences): a ladder of nine
+  recipes, each changing one thing from the one before - rung 0 is the 1986 one (sigmoid units, mean squared error, plain gradient descent, uniform
+  initialisation), then tanh, momentum, a log target, smooth-L1, ReLU with He initialisation, Adam, batch normalisation, weight decay with early stopping - and
+  three deep demonstrations (8 layers) to see gradients vanish or not. Seeds and learning rates are asked per run (the grid is 8 rates for gradient descent, 5
+  for Adam); a run that blows up is counted, not dropped; every epoch of every run is written with the per-layer diagnostics. The learning rate of a rung is
+  chosen on the validation boxes the scores come from, and the run says so.
+Not yet done: real runs on the Gimble recordings (the figures in the tests come from made-up pictures), the charts of the Train tab, and the comparison of
+these models with the YOLO distance model on the same boxes.
+
 The Training Python box lists the Pythons the Trainer finds. When OpenPara's own Python is the one chosen and has no torch or ultralytics (a fresh Playground install), the Trainer asks once whether to download them (it says the size: a few hundred MB for the CPU version, about 3 GB with NVIDIA GPU support, which it offers only when an NVIDIA GPU is found) and does it in the background with a progress row and Cancel, into `<user folder>/Trainer/packages`; "Remove the downloaded packages" undoes it. A Python you picked yourself is never touched.
 Pressing Start training prepares the run in the background (the distorted copies of the training pictures, then the run's own copy of
 the data): the window shows a bar, how far it is, the time left, and Cancel; the copies are made once and kept, also after a cancel.

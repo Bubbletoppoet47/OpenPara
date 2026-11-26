@@ -8,7 +8,7 @@ same way as the other distance models.   Run by the Trainer as   python train_nn
           seeds     how many seeds per learning rate (default 1; the specification asks for 5 where a result is claimed)
           seed      the first seed (the others follow)
           lrs       "grid" = the specification's grid (8 learning rates for gradient descent, 5 for Adam), a list of numbers, or nothing = the rung's default learning rate
-          epochs    (default 200)   batch, depth, width, hidden, activation, init, optimizer, momentum, weight_decay, patience, early_stopping: replace a setting of the rung
+          epochs    (default: the job's epochs, else 200)   batch, depth, width, hidden, activation, init, optimizer, momentum, weight_decay, patience, early_stopping: replace a setting of the rung
           target_err   the error whose first epoch is reported (default 7.5%)      n_boot   bootstrap resamples (default 2000)
 
 Every run is trained from random weights on the training boxes of the frozen copy (original pictures only, boxes with a distance), watching the validation boxes, which it never trains
@@ -50,7 +50,7 @@ import np_net as nn  # noqa: E402
 
 DEMO_KEYS = ("demo_sigmoid", "demo_relu_he", "demo_bn")
 SIZES = ("ladder", "demos") + tuple(str(i) for i in range(9)) + DEMO_KEYS
-DEFAULTS = {"seed": 0, "seeds": 1, "lrs": None, "epochs": 200, "target_err": 0.075, "n_boot": 2000, "every": None}
+DEFAULTS = {"seed": 0, "seeds": 1, "lrs": None, "epochs": None, "target_err": 0.075, "n_boot": 2000, "every": None}
 OVERRIDES = ("batch", "depth", "width", "hidden", "activation", "init", "optimizer", "momentum", "weight_decay", "patience", "early_stopping", "loss", "target", "batch_norm", "init_scale")
 RUN_COLS = ["rung", "name", "lr", "seed", "diverged", "diverged_epoch", "epochs_run", "best_epoch", "epochs_to_target", "median_rel_err", "within20", "mae_m", "signed_bias",
             "final_train_loss", "seconds", "parameters", "chosen", "curve"]
@@ -147,7 +147,7 @@ def fmt(v):
 def main():
     job = jc.load_job()
     P = dict(DEFAULTS, **(job.get("params") or {}))
-    seed0, n_seeds, epochs = int(P["seed"]), max(1, int(P["seeds"])), max(1, int(P["epochs"]))
+    seed0, n_seeds, epochs = int(P["seed"]), max(1, int(P["seeds"])), max(1, int(P["epochs"] or job.get("epochs") or 200))
     run = job["run_dir"]
     try:
         rungs = chosen_rungs(job)
