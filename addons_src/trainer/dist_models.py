@@ -9,6 +9,7 @@ formula's constant: nothing from the validation boxes), and is saved as ONE smal
     knn         2c   the mean of ln d of the k nearest training boxes       k and uniform / distance weights chosen by cross-validation grouped by recording
     boosting    2d   gradient boosting of trees (scikit-learn HistGradientBoostingRegressor, absolute error)   learning rate, depth and number of trees by grouped cross-validation
     gp          2e   Gaussian process, constant x RBF with one length scale per input + white noise (scikit-learn), target ln d standardised; also says how sure it is
+    mlp         3    a small neural network written out in numpy (np_net.py), trained from random weights on the rung of the ladder it is told (0 = the 1986 recipe ... 8)
 
 A saved gradient boosting model holds a pickle of the scikit-learn model: a pickle can run code when it is read, so it is read only when the caller says it
 trusts the file (load(..., trust_pickle=True)).  Every other kind is plain numbers.  The Gaussian process is saved as numbers too (its training rows, kernel and weights).
@@ -23,12 +24,13 @@ import numpy as np
 
 import dist_data as dd
 import eval_harness as eh
+import np_net as nn
 
 FORMAT = "opara-distance-model-v1"
 EXT = ".opdm"
 FAMILIES = {}                                 # family key -> class
 D_MIN, D_MAX = dd.D_MIN, dd.D_MAX
-IDS = {"pinhole": "2a", "loglinear": "2b", "knn": "2c", "boosting": "2d", "gp": "2e"}
+IDS = {"pinhole": "2a", "loglinear": "2b", "knn": "2c", "boosting": "2d", "gp": "2e", "mlp": "3"}
 
 
 class UntrustedModel(Exception):
@@ -469,6 +471,67 @@ class GaussianProcess(DistanceModel):
 
     def n_params(self):
         return len(self.ls) + 2                              # one length scale per input, the constant and the noise
+
+
+# ------------------------------------------------------------------ 3 a small neural network (np_net)
+@register
+class MLPModel(DistanceModel):
+    """The network of np_net.py on the standardised numbers of the box.  Its settings are those of a rung of the ladder (np_net.rung_config); it is saved as plain numbers.
+    What it answers depends on its target: metres / 20 (rung 0 - 2) or the standardised ln d (rung 3 and up); answer() turns either into metres inside 0.2 - 60."""
+    family = "mlp"
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.cfg, self.net, self.target, self.sd, self.run = None, None, None, None, {}
+
+    def config(self):
+        return {"seed": self.seed, **({k: (list(v) if isinstance(v, tuple) else v) for k, v in (self.cfg or {}).items() if k not in ("change",)})}
+
+    def fit(self, train, val=None, rung=6, cfg=None, epochs=200, lr=None, log=None, stop=None, target_err=0.075, every=1, **over):
+        """Trains on the TRAINING rows.  `val` (dd.Boxes) is what the learning curve and early stopping watch; it is never trained on.  With no `val` the training rows are watched
+        (and early stopping cannot be asked for).  `cfg` is a complete settings dict, else `rung` and any `over`rides (activation=, hidden=, optimizer=, ...)."""
+        self.cfg = nn.rung_config(rung, **over) if cfg is None else dict(cfg)
+        if val is None and self.cfg.get("early_stopping"):
+            raise ValueError("Early stopping needs validation boxes to watch.")
+        Xtr = train.X()
+        self.sd = dd.Standardiser().fit(Xtr)
+        v = train if val is None else val
+        r = nn.fit(self.cfg, self.sd.apply(Xtr), train.dist, self.sd.apply(v.X()), v.dist, epochs=epochs, seed=self.seed, lr=lr, log=log, stop=stop, target_err=target_err, every=every)
+        return self.adopt(r, self.sd, self.cfg)
+
+    def adopt(self, r, sd, cfg):
+        """Takes the result of np_net.fit (made on inputs standardised with `sd`) as this model: the job fits many networks and keeps some, so it does not train twice."""
+        self.cfg, self.sd = dict(cfg), sd
+        self.run, self.net, self.target = r, r["net"], r["target"]
+        self.cfg["lr"] = r["lr"]
+        self.info = {"rung": self.cfg.get("rung"), "name": self.cfg.get("name"), "lr": r["lr"], "epochs_run": r["epochs_run"], "best_epoch": r["best_epoch"], "diverged": r["diverged"],
+                     "epochs_to_target": r["epochs_to_target"], "hidden": list(self.cfg["hidden"]), "activation": self.cfg["activation"], "optimizer": self.cfg["optimizer"]}
+        return self
+
+    def answer(self, X):
+        if self.net is None or r_diverged(self):
+            raise ValueError("This network has no usable weights (the run diverged).")
+        return self.target.decode(self.net.predict(self.sd.apply(np.asarray(X, float))))
+
+    def predict_log(self, X):
+        return np.log(self.answer(X))
+
+    def params_dict(self):
+        return {"standardiser": self.sd.to_json(), "target": self.target.to_dict(), "cfg": self.config(), "net": self.net.to_dict()}
+
+    def load_params(self, p):
+        self.sd = dd.Standardiser.from_json(p["standardiser"])
+        t = p["target"]
+        self.target = nn.Target(t["kind"], t["mean"], t["std"])
+        self.cfg = dict(p.get("cfg") or {})
+        self.net = nn.MLP.from_dict(p["net"])
+
+    def n_params(self):
+        return self.net.n_params() if self.net is not None else 0
+
+
+def r_diverged(m):
+    return bool(m.run.get("diverged")) if m.run else False
 
 
 def calibration(y_true_log, mean, std, levels=(0.68, 0.95)):

@@ -220,4 +220,29 @@ else:
     raise AssertionError
 ok("parameter counts: formula 1, log-linear 3, k-NN 0 (it is its rows), Gaussian process 8 (6 length scales, constant, noise), boosting = its tree nodes")
 
+# the neural network family (np_net): fitted on the training boxes, read back from its file, the file never needs a pickle
+mlp = dm.make("mlp", 640, 1, ["person"], 3).fit(train, val, rung=6, epochs=25, hidden=(16, 8))
+assert mlp.family == "mlp" and mlp.id == "3" and mlp.n_params() == 6 * 16 + 16 + 16 * 8 + 8 + 8 + 1 and not mlp.pickled
+assert med(mlp.predict_boxes(val), val.dist) < 0.09 and mlp.info["rung"] == 6 and mlp.info["hidden"] == [16, 8] and not mlp.info["diverged"]
+mlp_path = mlp.save(os.path.join(tempfile.mkdtemp(), "net" + dm.EXT), scores={"dist_median_err": 0.05})
+back = dm.load(mlp_path)                                                       # (no trust_pickle needed: plain numbers)
+assert np.allclose(back.predict_boxes(val), mlp.predict_boxes(val), atol=1e-9) and back.cfg["optimizer"] == "adam"
+hdr = dm.read_header(mlp_path)
+assert hdr["family"] == "mlp" and hdr["scores"]["dist_median_err"] == 0.05 and hdr["pickled"] is False
+try:
+    dm.make("mlp", 640, 1, ["person"], 0).fit(train, None, rung=8, epochs=3)
+except ValueError as e:
+    assert "validation" in str(e)
+else:
+    raise AssertionError("early stopping with nothing to watch must be refused")
+diverged = dm.make("mlp", 640, 1, ["person"], 0).fit(train, val, rung=0, epochs=5, lr=50.0)
+assert diverged.info["diverged"]
+try:
+    diverged.predict_boxes(val)
+except ValueError as e:
+    assert "diverged" in str(e)
+else:
+    raise AssertionError("a diverged network must not answer")
+ok("the neural network is fitted from random weights, saved as plain numbers, read back identically; one that diverged refuses to answer; early stopping needs boxes to watch")
+
 print("dist models ok", flush=True)
