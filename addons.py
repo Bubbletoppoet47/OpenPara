@@ -71,14 +71,14 @@ CATALOG = {
                                   "to record, early-exit conditions and a results table with CSV export. The study is saved inside the "
                                   "simulation's project folder (study/). Needs the Simulation add-on."},
     "annotator_gimble": {"name": "Gimble sessions for the Annotator",
-                         "description": "Adds File > Import Gimble Session... to the Annotator: sessions recorded by the Gimble rig (camera + LiDAR) "
+                         "description": "Adds Data > Import Gimble session... to the Annotator: sessions recorded by the Gimble rig (camera + LiDAR) "
                                         "become sets of photos with their depth. Needs the Annotator add-on."},
     "remote": {"name": "Remote Computer",
                "description": "See the screen of another computer on your network, use its keyboard and mouse, copy files to and from it and run "
                               "commands there - a Raspberry Pi, or a laptop whose screen is broken. The other computer runs a small helper "
                               "program and has an access code. Playground only."},
     "gimble_link": {"name": "Gimble connection for the Annotator",
-                    "description": "Adds File > Gimble to the Annotator: send a trained model to the Gimble rig's Raspberry Pi in the form its "
+                    "description": "Adds Gimble buttons to the Annotator (Models and Data tabs): send a trained model to the Gimble rig's Raspberry Pi in the form its "
                                    "Detect program reads, download its recordings and see its status, over the network. Needs the Annotator and "
                                    "Remote Computer add-ons, and the Remote helper running on the Pi. Playground only."},
     "autotune": {"name": "Autotune",

@@ -223,7 +223,7 @@ def save_classes(path, classes):
 # list. Every existing label file stores a class as a plain integer index
 # into this list - inserting a class in the middle, or reordering, would
 # silently relabel every box already drawn with the classes that shifted.
-FIXED_CLASSES = []      # a new project starts with NO classes: everybody makes their own (Edit > Classes)
+FIXED_CLASSES = []      # a new project starts with NO classes: everybody makes their own (Setup tab > Classes)
 
 
 # ---------------------------------------------------------------------------

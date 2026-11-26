@@ -3,7 +3,10 @@ annotator_window.py - the General Classification Annotator as a Qt window (a QMa
 
 Desktop bounding-box annotation tool for building a detection dataset: draw boxes on photos from the Gimble rig (camera + LiDAR), import
 a recorded session folder (every sample brings its LiDAR depth, viewable as an overlay) or a video, pre-label with AI models, and PUBLISH
-what you annotated as a zip you can hand to someone (and merge theirs into yours). Classes are your own and bound to hotkeys (Edit > Classes, Edit > Hotkeys).
+what you annotated as a zip you can hand to someone (and merge theirs into yours). Classes are your own and bound to hotkeys (Setup tab: Classes, Hotkeys).
+
+The window is a ribbon (Annotate / Data / Models / Setup tabs of big buttons) over one side panel (the classes, then Frames / Selected box / AI assist)
+and the picture; annotator_ribbon.py and annotator_panel.py build those, this file says what each button does.
 
 All the actual logic (box math, file formats, the project's on-disk state, Gimble import, export / splitting) lives in annotator_core.py
 and share_zip.py and is toolkit-free; this file is the visual layer: it shows things and turns clicks into calls on a Project object.
@@ -11,6 +14,7 @@ It does the same things the older Tkinter window (annotator_gui.py in the Genera
 """
 
 import contextlib
+import html
 import json
 import os
 import shutil
@@ -20,9 +24,8 @@ import threading
 import numpy as np
 from PIL import Image
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QColor, QShortcut
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QMessageBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QPushButton,
-                             QScrollArea, QSplitter, QVBoxLayout, QWidget)
+from PyQt6.QtGui import QShortcut
+from PyQt6.QtWidgets import QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QSplitter, QVBoxLayout, QWidget
 
 try:                                                         # inside OpenPara: the shared look (bar, button weights); on its own the annotator does without
     import ui_kit
@@ -32,6 +35,8 @@ except ImportError:
 import annotator_core as ac
 import annotator_canvas as cv
 import annotator_dialogs as dlg
+import annotator_panel as pnl
+import annotator_ribbon as rib
 import dataset_zip as dz
 import hotkeys as hk
 import model_download as md
@@ -46,7 +51,7 @@ COPY_LIDAR_ON_IMPORT = True              # also copy each sample's raw LiDAR poi
 color_for_class = cv.color_for_class
 DEPTH_NEAR_M, DEPTH_FAR_M, PICK_RADIUS_PX, ZOOM_MAX, ZOOM_STEP = cv.DEPTH_NEAR_M, cv.DEPTH_FAR_M, cv.PICK_RADIUS_PX, cv.ZOOM_MAX, cv.ZOOM_STEP
 
-# AI models: downloaded from GitHub (File > Download models from GitHub) into one folder in OpenPara's own data folder, <models_dir()>/Assist
+# AI models: downloaded from GitHub (Models tab: Download models) into one folder in OpenPara's own data folder, <models_dir()>/Assist
 # and /Scratch; or trained by you (found under RUNS_DIR, the training program's output folder).  Nothing is built in.
 def models_dir():
     try:
@@ -150,7 +155,7 @@ class AnnotatorWindow(QMainWindow):
         else:
             yield
 
-    # ------------------------------------------------------------------ a project is opened (also File > Dataset location)
+    # ------------------------------------------------------------------ a project is opened (the old Dataset location command is gone)
     def open_project(self, root):
         self.project = ac.Project(root)
         self.path = None if (self.temp_root and same_path(root, self.temp_root)) else root
@@ -177,6 +182,7 @@ class AnnotatorWindow(QMainWindow):
             self.project.editor_id = self.me['id']
         self._scan_models()
         self.pick_check.setChecked(False)
+        self.panel.thumbs.clear()
         self.ai_choice.blockSignals(True)
         self.ai_choice.setCurrentIndex(0)
         self.ai_choice.blockSignals(False)
@@ -184,8 +190,7 @@ class AnnotatorWindow(QMainWindow):
         self._refresh_ai_choices()
         self._build_ai_assist_checkboxes()
         self._bind_hotkeys()
-        self._update_pick_check_text()
-        self._update_fit_button_text()
+        self._update_ribbon_keys()
         self._refresh_class_list()
         self._refresh_image_list()
         self.canvas.redraw()
@@ -195,143 +200,111 @@ class AnnotatorWindow(QMainWindow):
                      f"{len(self.project.startup_reconciled)} image(s) were deleted outside the app. Their labels were cleaned up.")
 
     # ------------------------------------------------------------------ UI
+    # Ribbon on top (tabs of big buttons, as in the Part window), one side panel on the left (the class list, then the Frames / Selected box /
+    # AI assist tabs), the picture in the middle, the status line at the bottom.
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(6, 6, 6, 4)
-        # toolbar row
-        tb = QHBoxLayout()
-        self.pick_check = QCheckBox()
-        self.pick_check.toggled.connect(self._on_pick_toggle)
-        tb.addWidget(self.pick_check)
-        self.fit_button = QPushButton()
-        self.fit_button.clicked.connect(self.fit_view)
-        tb.addWidget(self.fit_button)
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        tb.addWidget(sep)
-        tb.addWidget(QLabel("AI model:"))
-        self.ai_choice = QComboBox()
-        self.ai_choice.setMinimumWidth(190)
-        self.ai_choice.addItems(AI_CHOICES)
-        self.ai_choice.activated.connect(lambda _i: self.load_ai_model())
-        tb.addWidget(self.ai_choice)
-        b = self.confirm_btn = QPushButton("Confirm image")
-        b.setToolTip("Marks this image as annotated the way it is now (its boxes are kept) and goes to the next one.")
-        b.clicked.connect(self.confirm_current_as_is)
-        if ui_kit is not None:
-            ui_kit.primary(b)                                # the action that moves the work on
-        tb.addWidget(b)
-        self.ai_status = QLabel("No model loaded")
-        tb.addWidget(self.ai_status)
-        tb.addStretch(1)
-        outer.addLayout(tb)
-
-        split = QSplitter()
-        outer.addWidget(split, 1)
-        # left: classes, AI assist, selected box (scrollable, so nothing ever scrolls out of reach)
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        left = QWidget()
-        left_scroll.setWidget(left)
-        ll = QVBoxLayout(left)
-        ll.addWidget(self._heading("Classes"))
-        self.class_list = QListWidget()
-        self.class_list.setMinimumHeight(120)
-        self.class_list.currentRowChanged.connect(self._on_class_select)
-        ll.addWidget(self.class_list, 1)
-        ll.addWidget(self._note("Press a class key [ ] to pick it. A selected box is relabeled too.\nEdit > Classes / Hotkeys to change."))
-        ll.addWidget(self._rule())
-        ll.addWidget(self._heading("AI assist"))
-        ll.addWidget(self._note("Check classes for live predictions on this photo. Confirmed images are never touched."))
-        self.ai_box = QVBoxLayout()
-        ll.addLayout(self.ai_box)
-        b = QPushButton("Clear boxes and retry AI")
-        b.clicked.connect(self.clear_and_retry_ai)
-        ll.addWidget(b)
-        ll.addWidget(self._note("Wipes this image's boxes and predicts again."))
-        ll.addWidget(self._rule())
-        ll.addWidget(self._heading("Selected box"))
-        for text, fn in (("Delete selected box", self.delete_selected_box), ("Clear distance of box", self.clear_selected_distance)):
-            b = QPushButton(text)
-            b.clicked.connect(fn)
-            ll.addWidget(b)
-        ll.addWidget(self._note("LiDAR switch (toolbar): hover a box, click to attach its distance, right-click to clear."))
-        ll.addWidget(self._note("Drag: new box. Click: select. Double- or right-click: delete."))
-        ll.addStretch(1)
-        left_scroll.setMinimumWidth(220)
-        split.addWidget(left_scroll)
-        # centre: the picture
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.ribbon = rib.Ribbon()
+        outer.addWidget(self.ribbon)
+        body = QSplitter()
+        body.setContentsMargins(4, 4, 4, 4)
+        body.setChildrenCollapsible(False)
+        outer.addWidget(body, 1)
+        self.panel = pnl.AnnotatorPanel(self)
+        body.addWidget(self.panel)
         self.canvas = cv.ImageCanvas(self)
-        split.addWidget(self.canvas)
-        # right: image navigator
-        right = QWidget()
-        rl = QVBoxLayout(right)
-        rl.addWidget(self._heading("Images"))
-        rl.addWidget(self._note("Images still to annotate. [?] = AI draft, not yet confirmed."))
-        rl.addWidget(self._heading("Working set", 10))
-        self.session_combo = QComboBox()
-        self.session_combo.activated.connect(self._on_session_pick)
-        rl.addWidget(self.session_combo)
-        rl.addWidget(self._note("[A] = every frame of the set is annotated."))
-        self.show_annotated = QCheckBox("Show annotated too (review/fix)")
-        self.show_annotated.toggled.connect(lambda _c: self._refresh_image_list())
-        rl.addWidget(self.show_annotated)
-        row = QHBoxLayout()
-        for text, fn in (("< Prev", self.prev_image), ("Next >", self.next_image)):
-            b = QPushButton(text)
-            b.clicked.connect(fn)
-            row.addWidget(b)
-        rl.addLayout(row)
-        for text, fn in (("Rotate 90° ⟳", self.rotate_current_frame), ("Delete frame...", self.delete_current_frame)):
-            b = QPushButton(text)
-            b.clicked.connect(fn)
-            rl.addWidget(b)
-        self.image_list = QListWidget()
-        self.image_list.currentRowChanged.connect(self._on_image_select)
-        rl.addWidget(self.image_list, 1)
-        right.setMinimumWidth(240)
-        split.addWidget(right)
-        split.setStretchFactor(1, 1)
-        split.setSizes([230, 800, 260])
-        # status bar
+        body.addWidget(self.canvas)
+        body.setStretchFactor(1, 1)
+        body.setSizes([330, 900])
+        panel = self.panel                                   # the widgets the logic below reaches by name
+        self.class_list, self.session_combo, self.image_list = panel.class_list, panel.session_combo, panel.image_list
+        self.ai_choice, self.ai_box = panel.ai_choice, panel.ai_box
+        self.ai_choice.addItems(AI_CHOICES)
+        self.frame_text = ""                                 # "Frame 2 of 4", drawn on the picture
+        self._note_cache = {}
+        self._build_ribbon()
+        # status line: what is open at the left, the AI model and any running job at the right
         self.status_label = QLabel("No project loaded")
         self.progress_label = QLabel("")
+        self.ai_status = QLabel("No model loaded")
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addPermanentWidget(self.progress_label)
-        self._build_menubar()
-        self._build_bar()
+        self.statusBar().addPermanentWidget(self.ai_status)
 
-    def _build_bar(self):
-        """Inside OpenPara: the second menu bar is replaced by one bar, as in the other tabs - what this is and which project, then the File /
-        Edit / Manage commands as drop-down buttons.  On its own (no OpenPara around it) the annotator keeps its menu bar."""
-        self.bar_lbl = None
-        if ui_kit is None:
-            return
-        from PyQt6.QtWidgets import QToolButton
-        bar = QWidget()
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(6, 5, 6, 3)
-        lay.setSpacing(8)
-        lay.addWidget(ui_kit.kind_chip("Annotator", "#b83280"))
+    # Add-ons put commands in the annotator through ext.add_menu_item("annotator.file", text, fn); the ones this program knows have their
+    # own place and icon, any other goes on the Data tab with a plain one.
+    ADDON_PLACES = {"Import Gimble Session...": ("data", "ann_gimble_import", "Import Gimble\nsession…"),
+                    "Gimble: Download Recordings...": ("data", "ann_gimble_dl", "Download\nrecordings…"),
+                    "Gimble: Status...": ("data", "ann_gimble_status", "Gimble\nstatus…"),
+                    "Gimble: Send a Model...": ("models", "ann_gimble_send", "Send model\nto Gimble…")}
+
+    def _addon_buttons(self):
+        out = {"data": [], "models": []}
+        try:
+            import ext
+            items = list(ext.MENU_ITEMS.get("annotator.file", []))
+        except ImportError:
+            items = []
+        for i, (text, fn) in enumerate(items):
+            shown = text[:-3] + "…" if text.endswith("...") else text
+            page, icon, label = self.ADDON_PLACES.get(text, ("data", "ann_addon", rib.two_lines(shown)))
+            out[page].append(rib.button(f"addon{i}", icon, label, shown, lambda fn=fn: fn(self)))
+        return out
+
+    def _build_ribbon(self):
+        B, R = rib.button, self.ribbon
+        addon = self._addon_buttons()
+        self.model_menu = QMenu(self)
+        made = R.add_page("Annotate", [
+            B("confirm", "ann_confirm", "Confirm\nimage", "Marks this image as annotated the way it is now (its boxes are kept) and goes to the next one.", self.confirm_current_as_is, bold=True),
+            B("prev", "ann_prev", "Previous\nimage", "", self.prev_image),
+            B("next", "ann_next", "Next\nimage", "", self.next_image),
+            "|",
+            B("fit", "ann_fit", "Fit to\nscreen", "", self.fit_view),
+            B("rotate", "ann_rotate", "Rotate\n90°", "Turn the open image 90° clockwise (its boxes turn with it).", self.rotate_current_frame),
+            B("delete_frame", "ann_delete_frame", "Delete\nframe…", "Delete the open image and its files for good (asks first).", self.delete_current_frame),
+            "|",
+            B("lidar", "ann_lidar", "LiDAR\ndistance", "", checkable=True),
+            B("clear_dist", "ann_clear_dist", "Clear\ndistance", "Remove the distance of the selected box.", self.clear_selected_distance),
+            B("delete_box", "ann_delete_box", "Delete\nbox", "", self.delete_selected_box),
+            "|",
+            B("retry_ai", "ann_retry_ai", "Clear and\nretry AI", "Wipes this image's boxes and predicts again.", self.clear_and_retry_ai),
+        ])
+        self.confirm_btn, self.fit_button, self.pick_check = made["confirm"], made["fit"], made["lidar"]
+        self.pick_check.toggled.connect(self._on_pick_toggle)
+        R.add_page("Data", [
+            B("import_video", "ann_import_video", "Import\nvideo…", "Cut a video into frames: one set per video.", self.import_video),
+            B("import_zip", "ann_import_zip", "Import\nzip…", "Merge somebody's dataset zip into this project.", self.import_zip),
+            B("export_zip", "ann_export_zip", "Export\nzip…", "All annotated images, with boxes and distances, in one zip you can send.", self.export_zip),
+            B("tablet", "ann_tablet", "Tablet\nmode…", "Annotate from a tablet's browser.", self.open_in_browser),
+            "|",
+            B("sessions", "ann_sessions", "Sessions…", "Rename, delete or thin out the sets of frames.", self.manage_sessions),
+            B("sync", "ann_sync", "Sync deleted\nfiles", "Catch up with images deleted outside the annotator.", self.sync_deleted_files),
+        ] + (["|"] + addon["data"] if addon["data"] else []))
+        R.add_page("Models", [
+            B("load_model", "ann_model_load", "Load AI\nmodel", "Pick the model that pre-labels: one downloaded from GitHub, or one you trained.", menu=self.model_menu),
+            B("download_models", "ann_model_dl", "Download\nmodels…", "Get the models from GitHub.", self.download_models),
+            B("confidence", "ann_conf", "AI\nconfidence…", "Only keep predictions at or above this confidence.", self.set_ai_confidence),
+        ] + (["|"] + addon["models"] if addon["models"] else []))
+        R.add_page("Setup", [
+            B("classes", "ann_classes", "Classes…", "Add, rename or remove the classes.", self.manage_classes),
+            B("hotkeys", "ann_hotkeys", "Hotkeys…", "Keys for classes and actions.", self.edit_hotkeys),
+            B("my_name", "ann_name", "My name…", "Stamped on the data you export.", self.change_my_name),
+        ])
+        corner = QWidget()                                   # what this is and which project, beside the tabs
+        cl = QHBoxLayout(corner)
+        cl.setContentsMargins(0, 0, 8, 0)
+        cl.setSpacing(8)
+        if ui_kit is not None:
+            cl.addWidget(ui_kit.kind_chip("Annotator", "#b83280"))
         self.bar_lbl = QLabel("")
-        self.bar_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
-        lay.addWidget(self.bar_lbl, 1)
-        self.bar_buttons = {}
-        for key, text, menu, tip in (("file", "File ▾", self.file_menu, "Import videos and datasets, export a dataset, download models, annotate from a tablet"),
-                                     ("edit", "Edit ▾", self.edit_menu, "Classes, hotkeys, your name, AI confidence"),
-                                     ("manage", "Manage ▾", self.manage_menu, "Sessions, and files deleted outside the annotator")):
-            tb = QToolButton()
-            tb.setText(text)
-            tb.setToolTip(tip)
-            tb.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-            tb.setMenu(menu)
-            ui_kit.menu_button(tb)
-            lay.addWidget(tb)
-            self.bar_buttons[key] = tb
-        ui_kit.top_bar(self, bar)                             # (the menu bar is hidden, not replaced: its menus are what the buttons show)
+        self.bar_lbl.setStyleSheet("color:#6a7790;")
+        cl.addWidget(self.bar_lbl)
+        R.setCornerWidget(corner, Qt.Corner.BottomRightCorner)
 
     def _refresh_bar(self):
         lb = getattr(self, "bar_lbl", None)
@@ -344,60 +317,85 @@ class AnnotatorWindow(QMainWindow):
         except Exception:
             lb.setText("")
 
-    @staticmethod
-    def _heading(text, size=11):
-        """A pane heading, the same small capitals as in the rest of the program."""
-        lab = QLabel(text.upper())
-        lab.setStyleSheet("color:#4a5872; font-size:11px; font-weight:600; letter-spacing:1px; padding-top:2px;")
-        return lab
+    def _refresh_enabled(self, ids=None, pos=None):
+        """Greys the ribbon buttons that have nothing to act on (no image open, first / last frame, no box selected)."""
+        rb = self.ribbon.buttons
+        has = self.current_image_id is not None
+        for k in ("confirm", "fit", "rotate", "delete_frame", "lidar", "retry_ai"):
+            rb[k].setEnabled(has)
+        rb["prev"].setEnabled(pos is not None and pos > 0)
+        rb["next"].setEnabled(pos is not None and ids is not None and pos < len(ids) - 1)
+        self._refresh_box_panel()
 
-    @staticmethod
-    def _note(text):
-        lab = QLabel(text)
-        lab.setWordWrap(True)
-        lab.setStyleSheet("color:#6a7790; font-size:11px;")
-        return lab
+    def _refresh_box_panel(self):
+        """The Selected box tab, and the two ribbon buttons that act on the selected box."""
+        panel, i = getattr(self, "panel", None), self._sel
+        if panel is None or not hasattr(self, "boxes"):
+            return
+        valid = i is not None and 0 <= i < len(self.boxes)
+        d = self.box_dist[i] if valid and i < len(self.box_dist) else None
+        rb = self.ribbon.buttons
+        rb["delete_box"].setEnabled(valid)
+        rb["clear_dist"].setEnabled(bool(d))
+        if not valid:
+            panel.box_info.setText("<b>No box selected.</b><br><span style='color:#6a7790'>Click a box on the picture, or drag a new one.</span>")
+            return
+        cls, xc, yc, w, h = self.boxes[i]
+        name = self.project.classes[cls] if cls < len(self.project.classes) else f"class {cls}"
+        x1, y1, x2, y2 = ac.yolo_box_to_pixel(xc, yc, w, h, *self.current_pil_image.size)
+        dist = (f"Distance <b>{d['distance_m']:.2f} m</b> (LiDAR point at {d['u']}, {d['v']})" if d else "No distance attached.")
+        panel.box_info.setText(f"<span style='color:{color_for_class(cls)}; font-weight:600'>{html.escape(name)}</span><br>{int(x2 - x1)} × {int(y2 - y1)} px<br>{dist}")
 
-    @staticmethod
-    def _rule():
-        f = QFrame()
-        f.setFrameShape(QFrame.Shape.HLine)
-        return f
+    def _frame_note(self, img_id):
+        """The grey note at the right of a frame row: how many boxes it has, or that it is an AI draft (read when the row is on screen)."""
+        if img_id not in self._note_cache:
+            if self.project.is_ai_pending(img_id) and not self.project.is_annotated(img_id):
+                note = "AI draft"
+            elif not self.project.is_annotated(img_id):
+                note = ""
+            else:
+                n = len(self.boxes) if img_id == self.current_image_id else len(self.project.get_boxes(img_id))
+                note = f"{n} box" + ("" if n == 1 else "es")
+            self._note_cache[img_id] = note
+        return self._note_cache[img_id]
 
-    def _build_menubar(self):
-        bar = self.menuBar()
-        file_m = bar.addMenu("&File")
-        self.file_menu = file_m
+    _sel = None                                              # the selected box of the open image (None: no box)
 
-        def add(menu, text, fn):
-            a = QAction(text, self)
-            a.triggered.connect(lambda _c=False: fn())
-            menu.addAction(a)
-            return a
-        add(file_m, "Import Video...", self.import_video)
-        try:
-            import ext
-            for text, fn in ext.MENU_ITEMS.get("annotator.file", []):      # add-ons (e.g. Gimble sessions) put their items here
-                add(file_m, text, lambda fn=fn: fn(self))
-        except ImportError:
-            pass
-        file_m.addSeparator()
-        add(file_m, "Export dataset as zip...", self.export_zip)
-        add(file_m, "Import dataset zip...", self.import_zip)
-        file_m.addSeparator()
-        add(file_m, "Download models from GitHub...", self.download_models)
-        add(file_m, "Open in browser (tablet)...", self.open_in_browser)
-        edit_m = bar.addMenu("&Edit")
-        self.edit_menu = edit_m
-        add(edit_m, "Classes...", self.manage_classes)
-        add(edit_m, "Hotkeys...", self.edit_hotkeys)
-        edit_m.addSeparator()
-        add(edit_m, "My name...", self.change_my_name)
-        add(edit_m, "AI confidence...", self.set_ai_confidence)
-        manage_m = bar.addMenu("&Manage")
-        self.manage_menu = manage_m
-        add(manage_m, "Sessions...", self.manage_sessions)
-        add(manage_m, "Sync Deleted Files", self.sync_deleted_files)
+    @property
+    def selected_box_index(self):
+        return self._sel
+
+    @selected_box_index.setter
+    def selected_box_index(self, i):
+        self._sel = i
+        self._refresh_box_panel()
+
+    def _update_ribbon_keys(self):
+        """The hover tip of a ribbon button names the key bound to its job."""
+        rb = self.ribbon.buttons
+
+        def tip(key, base, *actions):
+            keys = "/".join(k for k in (self.hotkeys.label(a) for a in actions) if k)
+            rb[key].setToolTip(base + (f"  ({keys})" if keys else ""))
+        tip("prev", "Previous image", "prev_image")
+        tip("next", "Next image", "next_image")
+        tip("fit", "Fit the whole picture in the window", "fit_view")
+        tip("delete_box", "Delete the selected box", "delete_box")
+        tip("lidar", "LiDAR dots + pick distance: hover a box, click a dot to attach its distance, right-click to clear", "toggle_pick", "toggle_depth")
+
+    def _rebuild_model_menu(self):
+        """The ribbon's Load AI model list: what the model box in the AI assist tab offers, the loaded one ticked."""
+        m, cur = self.model_menu, self.ai_choice.currentText()
+        m.clear()
+        for text in [self.ai_choice.itemText(i) for i in range(self.ai_choice.count())]:
+            a = m.addAction(text)
+            a.setCheckable(True)
+            a.setChecked(text == cur)
+            a.triggered.connect(lambda _c=False, t=text: self._pick_model(t))
+
+    def _pick_model(self, text):
+        self._set_choice(text)
+        self.load_ai_model()
 
     # ------------------------------------------------------------------ small things
     def set_progress(self, text):
@@ -449,7 +447,7 @@ class AnnotatorWindow(QMainWindow):
         return models_dir()
 
     def _scan_models(self):
-        """The models downloaded from GitHub (the newest of each size and kind) go into the toolbar's AI model box."""
+        """The models downloaded from GitHub (the newest of each size and kind) go into the AI model lists (the ribbon's Load AI model and the AI assist tab)."""
         self._inserted = {}
         for key in ml.FOLDERS:
             for v in ml.newest_per_size(ml.list_versions(models_dir(), key)):
@@ -477,7 +475,7 @@ class AnnotatorWindow(QMainWindow):
             def predict(img_id):
                 ma = self.model_assist
                 if ma is None:
-                    raise RuntimeError("Load an AI model on the computer first (the AI model box at the top).")
+                    raise RuntimeError("Load an AI model on the computer first (Models tab > Load AI model).")
                 with self._web_ai_lock:
                     return self._map_model_classes(ma.predict_boxes(self.project.image_path(img_id), conf_threshold=self.model_conf))
             self._web_ai_lock = threading.Lock()
@@ -522,15 +520,6 @@ class AnnotatorWindow(QMainWindow):
                 sc.activated.connect(fixed[action])
             self.shortcuts.append(sc)
 
-    def _update_pick_check_text(self):
-        keys = [self.hotkeys.label(a) for a in ("toggle_pick", "toggle_depth")]
-        keys = "/".join(k for k in keys if k)
-        self.pick_check.setText("LiDAR dots + pick distance" + (f" ({keys})" if keys else ""))
-
-    def _update_fit_button_text(self):
-        key = self.hotkeys.label("fit_view")
-        self.fit_button.setText("Fit to screen" + (f" ({key})" if key else ""))
-
     def _hotkeys_changed(self):
         """Save, rebind and refresh everything that shows a key."""
         try:
@@ -538,8 +527,7 @@ class AnnotatorWindow(QMainWindow):
         except OSError as e:
             qtk.error(self, "Hotkeys", f"Could not save the hotkeys:\n{e}")
         self._bind_hotkeys()
-        self._update_pick_check_text()
-        self._update_fit_button_text()
+        self._update_ribbon_keys()
         self._build_ai_assist_checkboxes(keep_checked=self._checked_names())
         self._refresh_class_list()
         if self._classes_refresh:
@@ -583,14 +571,25 @@ class AnnotatorWindow(QMainWindow):
         self.class_list.clear()
         for i, name in enumerate(self.project.classes):
             key = self._hotkey_label(i)
-            it = QListWidgetItem((f"[{key}] " if key else "    ") + name)
-            it.setForeground(QColor(color_for_class(i)))
+            it = QListWidgetItem((f"[{key}] " if key else "") + name)
+            it.setData(pnl.ROLE_COLOR, color_for_class(i))
             self.class_list.addItem(it)
+        self.panel.fit_class_list(len(self.project.classes))
         if self.project.classes:
             idx = min(self.current_class_id, len(self.project.classes) - 1)
             self.class_list.setCurrentRow(idx)
             self.current_class_id = idx
         self.class_list.blockSignals(False)
+        self._refresh_class_counts()
+
+    def _refresh_class_counts(self):
+        """The number at the right of each class: how many boxes of it the open image has."""
+        n = {}
+        for b in self.boxes:
+            n[b[0]] = n.get(b[0], 0) + 1
+        for i in range(self.class_list.count()):
+            self.class_list.item(i).setData(pnl.ROLE_COUNT, n.get(i, 0))
+        self.class_list.viewport().update()
 
     def _set_active_class(self, idx):
         """Sets the class new boxes are drawn with; a selected box is relabeled in place too (one key does both)."""
@@ -663,7 +662,7 @@ class AnnotatorWindow(QMainWindow):
             ids = [i for i in ids if not self._is_hidden_info(imgs[i])]    # other people's data stays shut until Access
         if self.active_session is not None:
             ids = [i for i in ids if imgs[i].get('session_id') == self.active_session]
-        if self.show_annotated.isChecked():
+        if self.panel.show_all():
             return ids
         return [i for i in ids if i == self.current_image_id or not self.project.is_annotated(i)]
 
@@ -688,6 +687,8 @@ class AnnotatorWindow(QMainWindow):
         self.session_combo.addItems(labels)
         self.session_combo.setCurrentIndex(keys.index(self.active_session))
         self.session_combo.blockSignals(False)
+        t, a = prog.get(self.active_session, (tot, ann)) if self.active_session is not None else (tot, ann)
+        self.panel.set_summary.setText((f"Set {self.active_session}" if self.active_session is not None else "All sets") + f"  ·  {a} of {t} annotated")
 
     def _on_session_pick(self, i):
         if 0 <= i < len(self._session_keys):
@@ -698,9 +699,7 @@ class AnnotatorWindow(QMainWindow):
         self.active_session = sid
         self._clear_current()
         if not self._visible_image_ids() and self.project.list_images():
-            self.show_annotated.blockSignals(True)
-            self.show_annotated.setChecked(True)       # nothing left to do here - show everything to review
-            self.show_annotated.blockSignals(False)
+            self.panel.set_show_all(True, notify=False)       # nothing left to do here - show everything to review
         self._refresh_image_list()
         self.canvas.redraw()
         self._update_status()
@@ -708,11 +707,15 @@ class AnnotatorWindow(QMainWindow):
     def _refresh_image_list(self):
         self._refresh_session_combo()
         ids = self._visible_image_ids()
+        self._note_cache = {}
         self.image_list.blockSignals(True)
         self.image_list.clear()
         for img_id in ids:
-            mark = "✓" if self.project.is_annotated(img_id) else ("?" if self.project.is_ai_pending(img_id) else " ")
-            self.image_list.addItem(f"[{mark}] {img_id}")
+            state = "done" if self.project.is_annotated(img_id) else ("ai" if self.project.is_ai_pending(img_id) else "todo")
+            it = QListWidgetItem(f"[{ {'done': '✓', 'ai': '?', 'todo': ' '}[state] }] {img_id}")
+            it.setData(pnl.ROLE_ID, img_id)
+            it.setData(pnl.ROLE_STATE, state)
+            self.image_list.addItem(it)
         if self.current_image_id in ids:
             self.image_list.setCurrentRow(ids.index(self.current_image_id))
         self.image_list.blockSignals(False)
@@ -746,6 +749,7 @@ class AnnotatorWindow(QMainWindow):
         if img_id is None:
             return
         self.project.rotate_image(img_id, clockwise=True)
+        self.panel.thumbs.forget(img_id)
         self._depth_cache = (None, None)      # depth was rotated along with the image
         self.zoom, self.view_center = 1.0, None
         self.current_pil_image = Image.open(self.project.image_path(img_id)).convert("RGB")
@@ -769,6 +773,7 @@ class AnnotatorWindow(QMainWindow):
         ids = self._visible_image_ids()
         pos = ids.index(img_id) if img_id in ids else None
         self.project.delete_image(img_id)
+        self.panel.thumbs.forget(img_id)
         self._clear_current()
         remaining = self._visible_image_ids()
         if remaining:
@@ -1190,7 +1195,7 @@ class AnnotatorWindow(QMainWindow):
         if report['added_classes']:
             parts.append("new class(es): " + ", ".join(report['added_classes']))
         qtk.info(self, "Import complete", ("Imported: " + "; ".join(parts) if parts else "Nothing new to import")
-                 + f". ({report['same']} already identical.) Pick it in the Working set box.")
+                 + f". ({report['same']} already identical.) Pick it in the Frames tab (Working set).")
 
     # ------------------------------------------------------------------ dataset location
     # ------------------------------------------------------------------ import
@@ -1252,7 +1257,7 @@ class AnnotatorWindow(QMainWindow):
                 if skipped:
                     lines.append(f"{skipped} frame(s) were already in the project and were left alone.")
                 if made:
-                    lines.append("Pick the set from the Working set box on the right.")
+                    lines.append("Pick the set in the Frames tab (Working set).")
                 if errors:
                     lines.append("\nProblems:\n" + "\n".join(errors))
                 (qtk.warn if errors and not made else qtk.info)(self, "Video import", "\n".join(lines))
@@ -1292,6 +1297,7 @@ class AnnotatorWindow(QMainWindow):
         if cur in labels:
             self.ai_choice.setCurrentText(cur)
         self.ai_choice.blockSignals(False)
+        self._rebuild_model_menu()
 
     def _identify_old_models_in_background(self):
         """An older single-folder run has to be opened once to learn its size; do that off the GUI thread."""
@@ -1307,9 +1313,10 @@ class AnnotatorWindow(QMainWindow):
         self.ai_choice.blockSignals(True)
         self.ai_choice.setCurrentText(text)
         self.ai_choice.blockSignals(False)
+        self._rebuild_model_menu()
 
     def load_ai_model(self, kind=None):
-        """Loads the model picked in the toolbar box (a downloaded one, or one you trained). Switching re-predicts the current photo."""
+        """Loads the model picked in the ribbon's Load AI model list or the AI assist tab (a downloaded one, or one you trained). Switching re-predicts the current photo."""
         if kind:
             if self.ai_choice.findText(kind) < 0:
                 self._refresh_ai_choices()
@@ -1326,7 +1333,7 @@ class AnnotatorWindow(QMainWindow):
         if entry is None:
             self._set_choice(AI_CHOICES[0])
             self.ai_status.setText("No model loaded")
-            qtk.error(self, "Model not found", f"'{choice}' is not there (any more). Download models with File > Download models from GitHub.")
+            qtk.error(self, "Model not found", f"'{choice}' is not there (any more). Download models with Models tab > Download models.")
             return
         path = entry['path']
         if not os.path.exists(path):
@@ -1496,9 +1503,15 @@ class AnnotatorWindow(QMainWindow):
     def _update_status(self):
         self._refresh_bar()
         self.canvas.update_empty()
+        ids = self._visible_image_ids() if self.current_image_id is not None else []
+        pos = ids.index(self.current_image_id) if self.current_image_id in ids else None
+        self.frame_text = f"Frame {pos + 1} of {len(ids)}" if pos is not None else ""
+        self._refresh_enabled(ids, pos)
+        self._refresh_class_counts()
+        self.canvas.update()
         if self.current_image_id is None:
             n = len(self.project.list_images())
-            hint = "" if n else "  |  empty - File > Import Gimble Session... or Import Video..."
+            hint = "" if n else "  |  empty - Data tab: Import video... or Import Gimble session..."
             if n and self.active_session is not None:
                 hint = f"  |  set {self.active_session}: nothing to show"
             self.status_label.setText(f"Project: {self.project.root}  |  {n} image(s){hint}")

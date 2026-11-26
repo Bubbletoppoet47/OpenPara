@@ -1,7 +1,7 @@
 import faulthandler; faulthandler.dump_traceback_later(170, exit=True)
-"""The annotator: a new project has no classes (so no AI-assist boxes); the File menu is short; the project is a folder with its dataset inside
+"""The annotator: a ribbon over a side panel (no menu bar; a new project has no classes, so no AI-assist boxes); the project is a folder with its dataset inside
 (saved the first time something is imported); datasets travel as zips that merge; models come from the GitHub folder; windows show the
-'Opening ...' card; add-ons add menu items."""
+'Opening ...' card; add-ons put buttons on the ribbon."""
 import os, sys, tempfile, time, zipfile, json, shutil, contextlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.basename(HERE) == "tests":
@@ -61,41 +61,30 @@ w.host = FakeHost(); w.resize(1200, 800); w.show(); pump(4)
 assert w.temp_root and w.path is None and w.title() == "Annotator" and not w.is_dirty()
 assert w.project.classes == [] and w.ai_box.count() == 0 and w.class_list.count() == 0
 assert [w.ai_choice.itemText(i) for i in range(w.ai_choice.count())] == ["No AI model"]
-menus = {m.title().replace("&", ""): [a.text() for a in m.actions() if a.text()] for m in w.menuBar().findChildren(type(w.file_menu))}
-file_items = [a.text() for a in w.file_menu.actions() if a.text()]
-assert file_items == ["Import Video...", "Export dataset as zip...", "Import dataset zip...", "Download models from GitHub...", "Open in browser (tablet)..."], file_items
-edit_items = [a.text() for a in w.edit_menu.actions() if a.text()]
-assert edit_items == ["Classes...", "Hotkeys...", "My name...", "AI confidence..."], edit_items
-# inside the program: one bar (what it is, which project, the three menus as drop-down buttons) instead of a second menu bar
+# the window is a ribbon over a side panel: four tabs of big buttons, no menu bar (every command of the old menus has a button)
 from PyQt6.QtCore import QCoreApplication, QEvent
+from PyQt6.QtWidgets import QToolButton
 QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value); pump(2)      # as in the real program: scheduled deletions happen
-assert w.top_bar.isVisible() and w.menuBar().isHidden() and sorted(w.bar_buttons) == ["edit", "file", "manage"]
-# the three buttons really open their menus (the menus were once deleted together with the menu bar, so the buttons did nothing)
-for key, menu, first in (("file", w.file_menu, "Import Video..."), ("edit", w.edit_menu, "Classes..."), ("manage", w.manage_menu, None)):
-    bm = w.bar_buttons[key].menu()
-    assert bm is menu and [a.text() for a in bm.actions() if a.text()], key
-    assert first is None or bm.actions()[0].text() == first
-    assert all(a.isEnabled() or not a.text() for a in bm.actions()[:1])
-from PyQt6.QtCore import QTimer
-for key, expect in (("file", "Import Video..."), ("edit", "Classes..."), ("manage", "Sessions...")):
-    opened = {}
-    def close_popup():
-        p_ = QApplication.activePopupWidget()
-        opened["texts"] = None if p_ is None else [a.text() for a in p_.actions() if a.text()]
-        if p_ is not None:
-            p_.close()
-    QTimer.singleShot(300, close_popup)
-    w.bar_buttons[key].click()                               # a click on the button really opens its menu
-    assert opened.get("texts") and expect in opened["texts"], (key, opened)
+R = w.ribbon
+assert w.menuWidget() is None, "no menu bar"
+assert [R.tabText(i) for i in range(R.count())] == ["Annotate", "Data", "Models", "Setup"]
+def page_texts(name):
+    return [b.text().replace("\n", " ") for b in R.widget(R.page_index[name]).widget().findChildren(QToolButton)]
+assert page_texts("Annotate") == ["Confirm image", "Previous image", "Next image", "Fit to screen", "Rotate 90°", "Delete frame…", "LiDAR distance", "Clear distance", "Delete box", "Clear and retry AI"], page_texts("Annotate")
+assert page_texts("Data") == ["Import video…", "Import zip…", "Export zip…", "Tablet mode…", "Sessions…", "Sync deleted files"], page_texts("Data")
+assert page_texts("Models") == ["Load AI model", "Download models…", "AI confidence…"], page_texts("Models")
+assert page_texts("Setup") == ["Classes…", "Hotkeys…", "My name…"], page_texts("Setup")
+assert all(not b.icon().isNull() for b in R.buttons.values()), "every button has its icon"
 assert "0 images" in w.bar_lbl.text() and "not saved yet" in w.bar_lbl.text()
+# nothing is open yet: the buttons that act on an image / a box are greyed
+assert not any(R.buttons[k].isEnabled() for k in ("confirm", "prev", "next", "fit", "rotate", "delete_frame", "lidar", "clear_dist", "delete_box", "retry_ai"))
+assert all(R.buttons[k].isEnabled() for k in ("import_video", "import_zip", "classes", "hotkeys", "download_models"))
+assert [R.buttons["load_model"].menu().actions()[i].text() for i in range(len(R.buttons["load_model"].menu().actions()))] == ["No AI model"]
 # an empty project says what to do first, on the canvas, with the buttons to do it
 assert w.canvas.empty.isVisible() and [b.text() for b in w.canvas.empty_buttons] == ["Import video...", "Import dataset zip..."]
-from PyQt6.QtWidgets import QPushButton as _PB
-texts = {b.text() for b in w.findChildren(_PB)}
-assert {"Confirm image", "Clear boxes and retry AI", "Delete selected box", "Clear distance of box", "Delete frame..."} <= texts, texts
 assert "font-weight:600" in w.confirm_btn.styleSheet(), "the action that moves the work on stands out"
 for gone in ("Insert Assist Model", "Insert Scratch Model", "Publish to shared folder", "Import data to edit...", "Shared folder location...", "Models folder location...", "Dataset location...", "Import Gimble Session..."):
-    assert gone not in file_items
+    assert not any(gone.lower().rstrip(".") in t.lower() for t in page_texts("Data") + page_texts("Models") + page_texts("Setup")), gone
 # a box cannot be drawn without a class
 INFO.clear()
 
@@ -118,7 +107,7 @@ assert os.listdir(os.path.join(proj, "images")), "the dataset is inside the proj
 
 # ---- 3. classes are made by the user; AI assist gets one box per class
 qtk.ask_string = lambda *a, **k: "rock"
-w.manage_classes(); cd = w._dialogs["classes"]; cd.do_add()
+w.ribbon.buttons["classes"].click(); cd = w._dialogs["classes"]; cd.do_add()      # the Setup tab's Classes button opens the dialog
 qtk.ask_string = lambda *a, **k: "bush"; cd.do_add(); pump(4)
 assert w.project.classes == ["rock", "bush"] and w.ai_box.count() == 2 and w.class_list.count() == 2
 assert "classes" in [k for k in w._dialogs] and any("classes" in c for c in w.host.cards), w.host.cards     # the 'Opening ...' card
@@ -192,12 +181,19 @@ labels = [w2.ai_choice.itemText(i) for i in range(w2.ai_choice.count())]
 assert labels[0] == "No AI model" and any("Assist" in l for l in labels) and "Original helper model" not in labels, labels
 assert mdir.startswith(os.environ["OPARA_USER_DIR"])
 
-# ---- 8. add-ons put items in the File menu
+# ---- 8. add-ons put buttons on the ribbon: the ones the program knows have a place and an icon, any other goes on the Data tab
 ext.add_menu_item("annotator.file", "Import Gimble Session...", lambda win: INFO.append(("hook", win.title(), "")))
+ext.add_menu_item("annotator.file", "Gimble: Send a Model...", lambda win: INFO.append(("model", win.title(), "")))
+ext.add_menu_item("annotator.file", "My Own Tool...", lambda win: INFO.append(("own", win.title(), "")))
 w3 = at.make_tab(proj2); w3.show()
-acts = [a for a in w3.file_menu.actions() if a.text() == "Import Gimble Session..."]
-assert len(acts) == 1
-acts[0].trigger(); assert INFO[-1][0] == "hook"
+data3 = [b.text().replace("\n", " ") for b in w3.ribbon.widget(w3.ribbon.page_index["Data"]).widget().findChildren(QToolButton)]
+models3 = [b.text().replace("\n", " ") for b in w3.ribbon.widget(w3.ribbon.page_index["Models"]).widget().findChildren(QToolButton)]
+assert data3[-2:] == ["Import Gimble session…", "My Own Tool…"] and models3[-1] == "Send model to Gimble…", (data3, models3)
+btn = next(b for b in w3.ribbon.buttons.values() if b.text().replace("\n", " ") == "Import Gimble session…")
+assert not btn.icon().isNull()
+btn.click(); assert INFO[-1][0] == "hook"
+next(b for b in w3.ribbon.buttons.values() if b.text().replace("\n", " ") == "Send model to Gimble…").click(); assert INFO[-1][0] == "model"
+next(b for b in w3.ribbon.buttons.values() if b.text().replace("\n", " ") == "My Own Tool…").click(); assert INFO[-1][0] == "own"
 assert w3.path == proj2 and w3.title() == "Other"
 
 # ---- 9. an unsaved project that is closed is gone; one with content asks (is_dirty)

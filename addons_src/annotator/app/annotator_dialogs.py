@@ -404,7 +404,7 @@ class SessionsDialog(_Base):
         shown = mine + [r for pid, g in people.items() if pid in a.access_people for r in g]
         tot = sum(r['samples'] for r in shown)
         self.info.setText((f"{len(shown)} session(s), {tot} sample(s)." + ("  Other people's data is closed until you click Access." if people else ""))
-                          if shown or people else "No sessions imported yet - use File > Import Gimble Session...")
+                          if shown or people else "No sessions imported yet - use the Data tab: Import Gimble session...")
 
     def chosen(self):
         sid = self.sel_id()
@@ -707,7 +707,7 @@ class DownloadModels(_Base):
         finally:
             app.unsetCursor()
         if err or not entries:
-            qtk.info(app, "Download models", "Couldn't reach GitHub. Check your internet and try File > Download models from GitHub later."
+            qtk.info(app, "Download models", "Couldn't reach GitHub. Check your internet and try the Models tab > Download models later."
                      if err else "No models on GitHub yet.")
             return None
         return super().open(app, first_run, entries, install)
@@ -717,7 +717,7 @@ class DownloadModels(_Base):
         self.entries, self.install, self.state = entries, install, {"busy": False, "result": None}
         self.models_dir = app._default_models_dir()
         lay = QVBoxLayout(self)
-        lay.addWidget(label("Download ready-made AI models? They pre-label photos for you. You can do this later from File > Download "
+        lay.addWidget(label("Download ready-made AI models? They pre-label photos for you. You can do this later from the Models tab > Download "
                             "models from GitHub." if first_run else "Pick the AI models to download."))
         n = len(md.pick(entries, "newest"))
         self.r_newest = QRadioButton(f"Just the newest of each size ({n} model{'s' if n != 1 else ''})")
@@ -786,7 +786,7 @@ class DownloadModels(_Base):
             lines.append(f"Already had {len(res['skipped'])}.")
         for f, m in res["errors"]:
             lines.append(f"Couldn't get {f}: {m}")
-        lines.append("\nPick one in the AI model box at the top of the window.")
+        lines.append("\nPick one with Load AI model on the Models tab.")
         self.close()
         qtk.info(a, "Download models", "\n".join(lines))
 

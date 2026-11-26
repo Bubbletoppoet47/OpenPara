@@ -1,10 +1,10 @@
 """
-web_mode.py - annotate from a tablet's browser (File > Open in browser).
+web_mode.py - annotate from a tablet's browser (Data tab > Tablet mode).
 
 The desktop program starts a small web server. A tablet on the same Wi-Fi opens the address, types the access code
 and name, and annotates with an Apple Pencil: the pen draws and edits boxes, fingers pan and zoom. Everything is
 stored by the normal Project on the computer; nothing is saved on the tablet. LiDAR / depth is not part of the web
-page. Publishing is NOT possible from the tablet: it is done on the computer (File > Publish to shared folder).
+page. Publishing is NOT possible from the tablet: it is done on the computer (Export zip on the Data tab).
 Nothing counts as confirmed until Confirm is pressed; edits before that are saved as an unconfirmed draft ("?").
 
 Safety: off until you start it; a new random 6-digit code every time; wrong codes lock a device out for a few minutes;
@@ -248,7 +248,7 @@ class WebShare:
 
     def run_ai(self, img_id):
         if self.predict is None:
-            raise RuntimeError("Load an AI model on the computer first (File > Insert Assist Model).")
+            raise RuntimeError("Load an AI model on the computer first (Models tab > Load AI model).")
         pr = self.project
         self._known(img_id)
         if pr.is_annotated(img_id):
@@ -374,7 +374,7 @@ class _Handler(BaseHTTPRequestHandler):
             if m and m.group(1) == "ai":
                 return self._send(200, o.run_ai(m.group(2)))
             if u.path == "/api/publish":
-                return self._err(403, "Publish on the computer (File > Publish to shared folder).")
+                return self._err(403, "Export on the computer (Data tab > Export zip).")
         except KeyError:
             return self._err(404, "No such image.")
         except (ValueError, TypeError) as e:

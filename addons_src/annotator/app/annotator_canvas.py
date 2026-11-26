@@ -26,6 +26,10 @@ def color_for_class(class_id):
     return BOX_COLORS[class_id % len(BOX_COLORS)]
 
 
+def a_pick(app):
+    return app.pick_check.isChecked()
+
+
 def pil_to_qimage(im):
     im = im.convert("RGB")
     arr = np.ascontiguousarray(np.asarray(im))
@@ -139,7 +143,7 @@ class ImageCanvas(QWidget):
         h.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(h)
         t = QLabel("An annotator project is a folder of pictures with their boxes. Bring pictures in from a video, or from a dataset zip "
-                   "someone handed you. The File menu has the other ways (a Gimble session, models, a tablet).")
+                   "someone handed you. The Data tab above has the other ways (a Gimble session, a tablet).")
         t.setWordWrap(True)
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         t.setFixedWidth(430)
@@ -236,7 +240,30 @@ class ImageCanvas(QWidget):
             p.drawRect(QRectF(QPointF(*self.draw_start), QPointF(*self.draw_now)).normalized())
         if self.hover is not None:
             self.paint_hover(p)
+        self.paint_chips(p)
         p.end()
+
+    def paint_chips(self, p):
+        """Two quiet labels over the picture: what the mouse does (bottom left) and which frame this is (bottom right)."""
+        f = QFont(self.font())
+        f.setPointSize(9)
+        p.setFont(f)
+        hint = ("Hover a box · Click a dot: attach its distance · Right-click: clear it" if a_pick(self.app)
+                else "Drag: new box · Click: select · Double-click: delete")
+        self.chip(p, hint, 10, self.height() - 10, False)
+        text = getattr(self.app, "frame_text", "")
+        if text:
+            self.chip(p, text, self.width() - 10, self.height() - 10, True)
+
+    def chip(self, p, text, x, y, right):
+        r = p.fontMetrics().boundingRect(text)
+        w, h = r.width() + 20, r.height() + 10
+        rect = QRectF(x - w if right else x, y - h, w, h)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(20, 24, 30, 200))
+        p.drawRoundedRect(rect, 3, 3)
+        p.setPen(QColor("#e6e9ee"))
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
     def paint_hover(self, p):
         kind, data = self.hover

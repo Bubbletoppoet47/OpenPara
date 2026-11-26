@@ -13,7 +13,7 @@ the core still opens and saves the files that use it (the data stays in the file
 What else an add-on can plug into (all from its  register(ext)):
     ext.add_command(place, text, fn)              a command in the program window's File / Add / View / Help menu (and the start page)
     ext.add_hook(name, fn)                        a button another add-on's window offers (e.g. "sim_study")
-    ext.add_menu_item(menu, text, fn)             an item in the menu of another add-on's window (e.g. "annotator.file")
+    ext.add_menu_item(menu, text, fn)             an item in the menu of another add-on's window (e.g. "annotator.file"; the Annotator shows it as a ribbon button)
     ext.add_shell_mixin(cls)                      helpers its tabs expect from the program window
 A tab of an add-on may offer:  title(), path, is_dirty(), save(), can_close(), shutdown(), depends_on() (the tab it belongs to: closed with it).
 """

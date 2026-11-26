@@ -134,7 +134,7 @@ card. **Not yet seen on a real microphone and headphones**: the build machine ha
 sample-rate choice, WASAPI settings, dropout counting) is checked against a stand-in. A compiled (C) version of the engine is the next step
 if the Python one crackles or is too slow on a weak computer.
 
-**Gimble connection** (`addons_src/gimble_link/`, the Annotator's File menu: Gimble: Send a Model / Download Recordings / Status) works
+**Gimble connection** (`addons_src/gimble_link/`, the Annotator's ribbon: Models > Send model to Gimble, Data > Download recordings / Gimble status) works
 through that helper on the Gimble rig's Raspberry Pi, so the thumb drive stays in the Pi. It finds the Gimble folder (the one with
 `gimble_pi.py` and `gimble_detect.py`), converts a model of the Annotator's Models folder (Assist or Scratch) to `gimble_model.onnx` +
 `gimble_model.json` in a job of its own (`gimble_export_job.py`; the converted model is compared with the original before it is sent)

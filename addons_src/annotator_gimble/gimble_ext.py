@@ -1,4 +1,4 @@
-"""gimble_ext.py - File > Import Gimble Session... for the Annotator window.  A session folder recorded by gimble_pi.py (index.csv + images/ +
+"""gimble_ext.py - Data > Import Gimble session... (a ribbon button) for the Annotator window.  A session folder recorded by gimble_pi.py (index.csv + images/ +
 depth/), or the dataset folder holding several of them.  Re-importing only adds samples that are not there yet, so annotations are never
 disturbed.  The annotator keeps no Gimble code of its own except the reader in annotator_core (Project.import_gimble_session)."""
 

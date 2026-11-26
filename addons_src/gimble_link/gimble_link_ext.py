@@ -1,4 +1,4 @@
-"""gimble_link_ext.py - File > Gimble ... in the Annotator: send a trained model to the Gimble rig's Raspberry Pi, download its recordings,
+"""gimble_link_ext.py - the Gimble buttons of the Annotator (Models: Send model to Gimble; Data: Download recordings, Gimble status): send a trained model to the Gimble rig's Raspberry Pi, download its recordings,
 see its status.  Everything goes through the Remote helper on the Pi (the Remote Computer add-on); the Gimble's own programs are untouched.
 Playground only for now (addons.NOT_RELEASED)."""
 import os
