@@ -177,6 +177,212 @@ def bend_reach3d(data, k=None, exaggeration=None, n=None):
     return float(np.linalg.norm((P - data["X"]) / (b * ex), axis=1).max())
 
 
+# ------------------------------------------------------------------------------------------------------------------------------ heat-flux tracers (inside the part)
+# The 3D heat result holds one heat-flux vector for every tetrahedron.  The tracers are made as the 2D ones are (coupled_viz_core: heat_lines, time_coordinate, laps_for): lines that start on the
+# faces where heat enters the part, spaced so that every line stands for the same share of the heat that enters, and follow the flux until it leaves the part; particles travel along them, faster
+# where the flux is stronger (a display, not a real speed).  The lines lie INSIDE the part, so the picture draws the surface faded while they are on.  In the animation the lines are carried with
+# the bend of the part: their displacement is blended from the nearest points of the surface (the stress result gives the displacement of the surface vertices that are drawn), which is an
+# approximation made for the picture only.
+NO_FLOW = 1e-3                                           # a flux below this fraction of the strong flux is "no heat flow" (as in the 2D picture)
+SEED_BLEND = 0.02                                        # a seed is put this far (of the way) from its face to the middle of its tetrahedron
+SHELL_OPACITY = 0.42                                     # how solid the surface is drawn while the tracers are on
+CANDIDATES3 = 32                                         # tetrahedra tried (nearest centres first) when looking for the one that holds a point
+
+
+class FluxField3D:
+    """The tetrahedra of the heat analysis (`nodes` (n, 3) and `tets` (m, 4): the corners) with one heat-flux vector each.  Finds the tetrahedron that holds a point, gives the direction of the
+    heat there, and where heat enters the part.  Duck-typed like the 2D thermal_flow.FluxField: flux_at, direction, inlet_seeds, random_points, size, qref."""
+
+    def __init__(self, nodes, tets):
+        from scipy.spatial import cKDTree
+        P = np.asarray(nodes, float)[:, :3]
+        T = np.asarray(tets, np.int64)[:, :4]
+        v = P[T]                                                                  # (m, 4, 3)
+        self.v = v
+        M = np.stack([v[:, 1] - v[:, 0], v[:, 2] - v[:, 0], v[:, 3] - v[:, 0]], axis=2)       # (m, 3, 3): the edges from corner 0 are the columns
+        det = np.linalg.det(M)
+        scale = np.maximum(np.abs(v.max(axis=1) - v.min(axis=1)).max(axis=1), 1e-300) ** 3
+        self.good = np.abs(det) > 1e-12 * scale                                   # a tetrahedron without volume holds nothing
+        self.Minv = np.linalg.inv(np.where(self.good[:, None, None], M, np.eye(3)))
+        self.vol = np.where(self.good, np.abs(det) / 6.0, 0.0)
+        self.cen = v.mean(axis=1)
+        self.tree = cKDTree(self.cen)
+        pts = v.reshape(-1, 3)
+        self.lo, self.hi = pts.min(axis=0), pts.max(axis=0)
+        self.size = float(np.ptp(pts, axis=0).max())
+        self.q = np.zeros((len(v), 3))
+        self.qref = 0.0
+        self._boundary_faces(T)
+        self._inlet_w = np.zeros(len(self.b_area))
+
+    def _boundary_faces(self, T):
+        """The faces that belong to one tetrahedron only (the surface of the part): the tetrahedron, the three corners, the area, the inward unit normal and the middle."""
+        m = len(T)
+        corners = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
+        F = np.concatenate([T[:, c] for c in corners])                            # (4m, 3)
+        owner = np.tile(np.arange(m), 4)
+        key = np.sort(F, axis=1)
+        _, inv, cnt = np.unique(key, axis=0, return_inverse=True, return_counts=True)
+        only = cnt[inv.reshape(-1)] == 1
+        own = owner[only]
+        P = np.concatenate([self.v[:, list(c)] for c in corners])[only]           # (k, 3, 3): the corners of each boundary face
+        n = np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0])
+        ln = np.linalg.norm(n, axis=1)
+        n = n / np.maximum(ln, 1e-300)[:, None]
+        mid = P.mean(axis=1)
+        flip = np.sum(n * (self.cen[own] - mid), axis=1) < 0
+        n[flip] = -n[flip]
+        self.b_tet, self.b_P, self.b_area, self.b_n, self.b_mid = own, P, 0.5 * ln, n, mid
+
+    def set_flux(self, q, qref=None):
+        """The heat flux of every tetrahedron (any unit, the same for all), (m, 3).  `qref` is the strong flux (default: the 95th percentile of the flux magnitudes)."""
+        q = np.asarray(q, float)
+        if q.shape != (len(self.v), 3):
+            raise ValueError("one heat-flux vector for every tetrahedron is needed")
+        self.q = q
+        mag = np.linalg.norm(q, axis=1)
+        if qref is None:
+            qref = float(np.percentile(mag, 95)) if mag.size else 0.0
+            qref = qref if qref > 0 else (float(mag.max()) if mag.size else 0.0)
+        self.qref = float(qref)
+        inflow = np.sum(q[self.b_tet] * self.b_n, axis=1)                         # the flux into the part through each surface face
+        self._inlet_w = np.where(inflow > NO_FLOW * self.qref, inflow, 0.0) * self.b_area if self.qref > 0 else np.zeros(len(self.b_area))
+
+    def _bary(self, pts, cand):
+        """Barycentric coordinates (n, k, 4) of the points in the candidate tetrahedra (n, k)."""
+        d = pts[:, None, :] - self.v[cand, 0]
+        l123 = np.einsum("nkij,nkj->nki", self.Minv[cand], d)
+        return np.concatenate([1.0 - l123.sum(axis=2, keepdims=True), l123], axis=2)
+
+    def locate(self, pts, with_bary=False):
+        """The tetrahedron that holds each point (-1: none).  `pts` (n, 3).  With with_bary also the barycentric coordinates (n, 4) in it."""
+        pts = np.asarray(pts, float).reshape(-1, 3)
+        n = len(pts)
+        if n == 0:
+            return (np.zeros(0, np.int64), np.zeros((0, 4))) if with_bary else np.zeros(0, np.int64)
+        elem = -np.ones(n, np.int64)
+        bary = np.zeros((n, 4))
+        todo = np.arange(n)
+        for k in (min(CANDIDATES3, len(self.v)), min(8 * CANDIDATES3, len(self.v))):       # (the second, wider try is for the points of long thin tetrahedra)
+            if not len(todo):
+                break
+            _, cand = self.tree.query(pts[todo], k=k)
+            cand = np.asarray(cand).reshape(len(todo), -1)
+            lam = self._bary(pts[todo], cand)
+            ok = (lam >= -1e-9).all(axis=2) & self.good[cand]
+            first = ok.argmax(axis=1)
+            rows = np.arange(len(todo))
+            hit = ok[rows, first]
+            elem[todo[hit]] = cand[rows[hit], first[hit]]
+            bary[todo[hit]] = lam[rows[hit], first[hit]]
+            todo = todo[~hit]
+        return (elem, bary) if with_bary else elem
+
+    def flux_at(self, pts):
+        """-> (q (n, 3), inside (n,) bool): the heat flux vector of the tetrahedron that holds each point."""
+        elem = self.locate(pts)
+        inside = elem >= 0
+        q = np.zeros((len(elem), 3))
+        q[inside] = self.q[elem[inside]]
+        return q, inside
+
+    def direction(self, pts):
+        """-> (unit direction (n, 3) times the speed ratio, inside (n,)): where the heat goes at each point and how strongly (flux over the strong flux, at most the 2D picture's largest ratio); no
+        motion where the flux is below NO_FLOW of the strong flux."""
+        q, inside = self.flux_at(pts)
+        mag = np.linalg.norm(q, axis=1)
+        out = np.zeros_like(q)
+        if self.qref > 0:
+            move = inside & (mag > NO_FLOW * self.qref)
+            out[move] = q[move] / mag[move][:, None] * np.minimum(V.HEAT_RATIO_MAX, mag[move] / self.qref)[:, None]
+        return out, inside
+
+    def scalar_at(self, values, pts):
+        """A nodal scalar (n_nodes values given for the corners as `values` (m, 4): the value at the 4 corners of every tetrahedron) interpolated linearly at the points: -> (n,), NaN outside."""
+        elem, lam = self.locate(pts, with_bary=True)
+        out = np.full(len(elem), np.nan)
+        ok = elem >= 0
+        out[ok] = np.sum(np.asarray(values)[elem[ok]] * lam[ok], axis=1)
+        return out
+
+    def inlet_seeds(self, n):
+        """n points on the faces where heat enters the part, so that each stands for the same share of the heat that enters (faces chosen along the running total of the heat entering through
+        them, in the order of the faces; the place on a face is a fixed low-discrepancy point), a little way in.  The same every time.  None when no heat enters through a face."""
+        tot = float(self._inlet_w.sum())
+        if n <= 0 or tot <= 0:
+            return None
+        cw = np.cumsum(self._inlet_w) / tot
+        u = (np.arange(n) + 0.5) / n
+        e = np.minimum(np.searchsorted(cw, u, side="right"), len(cw) - 1)
+        i = np.arange(n)
+        r1, r2 = (0.5 + i * 0.7548776662466927) % 1.0, (0.5 + i * 0.5698402909980532) % 1.0           # (the R2 sequence)
+        s = np.sqrt(r1)
+        lam = np.stack([1.0 - s, s * (1.0 - r2), s * r2], axis=1)
+        on_face = np.einsum("nk,nkj->nj", lam, self.b_P[e])
+        return (1.0 - SEED_BLEND) * on_face + SEED_BLEND * self.cen[self.b_tet[e]]
+
+    def random_points(self, n, rng):
+        """n points spread evenly over the volume of the part."""
+        w = self.vol / self.vol.sum()
+        idx = rng.choice(len(self.v), size=n, p=w)
+        u = np.sort(rng.random((n, 3)), axis=1)
+        lam = np.stack([u[:, 0], u[:, 1] - u[:, 0], u[:, 2] - u[:, 1], 1.0 - u[:, 2]], axis=1)
+        return np.einsum("nk,nkj->nj", lam, self.v[idx])
+
+
+def displacement_at_points(X, U, pts, k=4):
+    """The displacement (mm) at points inside the part, blended from the k nearest of the surface vertices X (n, 3) that have the displacement U (n, 3): inverse distance squared."""
+    from scipy.spatial import cKDTree
+    pts = np.asarray(pts, float)
+    kk = min(int(k), len(X))
+    d, idx = cKDTree(X).query(pts, k=kk)
+    d, idx = np.asarray(d).reshape(len(pts), -1), np.asarray(idx).reshape(len(pts), -1)
+    w = 1.0 / (d * d + 1e-12)
+    w = w / w.sum(axis=1, keepdims=True)
+    return np.einsum("nk,nkj->nj", w, np.asarray(U, float)[idx])
+
+
+def build_tracers(field, X, U, options=None):
+    """The heat-flux tracers of a 3D part: `field` a FluxField3D with its heat flux set (its coordinates in mm), X (n, 3) and U (n, 3) the vertices of the surface that is drawn and their
+    displacement (mm).  -> {"lines", "cum", "length", "starts", "laps", "disp" (the displacement of every point of every line), "heat": {"how", "qref", "period", "wanted"}, "options"}."""
+    opt = dict(V.DEFAULTS, **V.HEAT_DEFAULTS)
+    opt.update(options or {})
+    lines, how = V.heat_lines(field, int(opt["lines"]), max_steps=opt["max_steps"])
+    cums = [V.time_coordinate(ln, V.heat_ratio(field, ln, opt["ratio_min"]), opt["ratio_min"]) for ln in lines]
+    lengths = [float(c[-1]) for c in cums]
+    period = max(lengths, default=0.0)
+    opt["trail"] = float(opt["trail_frac"]) * period
+    disp = [displacement_at_points(X, U, ln) for ln in lines]
+    return {"lines": lines, "cum": cums, "length": lengths, "starts": V.particle_starts(lengths, opt["per_line"], opt["seed"]), "laps": V.laps_for(lengths, opt["max_laps"]), "disp": disp,
+            "heat": {"how": how, "qref": float(field.qref), "period": period, "wanted": int(opt["lines"])}, "options": opt}
+
+
+def tracer_state(tr, k, exaggeration, n=None):
+    """What the tracers look like in frame k (1 .. n): {"lines": [(m, 3)] (carried with the bend: moved by bend x exaggeration x their displacement), "particles": (p, 3), "tails": [(t, 3)]}.
+    A particle goes along its line `laps` times in the whole animation, so the last frame has every particle where the first has it."""
+    opt = tr["options"]
+    n = int(n or V.DEFAULTS["frames"])
+    b = V.bend_at(k, n)
+    f = b * float(exaggeration)
+    lines, parts, tails = [], [], []
+    for line, cum, L, st, lp, dsp in zip(tr["lines"], tr["cum"], tr["length"], tr["starts"], tr["laps"], tr["disp"]):
+        P = line + f * dsp
+        lines.append(P)
+        for s0 in st:
+            s = (s0 + lp * (k / n) * L) % L
+            parts.append([float(np.interp(s, cum, P[:, j])) for j in range(3)])
+            ss = np.clip(s - np.linspace(0.0, float(opt["trail"]), int(opt["tail_points"])), 0.0, None)
+            tails.append(np.stack([np.interp(ss, cum, P[:, j]) for j in range(3)], axis=1))
+    return {"lines": lines, "particles": np.array(parts).reshape(-1, 3), "tails": tails}
+
+
+def tracer_gap(tr, ka, kb, exaggeration, n=None):
+    """The largest distance (mm) that a particle is apart between frame ka and frame kb, seen without the bend (the bend of the lines moves them too).  Between the last frame and frame 0: 0."""
+    a = tracer_state(tr, ka, 0.0, n)["particles"]
+    b = tracer_state(tr, kb, 0.0, n)["particles"]
+    return float(np.linalg.norm(a - b, axis=1).max()) if len(a) else 0.0
+
+
 # ------------------------------------------------------------------------------------------------------------------------------ the camera
 class Camera:
     """An orthographic camera that turns round the middle of the part: `azimuth` and `elevation` in degrees (z is up), `zoom` 1 = the whole part (with its bent shape) fits the picture."""

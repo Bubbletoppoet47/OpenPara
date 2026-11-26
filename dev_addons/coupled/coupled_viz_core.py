@@ -16,6 +16,11 @@ SPEEDS = (0.25, 0.5, 1.0, 2.0, 4.0)
 LAYERS = (("air_T", "Air temperature", "air"), ("tracers", "Tracers", None), ("body_u", "Body displacement", "body"), ("bent", "Bent outline (exaggerated)", None),
           ("air_p", "Air pressure", "air"), ("body_vm", "Von Mises stress", "body"))
 LAYERS_ON = {"air_T": True, "tracers": True, "body_u": True, "bent": True, "air_p": False, "body_vm": False}
+# the layers of the picture of a 2D heat and stress solve with no flow: the body shows one field at a time (temperature, displacement or von Mises stress)
+LAYERS_HEAT = (("body_T", "Temperature", "body"), ("tracers", "Heat-flux tracers", None), ("body_u", "Body displacement", "body"), ("bent", "Bent outline (exaggerated)", None),
+               ("body_vm", "Von Mises stress", "body"))
+LAYERS_HEAT_ON = {"body_T": True, "tracers": True, "body_u": False, "bent": True, "body_vm": False}
+HEAT_DEFAULTS = {"lines": 40, "per_line": 3, "trail_frac": 0.12, "margin": 0.08, "step_frac": 1.0 / 300.0, "max_steps": 1500, "ratio_min": 0.1, "max_laps": 8}
 STOPS = {"inferno": [(0.0, "#000004"), (0.25, "#57106e"), (0.5, "#bc3754"), (0.75, "#f98e09"), (1.0, "#fcffa4")],
          "viridis": [(0.0, "#440154"), (0.25, "#3b528b"), (0.5, "#21918c"), (0.75, "#5ec962"), (1.0, "#fde725")]}
 _LUT = {}
@@ -25,13 +30,13 @@ def set_layer(layers, key, on):
     """Switches a layer on or off; the layers of one group (the air: temperature or pressure; the body: displacement or von Mises) are shown one at a time, so switching one on
     switches the other off.  -> the new layers (a copy)."""
     out = dict(layers)
-    group = {k: g for k, _n, g in LAYERS}
+    group = {k: g for k, _n, g in LAYERS + LAYERS_HEAT}
     if key not in group:
         raise KeyError(key)
     out[key] = bool(on)
     if on and group[key] is not None:
         for k, g in group.items():
-            if g == group[key] and k != key:
+            if g == group[key] and k != key and k in out:
                 out[k] = False
     return out
 
@@ -219,9 +224,15 @@ def tracer_lines(velocity, ys, x_start, x_end, step=None, max_steps=None):
     max_steps = int(max_steps or DEFAULTS["max_steps"])
     ys = np.asarray(ys, float)
     pts = np.column_stack([np.full(len(ys), float(x_start)), ys])
+    return _follow(velocity, pts, step, max_steps, x_end)
+
+
+def _follow(velocity, pts, step, max_steps, x_end=None, drop=True):
+    """The steps of tracer_lines, from any starting points (n, 2); with x_end a line also stops when it passes that x.  -> [(n, 2) array] (lines of fewer than 5 points dropped, unless
+    drop is False: then there is one line for every starting point, in their order)."""
     lines = [[p.copy()] for p in pts]
-    alive = np.arange(len(ys))
-    cur = pts.copy()
+    alive = np.arange(len(pts))
+    cur = np.array(pts, float)
     for _ in range(max_steps):
         if not len(alive):
             break
@@ -229,14 +240,14 @@ def tracer_lines(velocity, ys, x_start, x_end, step=None, max_steps=None):
         for i in alive[~in1]:                                   # (the last step ended outside the mesh, in the body: that point is not part of the line)
             if len(lines[i]) > 1:
                 lines[i].pop()
-        sp = np.hypot(v1[:, 0], v1[:, 1])
+        sp = _norm(v1)
         ok = in1 & (sp > 1e-9)
         a = alive[ok]
         if not len(a):
             break
         mid = cur[a] + 0.5 * step * (v1[ok] / sp[ok][:, None])
         v2, in2 = velocity(mid)
-        sp2 = np.hypot(v2[:, 0], v2[:, 1])
+        sp2 = _norm(v2)
         good = in2 & (sp2 > 1e-9)
         g = a[good]
         if not len(g):
@@ -245,12 +256,18 @@ def tracer_lines(velocity, ys, x_start, x_end, step=None, max_steps=None):
         cur[g] = new
         for i, q in zip(g, new):
             lines[i].append(q.copy())
-        alive = g[new[:, 0] < x_end]
-    return [np.array(ln) for ln in lines if len(ln) >= 5]
+        alive = g if x_end is None else g[new[:, 0] < x_end]
+    return [np.array(ln) for ln in lines if len(ln) >= 5] if drop else [np.array(ln) for ln in lines]
+
+
+def _norm(v):
+    """The lengths of the rows of v (n, 2) or (n, 3)."""
+    v = np.asarray(v, float)
+    return np.hypot(v[:, 0], v[:, 1]) if v.shape[1] == 2 else np.sqrt((v * v).sum(axis=1))
 
 
 def arc_lengths(line):
-    d = np.hypot(np.diff(line[:, 0]), np.diff(line[:, 1]))
+    d = _norm(np.diff(line, axis=0))
     return np.concatenate([[0.0], np.cumsum(d)])
 
 
@@ -300,14 +317,126 @@ def build(flow, body, body_box, domain_box, polys, kinds, displacement_at, veloc
     lines = tracer_lines(velocity, ys, x0 - 0.9 * S, x1 + 3.9 * S, opt["step"], opt["max_steps"])
     cums = [arc_lengths(ln) for ln in lines]
     lengths = [float(c[-1]) for c in cums]
-    rest = outline_points(polys, kinds, opt["outline_points"])
-    disp = []
-    for q in rest:
-        U = displacement_at(q)[0] if (displacement_at is not None and body is not None) else np.zeros_like(q)          # (no stress analysis: the body does not bend)
-        disp.append(np.asarray(U, float) * float(length_per_unit))
+    rest, disp = outline_and_displacement(polys, kinds, displacement_at, body, length_per_unit, opt)
     return {"window": win, "air": air_layer(flow), "body": body_layer(body, length_per_unit) if body is not None else None, "lines": lines, "cum": cums, "length": lengths,
             "starts": particle_starts(lengths, opt["per_line"], opt["seed"]), "rest": rest, "disp": disp, "length_per_unit": float(length_per_unit),
             "options": opt}
+
+
+def outline_and_displacement(polys, kinds, displacement_at, body, length_per_unit, opt):
+    """The outline of the body as drawn (outline_points) and the displacement of each of its points in mm (zero with no stress analysis: the body does not bend)."""
+    rest = outline_points(polys, kinds, opt["outline_points"])
+    disp = []
+    for q in rest:
+        U = displacement_at(q)[0] if (displacement_at is not None and body is not None) else np.zeros_like(q)
+        disp.append(np.asarray(U, float) * float(length_per_unit))
+    return rest, disp
+
+
+# ------------------------------------------------------------------------------------------------------------------------------ the heat picture (2D, no flow)
+# A 2D heat and stress solve with no flow has no air.  The picture is the body: coloured by its temperature, its displacement or its von Mises stress (one at a time), with tracer lines
+# that follow the HEAT FLUX of the heat analysis (the last solve's final state), as the Heat flow of the 2D Thermal tab does (thermal_flow: the same FluxField), and the bent outline.
+# The tracer lines are made like those of the flow, with the heat flux where the flow has the velocity: they start where heat enters the body, spaced so that every line stands for the
+# same share of the heat that enters, and follow the flux until it leaves the body.  Particles travel along them; on a line a particle goes faster where the flux is stronger (its speed ratio
+# is the flux over the strong flux of the picture, as in the Thermal tab) - a display, not a real speed.
+HEAT_RATIO_MAX = 4.0                                                    # (the same as thermal_flow.MAX_RATIO: a particle never goes faster than this many times the reference speed)
+
+
+def body_window(box, margin=None):
+    """The part of the plane the heat picture shows: the box (x0, y0, x1, y1) of the body with a margin of 8 % of its longer side all round -> (x0, x1, y0, y1)."""
+    x0, y0, x1, y1 = (float(v) for v in box)
+    m = float(HEAT_DEFAULTS["margin"] if margin is None else margin) * max(x1 - x0, y1 - y0)
+    return (x0 - m, x1 + m, y0 - m, y1 + m)
+
+
+def reference_heat_flux(qmag, tmin, tmax):
+    """The 'strong' heat flux of a result, which the speed of the particles is compared with: the 95th percentile of the flux of its triangles (the largest when that is 0), as the Heat flow of the
+    2D Thermal tab takes it.  0 when nothing flows: no flux at all, or a temperature that is the same everywhere (a millionth of the temperature in kelvin is rounding noise)."""
+    q = np.asarray(qmag, float)
+    if q.size == 0 or float(tmax) - float(tmin) < 1e-6 * max(abs(float(tmax)), abs(float(tmin)), 1.0):
+        return 0.0
+    ref = float(np.percentile(q, 95))
+    return ref if ref > 0 else float(q.max())
+
+
+def heat_ratio(field, pts, ratio_min=None):
+    """The speed ratio of heat at points: the heat flux over the strong flux of the picture (field.qref), held between ratio_min (0.1) and HEAT_RATIO_MAX.  0 where no flux is known (outside)."""
+    lo = float(HEAT_DEFAULTS["ratio_min"] if ratio_min is None else ratio_min)
+    q, inside = field.flux_at(pts)
+    mag = _norm(q)
+    r = np.clip(mag / field.qref, lo, HEAT_RATIO_MAX) if field.qref > 0 else np.full(len(mag), lo)
+    return np.where(inside, r, 0.0)
+
+
+def time_coordinate(line, ratios, ratio_min=None):
+    """How far a particle has 'travelled' at each point of a line, counted in time: every step of the line is its length divided by the speed ratio there.  A particle that moves evenly in
+    this coordinate goes `ratio` times as fast where the heat flux is `ratio` times the strong flux.  Units of length (a particle at ratio 1 covers one unit per unit); starts at 0."""
+    lo = float(HEAT_DEFAULTS["ratio_min"] if ratio_min is None else ratio_min)
+    ds = _norm(np.diff(line, axis=0))
+    r = np.maximum(0.5 * (np.asarray(ratios, float)[:-1] + np.asarray(ratios, float)[1:]), lo)
+    return np.concatenate([[0.0], np.cumsum(ds / r)])
+
+
+def laps_for(periods, max_laps=None):
+    """How many times the particles of each line go round it in the whole animation: the longest line (in time) once, a line that takes half as long twice, and so on (whole numbers, at
+    most max_laps), so that the speeds along the different lines are about the same in time and every particle is back where it started at the last frame."""
+    mx = float(HEAT_DEFAULTS["max_laps"] if max_laps is None else max_laps)
+    top = max((float(p) for p in periods), default=0.0)
+    return [int(min(mx, max(1, round(top / p)))) if p > 0 else 1 for p in periods]
+
+
+def heat_lines(field, n, step=None, max_steps=None, seed=None):
+    """The tracer lines of a heat flux: n lines from where heat enters the body (field.inlet_seeds), followed along the flux until it leaves the body or stops.  With no edge that heat enters
+    through (heat made inside) the lines start at n points spread over the body and go both ways.  -> (lines [(n, 2) array], "edges" | "inside")."""
+    step = float(step or field.size * HEAT_DEFAULTS["step_frac"])
+    max_steps = int(max_steps or HEAT_DEFAULTS["max_steps"])
+    seeds = field.inlet_seeds(int(n))
+    if seeds is not None:
+        return _follow(field.direction, seeds, step, max_steps), "edges"
+    if field.qref <= 0 or int(n) <= 0:
+        return [], "inside"
+    pts = field.random_points(int(n), np.random.default_rng(DEFAULTS["seed"] if seed is None else seed))
+
+    def back(P):
+        v, inside = field.direction(P)
+        return -v, inside
+    fwd = _follow(field.direction, pts, step, max_steps, drop=False)
+    bwd = _follow(back, pts, step, max_steps, drop=False)
+    out = []
+    for f, b in zip(fwd, bwd):
+        ln = np.vstack([b[::-1][:-1], f]) if len(b) > 1 else f
+        if len(ln) >= 5:
+            out.append(ln)
+    return out, "inside"
+
+
+def thermal_layer(thermal, kelvin=273.15):
+    """The temperature on the mesh of the heat analysis (degC): {"xy", "tris" (corners), "T", "T_range"}."""
+    mesh = thermal["mesh"]
+    T = np.asarray(thermal["T"], float) - float(kelvin)
+    return {"xy": np.asarray(mesh["nodes"], float), "tris": np.asarray(mesh["tris"], int)[:, :3], "T": T, "T_range": (float(T.min()), float(T.max()))}
+
+
+def build_heat(thermal, body, field, polys, kinds, displacement_at, length_per_unit=1.0, options=None):
+    """Everything the picture of a 2D heat and stress solve with no flow is drawn from.
+    thermal: the result of the heat analysis (T in kelvin on its mesh); body: the result of the stress analysis (or None); field: a thermal_flow.FluxField of the heat analysis with its heat
+    flux set; polys, kinds: the edges of the body; displacement_at(points) -> (displacement (n, 2) in sketch units, gap).  -> a dict with "kind": "heat2d", the same keys as `build` gives for a
+    flow where they mean the same (lines, cum, length, starts, rest, disp, window, body, options), "thermal" (the temperature layer) and "heat" (how the lines were made)."""
+    opt = dict(DEFAULTS)
+    opt.update(HEAT_DEFAULTS)
+    opt.update(options or {})
+    allp = np.vstack([np.asarray(p, float) for p in polys])
+    box = (allp[:, 0].min(), allp[:, 1].min(), allp[:, 0].max(), allp[:, 1].max())
+    lines, how = heat_lines(field, int(opt["lines"]), max_steps=opt["max_steps"])
+    cums = [time_coordinate(ln, heat_ratio(field, ln, opt["ratio_min"]), opt["ratio_min"]) for ln in lines]
+    lengths = [float(c[-1]) for c in cums]
+    period = max(lengths, default=0.0)
+    opt["trail"] = float(opt["trail_frac"]) * period
+    rest, disp = outline_and_displacement(polys, kinds, displacement_at, body, length_per_unit, opt)
+    return {"kind": "heat2d", "window": body_window(box, opt["margin"]), "air": {"xy": None, "tris": None, "T": None, "T_range": None, "p": None, "p_range": None},
+            "thermal": thermal_layer(thermal), "body": body_layer(body, length_per_unit) if body is not None else None, "lines": lines, "cum": cums, "length": lengths,
+            "starts": particle_starts(lengths, opt["per_line"], opt["seed"]), "laps": laps_for(lengths, opt["max_laps"]), "rest": rest, "disp": disp,
+            "length_per_unit": float(length_per_unit), "options": opt, "heat": {"how": how, "qref": float(field.qref), "period": period, "wanted": int(opt["lines"])}}
 
 
 def frame_state(data, k, exaggeration=None, n=None):
@@ -318,9 +447,11 @@ def frame_state(data, k, exaggeration=None, n=None):
     ex = float(opt["exaggeration"] if exaggeration is None else exaggeration)
     bend = bend_at(k, n)
     parts, tails = [], []
-    for line, cum, L, st in zip(data["lines"], data["cum"], data["length"], data["starts"]):
+    laps = data.get("laps")                                                     # (the heat picture: a short line is gone round more than once, so that every line is about as fast)
+    for i, (line, cum, L, st) in enumerate(zip(data["lines"], data["cum"], data["length"], data["starts"])):
+        lp = laps[i] if laps else 1
         for s0 in st:
-            s = (s0 + (k / n) * L) % L
+            s = (s0 + lp * (k / n) * L) % L
             parts.append((float(np.interp(s, cum, line[:, 0])), float(np.interp(s, cum, line[:, 1]))))
             ss = np.clip(s - np.linspace(0.0, float(opt["trail"]), int(opt["tail_points"])), 0.0, None)
             tails.append(np.stack([np.interp(ss, cum, line[:, 0]), np.interp(ss, cum, line[:, 1])], axis=1))
@@ -353,6 +484,13 @@ def effective_layers(data, layers):
     """The layers as they can be drawn for this solve: no air temperature without a heat exchange (the pressure is shown instead when the air is on), no body fields without a stress analysis."""
     out = dict(layers)
     a, b = data["air"], data["body"]
+    if data.get("kind") == "heat2d":                                            # (no air here: the body shows its temperature, its displacement or its von Mises stress)
+        out["air_T"] = out["air_p"] = False
+        if b is None:
+            out["body_u"] = out["body_vm"] = out["bent"] = False
+        elif out.get("body_vm") and b["vm"] is None:
+            out["body_vm"], out["body_u"] = False, True
+        return out
     if out.get("air_T") and a["T"] is None:
         out["air_T"], out["air_p"] = False, a["p"] is not None
     if out.get("air_p") and a["p"] is None:
@@ -369,6 +507,14 @@ def colour_bars(data, layers):
     bars = []
     a, b = data["air"], data["body"]
     lay = effective_layers(data, layers)
+    if data.get("kind") == "heat2d":
+        if lay.get("body_T"):
+            bars.append(("Temperature (°C)", data["thermal"]["T_range"][0], data["thermal"]["T_range"][1], "inferno"))
+        if lay.get("body_u"):
+            bars.append(("Body displacement (mm)", b["u_range"][0], b["u_range"][1], "viridis"))
+        elif lay.get("body_vm"):
+            bars.append((f"Von Mises stress ({b.get('vm_unit', 'MPa')})", b["vm_range"][0], b["vm_range"][1], "viridis"))
+        return bars
     if lay.get("air_T"):
         bars.append(("Air temperature (°C)", a["T_range"][0], a["T_range"][1], "inferno"))
     elif lay.get("air_p"):

@@ -19,6 +19,7 @@ START_AGE = (0.0, 10.0)      # the ages the first tracers get (the CFD: 0 to 10)
 RESTART_AGE = (0.0, 3.0)     # the age of a tracer that starts again (the CFD: 0 to 3)
 MAX_RATIO = 4.0              # the speed ratio flux / reference flux stops here (a tracer must not jump across the drawing at a sharp corner)
 INLET_BLEND = 0.1            # a tracer that starts again at an edge is put this far (of the way) from the edge to the middle of its triangle
+SEED_BLEND = 0.02            # the same for the seeds of inlet_seeds (fixed lines): a smaller step, so that evenly spaced seeds stay evenly spaced
 NO_FLOW = 1e-3               # a flux below this fraction of the reference flux is "no heat flow" (no arrow, no motion)
 CANDIDATES = 16              # triangles tried (nearest centres first) when looking for the one that holds a point
 
@@ -144,6 +145,21 @@ class FluxField:
         t = rng.random(n)[:, None]
         on_edge = self.b_a[e] + t * (self.b_b[e] - self.b_a[e])
         return (1.0 - INLET_BLEND) * on_edge + INLET_BLEND * self.b_cen[e]
+
+    def inlet_seeds(self, n):
+        """n points where heat enters the body, placed so that each one stands for the same share of the heat that enters (the heat entering through an edge is its length times
+        its inward flux; the points are spaced evenly along the running total, in the order of the edges), a little way in.  The same every time.  None when no heat enters
+        through an edge (heat made inside, or no heat): the caller then chooses where to start."""
+        tot = float(self._inlet_w.sum())
+        if n <= 0 or tot <= 0:
+            return None
+        cw = np.cumsum(self._inlet_w) / tot
+        u = (np.arange(n) + 0.5) / n
+        e = np.minimum(np.searchsorted(cw, u, side="right"), len(cw) - 1)
+        before = np.where(e > 0, cw[np.maximum(e - 1, 0)], 0.0)
+        t = np.clip((u - before) / np.maximum(cw[e] - before, 1e-300), 0.0, 1.0)[:, None]
+        on_edge = self.b_a[e] + t * (self.b_b[e] - self.b_a[e])
+        return (1.0 - SEED_BLEND) * on_edge + SEED_BLEND * self.b_cen[e]
 
     def random_points(self, n, rng):
         """n points spread evenly over the area of the drawing."""

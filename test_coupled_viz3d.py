@@ -303,12 +303,27 @@ known = cw.result["known"]
 ok(abs(db["ranges"]["u"][1] - known["expected"]) < 0.03 * known["expected"], f"its largest displacement is the known 0.048 mm ({db['ranges']['u'][1]:.5f} mm)")
 ok(abs(float(np.ptp(db["X"], axis=0).max()) - 100.0) < 1e-6, "and the part drawn is the 100 mm bar")
 rb = pb.self_check()
-ok(len(rb) == 5 and all(r["ok"] for r in rb), "all five checks of the picture say PASS: " + "; ".join(f"{r['name']} {r['got']}" for r in rb))
+ok(len(rb) == 8 and all(r["ok"] for r in rb), "all eight checks of the picture (five of the part, three of the tracers) say PASS: " + "; ".join(f"{r['name']} {r['got']}" for r in rb))
+trb = db["tracers"]
+ok(trb is not None and len(trb["lines"]) == 40 and pb.tracers3_shown() and trb["heat"]["how"] == "edges", "the heat-flux tracers of the bar are made: 40 lines from the faces where heat enters")
+xs0 = np.array([ln[0, 0] for ln in trb["lines"]])
+xs1 = np.array([ln[-1, 0] for ln in trb["lines"]])
+x_lo, x_hi = float(db["X"][:, 0].min()), float(db["X"][:, 0].max())
+span = x_hi - x_lo
+from_lo = xs0.max() < x_lo + 0.05 * span and xs1.min() > x_hi - 0.05 * span
+from_hi = xs0.min() > x_hi - 0.05 * span and xs1.max() < x_lo + 0.05 * span
+ok(from_lo or from_hi, f"and they run the length of the bar, from one end to the other (x of the starts {xs0.min():.2f} .. {xs0.max():.2f}, of the ends {xs1.min():.2f} .. {xs1.max():.2f} mm)")
+ok(max(float(np.ptp(ln[:, 1])) for ln in trb["lines"]) < 1.0 and max(float(np.ptp(ln[:, 2])) for ln in trb["lines"]) < 1.0, "straight along the bar, as the heat of a bar heated at one end flows")
 pb.view.resize(800, 520)
 app.processEvents()
 imb = pb.view.render_image(120, 1.0)
 ab = region(imb)
 ok((ab[..., :3].min(axis=2) < 235).mean() > 0.03, "the bar is in the picture")
+on_b = ink(imb).copy()
+pb.layers3["tracers"] = False
+off_b = ink(pb.view.render_image(120, 1.0)).copy()
+pb.layers3["tracers"] = True
+ok(pb.tracers3_shown() and not np.array_equal(on_b, off_b), "the tracers are in the picture of the bar, and gone when their layer is off")
 pngb = pb.save_png(os.path.join(OUT, "bar.png"))
 ok(pngb and QImage(pngb).width() == 1600, "its PNG is written at twice the size")
 txt = cw.diagnostics_text()

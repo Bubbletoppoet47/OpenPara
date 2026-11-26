@@ -9,7 +9,7 @@ What it solves:
 - results: temperature and heat flux on the surface, a picture slider and animation for a transient run, a node probe, the heat through every condition and a heat balance (in = out + stored) that must close, per-body numbers;
 - direct solve for small meshes, conjugate gradients with an algebraic multigrid preconditioner (pyamg) above `DIRECT_LIMIT`.
 
-Not in this version: section planes through the part (the view colours the outer surface only), heat-flow arrows / tracers, thermal stress (temperature feeding 3D FEA), conjugate heat transfer with 3D CFD, contact resistance between bodies, view-factor radiation between parts, temperature-dependent properties, automatic mesh refinement, a parametric study.
+Not in this version: section planes through the part (the view colours the outer surface only), heat-flow arrows / tracers in this tab (the Viz tab of a Coupled Physics block draws heat-flux tracers inside the part), thermal stress (temperature feeding 3D FEA), conjugate heat transfer with 3D CFD, contact resistance between bodies, view-factor radiation between parts, temperature-dependent properties, automatic mesh refinement, a parametric study.
 Material values are typical room-temperature numbers taken as constant. Nothing here has been compared with commercial software or tried on real Windows: everything so far ran headless.
 
 ## Testing it (and what to send back)

@@ -1,7 +1,7 @@
 """The Viz tab of the Coupled Physics window: the rendered picture of the last coupled solve.  Three parts.
 (1) The numbers behind it (coupled_viz_core, no Qt): the layers that are shown one at a time, the bend ramp, the playback counter, tracer lines on a field whose streamlines are known,
 the particles (the same every time; the last frame has them where the first has them, so the loop is seamless), a triangle filled with known values, the colour bars and their labels.
-(2) The page with no solve, with a 3D solve and with a solve that has no flow in it: what it says, and that its controls are off.
+(2) The page with no solve, with a 3D solve and with a 2D solve whose results are gone: what it says, and that its controls are off.
 (3) In the real program window with the example project, solved: the air temperature runs 20 .. 50 degC; the largest displacement is the one the coupled solve reported; every tracer line
 stays inside the air mesh; the dashed outline is the displacement of the stress analysis times the exaggeration; the layers change the picture; the PNG is the still picture at twice the size
 and is the last frame; an animation file is written with every frame; nothing of the result changes.  Checks that must be able to fail are shown to fail on a deliberately wrong answer.
@@ -159,7 +159,10 @@ pg.refresh()
 ok(pg.message() == CV.NO_STRESS and pg.data is None, "a 3D solve whose stress result is not there any more: the tab says to solve again (the 3D picture is tested in test_coupled_viz3d.py)")
 fake.result = {"dim": 2, "ok": True, "fluid": None}
 pg.refresh()
-ok(pg.message() == CV.NO_FLUID, "a 2D solve with no flow in it: the tab says what it is made for")
+ok(pg.message() == CV.NO_HEAT and pg.data is None, "a 2D solve with no flow whose heat and stress results are not there any more: the tab says to solve again (its picture is tested in test_coupled_viz_heat.py)")
+fake.result = {"dim": 2, "ok": True, "fluid": {"seconds": 1.0}}
+pg.refresh()
+ok(pg.message() == CV.NO_FLUID, "a 2D solve whose flow is not in the result: the tab says to solve again")
 
 # ------------------------------------------------------------------------------------------------------------------------------ 3. in the program window
 import gpd_app
