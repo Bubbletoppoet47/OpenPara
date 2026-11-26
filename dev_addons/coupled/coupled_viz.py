@@ -1,9 +1,11 @@
 """coupled_viz.py - the Viz tab of the Coupled Physics window: the RENDERED picture of the last coupled solve, with a playback bar and the two ways of saving it.  The numbers behind it are in
 coupled_viz_core (no Qt); this file draws them with QPainter (no matplotlib).
 
-What is in the picture (every layer can be switched on and off in the Outline on the left): the air temperature or pressure on the air mesh (one at a time), the body with its displacement or
-von Mises stress (one at a time), the tracers (streamlines of the last pass with particles travelling along them), and the outline of the body as the flow bent it, drawn exaggerated.
-It shows the LAST solve: nothing here changes a result, and nothing is solved again.  With no solve yet the picture says so.  The picture is made for a 2D solve; a 3D pair says so too.
+Two pictures, by what was solved.  A 2D solve with a flow: the air temperature or pressure on the air mesh (one at a time), the body with its displacement or von Mises stress (one at a time), the
+tracers (streamlines of the last pass with particles travelling along them), and the outline of the body as the flow bent it, drawn exaggerated; every layer is switched on and off in the Outline on
+the left.  A 3D solve (heat and stress, with or without a flow): the surface of the part, seen from any side (drag to turn it), coloured by temperature, displacement or von Mises stress (one at a
+time), bent from nothing to its solved shape, drawn by a software z-buffer (coupled_viz3d_core: no OpenGL).  The air and tracers of a 3D flow are not drawn.
+It shows the LAST solve: nothing here changes a result, and nothing is solved again.  With no solve yet the picture says so.  A 2D solve without a flow says so too.
 
 Looked at only in a headless Qt (frames drawn, saved and compared with the numbers); never seen on a real screen."""
 import time
@@ -13,12 +15,13 @@ from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPen, QPolygonF
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QHBoxLayout, QLabel, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget)
 
+import coupled_viz3d_core as V3
 import coupled_viz_core as V
 import sim_ui
 
 EMPTY = "No solve yet. Press Solve in the Coupled tab: the rendered result appears here."
-NO_3D = "Viz of 3D results comes with the 3D fluid flow work."
-NO_FLUID = "The picture is made for a solve with a flow in it: wire a 2D Fluid Flow analysis into the block, and solve."
+NO_STRESS = "The result of the stress analysis is not here any more: solve again."
+NO_FLUID = "The 2D picture is made for a solve with a flow in it: wire a 2D Fluid Flow analysis into the block, and solve. (A 3D heat and stress block is drawn without one.)"
 STATUS = "Viz: shows the last coupled solve. Nothing here changes the result."
 TEAL, INK, MUTED = "#1f7a84", "#1f2933", "#4a5563"
 BAR_FRAC = 0.22                                         # the share of the width that the colour bars take
@@ -33,7 +36,11 @@ class VizCanvas(QWidget):
         self.frame = None                              # None: the last frame (the still picture)
         self.export_bg = None                          # a grey level while an animation is drawn for a transparent format
         self._static = None
+        self._solid = None                             # the last 3D picture (and its depth), kept while nothing in it changed
+        self.interacting = False                       # the mouse is turning the 3D part: it is drawn quickly, and well again when the mouse is let go
+        self._drag = None
         self.setMinimumSize(420, 320)
+        self.setMouseTracking(False)
 
     # ------------------------------------------------------------------ what is drawn
     def static_image(self, fit, scale, lay):
@@ -75,6 +82,9 @@ class VizCanvas(QWidget):
             p.drawText(QRectF(24, 0, w - 48, h), int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap), msg)
             return
         d = pg.data
+        if d.get("kind") == "body3d":
+            self.draw3d(p, w, h, k, scale)
+            return
         lay = V.effective_layers(d, pg.layers)
         pw = int(w * (1.0 - BAR_FRAC))
         fit = V.Fit(d["window"], pw, h)
@@ -109,8 +119,8 @@ class VizCanvas(QWidget):
                 p.drawPolyline(pl)
         self.paint_bars(p, w, h, pw, d, lay)
 
-    def paint_bars(self, p, w, h, pw, d, lay):
-        bars = V.colour_bars(d, self.page.layers)
+    def paint_bars(self, p, w, h, pw, d, lay, bars=None):
+        bars = V.colour_bars(d, self.page.layers) if bars is None else bars
         if not bars:
             return
         f = QFont(self.font())
@@ -140,6 +150,133 @@ class VizCanvas(QWidget):
                 yy = y0 + 24 + bh - (0.0 if hi <= lo else (t - lo) / (hi - lo)) * bh
                 p.drawLine(QPointF(x + 14, yy), QPointF(x + 18, yy))
                 p.drawText(QRectF(x + 20, yy - 8, w - x - 22, 16), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), f"{t:.3g}")
+
+    # ------------------------------------------------------------------ the 3D part
+    def camera_at(self, k):
+        """The camera of frame k: the view that was set, turned round the part by the animation (the second half of it) unless that is switched off."""
+        pg, cam = self.page, self.page.cam
+        off = V3.turn_at(k, pg.data["options"]["frames"]) if pg.turn_on else 0.0
+        if off == 0.0:
+            return cam
+        c = V3.Camera(cam.azimuth + off, cam.elevation, cam.zoom)
+        c.pan = cam.pan
+        return c
+
+    def solid_image(self, d, w, h, k, scale):
+        """The part as a picture of the size of the area, and its depth: (QImage, scr, P, zbuf, ss).  Drawn at `ss` times the size (smoother edges) unless the mouse is turning it or the animation
+        is playing; the last one is kept while nothing in it changed (the still part of an animation is the same picture for half of its frames)."""
+        pg = self.page
+        fast = self.interacting or pg.player.playing
+        want = max(1.0, float(scale)) * (1.0 if fast else 1.5)
+        ss = min(want, max(1.0, (4.0e6 / max(1.0, w * h)) ** 0.5))
+        W, H = max(2, int(w * ss)), max(2, int(h * ss))
+        ex = pg.exaggeration3()
+        fld = pg.active_field()
+        bend = V3.frame_positions(d, k, ex)[1] if pg.layers3["bent"] else 0.0
+        cam = self.camera_at(k)
+        key = (id(d), W, H, round(cam.azimuth, 3), round(cam.elevation, 3), round(cam.zoom, 4), round(float(cam.pan[0]), 2), round(float(cam.pan[1]), 2), fld, round(bend, 5), round(ex, 4),
+               round(V.bend_at(k, d["options"]["frames"]), 5) if fld == "u" else 0)
+        if self._solid is not None and self._solid[0] == key:
+            return self._solid[1:]
+        scr = V3.Screen(cam, d["centre"], V3.reach_radius(d, ex), W, H)
+        P = V3.frame_positions(d, k, ex)[0] if pg.layers3["bent"] else d["X"]
+        shade = V3.shade_of(scr.normals(P, d["tris"]))
+        f = next(f for f in V3.FIELDS if f[0] == fld)
+        lo, hi = d["ranges"][fld]
+        img, zb = V3.raster3d(scr, P, d["tris"], V3.field_values(d, fld, k if pg.layers3["bent"] else None), lo, hi, V.lut(f[3]), shade, chunk=800_000)
+        qi = QImage(img.data, W, H, W * 4, QImage.Format.Format_RGBA8888).copy()
+        self._solid = (key, qi, scr, P, zb, ss)
+        return qi, scr, P, zb, ss
+
+    def draw3d(self, p, w, h, k, scale):
+        pg = self.page
+        d = pg.data
+        pw = int(w * (1.0 - BAR_FRAC))
+        qi, scr, P, zb, ss = self.solid_image(d, pw, h, k, scale)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        p.drawImage(QRectF(0, 0, pw, h), qi)
+        edges = d["edges"]
+        if pg.layers3["rest"] and len(edges):
+            S0 = scr.project(d["X"]) / np.array([ss, ss, 1.0])
+            pen = QPen(QColor(120, 130, 145, 170), 1.0)
+            pen.setDashPattern([2.0, 3.0])
+            p.setPen(pen)
+            for a, b in edges:
+                p.drawLine(QPointF(S0[a, 0], S0[a, 1]), QPointF(S0[b, 0], S0[b, 1]))
+        if pg.layers3["edges"] and len(edges):
+            vis = V3.edge_visible(scr, zb, P, edges)
+            S1 = scr.project(P) / np.array([ss, ss, 1.0])
+            p.setPen(QPen(QColor(20, 24, 32, 215), 1.15))
+            for (a, b), v in zip(edges, vis):
+                if v:
+                    p.drawLine(QPointF(S1[a, 0], S1[a, 1]), QPointF(S1[b, 0], S1[b, 1]))
+        self.paint_triad(p, self.camera_at(k), 40, h - 40)                      # (the axes reach 34 pixels each way from here: they stay in the picture whatever the view)
+        fld = pg.active_field()
+        f = next(f for f in V3.FIELDS if f[0] == fld)
+        lo, hi = d["ranges"][fld]
+        self.paint_bars(p, w, h, pw, d, {}, bars=[(f[2], lo, hi, f[3])])
+
+    def paint_triad(self, p, cam, x0, y0):
+        """The three axes of the part as the camera sees them, in the corner."""
+        fnt = QFont(self.font())
+        fnt.setPixelSize(11)
+        fnt.setBold(True)
+        p.setFont(fnt)
+        L = 34.0
+        for name, (dx, dy), ln in V3.axes_triad(cam):
+            col = {"x": QColor("#c0392b"), "y": QColor("#27864a"), "z": QColor("#2c5fb3")}[name]
+            p.setPen(QPen(col, 2.0))
+            end = QPointF(x0 + dx * L, y0 + dy * L)
+            p.drawLine(QPointF(x0, y0), end)
+            if ln > 0.15:
+                p.drawText(QPointF(end.x() + (4 if dx >= 0 else -10), end.y() + (4 if dy >= 0 else -2)), name)
+
+    def mousePressEvent(self, ev):
+        d = self.page.data
+        if d is None or d.get("kind") != "body3d":
+            return super().mousePressEvent(ev)
+        self._drag = (ev.position().x(), ev.position().y(), ev.button(), bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+        self.interacting = True
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def mouseMoveEvent(self, ev):
+        if self._drag is None:
+            return super().mouseMoveEvent(ev)
+        x, y, btn, shift = self._drag
+        nx, ny = ev.position().x(), ev.position().y()
+        dx, dy = nx - x, ny - y
+        cam = self.page.cam
+        if shift or btn in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
+            cam.pan = cam.pan + np.array([dx, dy])
+        else:
+            cam.turn(-dx * 0.5, dy * 0.5)
+        self._drag = (nx, ny, btn, shift)
+        self.update()
+
+    def mouseReleaseEvent(self, ev):
+        if self._drag is None:
+            return super().mouseReleaseEvent(ev)
+        self._drag = None
+        self.interacting = False
+        self.unsetCursor()
+        self.update()
+
+    def mouseDoubleClickEvent(self, ev):
+        d = self.page.data
+        if d is not None and d.get("kind") == "body3d":
+            self.page.cam.reset()
+            self.update()
+        else:
+            super().mouseDoubleClickEvent(ev)
+
+    def wheelEvent(self, ev):
+        d = self.page.data
+        if d is None or d.get("kind") != "body3d":
+            return super().wheelEvent(ev)
+        steps = ev.angleDelta().y() / 120.0
+        cam = self.page.cam
+        cam.zoom = float(np.clip(cam.zoom * (1.12 ** steps), 0.1, 40.0))
+        self.update()
 
     def paintEvent(self, _ev):
         p = QPainter(self)
@@ -182,19 +319,29 @@ class VizPage:
         self.opts = {"lines": V.DEFAULTS["lines"], "per_line": V.DEFAULTS["per_line"], "trail": V.DEFAULTS["trail"]}
         self.player = V.Player()
         self.last_tick = None
+        self.mode = None                               # "flow2d" (a 2D solve with a flow), "body3d" (a 3D solve), or None (nothing to draw)
+        self.cam = V3.Camera()                         # the 3D picture: the view,
+        self.field = "u"                               # what colours the part (T, u or vm),
+        self.layers3 = {"bent": True, "edges": True, "rest": True}
+        self.exa3 = None                               # the exaggeration of the bend of a 3D part (None: the automatic one)
+        self.turn_on = True                            # the view turns once round the part in the second half of the animation
         self.build_panel()
         self.build_picture()
 
     # ------------------------------------------------------------------ the panel
     def build_panel(self):
         s1 = sim_ui.Section("viz", 1, "Layers", True)
-        s1.body.addWidget(sim_ui.wrapped("What the picture shows. The air shows one field at a time (temperature or pressure), and so does the body (displacement or von Mises stress)."))
+        # --- 2D: the air, the body, the bent outline
+        self.grp2d = QWidget()
+        g2 = QVBoxLayout(self.grp2d)
+        g2.setContentsMargins(0, 0, 0, 0)
+        g2.addWidget(sim_ui.wrapped("What the picture shows. The air shows one field at a time (temperature or pressure), and so does the body (displacement or von Mises stress)."))
         self.boxes = {}
         for key, name, _g in V.LAYERS:
             cb = QCheckBox(name)
             cb.setChecked(bool(self.layers[key]))
             cb.toggled.connect(lambda on, k=key: self.layer_toggled(k, on))
-            s1.body.addWidget(cb)
+            g2.addWidget(cb)
             self.boxes[key] = cb
         row = QHBoxLayout()
         row.addWidget(QLabel("Exaggeration of the bent outline (x)"))
@@ -205,10 +352,63 @@ class VizPage:
         self.e_ex.setToolTip("The displacement of the body is far smaller than its size. The dashed outline shows it this many times larger, and says so under the picture.")
         self.e_ex.valueChanged.connect(self.exaggeration_changed)
         row.addWidget(self.e_ex)
-        s1.body.addLayout(row)
+        g2.addLayout(row)
+        s1.body.addWidget(self.grp2d)
+        # --- 3D: the part
+        self.grp3d = QWidget()
+        g3 = QVBoxLayout(self.grp3d)
+        g3.setContentsMargins(0, 0, 0, 0)
+        g3.addWidget(sim_ui.wrapped("The part of the last solve. Drag to turn it, scroll to zoom, hold Shift and drag to move it, double-click to start again. The animation bends it from nothing to its solved shape."))
+        r0 = QHBoxLayout()
+        r0.addWidget(QLabel("Colour by"))
+        self.cmb_field = QComboBox()
+        self.cmb_field.setToolTip("One colouring at a time. The displacement colour grows with the bend; temperature and stress are the solved fields.")
+        self.cmb_field.currentIndexChanged.connect(self.field_changed)
+        r0.addWidget(self.cmb_field, 1)
+        g3.addLayout(r0)
+        self.boxes3 = {}
+        for key, name, tip in (("bent", "Bent shape (exaggerated)", "Off: the part as it was made, not bent."), ("edges", "Sharp edges", "The edges that show the shape of the part."),
+                               ("rest", "Original outline", "The edges of the part before it bent, dotted.")):
+            cb = QCheckBox(name)
+            cb.setToolTip(tip)
+            cb.setChecked(bool(self.layers3[key]))
+            cb.toggled.connect(lambda on, k=key: self.layer3_toggled(k, on))
+            g3.addWidget(cb)
+            self.boxes3[key] = cb
+        self.cb_turn = QCheckBox("Turn the part in the second half of the animation")
+        self.cb_turn.setToolTip("The view goes once round the part after it has bent, so that its shape is seen from every side. The last frame, and the picture you save, are seen from the view you set.")
+        self.cb_turn.setChecked(True)
+        self.cb_turn.toggled.connect(self.turn_toggled)
+        g3.addWidget(self.cb_turn)
+        r1 = QHBoxLayout()
+        r1.addWidget(QLabel("Exaggeration of the bend (x)"))
+        self.e_ex3 = QDoubleSpinBox()
+        self.e_ex3.setRange(1.0, V3.DEFAULTS3["max_exaggeration"])
+        self.e_ex3.setDecimals(1)
+        self.e_ex3.setValue(1.0)
+        self.e_ex3.setToolTip("The displacement of the part is far smaller than the part. The shape is drawn this many times larger; it starts at the factor that makes the largest displacement 8 % of the part.")
+        self.e_ex3.valueChanged.connect(self.exaggeration3_changed)
+        r1.addWidget(self.e_ex3)
+        self.b_auto = QPushButton("Auto")
+        self.b_auto.setToolTip("Back to the factor that makes the largest displacement 8 % of the part.")
+        self.b_auto.clicked.connect(lambda *_: self.exaggeration3_auto())
+        r1.addWidget(self.b_auto)
+        g3.addLayout(r1)
+        r2 = QHBoxLayout()
+        self.view_buttons = {}
+        for name in list(V3.VIEWS) + ["Reset"]:
+            b = QPushButton(name)
+            b.clicked.connect(lambda *_, n=name: self.view_button(n))
+            r2.addWidget(b)
+            self.view_buttons[name] = b
+        g3.addLayout(r2)
+        s1.body.addWidget(self.grp3d)
 
         s2 = sim_ui.Section("viz", 2, "Tracers", True)
-        s2.body.addWidget(sim_ui.wrapped("The tracers follow the velocity of the last pass of the coupled solve, round the body as the flow bent it. The air temperature is the one from the heat exchange."))
+        self.grp_trace2d = QWidget()
+        t2 = QVBoxLayout(self.grp_trace2d)
+        t2.setContentsMargins(0, 0, 0, 0)
+        t2.addWidget(sim_ui.wrapped("The tracers follow the velocity of the last pass of the coupled solve, round the body as the flow bent it. The air temperature is the one from the heat exchange."))
         r1 = QHBoxLayout()
         r1.addWidget(QLabel("Lines starting on the inlet"))
         self.e_lines = QSpinBox()
@@ -216,7 +416,7 @@ class VizPage:
         self.e_lines.setValue(self.opts["lines"])
         self.e_lines.valueChanged.connect(self.tracers_changed)
         r1.addWidget(self.e_lines)
-        s2.body.addLayout(r1)
+        t2.addLayout(r1)
         r2 = QHBoxLayout()
         r2.addWidget(QLabel("Particles on each line"))
         self.e_per = QSpinBox()
@@ -224,7 +424,7 @@ class VizPage:
         self.e_per.setValue(self.opts["per_line"])
         self.e_per.valueChanged.connect(self.tracers_changed)
         r2.addWidget(self.e_per)
-        s2.body.addLayout(r2)
+        t2.addLayout(r2)
         r3 = QHBoxLayout()
         r3.addWidget(QLabel("Trail length (mm)"))
         self.e_trail = QDoubleSpinBox()
@@ -232,11 +432,14 @@ class VizPage:
         self.e_trail.setValue(self.opts["trail"])
         self.e_trail.valueChanged.connect(self.trail_changed)
         r3.addWidget(self.e_trail)
-        s2.body.addLayout(r3)
+        t2.addLayout(r3)
+        s2.body.addWidget(self.grp_trace2d)
+        self.lbl_trace3 = sim_ui.wrapped("")
+        s2.body.addWidget(self.lbl_trace3)
 
         s3 = sim_ui.Section("viz", 3, "Animation and export", True)
-        s3.body.addWidget(sim_ui.wrapped(f"{V.DEFAULTS['frames']} frames at {V.DEFAULTS['fps']} frames per second. The result is steady: the body bends from nothing to its final shape over the first "
-                                         "half, and every particle goes once along its line. How fast the particles go on the screen is not how fast the air goes. The last frame is the still picture."))
+        self.lbl_anim = sim_ui.wrapped("")
+        s3.body.addWidget(self.lbl_anim)
         self.b_png = QPushButton("Save image (PNG)")
         self.b_png.setToolTip("The picture as it is now, at twice the size it has on the screen.")
         self.b_png.clicked.connect(lambda *_: self.save_png())
@@ -260,6 +463,24 @@ class VizPage:
         self.outline.select("Layers")
         self.outline.touched = True
         self.panel = panel
+        self.set_mode(None)
+
+    def set_mode(self, mode):
+        """Shows the controls of the picture that is made: the 2D flow (layers, tracers) or the 3D part (colouring, view); with nothing to draw, the 2D ones."""
+        self.mode = mode
+        three = mode == "body3d"
+        self.grp2d.setVisible(not three)
+        self.grp3d.setVisible(three)
+        self.grp_trace2d.setVisible(not three)
+        self.lbl_trace3.setVisible(three)
+        if three:
+            fl = bool((self.solve_result() or {}).get("fluid"))
+            self.lbl_trace3.setText("There are no tracers for this solve: the air of a 3D flow is not drawn yet." if fl else "There are no tracers: this solve has no flow in it.")
+            self.lbl_anim.setText(f"{V.DEFAULTS['frames']} frames at {V.DEFAULTS['fps']} frames per second. The result is steady: the part bends from nothing to its solved shape over the first half, and the view "
+                                  "goes once round it in the second half (switch that off above). The last frame is the still picture, seen from the view you have set.")
+        else:
+            self.lbl_anim.setText(f"{V.DEFAULTS['frames']} frames at {V.DEFAULTS['fps']} frames per second. The result is steady: the body bends from nothing to its final shape over the first "
+                                  "half, and every particle goes once along its line. How fast the particles go on the screen is not how fast the air goes. The last frame is the still picture.")
 
     # ------------------------------------------------------------------ the picture and its bar
     def build_picture(self):
@@ -320,22 +541,49 @@ class VizPage:
         st = getattr(h["structural"].win, "tab", None) if "structural" in h else None
         return fl, st
 
+    def windows(self):
+        """The windows of the analyses of the block by kind ('solid', 'thermal3d', ...), as the Workbench gave them to the window last."""
+        src = getattr(self.win, "src", None) or {}
+        w = src.get("windows")
+        try:
+            return (w() if callable(w) else w) or {}
+        except Exception:                                                              # noqa: BLE001
+            return {}
+
+    def solid_result(self):
+        w = self.windows().get("solid")
+        return getattr(w, "result", None) if w is not None else None
+
+    def thermal_result(self):
+        w = self.windows().get("thermal3d")
+        return getattr(w, "result", None) if w is not None else None
+
     def decide(self):
-        """Is there something to draw?  Sets self.why (None when there is)."""
+        """Is there something to draw?  Sets self.why (None when there is) and self.mode."""
         res = self.solve_result()
+        mode = None
         if res is None:
             self.why = EMPTY
         elif int(res.get("dim") or 2) == 3:
-            self.why = NO_3D
+            sr = self.solid_result()
+            if sr is None or not sr.get("surface") or sr.get("u") is None:
+                self.why = NO_STRESS
+            else:
+                self.why, mode = None, "body3d"
         elif not res.get("fluid") or "steps" not in (res.get("fluid") or {}):
             self.why = NO_FLUID
         else:
             fl, _st = self.members()
-            self.why = None if (fl is not None and getattr(fl, "result", None) is not None and fl.result.get("xy_sketch") is not None) else "The result of the flow is not here any more: solve again."
+            ready = fl is not None and getattr(fl, "result", None) is not None and fl.result.get("xy_sketch") is not None
+            self.why = None if ready else "The result of the flow is not here any more: solve again."
+            mode = "flow2d" if ready else None
+        self.set_mode(mode)                                                              # (cheap; the texts of the panel follow what the solve has: a flow or none)
         return self.why is None
 
     def make_data(self):
-        """The data of the last solve, from the analyses shown in the window (the flow of the last pass, the stress result, the geometry)."""
+        """The data of the last solve: for a 3D solve the surface of the part with its fields; for a 2D solve the flow of the last pass, the stress result and the geometry."""
+        if self.mode == "body3d":
+            return self.make_data3d()
         import coupled_members as cm
         import physics_cfd as pcfd
         fl, st = self.members()
@@ -346,6 +594,20 @@ class VizPage:
         return V.build(flow, st.result if (st is not None and st.result is not None) else None, fl.mesh["body_box"], fl.mesh["box"], geom["polys"], [e["kind"] for e in geom["edges"]],
                        disp, pcfd.FlowField(flow).velocity, length_per_unit=mm, options={"lines": self.opts["lines"], "per_line": self.opts["per_line"], "trail": self.opts["trail"],
                                                                                           "exaggeration": self.exaggeration})
+
+    def make_data3d(self):
+        """The surface of the part from the stress result (its displacement and von Mises stress at every vertex) and the temperature of the heat result at the same points."""
+        sr, tr = self.solid_result(), self.thermal_result()
+        gap = []
+        temp = None
+        if tr is not None:
+            def temp(P):                                                                 # noqa: E306
+                T, g = V3.surface_temperature(tr, P)
+                gap.append(g)
+                return T
+        d = V3.build3d(sr["nodes"], sr["surface"], sr["u"], vm=sr.get("vm_node"), temperature=temp)
+        d["T_gap"] = gap[0] if gap else None
+        return d
 
     def refresh(self):
         """The window calls this when the solve changed or this tab is shown: decides what there is to draw and (when this tab is the one shown) makes it."""
@@ -384,7 +646,20 @@ class VizPage:
             w.setEnabled(has)
         self.lbl_frame.setText(f"Frame {self.player.frame} of {self.player.n}")
         self.b_play.setText("Pause" if self.player.playing else "Play")
-        if has:
+        three = has and self.data.get("kind") == "body3d"
+        for w in (self.cmb_field, self.e_ex3, self.b_auto, self.cb_turn, *self.boxes3.values(), *self.view_buttons.values()):
+            w.setEnabled(three)
+        if three:
+            self.sync_fields()
+            d = self.data
+            ex = self.exaggeration3()
+            lines = [f"Shape drawn x{ex:g} larger than the real displacement (the largest is {d['ranges']['u'][1]:.3g} mm)"]
+            if (self.solve_result() or {}).get("fluid"):
+                lines.append("The air and tracers of the 3D flow are not drawn")
+            if d["ranges"].get("T") is None:
+                lines.append("No heat result: no temperature colouring")
+            self.notes.setText("   ·   ".join(lines))
+        elif has:
             d = self.data
             fl, _st = self.members()
             lines = []
@@ -406,6 +681,72 @@ class VizPage:
             self.slider.blockSignals(False)
         except RuntimeError:
             pass
+
+    def sync_fields(self):
+        """The colourings of this part in the box (the ones it has), the one in use selected, and the exaggeration box showing the factor in use."""
+        d = self.data
+        fields = V3.available_fields(d)
+        keys = [f[0] for f in fields]
+        if self.field not in keys:
+            self.field = "u"
+        if [self.cmb_field.itemData(i) for i in range(self.cmb_field.count())] != keys:
+            self.cmb_field.blockSignals(True)
+            self.cmb_field.clear()
+            for f in fields:
+                self.cmb_field.addItem(f[1], f[0])
+            self.cmb_field.blockSignals(False)
+        i = self.cmb_field.findData(self.field)
+        if i >= 0 and self.cmb_field.currentIndex() != i:
+            self.cmb_field.blockSignals(True)
+            self.cmb_field.setCurrentIndex(i)
+            self.cmb_field.blockSignals(False)
+        ex = self.exaggeration3()
+        if abs(self.e_ex3.value() - ex) > 0.05:
+            self.e_ex3.blockSignals(True)
+            self.e_ex3.setValue(ex)
+            self.e_ex3.blockSignals(False)
+
+    def exaggeration3(self):
+        """The factor the bend of the 3D part is drawn with: the one set, else the automatic one."""
+        if self.exa3 is not None:
+            return float(self.exa3)
+        return float(self.data["exaggeration"]) if self.data is not None and self.data.get("kind") == "body3d" else 1.0
+
+    def field_changed(self, *_):
+        key = self.cmb_field.currentData()
+        if key:
+            self.field = key
+            self.view.update()
+
+    def active_field(self):
+        """The colouring in use: the one chosen when this solve has it, else the displacement."""
+        d = self.data
+        return self.field if d is not None and d.get("ranges", {}).get(self.field) is not None else "u"
+
+    def turn_toggled(self, on):
+        self.turn_on = bool(on)
+        self.view.update()
+
+    def layer3_toggled(self, key, on):
+        self.layers3[key] = bool(on)
+        self.view.update()
+
+    def exaggeration3_changed(self, v):
+        self.exa3 = float(v)
+        self.update_ui()
+        self.view.update()
+
+    def exaggeration3_auto(self):
+        self.exa3 = None
+        self.update_ui()
+        self.view.update()
+
+    def view_button(self, name):
+        if name == "Reset":
+            self.cam.reset()
+        else:
+            self.cam.look(name)
+        self.view.update()
 
     def layer_toggled(self, key, on):
         self.layers = V.set_layer(self.layers, key, on)
@@ -509,6 +850,8 @@ class VizPage:
         d, res = self.data, self.solve_result()
         if d is None or res is None:
             return []
+        if d.get("kind") == "body3d":
+            return self.self_check3d()
         rows = []
         umax = (res.get("fsi") or {}).get("umax")
         if umax is None and (res.get("structural") or {}).get("L") == "mm":
@@ -529,6 +872,33 @@ class VizPage:
             tol = max(0.5, 0.05 * (hi - lo))
             rows.append({"name": "Air temperature range", "ok": abs(tr[0] - lo) <= tol and abs(tr[1] - hi) <= tol, "expected": f"{lo:.4g} .. {hi:.4g} degC (the heat exchange, within {tol:.2g} K)",
                          "got": f"{tr[0]:.4g} .. {tr[1]:.4g} degC"})
+        return rows
+
+    def self_check3d(self):
+        """The 3D picture against the results it was made from: (1) the displacement the part is drawn with is the largest one of the stress result; (2) the bent shape never moves further than
+        that (the exaggeration taken out); (3) the temperatures drawn lie inside the range of the heat result; (4) every point of the surface found a place on the surface of the heat mesh;
+        (5) the von Mises stress drawn does not exceed the largest one of the stress result."""
+        d, sr, tr = self.data, self.solid_result(), self.thermal_result()
+        if d is None or sr is None:
+            return []
+        rows = []
+        umax = float(sr["umax"])
+        got = float(d["ranges"]["u"][1])
+        rows.append({"name": "Displacement drawn", "ok": got <= umax * (1 + 1e-6) and got >= 0.98 * umax, "expected": f"{umax:.5g} mm (the stress result; the surface holds its largest)", "got": f"{got:.5g} mm"})
+        reach = V3.bend_reach3d(d, exaggeration=self.exaggeration3())
+        rows.append({"name": "Bent shape within that displacement", "ok": reach <= umax * 1.005, "expected": f"at most {umax:.5g} mm", "got": f"{reach:.5g} mm"})
+        rng = d["ranges"].get("T")
+        if rng is not None and tr is not None:
+            lo, hi = float(tr["Tmin"]) - 273.15, float(tr["Tmax"]) - 273.15
+            tol = max(0.5, 0.05 * (hi - lo))
+            rows.append({"name": "Temperature inside the heat result's range", "ok": rng[0] >= lo - tol and rng[1] <= hi + tol, "expected": f"{lo:.4g} .. {hi:.4g} degC (within {tol:.2g} K)",
+                         "got": f"{rng[0]:.4g} .. {rng[1]:.4g} degC"})
+            gap = d.get("T_gap")
+            if gap is not None:
+                rows.append({"name": "Every point of the surface found on the heat mesh", "ok": gap <= 0.5, "expected": "at most 0.5 element sizes from the surface of the heat mesh", "got": f"{gap:.3g} element sizes"})
+        vr = d["ranges"].get("vm")
+        if vr is not None and sr.get("vm_max") is not None:
+            rows.append({"name": "Von Mises stress inside the stress result's range", "ok": vr[1] <= float(sr["vm_max"]) * 1.001 + 1e-9, "expected": f"at most {float(sr['vm_max']):.5g} MPa", "got": f"{vr[1]:.5g} MPa"})
         return rows
 
     def say(self, text):

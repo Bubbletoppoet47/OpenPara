@@ -156,7 +156,7 @@ ok(im.width() == 500 and any(im.pixelColor(x, y).red() < 200 for x in range(0, 5
 ok(pg.save_png(os.path.join(OUT, "none.png")) is None and not os.path.exists(os.path.join(OUT, "none.png")), "and there is nothing to save")
 fake.result = {"dim": 3, "ok": True, "fluid": None}
 pg.refresh()
-ok(pg.message() == CV.NO_3D, "a 3D solve: the tab says that Viz of 3D results is not here yet")
+ok(pg.message() == CV.NO_STRESS and pg.data is None, "a 3D solve whose stress result is not there any more: the tab says to solve again (the 3D picture is tested in test_coupled_viz3d.py)")
 fake.result = {"dim": 2, "ok": True, "fluid": None}
 pg.refresh()
 ok(pg.message() == CV.NO_FLUID, "a 2D solve with no flow in it: the tab says what it is made for")
