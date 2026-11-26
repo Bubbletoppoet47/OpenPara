@@ -220,7 +220,11 @@ class TrainerAdapter(nodes.Adapter):
             keys.append("setup")
         env = getattr(w, "env", None)
         py = (meta.get("settings") or {}).get("python")
-        tab.project.set_ready(node.id, "setup", bool(py) and not (env and env.get("problems")))
+        problems = []
+        if env:                                              # (what is missing depends on the model type: a distance-only one needs numpy, not torch)
+            kind = ((meta.get("settings") or {}).get("model") or {}).get("type") or "yolo"
+            problems = tc.env_problems(env, tc.model_types().get(kind))[0]
+        tab.project.set_ready(node.id, "setup", bool(py) and not problems)
         fp = self.fingerprint(os.path.join(folder, "models"))
         if fp != st.get("fp"):
             st["fp"] = fp

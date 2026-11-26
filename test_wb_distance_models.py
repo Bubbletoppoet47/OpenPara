@@ -219,6 +219,24 @@ ok("pinhole" in e["blob"]["text"] and json.loads(e["blob"]["text"])["family"] ==
 ok(st(nT.id, "training") == wp.OK, f"the Training cell is ready ({st(nT.id, 'training')})")
 ok(W.sync_editors() == [], "looking again is no change")
 
+# ---- the Setup cell asks for what the chosen type needs: numpy for a distance-only type, torch for a YOLO one
+w1.env = {"problems": ["torch is not installed in the training Python."], "warnings": [], "started": True, "numpy_version": "1.26.4"}
+w1.tp.meta["settings"]["python"] = sys.executable
+w1.tp.meta["settings"]["model"] = {"type": "nn_ladder"}
+W.sync_editors()
+ok(st(nT.id, "setup") == wp.OK, f"a Python with numpy and no torch is enough for a distance-only type ({st(nT.id, 'setup')})")
+w1.tp.meta["settings"]["model"] = {"type": "yolo"}
+W.sync_editors()
+ok(st(nT.id, "setup") == wp.INCOMPLETE, f"and not for a YOLO model ({st(nT.id, 'setup')})")
+w1.tp.meta["settings"]["model"] = {"type": "classical_regress"}
+w1.env = {"problems": ["torch is not installed in the training Python."], "warnings": [], "started": True, "numpy_version": None}
+W.sync_editors()
+ok(st(nT.id, "setup") == wp.INCOMPLETE, f"a Python without numpy is not ({st(nT.id, 'setup')})")
+w1.tp.meta["settings"].pop("model", None)
+w1.tp.meta["settings"].pop("python", None)
+w1.env = None
+W.sync_editors()
+
 # ============================================================================================================================ Trained models lists them
 print("--- the Trained models window")
 W.refresh_project()
