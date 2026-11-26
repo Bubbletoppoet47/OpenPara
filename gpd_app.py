@@ -739,6 +739,9 @@ class AppShell(QMainWindow):
     def zoom_fit(self):
         w = self.cur()
         if w is not None and w.plotter is not None:
+            if callable(getattr(w, "zoom_fit", None)):          # the Part window fits the part and the open sketch, not the origin planes
+                w.zoom_fit()
+                return
             w.plotter.reset_camera()
             w.plotter.render()
 

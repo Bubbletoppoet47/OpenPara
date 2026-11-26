@@ -196,6 +196,7 @@ def ready_has_model(st):
 # ---------------------------------------------------------------------------------------------------------------------------- the adapter
 class AnalysisAdapter(nodes.Adapter):
     first_cell = "geometry"
+    simulation = True                # opening the block brings its geometry up to date from the wire (never the solve): wb_tab.refresh_geometry_on_open
 
     def __init__(self, kind, tab_kind, sim_kind, setup_ready, addon, two_d=False):
         self.kind, self.tab_kind, self.sim_kind, self.setup_ready, self.addon, self.two_d = kind, tab_kind, sim_kind, setup_ready, addon, two_d

@@ -498,6 +498,7 @@ class WorkbenchTab(QWidget):
         if not ok:
             self.say(why)
             return None
+        note = self.refresh_geometry_on_open(n) if getattr(a, "simulation", False) else None
         try:
             w = a.open_cell(self, n, key)
         except Exception as ex:                              # noqa: BLE001
@@ -510,7 +511,28 @@ class WorkbenchTab(QWidget):
                 pass
             return None
         self.scene.refresh()
+        if note:
+            self.say(note)                                   # (the editor said its own hint while it opened: what happened to the geometry matters more)
         return w
+
+    def refresh_geometry_on_open(self, n):
+        """Opening a simulation block brings its GEOMETRY up to date with the part or assembly wired into it, when that changed since the block took it.  Only that cell:
+        the solve is never run here (the solution then says 'update' until the person runs it).  A refresh that fails leaves the block as it was.
+        -> the sentence to say once the block is open (what was done, or why it failed), or None when there was nothing to do."""
+        prj = self.project
+        c = n.spec.cell("geometry") if n.spec is not None else None
+        k = prj.incoming(n.id, "geometry") if c is not None and c.role == "import" else None
+        if k is None:
+            return None
+        self.sync_editors()                                  # a part changed in its own tab goes into the project first
+        if prj.status(n.id, "geometry") != wp.REFRESH:
+            return None
+        src = prj.node(k.a)
+        err = self.run_step(n.id, "geometry", "refresh")
+        self.scene.refresh()
+        if err:
+            return f"{n.label} {n.title}: its geometry could not be refreshed from '{src.title}' ({err}); it opens as it was."
+        return f"{n.label} {n.title}: its geometry was refreshed from '{src.title}'. Nothing was solved: run the solution when you want it."
 
     def register_editor(self, node, widget):
         """The tab of an editor opened for a node: it does not go in the recent list or the session (it lives in the workspace), it closes with the workbench, and its

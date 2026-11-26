@@ -73,6 +73,9 @@ Axes: Z up; Front looks along +Y, Top looks down.  Right click: sketch = Make co
 Exit Sketch (the entity under the cursor is selected first); part = Fillet / Chamfer / Sketch on this face.  Sketch > Construction does
 the same for the selection.  The origin is drawn as a magenta dot and can be picked for relations and dimensions (e.g. Horizontal
 dimension from the origin to a corner).  Box selection was left out on purpose.
+Zoom to Fit (F, also View > Zoom to Fit) fits the whole part and the sketches that are shown - and, in an open sketch, the sketch - from the
+direction the view looks now; only an empty part fits the origin planes.  The Front / Top / Right planes and the origin axes grow with the
+part and the sketches (the origin always inside them), also while a sketch is being drawn.
 Icons are drawn in the program (icons.py), light theme in pm_app.py (THEME).
 
 
@@ -81,6 +84,9 @@ SHOW / HIDE, FILLET PREVIEW (new)
 "Show" (right, under the ribbon): Planes, Origin, Sketches, Sketch dimensions, Part edges.  Each sketch, plane and the origin also has a
 checkbox in the tree.  A sketch is hidden automatically once a feature (Extrude, Cut) uses it; tick it to show it again.  A selected or
 open sketch is always shown.  While Fillet / Chamfer is open the view shows the rounded result; the edges to pick are drawn thin on top.
+Live preview: while the panel of the last feature is open (Boss / Cut / Revolve / Sweep / Loft / Fillet / Chamfer / Pattern / Mirror) the view shows
+what it does, faded, and a number typed in the panel (a depth, an angle, a size, a count) is applied about a fifth of a second after the last key, so the
+preview follows the typing; half-typed text waits.  The whole edit is one Undo step, and typing the old value back leaves nothing to undo.
 Speed: anti-aliasing is FXAA now (was supersampling), edges and sketches are drawn as one object each instead of one per line.
 
 REVOLVE, PATTERN, MIRROR

@@ -334,6 +334,24 @@ class SketchEditor:
             return None
         return (np.array(tuple(p.origin)), np.array(tuple(p.x_dir)), np.array(tuple(p.y_dir)), np.array(tuple(p.z_dir)))
 
+    def world_bounds(self):
+        """(xmin, xmax, ymin, ymax, zmin, zmax) of everything drawn in the open sketch, in the part's coordinates; None for an empty sketch."""
+        m, pl = self.m, self.plane()
+        if m is None or pl is None:
+            return None
+        pts = [np.array([p], float) for i, p in m.pts.items() if i != 0]                 # point 0 is the sketch origin, always there
+        for key in sk.all_keys(m):
+            try:
+                pts.append(sk.polyline(m, key, 48))
+            except Exception:
+                pass
+        if not pts:
+            return None
+        uv = np.vstack([np.asarray(p, float).reshape(-1, 2) for p in pts])
+        w = self.to_world(uv)
+        lo, hi = w.min(axis=0), w.max(axis=0)
+        return (lo[0], hi[0], lo[1], hi[1], lo[2], hi[2])
+
     def default_size(self):
         r = self.pl.devicePixelRatioF()
         return max(1.0, self.pl.width() * r), max(1.0, self.pl.height() * r)

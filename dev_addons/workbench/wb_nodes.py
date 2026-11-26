@@ -27,6 +27,7 @@ class Adapter:
     kind = ""
     needs = ""                       # the add-on the kind needs ("" = nothing beyond the program)
     first_cell = ""                  # the cell that holds the content a double-click opens (the cell that changes when the editor changes something)
+    simulation = False               # an analysis block: opening it first refreshes its geometry cell when the wired part / assembly changed (it never solves)
 
     # ---- is it possible at all here
     def available(self, tab):

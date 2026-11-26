@@ -8,12 +8,13 @@ pm_app.py - a small parametric modeller with a SolidWorks-style workflow.
   * Fillet / Chamfer: press the button, click the edges in the view.
 Run:  python pm_app.py [file.gpd]        needs: pip install build123d pyvista pyvistaqt PyQt6
 """
+import math
 import os
 import sys
 import traceback
 
 import numpy as np
-from PyQt6.QtCore import QSettings, QSize, Qt
+from PyQt6.QtCore import QSettings, QSize, Qt, QTimer
 from PyQt6.QtGui import QAction, QBrush, QColor, QKeySequence
 from PyQt6.QtWidgets import (QAbstractItemView, QWidgetAction, QApplication, QFrame, QTabWidget, QToolButton, QCheckBox, QComboBox, QDockWidget, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget,
                              QInputDialog, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QToolBar,
@@ -53,6 +54,8 @@ FACE_SEL, EDGE_SEL = (0.3, 0.65, 1.0), (1.0, 0.45, 0.0)
 
 add_face_highlight = part_refgeo.add_face_highlight
 PLANE_COL = {"Front": (0.35, 0.60, 0.95), "Top": (0.45, 0.80, 0.45), "Right": (0.90, 0.55, 0.40)}
+LIVE_MS = 220                                           # a number typed in a feature's panel is applied (and previewed) this long after the last key
+
 ICON = {"sketch": "✎", "extrude": "▣", "cut": "▢", "fillet": "◜", "chamfer": "◿",
         "revolve": "◔", "revolve_cut": "◒", "partgen": "⚙", "imported": "⇩", "sweep": "⥁", "sweep_cut": "⥀", "loft": "⏢", "loft_cut": "⏥", "pattern": "☷", "mirror": "⧓", "refplane": "▱", "refaxis": "⁞", "refpoint": "·"}
 
@@ -1092,16 +1095,58 @@ class MainWindow(QMainWindow):
         e = QLineEdit(shown)
         e.setToolTip("A number or an expression using the Globals, e.g.  Width/2 + 3"
                      + ("\nA length is in " + unitctl.length_unit() + "; you can also type  3 in,  25 mm,  2 ft ..." if kind == "length" else ""))
+        cur = {"shown": shown, "val": str(tgt0[key])}           # what the box showed and what was stored when it was last settled (the box outlives many edits)
+        live = {"snap": False, "start": None}                   # a live change was made (and the undo step for it taken); the value the edit started from
+        timer = QTimer(e)
+        timer.setSingleShot(True)
+        timer.setInterval(LIVE_MS)
+
+        def value_of_text():
+            return cur["val"] if e.text() == cur["shown"] else unitctl.expr_from_display(e.text(), kind)
+
+        def live_apply():
+            """The panel of the last feature is open, so the view shows what the feature does: it follows what is typed."""
+            if store is not None or self.preview_feature() is not feat or (e.text() == cur["shown"] and not live["snap"]):
+                return
+            try:
+                new = value_of_text()
+                self.doc.num(new)                               # half-typed text ('1+', 'Wid') waits for the rest
+            except Exception:
+                return
+            if str(feat[key]) == new:
+                return
+            if not live["snap"]:
+                self.snapshot()
+                live["snap"], live["start"] = True, str(feat[key])
+            feat[key] = new
+            self.update_all(keep_props=True)
+
+        def typed(_t=None):
+            if store is None and self.preview_feature() is feat:
+                timer.start()
 
         def done():
+            timer.stop()
             tgt = feat if store is None else store
-            if e.text() == shown:
-                return                                         # nothing was typed: keep the stored value exactly
-            new = unitctl.expr_from_display(e.text(), kind)
-            if str(tgt[key]) != new:
-                self.snapshot()
-                tgt[key] = new
-                self.update_all(keep_props=True)
+            if live["snap"]:                                    # the edit was applied while typing: settle the final text
+                live["snap"] = False
+                new = value_of_text()
+                changed = str(tgt[key]) != new
+                if changed:
+                    tgt[key] = new
+                if new == live["start"]:
+                    self.undo_pop()                             # typed and typed back: no step to undo
+                if changed or new == live["start"]:
+                    self.update_all(keep_props=True)
+            elif e.text() != cur["shown"]:
+                new = unitctl.expr_from_display(e.text(), kind)
+                if str(tgt[key]) != new:
+                    self.snapshot()
+                    tgt[key] = new
+                    self.update_all(keep_props=True)
+            cur["shown"], cur["val"] = e.text(), str(tgt[key])
+        timer.timeout.connect(live_apply)
+        e.textEdited.connect(typed)
         e.editingFinished.connect(done)
         suggest.attach(e, self.suggest_names)
         form.addRow(unitctl.label(label) if kind == "length" else label, e)
@@ -1795,6 +1840,7 @@ class MainWindow(QMainWindow):
             self.refresh_globals()
             if not keep_props:
                 self.show_props()
+            self.rescale_planes()
             self.ed.redraw()
             return
         self.stale = False
@@ -1893,6 +1939,112 @@ class MainWindow(QMainWindow):
         e = self.doc.resolve_edge(ref, solid)
         return np.array([tuple(e.position_at(j / (n - 1))) for j in range(n)])
 
+    # ------------------------------------------------------------------ how big the part is: Zoom to Fit and the size of the origin planes
+    def model_bounds(self):
+        """(xmin, xmax, ymin, ymax, zmin, zmax) of what is in the view: the part (or the part before a feature being previewed), the bodies of that
+        preview, the sketches that are drawn and the sketch that is open.  None while there is nothing yet (then the origin planes are all there is)."""
+        boxes = []
+        if self.view_cells is not None and self.view_cells.n_points:
+            boxes.append(tuple(self.view_cells.bounds))
+        info = self.preview_info()
+        if info is not None:
+            for shape, _col in info["parts"]:
+                try:
+                    b = shape.bounding_box()
+                    boxes.append((b.min.X, b.max.X, b.min.Y, b.max.Y, b.min.Z, b.max.Z))
+                except Exception:
+                    pass
+        d = self.doc
+        for f in d.features:
+            if f["kind"] == "sketch" and d.status.get(f["id"]) == "ok" and not (self.ed is not None and self.ed.active and self.ed.sk_id == f["id"]) \
+                    and self.sketch_shown(f):
+                for p in d.sketch_lines(f):
+                    if len(p):
+                        boxes.append((p[:, 0].min(), p[:, 0].max(), p[:, 1].min(), p[:, 1].max(), p[:, 2].min(), p[:, 2].max()))
+        if self.ed is not None and self.ed.active:
+            b = self.ed.world_bounds()
+            if b is not None:
+                boxes.append(b)
+        if not boxes:
+            return None
+        a = np.array(boxes, float)
+        return (a[:, 0].min(), a[:, 1].max(), a[:, 2].min(), a[:, 3].max(), a[:, 4].min(), a[:, 5].max())
+
+    def plane_size(self, b=None, has_solid=None):
+        """Side of the Front / Top / Right planes and length scale of the origin axes: they grow with the part and with the sketches (and always
+        take in the origin), so they never end up a speck beside a large sketch."""
+        b = self.model_bounds() if b is None else b
+        if has_solid is None:
+            has_solid = self.view_cells is not None
+        if b is None:
+            return 30.0
+        ext = max(max(b[1], 0.0) - min(b[0], 0.0), max(b[3], 0.0) - min(b[2], 0.0), max(b[5], 0.0) - min(b[4], 0.0))
+        return 0.75 * max(ext, 10.0) if has_solid else max(30.0, 1.25 * ext)
+
+    def rescale_planes(self):
+        """The sketch grew or shrank: the origin planes and axes follow (they are centred on the origin, so scaling the actors is exact)."""
+        if self.plotter is None or not getattr(self, "actor_planes", None) and not getattr(self, "actor_origin", None):
+            return
+        drawn = getattr(self, "plane_drawn", None)
+        if not drawn:
+            return
+        new = self.plane_size()
+        if abs(new - drawn) < 0.02 * drawn and getattr(self, "plane_k", 1.0) == 1.0:
+            return
+        k = new / drawn
+        if abs(k - getattr(self, "plane_k", 1.0)) < 0.02 * k:
+            return
+        self.plane_k = k
+        for a in list(self.actor_planes.values()) + list(getattr(self, "actor_origin", [])):
+            try:
+                a.SetScale(k, k, k)
+            except Exception:
+                pass
+
+    def fit_view(self):
+        """Zoom to Fit: the whole part and the sketches (and, in a sketch, the sketch) fill the view, from the direction the camera looks now.  An empty
+        part fits the origin planes."""
+        pl = self.plotter
+        if pl is None:
+            return
+        b = self.model_bounds()
+        if b is None:
+            pl.reset_camera()
+            pl.render()
+            return
+        cam = pl.camera
+        lo, hi = np.array(b[0::2], float), np.array(b[1::2], float)
+        c = (lo + hi) / 2
+        half = (hi - lo) / 2
+        corners = c + np.array([[sx * half[0], sy * half[1], sz * half[2]] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+        d = np.array(cam.GetFocalPoint()) - np.array(cam.GetPosition())
+        d = d / max(float(np.linalg.norm(d)), 1e-12)
+        up = np.array(cam.GetViewUp(), float)
+        right = np.cross(d, up)
+        if float(np.linalg.norm(right)) < 1e-9:
+            right = np.cross(d, np.array([0.0, 0.0, 1.0]) if abs(d[2]) < 0.9 else np.array([0.0, 1.0, 0.0]))
+        right = right / np.linalg.norm(right)
+        up = np.cross(right, d)
+        rel = corners - c
+        w_, h_, z_ = np.abs(rel @ right), np.abs(rel @ up), rel @ d
+        W, H = max(1.0, float(pl.width())), max(1.0, float(pl.height()))
+        aspect = W / H
+        margin = 1.08
+        if cam.GetParallelProjection():
+            cam.SetParallelScale(max(float(h_.max()), float(w_.max()) / aspect, 1e-6) * margin)
+            dist = max(float(np.linalg.norm(np.array(cam.GetFocalPoint()) - np.array(cam.GetPosition()))), 2.0 * float(np.linalg.norm(hi - lo)), 1.0)
+        else:
+            th = math.tan(math.radians(cam.GetViewAngle()) / 2)
+            dist = float(np.max(np.maximum(h_ / th, w_ / (th * aspect)) - z_)) * margin
+            dist = max(dist, 1e-3)
+        cam.SetFocalPoint(*c)
+        cam.SetPosition(*(c - d * dist))
+        pl.renderer.reset_camera_clipping_range()
+        pl.render()
+
+    def zoom_fit(self):
+        self.fit_view()
+
     def draw(self, fit=False):
         pl = self.plotter
         if pl is None:
@@ -1974,11 +2126,9 @@ class MainWindow(QMainWindow):
             if ml is not None:
                 pl.add_mesh(ml, color=col, line_width=w, pickable=False, reset_camera=False)
         # origin planes (small, translucent; click to select) and the origin
-        size = 30.0
-        if solid is not None:
-            b = solid.bounding_box()
-            size = 0.75 * max(b.size.X, b.size.Y, b.size.Z, 10.0)
-        self.actor_planes = {}
+        size = self.plane_size(has_solid=solid is not None)
+        self.plane_drawn, self.plane_k = size, 1.0
+        self.actor_planes, self.actor_origin = {}, []
         if self.vis["planes"]:
             for nm, plane in pm.BASE_PLANES.items():
                 if not self.plane_show.get(nm, True) and self.sel_plane != nm:
@@ -1993,9 +2143,9 @@ class MainWindow(QMainWindow):
         if self.vis["origin"] and self.show_origin_item:
             L = 0.45 * size
             for vec, col in (((L, 0, 0), (0.85, 0.2, 0.2)), ((0, L, 0), (0.2, 0.7, 0.2)), ((0, 0, L), (0.2, 0.35, 0.9))):
-                pl.add_mesh(pv.Line((0, 0, 0), vec), color=col, line_width=2.5, pickable=False, reset_camera=False)
-            pl.add_mesh(pv.PolyData(np.array([[0.0, 0.0, 0.0]])), color=(0.8, 0.15, 0.55), point_size=9, render_points_as_spheres=True,
-                        pickable=False, reset_camera=False)
+                self.actor_origin.append(pl.add_mesh(pv.Line((0, 0, 0), vec), color=col, line_width=2.5, pickable=False, reset_camera=False))
+            self.actor_origin.append(pl.add_mesh(pv.PolyData(np.array([[0.0, 0.0, 0.0]])), color=(0.8, 0.15, 0.55), point_size=9, render_points_as_spheres=True,
+                                                 pickable=False, reset_camera=False))
         if self.cam is not None:
             pl.camera_position = self.cam
         else:
