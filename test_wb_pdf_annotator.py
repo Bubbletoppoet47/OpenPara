@@ -1,4 +1,4 @@
-"""The PDF Editor and the Annotator as blocks of the Workbench (no wires in or out), in the real program window.
+"""The PDF Editor and the Annotator as blocks of the Workbench (no wires in or out for the PDF Editor; the Annotator's Dataset and Distances go to a Trainer: test_wb_trainer.py), in the real program window.
 
 PDF Editor: the block's document is a folder; its tab opens on the PDFs and page projects in it; a PDF opened from anywhere else is copied into the folder (the original is never
 changed, the same file twice is one copy, a file past the size limit opens where it is and is said), a new page project has its file in the folder from the start and keeps its PDFs as
@@ -131,8 +131,8 @@ ok(isinstance(W, wb_tab.WorkbenchTab), "the program opened a Workbench at the st
 for kind in ("pdf", "annotator"):
     ok(wb_nodes.adapter_for(kind) is not None and kind not in wb_nodes.check_kinds(), f"{kind} has an adapter and is not listed as 'not wired in'")
     ok(wb_nodes.availability(W, kind)[0], f"the toolbox offers it ({kind}: {wb_nodes.availability(W, kind)[1] or 'ok'})")
-    ok(wp.KINDS[kind].standalone == "folder" and [c.key for c in wp.KINDS[kind].cells] == ["document"], f"{kind}: one cell, saved on its own as a folder")
-    ok(not [k for k in P.links if kind in (P.node(k.a).kind, P.node(k.b).kind)], f"{kind}: no wires")
+    ok(wp.KINDS[kind].standalone == "folder" and [c.key for c in wp.KINDS[kind].cells] == (["document"] if kind == "pdf" else ["document", "dataset", "distances"]), f"{kind}: its cells, saved on its own as a folder")
+    ok(not [k for k in P.links if kind in (P.node(k.a).kind, P.node(k.b).kind)], f"{kind}: no wires yet")
 
 # ============================================================================================================================ the PDF Editor block
 print("--- PDF Editor")

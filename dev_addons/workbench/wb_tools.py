@@ -453,6 +453,69 @@ class AnnotatorAdapter(nodes.Adapter):
             return ""
         return f"{os.path.normcase(os.path.abspath(folder))}|{st.st_size}|{st.st_mtime_ns}"
 
+    @staticmethod
+    def dmark(folder):
+        """What shows that a distance was picked or changed: the number, sizes and newest time of the distance files (a pick rewrites its file, never the manifest)."""
+        n = size = newest = 0
+        try:
+            with os.scandir(os.path.join(folder, "distances")) as it:
+                for e in it:
+                    if e.name.endswith(".json"):
+                        st = e.stat()
+                        n, size, newest = n + 1, size + st.st_size, max(newest, st.st_mtime_ns)
+        except OSError:
+            return ""
+        return f"{n}|{size}|{newest}"
+
+    @staticmethod
+    def counts(folder):
+        """{"images": annotated pictures that a Trainer can use, "boxes": their boxes, "distances": boxes with a LiDAR distance} read from the folder as it is (no annotator
+        window is needed; nothing is written)."""
+        import json
+        out = {"images": 0, "boxes": 0, "distances": 0}
+        try:
+            with open(os.path.join(folder, "manifest.json"), encoding="utf-8") as f:
+                imgs = (json.load(f) or {}).get("images", {})
+        except (OSError, ValueError):
+            return out
+        for img_id, info in imgs.items():
+            if not isinstance(info, dict) or not info.get("annotated") or info.get("ai_pending"):
+                continue
+            out["images"] += 1
+            try:
+                with open(os.path.join(folder, "labels", "annotated", f"{img_id}.txt"), encoding="utf-8") as f:
+                    out["boxes"] += sum(1 for ln in f if ln.strip())
+            except OSError:
+                pass
+            try:
+                with open(os.path.join(folder, "distances", f"{img_id}.json"), encoding="utf-8") as f:
+                    out["distances"] += sum(1 for pk in (json.load(f) or {}).get("boxes", []) if isinstance(pk, dict) and pk.get("distance_m") is not None)
+            except (OSError, ValueError, AttributeError):
+                pass
+        return out
+
+    def look(self, tab, node, folder):
+        """Reads the cells Dataset and Distances from the folder: ready when it has annotated pictures / boxes with a distance.  -> the keys of the cells whose content changed since the
+        last look (the first look of a block only sets what there is: nothing changed yet)."""
+        st = tab.node_state.setdefault(node.id, {})
+        m, dm = self.mark(folder), self.dmark(folder)
+        first = "seen_mark" not in st
+        keys = []
+        if m != st.get("seen_mark") or dm != st.get("seen_dmark") or "counts" not in st:
+            st["counts"] = self.counts(folder)
+        c = st["counts"]
+        prj = tab.project
+        prj.set_ready(node.id, self.first_cell, True)
+        prj.set_ready(node.id, "dataset", c["images"] > 0)
+        prj.set_ready(node.id, "distances", c["distances"] > 0)
+        if not first:
+            if m != st["seen_mark"]:
+                keys += [self.first_cell, "dataset", "distances"]
+            elif dm != st["seen_dmark"]:
+                keys += ["distances"]
+        st["seen_mark"], st["seen_dmark"] = m, dm
+        return keys
+
     def locate(self, tab, node):
         """The folder of a block whose project is not where it was: the person is asked where it is now.  -> the folder or None."""
         link = node.data.get("link") or {}
@@ -489,24 +552,47 @@ class AnnotatorAdapter(nodes.Adapter):
         if w is None:
             return None
         tab.adopt_editor(node, w)
-        tab.node_state[node.id] = {"base": self.mark(folder) if folder else ""}
+        tab.node_state.setdefault(node.id, {})["base"] = self.mark(folder) if folder else ""
+        if folder:
+            self.look(tab, node, folder)
         tab.say(f"{node.label} {node.title}: work in its tab. " + ("The project folder is kept as a link, never copied." if folder else
                 "Save the project into a folder of its own (File > Save) and the block keeps that folder."))
         return w
 
     def sync(self, tab, node):
-        st = tab.node_state.get(node.id)
         w = tab.editor_of(node.id)
         folder = getattr(w, "path", None) if w is not None else None
-        if st is None or "base" not in st or not self.is_project(folder):
-            return None                                           # (no window, or a project that is still in its temporary folder)
+        if not self.is_project(folder):
+            folder = self.dataset_folder(tab, node)               # (no window, or a project that is still in its temporary folder: the folder the block links to)
+            if folder is None:
+                return None
+        st = tab.node_state.setdefault(node.id, {})
+        keys = []
         m = self.mark(folder)
-        if m == st["base"]:
-            return None
+        if "base" in st and m != st["base"]:
+            keys.append(self.first_cell)
+            tab.project.set_ready(node.id, self.first_cell, True)
         st["base"] = m
-        node.data["link"] = wp.rel_link(folder, tab.path)
-        tab.project.set_ready(node.id, self.first_cell, True)
-        return [self.first_cell]
+        if w is not None and self.is_project(getattr(w, "path", None)):
+            link = wp.rel_link(folder, tab.path)
+            if node.data.get("link") != link:
+                node.data["link"] = link
+        for k in self.look(tab, node, folder):
+            if k not in keys:
+                keys.append(k)
+        return keys or None
+
+    def source_mark(self, tab, node):
+        """What a Trainer took from this block: the dataset and its distances as they are now ("" when the block has no project folder yet)."""
+        folder = self.dataset_folder(tab, node)
+        return f"{self.mark(folder)}#{self.dmark(folder)}" if folder else ""
+
+    def rebaseline(self, tab, node):
+        """The program itself wrote into the project folder (reading a dataset out of it also rewrites its manifest): that is not a change for the cells."""
+        folder = self.dataset_folder(tab, node)
+        if folder:
+            st = tab.node_state.setdefault(node.id, {})
+            st["base"], st["seen_mark"], st["seen_dmark"] = self.mark(folder), self.mark(folder), self.dmark(folder)
 
     def closed(self, tab, node):
         w = tab.editor_of(node.id)

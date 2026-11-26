@@ -130,9 +130,19 @@ for _k, _l, _tip, _st in (
         ("sheets", "Sheets", "A spreadsheet", ".opsheet"), ("pdf", "PDF Editor", "Read, mark up and arrange PDF files; the PDFs opened in it are kept in the project", "folder"),
         ("controls", "Controls", "Control systems: blocks, step responses", ".opctl"), ("circuits", "Circuits", "Circuit diagrams with a simulator", ".opcirc"),
         ("visualize", "Visualize", "Pictures and videos of a part or assembly", "folder"), ("motor", "Motor Control", "A motor drive", "folder"),
-        ("trainer", "Trainer", "Training of models", "folder"), ("annotator", "Annotator", "Pictures with labels, for training; the project folder is kept as a link", "folder"),
         ("truss", "Truss Generator", "The members of a truss from a sketch", ".truss")):
     register(_k, _l, "Component Tools", [("document", _l, "data")], _tip, _st)
+# Annotator and Trainer.  The Annotator's project folder is kept as a link (a dataset is far too big for a project file); its Dataset cell (the annotated pictures with their boxes) and
+# its Distances cell (the LiDAR distance picked for each box) can be wired into a Trainer, ONE Annotator for each Trainer.  The Trainer's two import cells take them (Refresh copies the
+# dataset into the Trainer's own training project; pictures are never stored in the project file).  Its Training cell is "data", not "compute": Update Project never starts a training,
+# the person presses Start training in the Trainer window.  The Models cell shows the models trained (kept inside the project file up to 500 MB each, a longer one is linked).
+register("annotator", "Annotator", "Component Tools",
+         [("document", "Annotator", "data"), ("dataset", "Dataset", "data", ("dataset",)), ("distances", "Distances", "data", ("distances",))],
+         "Pictures with labels, for training; the project folder is kept as a link.  Its Dataset and Distances can be wired into a Trainer", "folder")
+register("trainer", "Trainer", "Component Tools",
+         [CellSpec("dataset", "Dataset", "import", (), ("dataset",)), CellSpec("distances", "Distances", "import", (), ("distances",), optional=True),
+          ("setup", "Setup", "data"), ("training", "Training", "data"), ("models", "Models", "view", ("models",))],
+         "Trains models on the Dataset (and Distances) of the Annotator wired into it; the models are kept in the project", "folder")
 # A study takes any number of wires into its Parameters cell: the dimensions of Parts (they change the geometry of every analysis that works on that Part) and the Setup of analyses
 # (their own inputs; the outputs recorded come from every analysis wired).  It needs at least one analysis.  The study itself is kept in the study block.
 register("study", "Parametric Study", "Design Exploration",
