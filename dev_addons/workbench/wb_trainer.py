@@ -23,16 +23,13 @@ import os
 import shutil
 import tempfile
 
+import wb_models
 import wb_nodes as nodes
 import wb_parts
 import wb_project as wp
 
-MODEL_LIMIT = 500 * 1024 * 1024                  # a model up to this many bytes is kept inside the project file, a bigger one is linked
-KEYS = ("assist", "scratch")                     # the model folders of a training project (the annotator's Models layout)
-
-
-def mb(n):
-    return f"{n / (1 << 20):.0f} MB" if n >= (1 << 20) else f"{n / 1024:.0f} KB"
+KEYS = wb_models.KEYS                            # the model folders of a training project (the annotator's Models layout)
+mb = wb_models.mb
 
 
 def trainer_core():
@@ -124,42 +121,9 @@ class TrainerAdapter(nodes.Adapter):
         return "|".join(out)
 
     # ------------------------------------------------------------------ models: kept inside, or linked
-    def linked_folder(self, tab):
-        """Where a model that is too big for the project file is written: next to the project file when it has one, else in the user's Trainer folder."""
-        if tab.path:
-            stem = os.path.splitext(os.path.basename(tab.path))[0]
-            return os.path.join(os.path.dirname(os.path.abspath(tab.path)), f"{stem} models")
-        return os.path.join(trainer_core().user_dir(), "Trainer", "Linked models")
-
     def store_model_file(self, tab, node, pt, key, info=None):
-        """Takes a model file into the block: INSIDE the project up to MODEL_LIMIT, else LINKED (copied to linked_folder, and the person is told).  `info` is the .json that goes with
-        it (read from next to the file when not given).  -> the entry that was added to node.data["models"], or None when this model is in the block already."""
-        tc = trainer_core()
-        fn = os.path.basename(pt)
-        lst = node.data.setdefault("models", [])
-        size = os.path.getsize(pt)
-        if info is None:
-            info = tc.libs()[3].read_info(pt) or {}
-        entry = {"file": fn, "key": key, "bytes": size, "info": info}
-        old = next((m for m in lst if m["file"] == fn), None)
-        if old is not None and old.get("bytes") == size:
-            return None
-        if size <= MODEL_LIMIT:
-            entry["stored"], entry["blob"] = "inside", wp.pack_file(pt)
-        else:
-            dest = self.linked_folder(tab)
-            os.makedirs(dest, exist_ok=True)
-            target = os.path.join(dest, fn)
-            if os.path.abspath(target) != os.path.abspath(pt):
-                shutil.copyfile(pt, target)
-            entry["stored"], entry["link"] = "linked", wp.rel_link(target, tab.path)
-            tab.note(f"{node.label} {node.title}: the model {fn} is {mb(size)}, over the {mb(MODEL_LIMIT)} limit for a model kept inside the project, so it is linked: it is in "
-                     f"{dest}. Keep that folder with the project.")
-        if old is not None:
-            lst[lst.index(old)] = entry
-        else:
-            lst.append(entry)
-        return entry
+        """Takes a model file into the block: INSIDE the project up to wb_models.MODEL_LIMIT, else LINKED (see wb_models.store_file).  -> the entry, or None when the block has it."""
+        return wb_models.store_file(tab, node, pt, key, info)
 
     def put_model(self, tab, node, models_dir, m):
         """A model of the block as files in the training project: the .pt and its .json.  A linked model whose file is gone is left out (and said)."""

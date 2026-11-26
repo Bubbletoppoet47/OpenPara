@@ -93,6 +93,7 @@ import wb_nodes
 import wb_project as wp
 import wb_tab
 import wb_tools  # noqa: F401 (registers the adapters)
+import wb_models
 import wb_trainer
 tt.TrainerTab.check_env = lambda self: None                  # (looking for Pythons runs programs: not here)
 app = QApplication([])
@@ -252,7 +253,7 @@ ok(W.sync_editors() == [] and st(nT.id, "dataset") == wp.OK, "that is not a chan
 
 # ============================================================================================================================ too big for the file: linked
 print("--- a model over the limit")
-wb_trainer.MODEL_LIMIT = 6000
+wb_models.MODEL_LIMIT = 6000
 big = os.path.join(T, "big.pt")
 open(big, "wb").write(os.urandom(9000))
 os.makedirs(ml.folder_path(w.tp.models_dir, "scratch"), exist_ok=True)
@@ -281,7 +282,7 @@ nT = next(x for x in P.nodes.values() if x.kind == "trainer")
 W.notes = []
 w = W.open_cell(nT.id, "training")
 ok([x["file"] for x in w.tp.list_models()] == [mname] and any("not where it was" in n for n in W.notes), "a linked model whose file is gone is left out and said")
-wb_trainer.MODEL_LIMIT = 500 * 1024 * 1024
+wb_models.MODEL_LIMIT = 500 * 1024 * 1024
 
 # ============================================================================================================================ the Annotator changes again; the block on its own; delete
 print("--- the window as a block: ribbon, Take from Annotator, a run, export, import, remove")
@@ -350,12 +351,12 @@ ok(len(w.tp.list_models()) == m0 + 1 and w.models_list.count() == m0 + 1, "Impor
 ok(len(nT.data["models"]) == n0 + 2 and next(m for m in nT.data["models"] if m["file"] == "my_model.pt")["info"].get("classes") == ["cup", "bottle"], "and the block keeps it inside, with its information")
 big2 = os.path.join(T, "big2.pt")
 open(big2, "wb").write(os.urandom(3000))
-wb_trainer.MODEL_LIMIT = 1000
+wb_models.MODEL_LIMIT = 1000
 W.notes = []
 ok(w.import_model_files([big2]) == 1, "a model file can be dropped on the window too")
 mm = next(m for m in nT.data["models"] if m["file"] == "big2.pt")
 ok(mm["stored"] == "linked" and any("limit" in n for n in W.notes), "one over the limit is linked, and said")
-wb_trainer.MODEL_LIMIT = 500 * 1024 * 1024
+wb_models.MODEL_LIMIT = 500 * 1024 * 1024
 for want in ("my_model.pt", "big2.pt"):
     row = next(r for r in range(w.models_list.count()) if os.path.basename(w.models_list.item(r).data(Qt.ItemDataRole.UserRole)) == want)
     w.models_list.setCurrentRow(row)

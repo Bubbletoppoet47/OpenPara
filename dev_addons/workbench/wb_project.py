@@ -143,6 +143,13 @@ register("trainer", "Trainer", "Component Tools",
          [CellSpec("dataset", "Dataset", "import", (), ("dataset",)), CellSpec("distances", "Distances", "import", (), ("distances",), optional=True),
           ("setup", "Setup", "data"), ("training", "Training", "data"), ("models", "Models", "view", ("models",))],
          "Trains models on the Dataset (and Distances) of the Annotator wired into it; the models are kept in the project", "folder")
+# Trained models: ONE list of every model there is - the ones trained in the Trainers wired into its From trainers cell, the ones imported into it (kept inside the project file up to
+# 500 MB each, a bigger one is linked) and the ones in the shared Models folder (the ones downloaded from GitHub).  Nothing is copied from a Trainer: the list follows the wires.
+# From trainers takes any number of Trainers (none is fine), Library is the list (ready when there is a model in it; its stamp grows when the list changes, a model of a wired Trainer
+# too), Models gives the list to a Model testing block.
+register("trained_models", "Trained models", "Component Tools",
+         [CellSpec("trainers", "From trainers", "import", (), ("models",), many=True, optional=True), ("library", "Library", "data"), ("models", "Models", "view", ("models",))],
+         "One list of every model: the ones trained in the Trainers wired into it, the ones imported into it and the ones downloaded from GitHub; import, export, rename, remove", "folder")
 # A study takes any number of wires into its Parameters cell: the dimensions of Parts (they change the geometry of every analysis that works on that Part) and the Setup of analyses
 # (their own inputs; the outputs recorded come from every analysis wired).  It needs at least one analysis.  The study itself is kept in the study block.
 register("study", "Parametric Study", "Design Exploration",

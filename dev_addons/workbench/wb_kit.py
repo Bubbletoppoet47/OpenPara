@@ -38,6 +38,8 @@ SHAPES = {
     "wb_motor": ('<circle class="b" cx="12" cy="12" r="8"/><path class="l" d="M8.500 15.500v-7l3.500 4.500 3.500-4.500v7"/><path class="l" d="M2 12h2M20 12h2"/>', "cfg"),
     "wb_trainer": ('<path class="l" d="M5 6l7 6-7 6M12 12h8"/><circle class="a" cx="5" cy="6" r="2.300"/><circle class="a" cx="5" cy="18" r="2.300"/><circle class="a" cx="12" cy="12" r="2.300"/>'
                    '<circle class="a" cx="20" cy="12" r="2.300"/>', "ai"),
+    "wb_trained_models": ('<rect class="p" x="3" y="3.500" width="18" height="5"/><rect class="p" x="3" y="9.500" width="18" height="5"/><rect class="p" x="3" y="15.500" width="18" height="5"/>'
+                          '<circle class="a" cx="6.200" cy="6" r="1.400"/><circle class="a" cx="6.200" cy="12" r="1.400"/><circle class="a" cx="6.200" cy="18" r="1.400"/><path class="l" d="M10 6h8M10 12h8M10 18h8"/>', "ai"),
     "wb_annotator": ('<rect class="p" x="3" y="4" width="18" height="16"/><rect class="a" x="7" y="8" width="10" height="8" style="opacity:.6"/><path class="l" d="M3 8V4h4M21 8V4h-4M3 16v4h4M21 16v4h-4"/>', "ai"),
     "wb_truss": ('<path class="b" d="M2 18L12 6l10 12z"/><path class="l" d="M7 12l5 6 5-6M12 6v12"/>', "feat"),
     "wb_drawing": ('<path class="p" d="M4 3h16v18H4z"/><path class="l" d="M7 6h10v6H7z"/><path class="a" d="M7 14.500h10v4H7z"/>', "ref"),
@@ -55,7 +57,7 @@ SHAPES = {
 
 KIND = {"part": "tab_part", "assembly": "assembly", "solid": "tab_solid", "thermal3d": "wb_thermal3d", "fluid3d": "wb_fluid3d", "coupled": "wb_coupled", "fea": "tab_fea", "thermal": "wb_thermal2d", "cfd": "tab_cfd",
         "beam": "tab_beam", "sheets": "wb_sheets", "pdf": "wb_pdf", "controls": "wb_controls", "circuits": "wb_circuits", "visualize": "wb_visualize", "motor": "wb_motor",
-        "trainer": "wb_trainer", "annotator": "wb_annotator", "truss": "wb_truss", "study": "wb_params", "drawing": "wb_drawing"}
+        "trainer": "wb_trainer", "trained_models": "wb_trained_models", "annotator": "wb_annotator", "truss": "wb_truss", "study": "wb_params", "drawing": "wb_drawing"}
 STATUS = {"ok": "wb_ok", "incomplete": "wb_incomplete", "update": "wb_update", "refresh": "wb_refresh", "failed": "wb_failed"}
 CELL = {"profile": "wb_profile", "setup": "wb_params", "solution": "wb_solve", "results": "wb_results", "models": "wb_models"}
 SOLID_KINDS = ("solid", "thermal3d", "fluid3d")                         # their Geometry cell holds a solid (a part or an assembly); the other analyses hold a sketch
