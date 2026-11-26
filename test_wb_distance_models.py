@@ -1,6 +1,6 @@
 """Distance-only models in the Workbench: a Trainer block keeps them inside the project file like any other model (one .opdm file each, up to 500 MB), a Trained models block lists
 them as "Distance only" beside the YOLO models, they can be imported, dropped and exported as .opdm files (no question about code: they are numbers), a Trainer that is built again
-from the project file gets them back in its models/Distance folder, and Model testing leaves them out until it has a detector slot for them.
+from the project file gets them back in its models/Distance folder, and Model testing lists them (a detector slot gives them boxes: test_wb_testing_boxes.py).
 python test_wb_distance_models.py"""
 import atexit
 import faulthandler
@@ -304,8 +304,9 @@ ok(len(nT.data["models"]) == 1 and nT.data["models"][0]["file"].startswith("mlp_
 # ============================================================================================================================ Model testing
 print("--- Model testing")
 wt = W.open_cell(nM.id, "models")
-ok(wt is not None and "distance-only" in wt.bar_lbl.text() and "not testable yet" in wt.bar_lbl.text(), f"the Model testing window says they wait ({wt.bar_lbl.text()})")
-ok(wt.ai_choice.count() == 0 and wt.analyse.panel.model_combo.count() == 0, "and does not offer them to the Analyse tab (they find no boxes)")
+ok(wt is not None and "distance only" in wt.bar_lbl.text(), f"the Model testing window lists them as distance only ({wt.bar_lbl.text()})")
+ok(wt.ai_choice.count() == 1 and wt.analyse.panel.model_combo.count() == 1 and wt.analyse.panel.model_combo.itemText(0).endswith("(distance only)"), "and offers it to the Analyse tab as distance only")
+ok(wt.bf_combo.count() == 0 and wt.bf_combo.isEnabled() and "finds no boxes" in wt.bf_note.text(), f"with no detector to take boxes from, the Boxes from slot says so ({wt.bf_note.text()[:50]}...)")
 ok(len(wb_models.models_of(W, nM.id)) == 1, "(the block still has them wired in)")
 
 print()
