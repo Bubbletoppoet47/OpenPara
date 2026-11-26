@@ -150,6 +150,14 @@ register("trainer", "Trainer", "Component Tools",
 register("trained_models", "Trained models", "Component Tools",
          [CellSpec("trainers", "From trainers", "import", (), ("models",), many=True, optional=True), ("library", "Library", "data"), ("models", "Models", "view", ("models",))],
          "One list of every model: the ones trained in the Trainers wired into it, the ones imported into it and the ones downloaded from GitHub; import, export, rename, remove", "folder")
+# Model testing: runs the models over a recorded session of the Gimble rig and compares the distance each gives with the LiDAR (the Annotator's Analyse tab, in a block of its own).  Models:
+# the ones of the Trainers / Trained models blocks wired into its Models cell (any number; none is fine) and the ones dropped on it.  Test data is a link to a recorded session folder
+# (never a copy: a session is frames and depth).  Setup holds the confidence, the tolerance and the way the LiDAR is read.  Analysis is a "data" cell, not "compute": it is ready while an
+# analysis has been run in the window, and Update Project never runs a model (the person presses Run analysis).  Results are not saved in the project (CSV and report are exported).
+register("model_test", "Model testing", "Component Tools",
+         [CellSpec("models", "Models", "import", (), ("models",), many=True, optional=True), ("data", "Test data", "data"), ("setup", "Setup", "data"), ("analysis", "Analysis", "data"),
+          ("results", "Results", "view")],
+         "Runs trained models over a recorded session of the Gimble rig and compares the distance they give with the LiDAR, frame by frame", "")
 # A study takes any number of wires into its Parameters cell: the dimensions of Parts (they change the geometry of every analysis that works on that Part) and the Setup of analyses
 # (their own inputs; the outputs recorded come from every analysis wired).  It needs at least one analysis.  The study itself is kept in the study block.
 register("study", "Parametric Study", "Design Exploration",

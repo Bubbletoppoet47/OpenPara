@@ -211,6 +211,17 @@ def _g_trained_models(p):
         p.drawEllipse(QPointF(6.5, y), 1.4, 1.4)
 
 
+def _g_model_test(p):
+    p.setPen(_pen(NAVY, 1.3))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRect(QRectF(3.5, 5.5, 17, 13))
+    p.drawLine(QPointF(3.5, 15), QPointF(20.5, 15))
+    for x in (7, 11, 15, 19):
+        p.drawLine(QPointF(x, 15), QPointF(x, 17))
+    p.setPen(_pen(BLUE, 1.8))
+    p.drawPolyline(_poly([(8, 10), (10.5, 12.5), (15.5, 8)]))
+
+
 def _g_annotator(p):
     p.setPen(QPen(ORANGE, 1.6, Qt.PenStyle.DashLine))
     p.setBrush(Qt.BrushStyle.NoBrush)
@@ -257,7 +268,7 @@ def _g_coupled(p):
 
 KIND_GLYPH = {"coupled": _g_coupled, "part": _g_part, "assembly": _g_assembly, "solid": _g_solid, "thermal3d": _g_thermal3d, "fluid3d": _g_fluid3d, "fea": _g_fea, "thermal": _g_thermal, "cfd": _g_cfd,
               "beam": _g_beam, "sheets": _g_sheets, "pdf": _g_pdf, "controls": _g_controls, "circuits": _g_circuits, "visualize": _g_visualize, "motor": _g_motor,
-              "trainer": _g_trainer, "trained_models": _g_trained_models, "annotator": _g_annotator, "truss": _g_truss, "study": _g_study, "drawing": _g_drawing}
+              "trainer": _g_trainer, "trained_models": _g_trained_models, "model_test": _g_model_test, "annotator": _g_annotator, "truss": _g_truss, "study": _g_study, "drawing": _g_drawing}
 
 
 def _g_unknown(p):
