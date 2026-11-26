@@ -297,17 +297,31 @@ class Project:
         return n
 
     # ------------------------------------------------------------------ the project file (.oppb)
-    def to_json(self, zoom=1.0, auto_inches="11"):
+    def to_json(self, zoom=1.0, auto_inches="11", base=None):
+        """The project as a dict.  base: a folder; the PDFs that are inside it are written as paths relative to it (a project that moves with its PDFs, as in a Workbench
+        block); without it every path is the full path, as always."""
+        def src(path):
+            if base:
+                try:
+                    rel = os.path.relpath(path, base)
+                except ValueError:                              # another drive on Windows
+                    return path
+                if not rel.startswith("..") and not os.path.isabs(rel):
+                    return rel.replace(os.sep, "/")
+            return path
         return {"format": FORMAT, "version": 1, "zoom": zoom, "auto_inches": auto_inches,
-                "pages": [{"source": it.source.path, "page": it.page_index, "breaks": [round(b, 3) for b in it.breaks],
+                "pages": [{"source": src(it.source.path), "page": it.page_index, "breaks": [round(b, 3) for b in it.breaks],
                            "excluded": [list(k) for k in sorted(it.excluded)]} for it in self.items]}
 
-    def load_json(self, d):
-        """Reopens the PDFs a project file names.  Returns the list of files that could not be opened (their pages are left out)."""
+    def load_json(self, d, base=None):
+        """Reopens the PDFs a project file names (a relative path is looked for in `base`, the folder of the project file).  Returns the list of files that could not be opened
+        (their pages are left out)."""
+        def full(path):
+            return os.path.normpath(os.path.join(base, path)) if base and path and not os.path.isabs(path) else path
         self.clear()
         missing, opened = [], {}
         for p in d.get("pages", []):
-            path = p.get("source", "")
+            path = full(p.get("source", ""))
             if path in missing:
                 continue
             if path not in opened:
@@ -323,7 +337,7 @@ class Project:
         by_page = {(it.source.path, it.page_index): it for items in opened.values() for it in items}
         ordered = []
         for p in d.get("pages", []):
-            it = by_page.pop((p.get("source", ""), p.get("page", -1)), None)
+            it = by_page.pop((full(p.get("source", "")), p.get("page", -1)), None)
             if it is None:
                 continue
             it.breaks = sorted(float(b) for b in p.get("breaks", []) if EDGE_PT < float(b) < it.height_pt - EDGE_PT)

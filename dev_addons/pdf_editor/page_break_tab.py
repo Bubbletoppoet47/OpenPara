@@ -233,9 +233,11 @@ class PageBreakTab(QWidget):
     AUTO_SETUP = True                          # download PyMuPDF by itself when it is missing (a test turns this off)
     installer = None                           # a test can put its own downloader here (see pb_deps.install)
 
-    def __init__(self, path=None):
+    def __init__(self, path=None, portable=False):
         super().__init__()
         self.path = None                       # the .oppb project file, when there is one
+        self.portable = portable               # in a Workbench block: the PDFs next to the project file are written as relative paths
+        self.keep = None                       # in a Workbench block: a PDF that is imported from elsewhere is copied into the block first (PdfEditorTab.keep)
         self.host = None
         self.dirty = False
         self.zoom = 1.0
@@ -526,6 +528,8 @@ class PageBreakTab(QWidget):
         if not core.available():
             self.status.say("Page Break is still getting PyMuPDF. Wait for the set-up to finish.", "warn")
             return []
+        if self.keep is not None:
+            path = self.keep(path)
         try:
             items = self.project.import_pdf(path)
         except core.PageBreakError as e:
@@ -653,8 +657,12 @@ class PageBreakTab(QWidget):
     def is_dirty(self):
         return self.dirty
 
+    def portable_base(self):
+        """In a Workbench block (the tab was made so) the folder of the project file: the PDFs next to it are kept as relative paths, so the block can move."""
+        return os.path.dirname(os.path.abspath(self.path)) if self.portable and self.path else None
+
     def to_json(self):
-        return self.project.to_json(self.zoom, self.auto_inches.text())
+        return self.project.to_json(self.zoom, self.auto_inches.text(), self.portable_base())
 
     def open_path(self, path):
         if not core.available():
@@ -667,7 +675,12 @@ class PageBreakTab(QWidget):
             d = core.read_project(path)
             self.images.clear()
             self.blocks_clear()
-            missing = self.project.load_json(d)
+            before, self.path = self.path, path                 # (portable_base needs it)
+            try:
+                missing = self.project.load_json(d, self.portable_base())
+            except BaseException:
+                self.path = before
+                raise
         except (OSError, ValueError, core.PageBreakError) as e:
             self.status.say(f"Couldn't open that file: {e}", "bad")
             return False

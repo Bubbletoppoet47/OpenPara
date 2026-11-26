@@ -13,6 +13,7 @@ What the program window expects of a tab (see gpd_app.py): path, title(), is_dir
 that is opened from anywhere in the program land in this tab as a new inner tab instead of opening a second PDF editor.
 """
 import os
+import shutil
 import threading
 
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
@@ -42,6 +43,8 @@ class PdfEditorTab(QWidget):
     AUTO_SETUP = True                          # download PyMuPDF by itself when it is missing (a test turns this off)
     installer = None                           # a test can put its own downloader here (see pb_deps.install)
     backend = None                             # a test can put its own voice here (see pe_speech)
+    KEEP_LIMIT = 150 << 20                     # in a Workbench block: the PDFs it keeps come to at most this many bytes (the project file holds them)
+    keep_dir = None                            # set by a Workbench block (attach_block_folder): the folder that holds what is open in this tab
 
     def __init__(self, path=None):
         super().__init__()
@@ -57,6 +60,7 @@ class PdfEditorTab(QWidget):
         self.setup_busy = False
         self.last_project = None               # the page project that "Cut and combine" adds to
         self._labels = {}
+        self.kept = {}                         # in a block: {key of a file picked from elsewhere: its copy in the block's folder}
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -133,6 +137,8 @@ class PdfEditorTab(QWidget):
         return ui_kit.menu_button(b)
 
     def last_files(self):
+        if self.keep_dir:                                        # (what was open last time was open on its own, not in this block)
+            return []
         return [p for p in self.store.get("open", []) if isinstance(p, str) and os.path.isfile(p)]
 
     def refresh_reopen(self):
@@ -280,6 +286,8 @@ class PdfEditorTab(QWidget):
                 pass
 
     def remember_open(self):
+        if self.keep_dir:                                        # a block's files live in the project's temporary folder: never in "open last time"
+            return
         self.store.set("open", [w.path for w in self.widgets() if getattr(w, "path", None)])
         self.store.flush()
 
@@ -294,11 +302,12 @@ class PdfEditorTab(QWidget):
         return self.open_path(path) is not None
 
     def open_path(self, path):
-        """Opens a PDF (a reader tab) or a .oppb project (a page project tab); one that is already open is brought to the front.  -> the tab, or None."""
-        low = path.lower()
+        """Opens a PDF (a reader tab) or a .oppb project (a page project tab); one that is already open is brought to the front.  -> the tab, or None.
+        In a Workbench block a file from anywhere else is copied into the block's folder first (see keep) and the copy is opened."""
         if not core.available():
             self.pending.append(path)
             return None
+        path = self.kept.get(pe_store.key(path), path)           # a file that was copied into the block before: its copy
         w = self.find(path)
         if w is not None:
             self.tabs.setCurrentWidget(w)
@@ -306,12 +315,67 @@ class PdfEditorTab(QWidget):
         if not os.path.isfile(path):
             self.warn(f"{os.path.basename(path)} is not there any more.")
             return None
-        if low.endswith(PROJECT_EXT):
+        low = path.lower()
+        if not low.endswith((PROJECT_EXT, PDF_EXT)):
+            self.warn(f"{os.path.basename(path)} is not a PDF or a page project.")
+            return None
+        path = self.keep(path)
+        if path.lower().endswith(PROJECT_EXT):
             return self.open_project(path)
-        if low.endswith(PDF_EXT):
-            return self.open_pdf(path)
-        self.warn(f"{os.path.basename(path)} is not a PDF or a page project.")
-        return None
+        return self.open_pdf(path)
+
+    # ------------------------------------------------------------------ in a block of the Workbench: everything open is kept in the block's folder
+    def attach_block_folder(self, folder):
+        """A Workbench block opened this tab on its folder: the PDFs and page projects in it open as tabs, and from now on a file that is opened from anywhere
+        else is copied into the folder (the project file holds the folder, never a link to a file somewhere else)."""
+        os.makedirs(folder, exist_ok=True)
+        self.keep_dir = folder
+        self.reopen_btn.setVisible(False)
+        for fn in sorted(os.listdir(folder)):
+            if fn.lower().endswith((PDF_EXT, PROJECT_EXT)) and os.path.isfile(os.path.join(folder, fn)):
+                self.open_path(os.path.join(folder, fn))
+        self.show_stack()
+
+    @staticmethod
+    def free_name(folder, name):
+        """folder/name, or folder/stem (2).ext ... when that exists: a file in the folder is never overwritten."""
+        stem, ext = os.path.splitext(name)
+        p, i = os.path.join(folder, name), 2
+        while os.path.exists(p):
+            p = os.path.join(folder, f"{stem} ({i}).{ext.lstrip('.')}" if ext else f"{stem} ({i})")
+            i += 1
+        return p
+
+    def kept_bytes(self):
+        folder = self.keep_dir
+        return sum(os.path.getsize(os.path.join(folder, f)) for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f)))
+
+    def keep(self, path):
+        """-> the path to open: in a block, a copy in the block's folder (the original is never changed); a file that is already in the folder, a file that would take
+        the block past KEEP_LIMIT (it opens where it is and is not part of the project: said), and any file outside a block are opened as they are."""
+        if not self.keep_dir:
+            return path
+        folder = os.path.abspath(self.keep_dir)
+        src = os.path.abspath(path)
+        if pe_store.key(os.path.dirname(src)) == pe_store.key(folder):
+            return path
+        had = self.kept.get(pe_store.key(src))
+        if had and os.path.isfile(had):                          # the same file again: its copy, not a second one
+            return had
+        try:
+            size = os.path.getsize(src)
+            if self.kept_bytes() + size > self.KEEP_LIMIT:
+                self.warn(f"{os.path.basename(src)} is not copied into this block: the PDFs of a block come to at most {self.KEEP_LIMIT >> 20} MB, because the project file holds them.\n\n"
+                          "It opens where it is and is not part of the project.")
+                return path
+            os.makedirs(folder, exist_ok=True)
+            dst = self.free_name(folder, os.path.basename(src))
+            shutil.copy2(src, dst)
+        except OSError as e:
+            self.warn(f"{os.path.basename(src)} could not be copied into this block ({e}). It opens where it is and is not part of the project.")
+            return path
+        self.kept[pe_store.key(src)] = dst
+        return dst
 
     def ask_password(self, path):
         pw, ok = QInputDialog.getText(self, "PDF editor", f"{os.path.basename(path)} is protected by a password.\nPassword:", QLineEdit.EchoMode.Password)
@@ -334,8 +398,13 @@ class PdfEditorTab(QWidget):
         return self.add_inner(r)
 
     def open_project(self, path=None):
-        t = pbt.PageBreakTab(path)
+        t = pbt.PageBreakTab(path, portable=bool(self.keep_dir))
         t.host = self.host
+        if self.keep_dir:
+            t.keep = self.keep
+        if path is None and self.keep_dir:                       # in a block a new page project has its file in the block's folder from the start (no question where)
+            os.makedirs(self.keep_dir, exist_ok=True)
+            t.path = self.free_name(os.path.abspath(self.keep_dir), "Page project" + PROJECT_EXT)
         self.last_project = t
         return self.add_inner(t)
 

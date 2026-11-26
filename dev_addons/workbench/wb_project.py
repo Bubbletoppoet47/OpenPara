@@ -127,10 +127,10 @@ register("coupled", "Coupled Physics", "Analysis Systems",
          "A heat analysis and a stress analysis of the same geometry solved together: the temperature of the first is the load of the second", "folder")
 # Other tools: one document each.
 for _k, _l, _tip, _st in (
-        ("sheets", "Sheets", "A spreadsheet", ".opsheet"), ("pdf", "PDF Editor", "Read, mark up and arrange PDF files", ".oppb"),
+        ("sheets", "Sheets", "A spreadsheet", ".opsheet"), ("pdf", "PDF Editor", "Read, mark up and arrange PDF files; the PDFs opened in it are kept in the project", "folder"),
         ("controls", "Controls", "Control systems: blocks, step responses", ".opctl"), ("circuits", "Circuits", "Circuit diagrams with a simulator", ".opcirc"),
         ("visualize", "Visualize", "Pictures and videos of a part or assembly", "folder"), ("motor", "Motor Control", "A motor drive", "folder"),
-        ("trainer", "Trainer", "Training of models", "folder"), ("annotator", "Annotator", "Pictures with labels, for training", "folder"),
+        ("trainer", "Trainer", "Training of models", "folder"), ("annotator", "Annotator", "Pictures with labels, for training; the project folder is kept as a link", "folder"),
         ("truss", "Truss Generator", "The members of a truss from a sketch", ".truss")):
     register(_k, _l, "Component Tools", [("document", _l, "data")], _tip, _st)
 # A study takes any number of wires into its Parameters cell: the dimensions of Parts (they change the geometry of every analysis that works on that Part) and the Setup of analyses

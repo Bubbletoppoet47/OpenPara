@@ -13,6 +13,16 @@ editor tab (the host hook `AppShell.adopted_by_tab` asks each tab whether it tak
 What is open, where you were in each PDF, the voice and its speed are remembered in `<user folder>/pdf_editor.json`; an empty new editor tab offers
 "Reopen ..." for what was open last time.  The look is OpenPara's (`ui_kit`: numbered sections, notes, status line, empty state); pages stay white.
 
+### In a Workbench block
+
+The Workbench (`dev_addons/workbench`) has a **PDF Editor** block with no wires in or out.  Its tab is this one, with the same functions; what changes is where files
+live.  The block's document is a **folder**: the tab opens on every PDF and page project in it (`attach_block_folder`), and a PDF or project opened from anywhere
+else (Open PDF, a page project's own import, Images -> PDF, File > Open) is **copied** into the folder first (`keep`), so the Workbench project never depends on a
+file somewhere else.  The original is never changed; the same file again is the same tab; the PDFs of a block come to at most `KEEP_LIMIT` (150 MB, the project
+file holds them), and a file past that opens where it is and says so.  A new page project has its file in the folder from the start (no "save as" question) and
+writes the PDFs next to it as relative paths (`PageBreakTab.portable`, `pb_core.Project.to_json(base)`), so it finds them again whenever the project is opened.
+"What was open last time" (`pdf_editor.json`) ignores a block's files.  The editor on its own is unchanged.  Test: `test_wb_pdf_annotator.py`.
+
 ### Reader (a PDF tab)
 
 * **Where reading starts**: click a sentence to put the marker there; **Play** starts at the marker (with no marker, at the first sentence at the top

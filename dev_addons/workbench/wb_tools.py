@@ -5,6 +5,11 @@ FOLDER (project.json and the sketch), so node.data["files"] holds the files in i
 tab (a new, empty one is made and saved there first); what is done in the tab is read back (when the project is saved, when the Workbench is shown again, before Update Project).
 Saved on its own, the block is the ordinary file (or folder), which opens in the program like any other.  The cell is ready once the document has something in it (it was changed
 in the tab).
+
+Two blocks have no wires in or out yet: the PDF Editor and the Annotator.  The PDF Editor's document is a FOLDER of the PDFs and page projects that are open in its tab (a file opened
+from anywhere else is copied into it, so the project never depends on a file somewhere else).  The Annotator's dataset is too big to be packed into a project file: the block keeps a
+LINK to the project folder (a folder with manifest.json) that the annotator window works in; the window of a new block starts a project in a temporary folder, and the block takes the
+folder once the project is saved.  dataset_folder() gives that folder: it is what a Trainer block will be wired to later.
 """
 import hashlib
 import os
@@ -17,6 +22,25 @@ import wb_project as wp
 # (block kind, tab kind of the add-on, extension, add-on, the document is a folder)
 TOOLS = (("sheets", "sheets", ".opsheet", "Sheets", False), ("drawing", "drawing", ".opdraw", "Drawings", False), ("controls", "controls", ".opctl", "Systems and Controls", False), ("circuits", "circuits", ".opcirc", "Circuits", False),
          ("truss", "truss", ".truss", "Truss Generator", True))
+
+
+def fingerprint(path):
+    """A fast fingerprint of a file or folder: names, sizes and times only (the contents of PDFs are not read each time the project looks at the block)."""
+    h = hashlib.sha1()
+    if os.path.isdir(path):
+        for root, dirs, files in os.walk(path):
+            dirs.sort()
+            for fn in sorted(files):
+                full = os.path.join(root, fn)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                h.update(f"{os.path.relpath(full, path).replace(os.sep, '/')}\0{st.st_size}\0{st.st_mtime_ns}\1".encode("utf-8"))
+    else:
+        st = os.stat(path)
+        h.update(f"{st.st_size}\0{st.st_mtime_ns}".encode("utf-8"))
+    return h.hexdigest()
 
 
 def digest(path):
@@ -96,22 +120,29 @@ class FileToolAdapter(nodes.Adapter):
         old = st.get("file")
         if old and old != f:
             self.remove(old)
-        if node.data.get(self.slot):
-            self.remove(f)                                       # (nothing left over from before is mixed into the document)
-            self.write(node, f)
-            w = h.new_addon_tab(self.tab_kind, f)
-        else:                                                    # a new document: the tool makes an empty one, which is saved in the workspace so that there is a file
-            w = h.new_addon_tab(self.tab_kind, None)
-            if w is not None:
-                w.path = f
-                w.save()
+        w = self.make_editor(h, node, f)
         if w is None:
             return None
         tab.adopt_editor(node, w)
         st["file"] = f
-        st["base"] = digest(f) if self.exists(f) else ""
+        st["base"] = self.fingerprint(f) if self.exists(f) else ""
         tab.say(f"{node.label} {node.title}: work in its tab. The project takes the changes when you save it or come back here.")
         return w
+
+    def make_editor(self, h, node, f):
+        """The tool's tab on the block's document `f` (written into the workspace from the block, or a new one that is saved there first)."""
+        if node.data.get(self.slot):
+            self.remove(f)                                       # (nothing left over from before is mixed into the document)
+            self.write(node, f)
+            return h.new_addon_tab(self.tab_kind, f)
+        w = h.new_addon_tab(self.tab_kind, None)                 # a new document: the tool makes an empty one, which is saved in the workspace so that there is a file
+        if w is not None:
+            w.path = f
+            w.save()
+        return w
+
+    def fingerprint(self, path):
+        return digest(path)
 
     def sync(self, tab, node):
         st = tab.node_state.get(node.id)
@@ -127,7 +158,7 @@ class FileToolAdapter(nodes.Adapter):
                 tab.say(f"'{node.title}' could not be saved into the project: {ex}")
         if not f or not self.exists(f):
             return None
-        d = digest(f)
+        d = self.fingerprint(f)
         if d == st["base"]:
             return None
         st["base"] = d
@@ -354,5 +385,150 @@ class DrawingAdapter(FileToolAdapter):
         return out
 
 
+class PdfEditorAdapter(FileToolAdapter):
+    """PDF Editor (no wires): the document is a folder.  The tab opens on every PDF and page project in it; a PDF or project opened from anywhere else is copied into it (see
+    PdfEditorTab.attach_block_folder), a new page project is made in it.  What changes (a saved highlight, a new file) is fingerprinted by names, sizes and times, so a big PDF is
+    not read each time."""
+
+    def __init__(self):
+        super().__init__("pdf", "pdfeditor", "", "PDF editor", True)
+
+    def fingerprint(self, path):
+        return fingerprint(path)
+
+    def make_editor(self, h, node, f):
+        self.remove(f)
+        if node.data.get(self.slot):
+            self.write(node, f)
+        os.makedirs(f, exist_ok=True)
+        w = h.new_addon_tab(self.tab_kind, None)
+        if w is not None and hasattr(w, "attach_block_folder"):
+            w.attach_block_folder(f)
+        return w
+
+
+class AnnotatorAdapter(nodes.Adapter):
+    """Annotator (no wires): the block keeps a LINK to the annotator project folder (a folder with its dataset inside; node.data["link"] = {"abs", "rel"}), never a copy: a dataset
+    is photos and video frames, far too big for a project file.  A new block opens the annotator on a new project in a temporary folder, as the annotator does on its own; the
+    first time the project is saved to its own folder (the annotator asks where) the block takes that folder.  The block follows the window: Save As, or a Dataset location chosen in
+    the window, moves the link.  A change in the dataset (its manifest) is a change of the cell.  dataset_folder() is where a later Trainer block will get the dataset."""
+    kind = "annotator"
+    first_cell = "document"
+    tab_kind = "annotator"
+    addon = "General Classification Annotator"
+
+    def available(self, tab):
+        try:
+            import addons
+            ok = self.tab_kind in addons.tab_kinds()
+        except Exception:                                        # noqa: BLE001
+            ok = False
+        if not ok:
+            return False, f"This tool needs the add-on '{self.addon}', which is not installed or is switched off (Add-ons)."
+        try:
+            import annotator_tab
+            need = annotator_tab.missing(required_only=True)
+        except Exception:                                        # noqa: BLE001
+            need = []
+        if need:
+            return False, "The annotator needs these packages first: " + ", ".join(p for _i, p, _w, _r in need) + " (pip install them, then open the block again)."
+        return True, ""
+
+    @staticmethod
+    def is_project(folder):
+        return bool(folder) and os.path.isfile(os.path.join(folder, "manifest.json"))
+
+    def dataset_folder(self, tab, node):
+        """The project folder the block links to, as it is now; None when the block has none yet or the folder is not where it was."""
+        link = node.data.get("link")
+        folder = wp.resolve_link(link, tab.path) if isinstance(link, dict) else None
+        return folder if self.is_project(folder) else None
+
+    @staticmethod
+    def mark(folder):
+        """What shows that the dataset changed: the folder and its manifest (rewritten by every import, box and class)."""
+        try:
+            st = os.stat(os.path.join(folder, "manifest.json"))
+        except OSError:
+            return ""
+        return f"{os.path.normcase(os.path.abspath(folder))}|{st.st_size}|{st.st_mtime_ns}"
+
+    def locate(self, tab, node):
+        """The folder of a block whose project is not where it was: the person is asked where it is now.  -> the folder or None."""
+        link = node.data.get("link") or {}
+        from PyQt6.QtWidgets import QFileDialog
+        start = os.path.dirname(link.get("abs", "")) if link.get("abs") else ""
+        p = QFileDialog.getExistingDirectory(tab, f"The annotator project of '{node.title}' is not at {link.get('abs', 'its place')} any more: choose its folder", start)
+        if not p:
+            tab.say(f"'{node.title}': its annotator project folder was not found, so it was not opened.")
+            return None
+        if not self.is_project(p):
+            tab.say(f"'{os.path.basename(p)}' is not an annotator project (it has no manifest.json), so '{node.title}' was not opened.")
+            return None
+        node.data["link"] = wp.rel_link(p, tab.path)
+        tab.project.touch(node.id, self.first_cell)
+        return p
+
+    def open_cell(self, tab, node, key):
+        w = tab.editor_of(node.id)
+        h = tab.host
+        if w is not None:
+            if h is not None and hasattr(h, "tabs"):
+                h.tabs.setCurrentWidget(w)
+            return w
+        if h is None or not hasattr(h, "new_addon_tab"):
+            tab.say(f"'{node.title}' opens in the program window; there is none here.")
+            return None
+        tab.sync_editors()
+        folder = None
+        if node.data.get("link"):
+            folder = self.dataset_folder(tab, node) or self.locate(tab, node)
+            if folder is None:
+                return None
+        w = h.new_addon_tab(self.tab_kind, folder)               # no folder: a new project in a temporary one
+        if w is None:
+            return None
+        tab.adopt_editor(node, w)
+        tab.node_state[node.id] = {"base": self.mark(folder) if folder else ""}
+        tab.say(f"{node.label} {node.title}: work in its tab. " + ("The project folder is kept as a link, never copied." if folder else
+                "Save the project into a folder of its own (File > Save) and the block keeps that folder."))
+        return w
+
+    def sync(self, tab, node):
+        st = tab.node_state.get(node.id)
+        w = tab.editor_of(node.id)
+        folder = getattr(w, "path", None) if w is not None else None
+        if st is None or "base" not in st or not self.is_project(folder):
+            return None                                           # (no window, or a project that is still in its temporary folder)
+        m = self.mark(folder)
+        if m == st["base"]:
+            return None
+        st["base"] = m
+        node.data["link"] = wp.rel_link(folder, tab.path)
+        tab.project.set_ready(node.id, self.first_cell, True)
+        return [self.first_cell]
+
+    def closed(self, tab, node):
+        w = tab.editor_of(node.id)
+        h = tab.host
+        if w is not None and h is not None and hasattr(h, "tabs"):
+            i = h.tabs.indexOf(w)
+            if i >= 0:
+                h.close_tab(i)                                    # (the program asks about a project that was never saved, as it does on its own)
+        tab.node_state.pop(node.id, None)
+
+    def export(self, tab, node, folder):
+        tab.sync_editors()
+        src = self.dataset_folder(tab, node)
+        if src is None:
+            raise ValueError(f"'{node.title}' has no saved annotator project yet: open it and save the project into a folder (File > Save), then save the block on its own.")
+        p = wb_parts.unique_path(folder, nodes.safe_stem(node.title), ".annotator")
+        os.makedirs(folder, exist_ok=True)
+        shutil.copytree(src, p)
+        return p
+
+
 for _k, _t, _e, _a, _f in TOOLS:
     nodes.register(SheetsAdapter(_k, _t, _e, _a, _f) if _k == "sheets" else DrawingAdapter(_k, _t, _e, _a, _f) if _k == "drawing" else FileToolAdapter(_k, _t, _e, _a, _f))
+nodes.register(PdfEditorAdapter())
+nodes.register(AnnotatorAdapter())

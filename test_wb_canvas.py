@@ -87,8 +87,8 @@ tb = tab.toolbox
 groups = [tb.topLevelItem(i).text(0) for i in range(tb.topLevelItemCount())]
 ok(groups == list(wp.GROUPS), f"the toolbox has the four groups in order ({groups})")
 ok(tb.item_of("solid") is not None and tb.item_of("part") is not None and tb.item_of("study") is not None, "every kind is in the toolbox")
-ok(not (tb.item_of("pdf").flags() & Qt.ItemFlag.ItemIsEnabled) == False, "a kind with no editor is still listed")
-ok("Not wired" in tb.item_of("pdf").toolTip(0), "a kind with no editor says so in its tooltip")
+ok(not (tb.item_of("visualize").flags() & Qt.ItemFlag.ItemIsEnabled) == False, "a kind with no editor is still listed")
+ok("Not wired" in tb.item_of("visualize").toolTip(0), "a kind with no editor says so in its tooltip")
 ok("needs the add-on" in tb.item_of("solid").toolTip(0), f"an analysis whose add-on is not loaded says which add-on it needs ({tb.item_of('solid').toolTip(0)[:90]})")
 ok(not tb.item_of("part").icon(0).isNull() and not tb.item_of("study").icon(0).isNull(), "every kind has a picture")
 ok(all(not ic.kind_icon(k).isNull() for k in wp.KINDS), "all pictures draw")
@@ -425,7 +425,7 @@ ok(CALLS == [("open", "A", "geometry")], "a double-click on a cell asks the bloc
 tab.on_activated(A.id, "name")
 ok(CALLS[-1] == ("open", "A", "geometry"), "a double-click on the name row opens the first cell")
 # a kind with no adapter
-tab.add_block("pdf", 900, 100)
+tab.add_block("visualize", 900, 100)
 S = list(prj.nodes.values())[-1]
 tab.on_activated(S.id, "document")
 ok("not wired" in tab.line.text(), "a block with no editor says so")

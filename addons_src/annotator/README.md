@@ -15,5 +15,9 @@ Rebuilt in Qt from the Tkinter program in the General-Classification-Annotator r
 What is not here on purpose: *File > Check for updates* and *Update folder location* (the old self-updater); OpenPara's add-on updates take
 its place. *Dataset location* reopens the new dataset in the same tab instead of restarting the program.
 
+In the Workbench (`dev_addons/workbench`) the Annotator is a block with no wires in or out: it opens this tab and keeps a link to the project folder (no copy of the
+dataset).  A new block works in a temporary project until you save it to a folder; then the block follows that folder.  A Trainer block will take a wire from it later.
+Nothing in the annotator itself changed.  Test: `test_wb_pdf_annotator.py`.
+
 Needs: pillow, numpy, opencv-python (required); qrcode (optional); torch, torchvision, ultralytics (AI pre-labeling, large). See requirements.txt.
 Your dataset, models and settings stay where the original program keeps them (`~/.trash_annotator.json`, the dataset folder, `~/yolo_runs`).
