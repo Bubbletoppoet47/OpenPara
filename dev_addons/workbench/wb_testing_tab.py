@@ -125,8 +125,8 @@ class TestingWindow(QWidget):
         self.analyse.bind_ribbon(R.add_page("Test", self.analyse.ribbon_items()))
         B = rib.button
         self.models_buttons = R.add_page("Models", [
-            B("import_model", "ann_import_zip", "Import\nmodel...", "Takes model files (.pt) into this block. A model up to 500 MB is kept inside the project file, a bigger one is linked.", self.import_model),
-            B("import_folder", "ann_import_zip", "Import\nfolder...", "Takes every model file (.pt) of a folder into this block.", self.import_folder),
+            B("import_model", "ann_import_zip", "Import\nmodel...", "Takes model files (.pt, .opdm) into this block. A model up to 500 MB is kept inside the project file, a bigger one is linked.", self.import_model),
+            B("import_folder", "ann_import_zip", "Import\nfolder...", "Takes every model file (.pt, .opdm) of a folder into this block.", self.import_folder),
         ])
         corner = QWidget()
         cl = QHBoxLayout(corner)
@@ -162,11 +162,13 @@ class TestingWindow(QWidget):
     # ------------------------------------------------------------------ the models
     def reload_models(self):
         """The models of the wires and of the block, as the Analyse tab's list (a model keeps its label while it is there)."""
-        rows = wb_models.models_of(self.tab, self.node.id)
-        fp = wb_models.fingerprint(rows)
+        every = wb_models.models_of(self.tab, self.node.id)
+        fp = wb_models.fingerprint(every)
         if fp == self._fp:
             return
         self._fp = fp
+        rows = [r for r in every if r["key"] != "distance"]                     # (a distance-only model finds no boxes: it waits for the "Boxes from" slot of the next step)
+        waiting = len(every) - len(rows)
         by, count = {}, {}
         for r in rows:
             count[r["name"]] = count.get(r["name"], 0) + 1
@@ -178,15 +180,15 @@ class TestingWindow(QWidget):
         self.ai_choice.addItems(list(by))
         if self.analyse is not None and not self.analyse.running:
             self.analyse.refresh_models()
-        self.bar_lbl.setText(f"{len(rows)} model{'s' if len(rows) != 1 else ''}")
+        self.bar_lbl.setText(f"{len(rows)} model{'s' if len(rows) != 1 else ''}" + (f"  (+ {waiting} distance-only: not testable yet)" if waiting else ""))
 
     def import_model(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Import model file(s)", "", "Model (*.pt)")
+        paths, _ = QFileDialog.getOpenFileNames(self, "Import model file(s)", "", "Models (*.pt *.opdm);;Model (*.pt);;Distance model (*.opdm)")
         if paths:
             self.take_paths(paths)
 
     def import_folder(self):
-        d = QFileDialog.getExistingDirectory(self, "Import every model file (.pt) of a folder")
+        d = QFileDialog.getExistingDirectory(self, "Import every model file (.pt, .opdm) of a folder")
         if d:
             self.take_paths([d])
 
@@ -254,7 +256,7 @@ class TestingWindow(QWidget):
         return " ".join(said)
 
     def dragEnterEvent(self, e):
-        if any(u.toLocalFile().lower().endswith(".pt") or os.path.isdir(u.toLocalFile()) for u in e.mimeData().urls()):
+        if any(u.toLocalFile().lower().endswith(wb_models.EXTS) or os.path.isdir(u.toLocalFile()) for u in e.mimeData().urls()):
             e.acceptProposedAction()
 
     def dropEvent(self, e):

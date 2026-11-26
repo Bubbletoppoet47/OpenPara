@@ -1,9 +1,10 @@
 """wb_models.py - the models of a workbench project: where they are kept, and how the blocks that use them find them.  No Qt here.
 
-A model is a .pt file with its information (a .json: kind, size, created, trainer, classes, scores, based_on; the annotator's model_library format).  In a project file a model is an
+A model is a .pt file with its information (a .json: kind, size, created, trainer, classes, scores, based_on; the annotator's model_library format), or a distance-only model: one
+.opdm file (the Trainer's formula, regressors and networks that answer the distance of a box and find no boxes), which carries its information inside.  In a project file a model is an
 ENTRY of node.data["models"] of the block that holds it:
 
-    {"file": "Medium_2026-10-08_1530_Ian.pt", "key": "assist" | "scratch", "bytes": n, "info": {...},
+    {"file": "Medium_2026-10-08_1530_Ian.pt", "key": "assist" | "scratch" | "distance", "bytes": n, "info": {...},
      "stored": "inside", "blob": {"b64": ...}}        the file is INSIDE the project file (up to MODEL_LIMIT)
      "stored": "linked", "link": {"abs", "rel"}        the file is kept next to the project (bigger than MODEL_LIMIT), and the person was told
 
@@ -20,9 +21,12 @@ import time
 import wb_project as wp
 
 MODEL_LIMIT = 500 * 1024 * 1024                 # a model up to this many bytes is kept inside the project file, a bigger one is linked
-KEYS = ("assist", "scratch")
-FOLDERS = {"assist": "Assist", "scratch": "Scratch"}
-KIND_TEXT = {"assist": "Classes + boxes", "scratch": "Classes + boxes + distance"}
+KEYS = ("assist", "scratch", "distance")
+SHARED_KEYS = ("assist", "scratch")                         # (the shared Models folder of the Annotator has no distance-only models)
+FOLDERS = {"assist": "Assist", "scratch": "Scratch", "distance": "Distance"}
+KIND_TEXT = {"assist": "Classes + boxes", "scratch": "Classes + boxes + distance", "distance": "Distance only"}
+FAMILY_TEXT = {"pinhole": "formula k / height", "loglinear": "log-linear regression", "knn": "k nearest neighbours", "boosting": "gradient boosting", "gp": "Gaussian process"}
+EXTS = (".pt", ".opdm")                                     # the files a model can be
 STORED_TEXT = {"inside": "Inside the project", "linked": "Linked", "shared": "GitHub / shared folder"}
 HOLDERS = ("trainer", "trained_models", "model_test")      # the kinds of block that hold models of their own
 
@@ -50,14 +54,40 @@ def linked_folder(tab):
     return os.path.join(base, "Trainer", "Linked models")
 
 
+def is_distance_file(path):
+    return str(path).lower().endswith(".opdm")
+
+
+def ext_of(key):
+    return ".opdm" if key == "distance" else ".pt"
+
+
 def key_of(path):
-    """'scratch' for a model with a distance model (a detector with one added, or the earlier kind), else 'assist'.  Read without torch."""
+    """'distance' for a distance-only model (.opdm), 'scratch' for a model with a distance model (a detector with one added, or the earlier kind), else 'assist'.  Read without torch."""
+    if is_distance_file(path):
+        return "distance"
     _ml, tc = libs()
     return "scratch" if tc is not None and tc.checkpoint_kind(path) in ("two", "old") else "assist"
 
 
+def distance_info(path):
+    """The information of a distance-only model, read from the head of its file (never a pickle).  'size' is what the model is, in words (the lists show it where the others show Small, Medium ...)."""
+    _ml, tc = libs()
+    h = tc.distance_models().read_header(path) if tc is not None else None
+    if h is None:
+        raise ValueError(f"{os.path.basename(path)} is not an OpenPara distance model file.")
+    tr = h.get("trained") or {}
+    fam = h.get("family")
+    rung = (h.get("info") or {}).get("rung")
+    return {"format": "opara-distance-model-v1", "kind": "distance", "size": f"network, rung {rung}" if fam == "mlp" else FAMILY_TEXT.get(fam, fam or "distance model"),
+            "created": h.get("created") or os.path.getmtime(path), "trainer": tr.get("trainer"), "classes": h.get("names") or tr.get("classes"), "scores": h.get("scores"),
+            "based_on": None, "family": fam, "pickled": bool(h.get("pickled"))}
+
+
 def info_of(path, key):
     """The information of a model file: the .json next to it when it has one, else what can be said without loading it (a model file can run code when it is loaded)."""
+    if key == "distance" or is_distance_file(path):
+        return distance_info(path)
     ml, _tc = libs()
     info = ml.read_info(path) if ml is not None else None
     if info:
@@ -122,18 +152,19 @@ def write_info(ml, pt, info):
 
 
 def export_entry(tab, node_id, entry, dest):
-    """Writes a model out as a file: the .pt as `dest` and its information beside it.  -> the .pt written."""
+    """Writes a model out as a file: the .pt as `dest` and its information beside it (a distance-only model is one .opdm file).  -> the file written."""
     ml, _tc = libs()
     src = entry_path(tab, node_id, entry)
     if src is None:
         raise ValueError(f"The file of {entry['file']} is not there ({(entry.get('link') or {}).get('abs', 'it is linked')}).")
-    if not dest.lower().endswith(".pt"):
-        dest += ".pt"
+    ext = ext_of(entry.get("key"))
+    if not dest.lower().endswith(ext):
+        dest += ext
     os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
     tmp = dest + ".part"
     shutil.copyfile(src, tmp)
     os.replace(tmp, dest)
-    if ml is not None:
+    if ml is not None and ext == ".pt":
         write_info(ml, dest, entry.get("info"))
     return dest
 
@@ -169,7 +200,7 @@ def shared_signature():
         return ()
     sig = []
     d = tc.annotator_models_dir()
-    for key in KEYS:
+    for key in SHARED_KEYS:
         sub = ml.folder_path(d, key)
         if os.path.isdir(sub):
             for f in sorted(os.listdir(sub)):
@@ -192,7 +223,7 @@ def shared_entries():
         return _SHARED["rows"]
     out = []
     d = tc.annotator_models_dir()
-    for key in KEYS:
+    for key in SHARED_KEYS:
         for v in ml.list_versions(d, key):
             info = ml.read_info(v["path"]) or {"size": v["size"], "created": v["ts"], "trainer": v["trainer"], "classes": v["classes"], "scores": v["scores"], "based_on": v["based_on"]}
             try:

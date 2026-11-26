@@ -147,6 +147,26 @@ def distance_models():
     return dist_models
 
 
+def list_distance_versions(models_dir):
+    """The distance-only models in <models_dir>/Distance/*.opdm, newest first, in the shape of model_library.list_versions plus 'kind': 'distance', 'family', 'id', 'pickled'
+    and 'info' (what the fit says about itself).  Only the head of each file is read, never a pickle."""
+    dmod = distance_models()
+    out, d = [], os.path.join(models_dir, DISTANCE_DIR)
+    if not os.path.isdir(d):
+        return out
+    for f in os.listdir(d):
+        p = os.path.join(d, f)
+        h = dmod.read_header(p) if f.lower().endswith(DISTANCE_EXT) else None
+        if h is None:
+            continue
+        tr = h.get("trained") or {}
+        out.append({"path": p, "file": f, "key": "distance", "kind": "distance", "size": None, "ts": h.get("created") or os.path.getmtime(p), "trainer": tr.get("trainer"),
+                    "classes": h.get("names") or tr.get("classes"), "scores": h.get("scores"), "based_on": None, "family": h.get("family"), "id": h.get("id"),
+                    "pickled": bool(h.get("pickled")), "info": h.get("info")})
+    out.sort(key=lambda v: (v["ts"], v["file"]), reverse=True)
+    return out
+
+
 def checkpoint_kind(path):
     """What a .pt model is: "two" (a detector with a distance model added), "old" (the earlier one-network distance model) or "plain"
     (a classes + boxes model, or anything else).  Read without torch: a .pt is a zip whose pickle names the format near its start."""
@@ -950,23 +970,8 @@ class TrainingProject:
         return os.path.join(self.models_dir, DISTANCE_DIR)
 
     def list_distance_models(self):
-        """The distance-only models of this project (models/Distance/*.opdm), newest first, in the shape of ml.list_versions plus 'kind': 'distance', 'family' and 'id'.
-        Only the head of each file is read (never a pickle)."""
-        dmod = distance_models()
-        out, d = [], self.distance_dir()
-        if not os.path.isdir(d):
-            return out
-        for f in os.listdir(d):
-            p = os.path.join(d, f)
-            h = dmod.read_header(p) if f.lower().endswith(DISTANCE_EXT) else None
-            if h is None:
-                continue
-            tr = h.get("trained") or {}
-            out.append({"path": p, "file": f, "key": "distance", "kind": "distance", "size": None, "ts": h.get("created") or os.path.getmtime(p), "trainer": tr.get("trainer"),
-                        "classes": h.get("names") or tr.get("classes"), "scores": h.get("scores"), "based_on": None, "family": h.get("family"), "id": h.get("id"),
-                        "pickled": bool(h.get("pickled")), "info": h.get("info")})
-        out.sort(key=lambda v: (v["ts"], v["file"]), reverse=True)
-        return out
+        """The distance-only models of this project (models/Distance/*.opdm), newest first, in the shape of ml.list_versions plus 'kind': 'distance', 'family' and 'id'."""
+        return list_distance_versions(self.models_dir)
 
     def list_models(self):
         out = self.list_distance_models()

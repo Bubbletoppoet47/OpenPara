@@ -5,7 +5,8 @@ the right, a status bar).  All the model handling is in wb_models (and the block
     list    Model | Kind | Size | Stored | Made | From        (click a heading to sort)
     filter  All models / Embedded models (in this project: inside it or linked) / GitHub models (the shared Models folder)
     left    the details of the model chosen in the list
-Model files (.pt) or folders dropped on the window are imported.  A model file can run code when it is loaded, so the person is asked before one is taken.
+Model files (.pt, or .opdm for a distance-only model) or folders dropped on the window are imported.  A .pt model file can run code when it is loaded, so the person is asked before
+one is taken (a distance-only model is numbers: it is only copied, and the one kind that holds a pickle asks again when it is opened).
 """
 import os
 
@@ -37,7 +38,7 @@ class SortItem(QTableWidgetItem):
 
 
 def model_files(paths):
-    """The .pt files of these paths: a file as it is, a folder with the .pt files in it and in the folders under it (three levels down at most)."""
+    """The model files (.pt, .opdm) of these paths: a file as it is, a folder with the model files in it and in the folders under it (three levels down at most)."""
     out = []
     for p in paths:
         if os.path.isdir(p):
@@ -45,8 +46,8 @@ def model_files(paths):
             for root, dirs, files in os.walk(p):
                 if root.count(os.sep) - base >= 3:
                     dirs[:] = []
-                out += [os.path.join(root, f) for f in sorted(files) if f.lower().endswith(".pt")]
-        elif p.lower().endswith(".pt") and os.path.isfile(p):
+                out += [os.path.join(root, f) for f in sorted(files) if f.lower().endswith(wb_models.EXTS)]
+        elif p.lower().endswith(wb_models.EXTS) and os.path.isfile(p):
             out.append(p)
     return out
 
@@ -56,11 +57,12 @@ def import_models(parent, tab, node, paths, host=None):
     once.  -> (how many were taken, or None when nothing was done, and the sentence for the status bar)."""
     files = model_files(paths)
     if not files:
-        return None, "There is no model file (.pt) in that."
-    r = QMessageBox.question(parent, "Import model", "A model file (.pt) can contain code that runs when it is loaded.\n\nImport only models you made or trust. Import " + (
-        f"these {len(files)} files?" if len(files) > 1 else os.path.basename(files[0]) + "?"), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-    if r != QMessageBox.StandardButton.Yes:
-        return None, ""
+        return None, "There is no model file (.pt or .opdm) in that."
+    if any(f.lower().endswith(".pt") for f in files):
+        r = QMessageBox.question(parent, "Import model", "A model file (.pt) can contain code that runs when it is loaded.\n\nImport only models you made or trust. Import " + (
+            f"these {len(files)} files?" if len(files) > 1 else os.path.basename(files[0]) + "?"), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if r != QMessageBox.StandardButton.Yes:
+            return None, ""
     import contextlib
     busy = getattr(host, "busy", None)
     done, again, failed = [], [], []
@@ -125,10 +127,10 @@ class ModelsWindow(QWidget):
         self.ribbon = R = rib.Ribbon()
         outer.addWidget(R)
         made = R.add_page("Models", [
-            B("import_model", "ann_import_zip", "Import\nmodel...", "Takes model files (.pt) into this block. A model up to 500 MB is kept inside the project file, a bigger one is linked.", self.import_model),
-            B("import_folder", "ann_import_zip", "Import\nfolder...", "Takes every model file (.pt) of a folder into this block.", self.import_folder),
+            B("import_model", "ann_import_zip", "Import\nmodel...", "Takes model files (.pt, or .opdm for a distance-only model) into this block. A model up to 500 MB is kept inside the project file, a bigger one is linked.", self.import_model),
+            B("import_folder", "ann_import_zip", "Import\nfolder...", "Takes every model file (.pt, .opdm) of a folder into this block.", self.import_folder),
             "|",
-            B("export_model", "ann_export_zip", "Export...", "Writes the model chosen in the list out as a file: the .pt and its information (.json) beside it.", self.export_model),
+            B("export_model", "ann_export_zip", "Export...", "Writes the model chosen in the list out as a file: the .pt and its information (.json) beside it, or the one .opdm file of a distance-only model.", self.export_model),
             B("rename_model", "ann_name", "Rename...", "Gives the model chosen in the list another name (its file keeps its name).", self.rename_model),
             B("remove_model", "ann_delete_box", "Remove", "Removes the model chosen in the list from this block (only a model imported into it).", self.remove_model),
         ])
@@ -205,7 +207,7 @@ class ModelsWindow(QWidget):
         self.table.setSortingEnabled(True)
         self.table.itemSelectionChanged.connect(self.show_detail)
         rv.addWidget(self.table, 1)
-        self.drop_lbl = QLabel("Drop model files (.pt) or a folder of them here to import them.")
+        self.drop_lbl = QLabel("Drop model files (.pt, .opdm) or a folder of them here to import them.")
         self.drop_lbl.setStyleSheet(f"color:{ui_kit.MUTED}; font-size:11px;")
         rv.addWidget(self.drop_lbl)
         split.addWidget(right)
@@ -332,12 +334,12 @@ class ModelsWindow(QWidget):
 
     # ------------------------------------------------------------------ importing
     def import_model(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Import model file(s)", "", "Model (*.pt)")
+        paths, _ = QFileDialog.getOpenFileNames(self, "Import model file(s)", "", "Models (*.pt *.opdm);;Model (*.pt);;Distance model (*.opdm)")
         if paths:
             self.import_paths(paths)
 
     def import_folder(self):
-        d = QFileDialog.getExistingDirectory(self, "Import every model file (.pt) of a folder")
+        d = QFileDialog.getExistingDirectory(self, "Import every model file (.pt, .opdm) of a folder")
         if d:
             self.import_paths([d])
 
@@ -373,7 +375,7 @@ class ModelsWindow(QWidget):
         if r is None:
             QMessageBox.information(self, "Export model", "Choose a model in the list first.")
             return
-        dest, _ = QFileDialog.getSaveFileName(self, "Export the model as a file", r["file"], "Model (*.pt)")
+        dest, _ = QFileDialog.getSaveFileName(self, "Export the model as a file", r["file"], "Distance model (*.opdm)" if r["key"] == "distance" else "Model (*.pt)")
         if not dest:
             return
         try:
@@ -381,7 +383,7 @@ class ModelsWindow(QWidget):
         except (OSError, ValueError) as e:
             QMessageBox.critical(self, "Export model", f"Could not write the model: {e}")
             return
-        self.say(f"Exported {os.path.basename(out)}, with its information beside it.")
+        self.say(f"Exported {os.path.basename(out)}" + ("." if r["key"] == "distance" else ", with its information beside it."))
 
     def rename_model(self):
         r = self.own_row("Rename model")
@@ -411,7 +413,7 @@ class ModelsWindow(QWidget):
 
     # ------------------------------------------------------------------ dropping files
     def dragEnterEvent(self, e):
-        if any(u.toLocalFile().lower().endswith(".pt") or os.path.isdir(u.toLocalFile()) for u in e.mimeData().urls()):
+        if any(u.toLocalFile().lower().endswith(wb_models.EXTS) or os.path.isdir(u.toLocalFile()) for u in e.mimeData().urls()):
             e.acceptProposedAction()
 
     def dropEvent(self, e):

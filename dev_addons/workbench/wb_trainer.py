@@ -13,7 +13,7 @@ window.
 
 What the project file keeps of a Trainer (node.data):
     settings   the settings of the training project (model type, size, epochs, distortions, the Python to train with ...)
-    models     every model trained: {"file", "key", "bytes", "stored": "inside" | "linked", "info", "blob" | "link"}.
+    models     every model trained: {"file", "key" (assist | scratch | distance), "bytes", "stored": "inside" | "linked", "info", "blob" | "link"}.
                A model up to MODEL_LIMIT (500 MB) is kept INSIDE the file, so one project file is one training; a bigger one is LINKED (it is written next to the project, and the
                person is told).  Importing a model from a file works the same way (see store_model_file).
 Never kept: the pictures, the distorted copies, the frozen copies of runs.
@@ -28,7 +28,7 @@ import wb_nodes as nodes
 import wb_parts
 import wb_project as wp
 
-KEYS = wb_models.KEYS                            # the model folders of a training project (the annotator's Models layout)
+KEYS = wb_models.KEYS                            # the model folders of a training project (the annotator's Models layout, and Distance for the distance-only models)
 mb = wb_models.mb
 
 
@@ -110,10 +110,10 @@ class TrainerAdapter(nodes.Adapter):
         """Names and sizes of the model files of a training project."""
         out = []
         for key in KEYS:
-            d = os.path.join(models_dir, {"assist": "Assist", "scratch": "Scratch"}[key])
+            d = os.path.join(models_dir, wb_models.FOLDERS[key])
             if os.path.isdir(d):
                 for fn in sorted(os.listdir(d)):
-                    if fn.lower().endswith(".pt"):
+                    if fn.lower().endswith(wb_models.ext_of(key)):
                         try:
                             out.append(f"{key}/{fn}/{os.path.getsize(os.path.join(d, fn))}")
                         except OSError:
@@ -126,9 +126,9 @@ class TrainerAdapter(nodes.Adapter):
         return wb_models.store_file(tab, node, pt, key, info)
 
     def put_model(self, tab, node, models_dir, m):
-        """A model of the block as files in the training project: the .pt and its .json.  A linked model whose file is gone is left out (and said)."""
+        """A model of the block as files in the training project: the .pt and its .json (a distance-only model is the one .opdm).  A linked model whose file is gone is left out (and said)."""
         tc = trainer_core()
-        sub = os.path.join(models_dir, {"assist": "Assist", "scratch": "Scratch"}.get(m.get("key"), "Assist"))
+        sub = os.path.join(models_dir, wb_models.FOLDERS.get(m.get("key"), "Assist"))
         os.makedirs(sub, exist_ok=True)
         pt = os.path.join(sub, wp.safe_name(m["file"]))
         if m.get("stored") == "linked":
@@ -142,7 +142,7 @@ class TrainerAdapter(nodes.Adapter):
             if not isinstance(m.get("blob"), dict):
                 return None
             wp.unpack_file(m["blob"], sub, os.path.basename(pt))
-        if isinstance(m.get("info"), dict) and m["info"]:
+        if isinstance(m.get("info"), dict) and m["info"] and m.get("key") != "distance":
             with open(tc.libs()[3].info_path(pt), "w", encoding="utf-8") as f:
                 json.dump(m["info"], f, indent=2)
         self.state(tab, node).setdefault("placed", set()).add((m["file"], m.get("key")))
@@ -155,7 +155,7 @@ class TrainerAdapter(nodes.Adapter):
         models_dir = os.path.join(folder, "models")
         seen, changed = set(), False
         for key in KEYS:
-            for v in ml.list_versions(models_dir, key):
+            for v in (tc.list_distance_versions(models_dir) if key == "distance" else ml.list_versions(models_dir, key)):
                 seen.add((v["file"], key))
                 got = self.store_model_file(tab, node, v["path"], key)
                 changed = changed or got is not None
