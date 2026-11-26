@@ -160,13 +160,43 @@ def condition_tags(w):
     return out
 
 
+HANDOVER_NODES = ("Loads", "Conditions", "Fluid and flow")        # where the rows of what the coupling hands over are listed: the first of these the window has
+
+
+def handover_node(nodes):
+    return next((k for k in HANDOVER_NODES if k in nodes), None)
+
+
+def handover_items(w, nodes):
+    """{node key: [(text, tag)]}: the rows of what a Coupled Physics window hands over to this analysis (w.handover: a list of dicts with "name", "type", "where", "value", "note"
+    and "keys", set by that window; nothing for a window that is not shown inside one).  They are locked rows in green; their letters go on after those of the conditions."""
+    rows = getattr(w, "handover", None) or ()
+    k = handover_node(nodes)
+    if not rows or k is None:
+        return {}
+    first = len(condition_tags(w))
+    anchor = getattr(w, "handover_anchor", None)
+    out = []
+    for i, row in enumerate(rows):
+        try:
+            at = anchor(row) if callable(anchor) else None
+        except Exception:                               # noqa: BLE001 - a place that cannot be found is no place
+            at = None
+        out.append((f"{row['name']} · {row['type']}", {"letter": sim_tags.letter(first + i), "name": row["name"], "type": row["type"], "where": row.get("where", ""), "value": row.get("value", ""),
+                                                       "group": "Loads" if k == "Loads" else k, "kind": "handover", "colour": sim_tags.colour_of("handover"), "item": row, "row": first + i,
+                                                       "anchor": at, "note": row.get("note", ""), "tip": row.get("note", ""), "details_title": row["name"]}))
+    return {k: out}
+
+
 def generic_items(w, nodes):
-    """{node key: [(text, tag)]} from the conditions of the table, and the local element sizes of the Mesh (3D)."""
+    """{node key: [(text, tag)]} from the conditions of the table, the rows handed over by a Coupled Physics window, and the local element sizes of the Mesh (3D)."""
     items = {}
     for tg in condition_tags(w):
         k = node_of(tg["group"], nodes)
         if k is not None:
             items.setdefault(k, []).append((tg["name"], tg))
+    for k, v in handover_items(w, nodes).items():
+        items.setdefault(k, []).extend(v)
     return items
 
 
@@ -194,6 +224,8 @@ def generic_marks(w, nodes):
             marks[key] = "ok" if (mesh or (geom and not needs_mesh)) else ("update" if geom else "incomplete")
         elif low in ("supports", "loads", "conditions"):
             have = len(refs) if low == "conditions" else n.get(key, 0)
+            if low == "loads" and getattr(w, "handover", None) and handover_node(nodes) == key:      # what a Coupled Physics window hands over is a load of this analysis
+                have += len(w.handover)
             if low == "loads" and not have:                              # a support that moves its points by a given amount drives the analysis as a load does
                 try:
                     import sim_disp
@@ -293,6 +325,12 @@ class Outline(QWidget):
         self.hl.setSpacing(0)
         self.holder.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         self.hl.addStretch(1)                         # a page takes the height it needs and starts at the top of the Details; the rest of the height is empty space below it
+        self.note = QLabel("")                        # the Details of a row that is handed over by a Coupled Physics window: a locked row has no page to edit, only this text
+        self.note.setWordWrap(True)
+        self.note.setTextFormat(Qt.TextFormat.PlainText)
+        self.note.setStyleSheet("color:#1d5e3a; padding:6px 4px;")
+        self.note.hide()
+        self.hl.insertWidget(0, self.note)
         self.scroll.setWidget(self.holder)
         bl.addWidget(self.scroll, 1)
         self.split.addWidget(bottom)
@@ -351,8 +389,12 @@ class Outline(QWidget):
             self.expect = None
             self.touched = True
         self.current = (key, tag)
+        handed = tag is not None and tag.get("kind") == "handover"
         for k, n in self.nodes.items():
-            n["section"].setVisible(k == key)
+            n["section"].setVisible(k == key and not handed)
+        self.note.setVisible(handed)
+        if handed:
+            self.note.setText(tag.get("note") or "")
         self.head.setText(f"Details of “{(tag.get('details_title') or cur.text(0))}”" if tag is not None else f"Details of “{key}”")
         self.holder.adjustSize()
         self.user_open = False
@@ -517,11 +559,15 @@ class Outline(QWidget):
         if self.current is None:
             return None, None
         key, tag = self.current
+        if tag is not None and tag.get("kind") == "handover":
+            return "handover", tag.get("item")
         return focus_of(key), (tag.get("item") if tag else None)
 
     def visible_tags(self):
         """The tags the view draws now: those of the selected node (all of its conditions) or just the selected row; none for the nodes that are not about conditions."""
         f, item = self.focus()
+        if f == "handover":
+            return [t for t in self.tags if t["item"] is item]
         if f not in ("supports", "loads", "conditions"):
             return []
         want = {"supports": "Supports", "loads": "Loads"}.get(f)

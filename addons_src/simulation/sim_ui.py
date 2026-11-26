@@ -353,10 +353,10 @@ def _holds_widgets(lay):
     return False
 
 
-def outlinize(panel, window=None, kind="sim"):
+def outlinize(panel, window=None, kind="sim", order=None):
     """Makes the finished panel of a window (make_panel, with all its Sections in) the ANSYS-style column: the Sections move into an Outline (a tree of them, in the order a model is
     built) with the Details of the selected one below it, and what else was in the panel stays under them, always in
-    view (the Solve button is not one of these: it is at the top of the Results page).  -> the sim_outline.Outline, or None when the panel has no sections.  `window` may offer outline_items / outline_marks / outline_selected (see sim_outline)."""
+    view (the Solve button is not one of these: it is at the top of the Results page).  -> the sim_outline.Outline, or None when the panel has no sections.  `window` may offer outline_items / outline_marks / outline_selected (see sim_outline).  `order`: the titles of the sections in the order the rows are wanted (a window whose rows are not the usual ones of a model: the Coupled Physics window)."""
     if _PLAIN[0]:
         return None
     scroll = getattr(panel, "scroll", None)
@@ -369,7 +369,7 @@ def outlinize(panel, window=None, kind="sim"):
     import sim_outline
     ol = sim_outline.Outline(kind)
     lay = content.layout()
-    for s_ in sorted(secs, key=sim_outline.rank):
+    for s_ in sorted(secs, key=(lambda x: (order.index(x.title) if x.title in order else len(order), x.number)) if order else sim_outline.rank):
         if lay is not None:
             lay.removeWidget(s_)
         ol.add_section(s_)

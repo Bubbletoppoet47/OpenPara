@@ -149,6 +149,7 @@ class WorkbenchTab(QWidget):
         self.workspace = tempfile.mkdtemp(prefix="opara_wb_")
         atexit.register(self.drop_workspace)
         self.editors = {}                                   # node id -> the editor tab (a widget) that was opened for it
+        self.hosted = {}                                    # node id -> (the analysis window, the node of the Coupled Physics block that shows its panes): an analysis wired into Coupled Physics has no tab
         self.node_state = {}                                # node id -> what the kind's adapter keeps about it (its workspace file, what it last read back)
         self.notes = []                                      # what the steps of the running Refresh / Update had to say (shown with the result)
         self.busy_now = False
@@ -458,6 +459,7 @@ class WorkbenchTab(QWidget):
                 except Exception:                            # noqa: BLE001
                     pass
             self.editors.pop(n.id, None)
+            self.hosted.pop(n.id, None)
         self.scene.remove_nodes([n.id for n in ns])
         self.say(f"Deleted {names}.")
         return len(ns)
@@ -559,8 +561,32 @@ class WorkbenchTab(QWidget):
             h.refresh_titles()
         return widget
 
+    def register_hosted(self, node, widget, owner):
+        """An analysis window whose panes are shown in the window of the Coupled Physics block `owner` (no tab of its own): it is the node's editor for as long as that window is open."""
+        self.hosted[node.id] = (widget, owner.id)
+        return widget
+
+    def hosted_by(self, nid):
+        """The node id of the Coupled Physics block that shows the analysis `nid`, or None (not hosted, or its window is closed)."""
+        hw = self.hosted.get(nid)
+        if hw is None:
+            return None
+        return hw[1] if self.editor_of(nid) is not None else None
+
     def editor_of(self, nid):
-        """The editor tab of a node when it is still open, else None."""
+        """The editor tab of a node when it is still open, else None.  An analysis shown inside the window of a Coupled Physics block is its editor too (the window, not a tab)."""
+        hw = self.hosted.get(nid)
+        if hw is not None:
+            w, owner = hw
+            try:
+                if self.editor_of(owner) is None:
+                    self.hosted.pop(nid, None)
+                    return None
+                w.isVisible()                                # a deleted Qt object raises here
+            except RuntimeError:
+                self.hosted.pop(nid, None)
+                return None
+            return w
         w = self.editors.get(nid)
         if w is None:
             return None

@@ -113,7 +113,7 @@ def _blob(make, name):
 def with_editor(tab, node, fn):
     """Opens the analysis of `node` in its usual window (in the background), lets fn(window) set it up, reads it back into the project and closes the window."""
     a = nodes.adapter_for(node.kind)
-    w = a.open_editor(tab, node, front=False)
+    w = a.open_editor(tab, node, front=False, hosted=False) if hasattr(a, "hosting_block") else a.open_editor(tab, node, front=False)      # (an analysis wired into Coupled Physics is set up in a tab of its own here: that is quick)
     if w is None:
         raise RuntimeError("its window could not be opened")
     try:

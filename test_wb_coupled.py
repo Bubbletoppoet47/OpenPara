@@ -38,6 +38,15 @@ addons.register_extensions(ext)
 FAILS = []
 
 
+def widget_gone(w):
+    """True when a Qt widget was deleted (touching it raises)."""
+    try:
+        w.isVisible()
+        return False
+    except RuntimeError:
+        return True
+
+
 def ok(cond, text):
     print(("ok   " if cond else "FAIL ") + text)
     if not cond:
@@ -246,6 +255,9 @@ done, failed = W.update_project(only={nHeat2d.id, nStress2d.id, nC2.id})
 ok(not failed and len(calls) == n_calls + 1, f"Update: one coupled solve ({failed}) {MSGS[-3:]}")
 wc2 = W.editor_of(nC2.id)
 ok(wc2 is not None and wc2.result is not None and wc2.result["ok"] and wc2.result["dim"] == 2 and all(c["ok"] for c in wc2.result["checks"]), "the 2D result is there and every check passes")
+ok(W.hosted_by(nStress2d.id) == nC2.id and W.hosted_by(nHeat2d.id) == nC2.id, "the two 2D analyses are shown inside the window of the Coupled block (no tab of their own)")
+ok(all(w_ is not wt2 and w_ is not wf2 for w_ in (W.editor_of(nHeat2d.id), W.editor_of(nStress2d.id))) and all(widget_gone(w_) or shell.tabs.indexOf(w_) < 0 for w_ in (wt2, wf2)), "and the tabs they had are gone")
+tf2 = W.editor_of(nStress2d.id).tab                                                       # (the window that the block shows now: it holds the setup that was made in the tab, and the result)
 nodes2 = np.asarray((tf2.result.get("mesh") or tf2.mesh)["nodes"], float)               # (quadratic elements: the result has the mid-nodes too)
 ux = np.asarray(tf2.result["u"])[:, 0]
 dx2d = float(ux[np.abs(nodes2[:, 0] - nodes2[:, 0].max()) < 1e-9].mean())

@@ -502,6 +502,7 @@ class CFDCanvas(pt.PhysCanvas):
             legend = (data["name"], self.base["lo"], self.base["hi"], data["unit"]) if self.base else None
         self.paint_overlay(p, data, stale=False)
         p.resetTransform()
+        self.paint_tag_chips(p)
         if legend:
             self.paint_legend2(p, *legend)
 
@@ -547,6 +548,7 @@ class CFDCanvas(pt.PhysCanvas):
             for side, (mx, my, dx, dy) in mids.items():
                 s = self.w2s(mx, my)
                 p.drawText(int(s.x() + dx), int(s.y() + dy), kinds[side])
+        self.paint_handover(p)
         if self.particles is not None and tab.cb_tracers.isChecked() and self.shows("result"):
             P = self.particles
             p.setPen(QPen(QColor(255, 255, 255, 190), 1.5))
@@ -959,6 +961,9 @@ class CFDTab(sim_meshhost.Mesh2DHost, QWidget):
             self.win.status(text)
         except Exception:
             pass
+
+    def handover_anchor(self, row):
+        return pt.handover_anchor_2d(self, row)
 
     def selectable(self):
         """Edge keys that can be selected: the walls of the solid bodies (None = any edge, before there is a mesh)."""

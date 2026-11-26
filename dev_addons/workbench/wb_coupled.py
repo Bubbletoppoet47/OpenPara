@@ -4,11 +4,12 @@ Flow analysis together with a Thermal analysis (they exchange heat) and / or a S
 The cells:   Physics (import)   a wire from the Setup of a 2D / 3D Thermal block and one from the Setup of a 2D / 3D Static Structural block, or of a 2D / 3D Fluid Flow block and a
                                 Thermal and / or a Static Structural block of the same dimension.  Refresh checks them: one of each, the same dimension, wired from the same Part or Assembly block.
              Setup (data)       the coupling options (the window's state file); always ready.
-             Solution (compute) Update opens the window (and the two analyses, when they are not open), solves the heat analysis, hands its temperature to the stress analysis and
-                                solves that.  The results live in the windows of the two analyses and in the Coupled Physics window; closing the window makes the solution 'update' again.
+             Solution (compute) Update opens the window (it shows the analyses wired in, each on its own tab of the strip: Fluid, Thermal, Structural), solves the heat analysis, hands its
+                                temperature to the stress analysis and solves that.  The results live in the analyses and in the Coupled Physics window; closing the window makes the solution 'update' again.
              Results (view)     opens the window.
-The block is an ordinary project folder (.gpx: simulation.json + state.sim) kept as data in node.data["files"], like the analyses.  The two analyses are set up in their own windows
-as usual; a stress analysis wired in needs supports but no load (the temperature is its load).  Saving the block on its own gives the folder.
+The block is an ordinary project folder (.gpx: simulation.json + state.sim) kept as data in node.data["files"], like the analyses.  The analyses are set up in the strip of its window (they have
+no tab of their own while they are wired in: double-clicking one of them opens this window on its tab); a stress analysis wired in needs supports but no load (the temperature is its load).
+Saving the block on its own gives the folder.
 """
 import hashlib
 import os
@@ -160,8 +161,29 @@ class CoupledAdapter(nodes.Adapter):
                 show[role] = (lambda n=n: tab.open_cell(n.id, "geometry"))
         why = self.problems(tab, node)
         fl = self.roles(tab, node).get("fluid")
-        return {"windows": lambda: self.windows(tab, node), "labels": self.labels(tab, node), "show": show, "problem": why, "note": None,
-                "dim": (DIM[fl.kind] if fl is not None else None)}
+        roles = self.roles(tab, node)
+        return {"windows": lambda: self.windows(tab, node), "labels": self.labels(tab, node), "titles": {r: (n.title if n is not None else "") for r, n in roles.items()},
+                "show": show, "problem": why, "note": None,
+                "dim": (DIM[fl.kind] if fl is not None else None), "part": self.part_name(tab, node), "marks": lambda: self.setup_marks(tab, node),
+                "deps_key": lambda: self.deps_key(tab, node)}
+
+    def part_name(self, tab, node):
+        """The name of the part or assembly the analyses work on (the first one found), or None."""
+        for n in self.member_nodes(tab, node):
+            g = tab.project.incoming(n.id, "geometry")
+            if g is not None and g.a in tab.project.nodes:
+                return tab.project.nodes[g.a].title
+        return None
+
+    def setup_marks(self, tab, node):
+        """{role: 'ok' | 'incomplete' | 'update'} from the Setup cell of each analysis wired in (what the strip of the window shows)."""
+        out = {}
+        for role, n in self.roles(tab, node).items():
+            if n is None:
+                continue
+            st = tab.project.status(n.id, "setup")
+            out[role] = "ok" if st == wp.OK else ("incomplete" if st == wp.INCOMPLETE else "update")
+        return out
 
     # ---- the project folder in the workspace
     def state(self, tab, node):
@@ -220,9 +242,113 @@ class CoupledAdapter(nodes.Adapter):
         if not node.data.get("files"):                           # a block that was never opened has no folder yet: the one the window just made is the block's
             node.data["files"] = wb_analysis.pack(f)
             tab.project.changed()
+        self.host_members(tab, node, w)
         if not front and front_w is not None:
             h.tabs.setCurrentWidget(front_w)
         return w
+
+    # ---- the analyses shown inside the window
+    def hostable(self, n):
+        try:
+            import coupled_host
+        except ImportError:
+            return False
+        return coupled_host.can_host(n.kind)
+
+    def host_members(self, tab, node, cw):
+        """Every analysis wired in that the window can show is shown in it: its own tab (if it has one) is closed first, the window of its project folder is made without a tab and its panes go
+        into the strip of `cw`."""
+        out = {}
+        for role, n in self.roles(tab, node).items():
+            if n is not None and self.hostable(n):
+                out[role] = self.host_member(tab, node, cw, n)
+        cw.refresh()
+        return out
+
+    def host_member(self, tab, node, cw, n):
+        """The analysis `n` is shown inside the window `cw` of the Coupled Physics block `node`.  -> its window (already hosted: the same one), or None when it could not be made."""
+        if tab.hosted_by(n.id) == node.id:
+            return tab.editor_of(n.id)
+        a = nodes.adapter_for(n.kind)
+        ok, why = a.available(tab)
+        if not ok:
+            tab.say(why)
+            return None
+        if tab.editor_of(n.id) is not None:                      # it has a tab of its own (or another block shows it): saved and closed, its state travels in its project folder
+            a.close_editor(tab, n)
+        tab.sync_editors()                                       # what was done in it is taken before its folder is written again
+        f = a.materialize(tab, n)
+        mw = a.window(tab, f, threaded=True)
+        tab.register_hosted(n, mw, node)
+        cw.host_member(ROLE[n.kind], mw)
+        st = a.state(tab, n)
+        try:
+            if mw.is_dirty():                                    # (a window may find its own housekeeping to write: that is not the person's change)
+                mw.save()
+        except Exception:                                        # noqa: BLE001
+            pass
+        st["base"] = wb_analysis.digests(f)
+        st["had_editor"] = True
+        return mw
+
+    def release_member(self, tab, node, n):
+        """The analysis `n` leaves the window of the Coupled Physics block `node` (it is not wired in any more, or its geometry is refreshed): saved, read back into the project, its window shut
+        down.  Its results go with it, so its solution says 'update' again."""
+        mw = tab.editor_of(n.id)
+        a = nodes.adapter_for(n.kind)
+        if mw is None or tab.hosted_by(n.id) != node.id:
+            return
+        try:
+            if mw.is_dirty():
+                mw.save()
+        except Exception:                                        # noqa: BLE001
+            pass
+        for key in (a.sync(tab, n) or []):
+            tab.project.touch(n.id, key)
+        cw = tab.editor_of(node.id)
+        if cw is not None:
+            cw.unhost_member(ROLE[n.kind])
+        tab.hosted.pop(n.id, None)
+        a.drop_window(mw)
+        a.state(tab, n)["had_editor"] = False
+        tab.project.set_ready(n.id, "solution", False)
+
+    def open_member(self, tab, node, n, front=True, say=True):
+        """The analysis `n` (wired into the block `node`) opens in the window of that block, on its own tab of the strip.  -> the analysis window."""
+        cw = tab.editor_of(node.id)
+        if cw is None:
+            cw = self.open_editor(tab, node, front=front)
+        elif front:
+            self.show(tab, cw)
+        if cw is None:
+            return None
+        if tab.hosted_by(n.id) != node.id and self.hostable(n):
+            self.host_member(tab, node, cw, n)
+            cw.refresh()
+        if front:
+            cw.show_role(ROLE[n.kind])
+            if say:
+                text = f"‘{n.title}’ is part of ‘{node.title}’: it opens here."
+                cw.line.setText(text)
+                tab.say(text)
+        return tab.editor_of(n.id)
+
+    def relink(self, tab, node):
+        """A wire was made or removed: an open window shows the analyses that are wired in now (one that was taken out is saved and leaves; one that was put in moves in, from its own tab)."""
+        cw = tab.editor_of(node.id)
+        if cw is None:
+            return
+        want = {n.id: n for n in self.roles(tab, node).values() if n is not None and self.hostable(n)}
+        for nid in [i for i, (_w, owner) in list(tab.hosted.items()) if owner == node.id and i not in want]:
+            if nid in tab.project.nodes:
+                self.release_member(tab, node, tab.project.nodes[nid])
+            else:
+                tab.hosted.pop(nid, None)
+        for n in want.values():
+            if tab.hosted_by(n.id) != node.id:
+                self.host_member(tab, node, cw, n)
+        cw.refresh()
+        tab.scene.refresh()
 
     # ---- reading back
     def sync(self, tab, node):
@@ -326,6 +452,8 @@ class CoupledAdapter(nodes.Adapter):
             if i >= 0:
                 h.close_tab(i)
         tab.editors.pop(node.id, None)
+        for nid in [i for i, (_w, owner) in list(tab.hosted.items()) if owner == node.id]:        # the analyses it showed went with it (their results too: their solutions say 'update' at the next read-back)
+            tab.hosted.pop(nid, None)
 
     def closed(self, tab, node):
         self.close_editor(tab, node)

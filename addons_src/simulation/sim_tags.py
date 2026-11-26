@@ -13,7 +13,7 @@ from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPen
 
 KIND_COLOURS = {"support": "#2f6fdc", "slide": "#e0b000", "bearing": "#7a4dc2", "contact": "#7a4dc2", "force": "#d12f2f", "pressure": "#e8742a", "point": "#a61e4d",
                 "gravity": "#1f7a2c", "moment": "#a61e4d", "temperature": "#d12f2f", "flux": "#e8742a", "power": "#a61e4d", "convection": "#1f7a2c", "radiation": "#7a4dc2",
-                "insulated": "#5b6770", "size": "#0e7f86", "load": "#d12f2f"}
+                "insulated": "#5b6770", "size": "#0e7f86", "load": "#d12f2f", "handover": "#23744a"}
 # what the Type text of a condition says -> its kind (the first word that matches wins)
 WORDS = (("fixed", "support"), ("pinned", "support"), ("displacement", "support"), ("insulat", "insulated"), ("convect", "convection"), ("radiat", "radiation"), ("heat flux", "flux"), ("flux", "flux"), ("heat flow", "power"), ("heat gen", "power"),
          ("temperature", "temperature"), ("gravity", "gravity"), ("pressure", "pressure"), ("moment", "moment"), ("vertex", "point"), ("force", "force"), ("wind", "pressure"),
@@ -157,7 +157,8 @@ class FocusMixin:
         f = self.focus
         if f is None:
             return True
-        return {"mesh": f == "mesh", "result": f == "results", "supports": f in ("supports", "conditions"), "loads": f in ("loads", "conditions")}.get(what, False)
+        return {"mesh": f == "mesh", "result": f == "results", "supports": f in ("supports", "conditions"), "loads": f in ("loads", "conditions"),
+                "handover": f in ("handover", "loads", "conditions")}.get(what, False)
 
     def items_shown(self, items, what):
         """The supports / loads of the list that are drawn now: all of them under their node, only the selected one when a row is selected."""

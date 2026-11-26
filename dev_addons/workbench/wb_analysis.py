@@ -248,7 +248,32 @@ class AnalysisAdapter(nodes.Adapter):
             w.threaded = threaded
         return w
 
+    def hostable(self):
+        """True when the panes of this kind of analysis can be shown inside a Coupled Physics window (coupled_host)."""
+        try:
+            import coupled_host
+        except ImportError:
+            return False
+        return coupled_host.can_host(self.kind)
+
+    def hosting_block(self, tab, node):
+        """The Coupled Physics block whose window shows this analysis, or None: it is wired into the Physics cell of that block (and so is one of its members), and the Coupled Physics add-on is
+        there and can show this kind of analysis.  Such an analysis has no tab of its own: it is set up in the strip of that window."""
+        if not self.hostable():
+            return None
+        cn = self.coupled_nodes(tab, node)
+        ca = nodes.adapter_for("coupled")
+        if not cn or ca is None:
+            return None
+        ok, _why = ca.available(tab)
+        if not ok:
+            return None
+        return cn[0] if node.id in {m.id for m in ca.member_nodes(tab, cn[0])} else None
+
     def open_cell(self, tab, node, key):
+        blk = self.hosting_block(tab, node)
+        if blk is not None:                                      # part of a Coupled Physics block: it opens in that block's window, on its own tab of the strip
+            return nodes.adapter_for("coupled").open_member(tab, blk, node, say=True)
         w = tab.editor_of(node.id)
         if w is not None:
             self.show(tab, w)
@@ -263,7 +288,16 @@ class AnalysisAdapter(nodes.Adapter):
         if h is not None and hasattr(h, "tabs"):
             h.tabs.setCurrentWidget(w)
 
-    def open_editor(self, tab, node, front=True):
+    def open_editor(self, tab, node, front=True, hosted=True):
+        """The editor of the analysis: its window (a tab of its own, or a place in the window of the Coupled Physics block it is wired into: `hosted` False asks for a tab of its own even then,
+        which is how the setups of the example project are made).  An analysis already open is returned as it is."""
+        w = tab.editor_of(node.id)
+        if w is not None:
+            return w
+        if hosted:
+            blk = self.hosting_block(tab, node)
+            if blk is not None:
+                return nodes.adapter_for("coupled").open_member(tab, blk, node, front=front, say=False)
         h = tab.host
         if h is None or not hasattr(h, "new_addon_tab"):
             tab.say(f"'{node.title}' opens in the program window; there is none here.")
@@ -637,6 +671,10 @@ class AnalysisAdapter(nodes.Adapter):
         if w is None:
             return
         self.close_studies(tab, node)
+        owner = tab.hosted_by(node.id)
+        if owner is not None:                                    # shown in the window of a Coupled Physics block: it leaves that window (saved), there is no tab to close
+            nodes.adapter_for("coupled").release_member(tab, tab.project.nodes[owner], node)
+            return
         try:
             if w.is_dirty():
                 w.save()

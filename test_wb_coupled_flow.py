@@ -209,6 +209,8 @@ ok(not failed and P.status(nC.id, "physics") == wp.OK, f"Refresh Project: Physic
 done, failed = W.update_project(only={nFl.id, nTh.id, nC.id})
 ok(not failed and len(calls) == 1, f"Update: ONE coupled solve ({failed}, {len(calls)}) {MSGS[-3:]}")
 wc = W.editor_of(nC.id)
+ok(W.hosted_by(nFl.id) == nC.id and W.hosted_by(nTh.id) == nC.id, "the flow and the heat analysis are shown in the window of the block, with no tab of their own")
+cf, th = W.editor_of(nFl.id).tab, W.editor_of(nTh.id).tab                  # (the windows the block shows now: the ones that were in tabs were closed when the analyses moved in; their setup came along in their folders)
 r1 = wc.result if wc is not None else None
 ok(r1 is not None and r1["ok"] and r1["dim"] == 2 and "fluid" in r1 and "thermal" in r1 and "structural" not in r1, "the result has the fluid and the heat parts")
 ok(r1 is not None and all(c["ok"] for c in r1["checks"]), "every check passes: " + (checks_text(r1) if r1 else ""))
@@ -235,6 +237,8 @@ W.sync_editors()
 # ---------------------------------------------------------------------------------------------------------------------------------- the three together
 W.scene.make_link(nSt.id, "setup", nC.id, "physics")
 ok(ad.problems(W, nC) is None, "the stress analysis is wired in as well: they fit")
+ok(W.hosted_by(nSt.id) == nC.id, "and it is shown in the window of the block as well")
+cf, th, fe = W.editor_of(nFl.id).tab, W.editor_of(nTh.id).tab, W.editor_of(nSt.id).tab     # (the stress analysis was in a tab of its own: the window the block shows now holds its setup)
 ok(P.status(nSt.id, "setup") == wp.OK, f"wired in, the stress analysis needs supports but no load: its Setup is ok ({P.status(nSt.id, 'setup')})")
 done, failed = W.update_project(only={nFl.id, nTh.id, nSt.id, nC.id})
 ok(not failed and len(calls) == 2, f"Update: one more coupled solve ({failed}, {len(calls)}) {MSGS[-3:]}")

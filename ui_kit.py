@@ -112,11 +112,14 @@ def fit_panel(split, panel, content, lo=340, hi=640, index=0):
     splitter gets what is left.  Set when the tab is built, again when it is first laid out (fonts and styles are known then), and widened
     when the contents grow - until the user drags the divider, which then stays where they put it.  The width is not remembered."""
     def get_w():
-        return split.sizes()[index]
+        sizes = split.sizes()
+        return sizes[index] if index < len(sizes) else 10 ** 6            # (the panel was taken out of the splitter by another window that shows it: nothing to widen here)
 
     def set_w(want):
         sizes = split.sizes()
         n = split.count()
+        if n <= index:
+            return
         others = [i for i in range(n) if i != index]
         total = sum(sizes)
         new = [0] * n

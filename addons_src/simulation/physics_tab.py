@@ -175,6 +175,15 @@ def condition_anchor_2d(tab, item):
     return None
 
 
+def handover_anchor_2d(tab, row):
+    """Where a handed-over row sits, for its tag: the middle of the first edge it is about, or the first edge of the body for a row about the whole body.  (x, y) or None."""
+    keys = row.get("keys")
+    if keys is None:
+        g = getattr(tab, "geom", None)
+        keys = [g["edges"][0]["src"]] if g is not None and g.get("edges") else []
+    return condition_anchor_2d(tab, {"targets": list(keys)})
+
+
 def points_along(pts, closed, count):
     """`count` points evenly spaced by arc length along a polyline -> [(x, y, tx, ty)] with (tx, ty) the unit tangent."""
     P = list(pts) + ([pts[0]] if closed else [])
@@ -579,6 +588,7 @@ class PhysCanvas(sim_tags.FocusMixin, QWidget):
         if getattr(tab, "REGION_VIEW", False) and not (want_field or mesh_only):
             self.paint_region_marks(p)
         self.paint_conditions(p)
+        self.paint_handover(p)
         self.paint_fasteners(p)
         if self.shows("result"):
             self.paint_probes(p)
@@ -804,6 +814,40 @@ class PhysCanvas(sim_tags.FocusMixin, QWidget):
                             d = (ld["tx"] / L, ld["ty"] / L)
                         s0 = self.w2s(x0, y0)
                         self.arrow(p, QPointF(s0.x() - 36 * d[0], s0.y() + 36 * d[1]), s0)
+
+    def paint_handover(self, p):
+        """What a Coupled Physics window hands over to this analysis, in green: the edges the rows are about (dashed round the whole body for a row about the body), with arrows into
+        the body for a pressure.  Only while the Outline shows them: a row selected, or the node the rows are listed under."""
+        tab = self.tab
+        rows = self.items_shown(list(getattr(tab, "handover", None) or ()), "handover")
+        if not rows or tab.geom is None:
+            return
+        col = QColor(sim_tags.colour_of("handover"))
+        edge_of = {e["src"]: (e, pts) for e, pts in zip(tab.geom["edges"], tab.geom["polys"])}
+        for row in rows:
+            keys = row.get("keys")
+            whole = keys is None
+            ks = list(edge_of) if whole else [tuple(k) for k in keys]
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            for k in ks:
+                if k not in edge_of:
+                    continue
+                e, pts = edge_of[k]
+                closed = e["kind"] == "ci"
+                poly = QPolygonF([self.w2s(*q) for q in pts] + ([self.w2s(*pts[0])] if closed else []))
+                pen = QPen(col, 2.4 if whole else 4.2, Qt.PenStyle.DashLine if whole else Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+                if row.get("dashed") and not whole:
+                    pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+                    pen.setDashPattern([14 / 4.2, 8 / 4.2])                                    # (14 on, 8 off)
+                p.setPen(pen)
+                p.drawPolyline(poly)
+                if row.get("arrows") and not whole:
+                    p.setPen(QPen(col, 2))
+                    count = max(2, min(40, int(round(polyline_length(pts, closed) * self.scale / 40.0))))
+                    for x0, y0, tx, ty in points_along(pts, closed, count):
+                        ix, iy = self.inward_normal(x0, y0, -ty, tx)
+                        s0 = self.w2s(x0, y0)
+                        self.arrow(p, QPointF(s0.x() - 34 * ix, s0.y() + 34 * iy), s0)
 
     def paint_fasteners(self, p):
         """Bolt / screw heads (a bar of the head width on the edge, an arrow toward the head side) and contact arrows."""
@@ -2181,6 +2225,9 @@ class PhysicsTab(sim_meshhost.Mesh2DHost, QWidget):
 
     def condition_anchor(self, item):
         return condition_anchor_2d(self, item)
+
+    def handover_anchor(self, row):
+        return handover_anchor_2d(self, row)
 
     def refresh_lists(self):
         sim_disp.upgrade_inplace(self.supports, 2)               # a support of an older file or script (x = ux held, y = uy held) is a Displacement now
