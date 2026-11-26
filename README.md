@@ -148,6 +148,11 @@ by hand cannot run there, and the Gimble says so. Recordings are copied from `da
 `test_videos/` (files already on the PC are skipped). It needs the Annotator's packages (torch, ultralytics) and downloads onnx and
 onnxruntime.
 
+**Analyse** (the Annotator's ribbon tab, `addons_src/annotator/app/annotator_analysis.py` + `annotator_analyse.py`): open a recorded Gimble session folder,
+run a model of the Annotator's list over it and see how its distance agrees with the LiDAR inside each box (closest point, median and average, within an
+adjustable tolerance at an adjustable confidence), scrub the frames to judge the test by eye, and save a frame picture, a CSV or a one-page report. It was
+tested with made-up models (`test_annotator_analyse.py`); **not yet run with a real trained model**, which needs torch and ultralytics.
+
 **Trainer: two kinds of model, both from random weights** (`addons_src/trainer/`). "Classes + boxes" trains a stock YOLO model
 (`train_helper_job.py`, saved in `Models/Assist`). "Classes + boxes + distance" (`train_distance_job.py`, saved in `Models/Scratch`)
 trains two models one after the other: that same detector, then a separate small distance model (`annotator/app/distance_model.py`)

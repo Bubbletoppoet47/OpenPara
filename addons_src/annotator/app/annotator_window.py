@@ -25,7 +25,7 @@ import numpy as np
 from PIL import Image
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QShortcut
-from PyQt6.QtWidgets import QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QSplitter, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QSplitter, QStackedWidget, QVBoxLayout, QWidget
 
 try:                                                         # inside OpenPara: the shared look (bar, button weights); on its own the annotator does without
     import ui_kit
@@ -33,6 +33,7 @@ except ImportError:
     ui_kit = None
 
 import annotator_core as ac
+import annotator_analyse as ana
 import annotator_canvas as cv
 import annotator_dialogs as dlg
 import annotator_panel as pnl
@@ -208,12 +209,16 @@ class AnnotatorWindow(QMainWindow):
         outer = QVBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+        self._mode_analyse = False                           # the Analyse tab is shown (its own panel and picture, its own status line)
+        self._analyse_status = self._annotate_status = ""
         self.ribbon = rib.Ribbon()
         outer.addWidget(self.ribbon)
+        self.stack = QStackedWidget()
+        outer.addWidget(self.stack, 1)
         body = QSplitter()
         body.setContentsMargins(4, 4, 4, 4)
         body.setChildrenCollapsible(False)
-        outer.addWidget(body, 1)
+        self.stack.addWidget(body)
         self.panel = pnl.AnnotatorPanel(self)
         body.addWidget(self.panel)
         self.canvas = cv.ImageCanvas(self)
@@ -226,6 +231,15 @@ class AnnotatorWindow(QMainWindow):
         self.ai_choice.addItems(AI_CHOICES)
         self.frame_text = ""                                 # "Frame 2 of 4", drawn on the picture
         self._note_cache = {}
+        self.analyse = ana.AnalyseTab(self)                  # the Analyse tab: a recorded session, a model, the LiDAR (annotator_analyse.py)
+        analyse_body = QSplitter()
+        analyse_body.setContentsMargins(4, 4, 4, 4)
+        analyse_body.setChildrenCollapsible(False)
+        analyse_body.addWidget(self.analyse.panel)
+        analyse_body.addWidget(self.analyse.view)
+        analyse_body.setStretchFactor(1, 1)
+        analyse_body.setSizes([330, 900])
+        self.stack.addWidget(analyse_body)
         self._build_ribbon()
         # status line: what is open at the left, the AI model and any running job at the right
         self.status_label = QLabel("No project loaded")
@@ -290,6 +304,7 @@ class AnnotatorWindow(QMainWindow):
             B("download_models", "ann_model_dl", "Download\nmodels…", "Get the models from GitHub.", self.download_models),
             B("confidence", "ann_conf", "AI\nconfidence…", "Only keep predictions at or above this confidence.", self.set_ai_confidence),
         ] + (["|"] + addon["models"] if addon["models"] else []))
+        self.analyse.bind_ribbon(R.add_page("Analyse", self.analyse.ribbon_items()))
         R.add_page("Setup", [
             B("classes", "ann_classes", "Classes…", "Add, rename or remove the classes.", self.manage_classes),
             B("hotkeys", "ann_hotkeys", "Hotkeys…", "Keys for classes and actions.", self.edit_hotkeys),
@@ -305,6 +320,35 @@ class AnnotatorWindow(QMainWindow):
         self.bar_lbl.setStyleSheet("color:#6a7790;")
         cl.addWidget(self.bar_lbl)
         R.setCornerWidget(corner, Qt.Corner.BottomRightCorner)
+        R.currentChanged.connect(self._on_ribbon_tab)
+
+    def _on_ribbon_tab(self, index):
+        """The Analyse tab swaps the side panel and the picture for its own; the annotating hotkeys sleep while it is shown."""
+        on = self.ribbon.tabText(index) == "Analyse"
+        if on == self._mode_analyse:
+            return
+        self._mode_analyse = on
+        self.stack.setCurrentIndex(1 if on else 0)
+        for sc in self.shortcuts:
+            sc.setEnabled(not on)
+        if on:
+            self.analyse.refresh_models()
+            self.status_label.setText(self._analyse_status)
+            self.analyse.view.canvas.setFocus()
+        else:
+            self.status_label.setText(self._annotate_status)
+            self.canvas.setFocus()
+
+    def _show_status(self, text):
+        """The annotating view's status line (kept, and shown unless the Analyse tab is up)."""
+        self._annotate_status = text
+        if not self._mode_analyse:
+            self.status_label.setText(text)
+
+    def show_analyse_status(self, text):
+        self._analyse_status = text
+        if self._mode_analyse:
+            self.status_label.setText(text)
 
     def _refresh_bar(self):
         lb = getattr(self, "bar_lbl", None)
@@ -392,6 +436,8 @@ class AnnotatorWindow(QMainWindow):
             a.setCheckable(True)
             a.setChecked(text == cur)
             a.triggered.connect(lambda _c=False, t=text: self._pick_model(t))
+        if getattr(self, "analyse", None) is not None:
+            self.analyse.refresh_models()
 
     def _pick_model(self, text):
         self._set_choice(text)
@@ -427,6 +473,7 @@ class AnnotatorWindow(QMainWindow):
         self._depth_cache = (None, None)
 
     def closeEvent(self, e):
+        self.analyse.shutdown()
         w = self._web
         if w is not None:
             try:
@@ -514,6 +561,7 @@ class AnnotatorWindow(QMainWindow):
                 continue
             sc = QShortcut(qtk.to_qt_sequence(b), self)
             sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.setEnabled(not self._mode_analyse)
             if action.startswith("class:"):
                 sc.activated.connect(lambda i=int(action[6:]): self._set_active_class(i))
             else:
@@ -1514,7 +1562,7 @@ class AnnotatorWindow(QMainWindow):
             hint = "" if n else "  |  empty - Data tab: Import video... or Import Gimble session..."
             if n and self.active_session is not None:
                 hint = f"  |  set {self.active_session}: nothing to show"
-            self.status_label.setText(f"Project: {self.project.root}  |  {n} image(s){hint}")
+            self._show_status(f"Project: {self.project.root}  |  {n} image(s){hint}")
             return
         if self.project.is_annotated(self.current_image_id):
             status = "annotated"
@@ -1524,7 +1572,7 @@ class AnnotatorWindow(QMainWindow):
             status = "not yet annotated"
         info = self.project.manifest['images'].get(self.current_image_id, {})
         depth_txt = f"{info.get('depth_pixels', 0)} LiDAR pts" if self.project.has_depth(self.current_image_id) else "no depth"
-        self.status_label.setText(
+        self._show_status(
             f"{self.current_image_id}  |  {len(self.boxes)} box(es) ({sum(1 for d in self.box_dist if d)} with distance)  |  {status}  |  "
             f"{depth_txt}  |  {len(self.project.list_images())} image(s) in project"
             + (f"  |  set: {self.active_session}" if self.active_session else ""))

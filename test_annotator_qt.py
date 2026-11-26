@@ -61,19 +61,20 @@ w.host = FakeHost(); w.resize(1200, 800); w.show(); pump(4)
 assert w.temp_root and w.path is None and w.title() == "Annotator" and not w.is_dirty()
 assert w.project.classes == [] and w.ai_box.count() == 0 and w.class_list.count() == 0
 assert [w.ai_choice.itemText(i) for i in range(w.ai_choice.count())] == ["No AI model"]
-# the window is a ribbon over a side panel: four tabs of big buttons, no menu bar (every command of the old menus has a button)
+# the window is a ribbon over a side panel: five tabs of big buttons, no menu bar (every command of the old menus has a button)
 from PyQt6.QtCore import QCoreApplication, QEvent
 from PyQt6.QtWidgets import QToolButton
 QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value); pump(2)      # as in the real program: scheduled deletions happen
 R = w.ribbon
 assert w.menuWidget() is None, "no menu bar"
-assert [R.tabText(i) for i in range(R.count())] == ["Annotate", "Data", "Models", "Setup"]
+assert [R.tabText(i) for i in range(R.count())] == ["Annotate", "Data", "Models", "Analyse", "Setup"]
 def page_texts(name):
     return [b.text().replace("\n", " ") for b in R.widget(R.page_index[name]).widget().findChildren(QToolButton)]
 assert page_texts("Annotate") == ["Confirm image", "Previous image", "Next image", "Fit to screen", "Rotate 90°", "Delete frame…", "LiDAR distance", "Clear distance", "Delete box", "Clear and retry AI"], page_texts("Annotate")
 assert page_texts("Data") == ["Import video…", "Import zip…", "Export zip…", "Tablet mode…", "Sessions…", "Sync deleted files"], page_texts("Data")
 assert page_texts("Models") == ["Load AI model", "Download models…", "AI confidence…"], page_texts("Models")
 assert page_texts("Setup") == ["Classes…", "Hotkeys…", "My name…"], page_texts("Setup")
+assert page_texts("Analyse") == ["Open session…", "Run analysis", "Stop", "Dots in boxes", "All dots", "Save frame image", "Export CSV", "Export report", "Try the example", "Self-check"], page_texts("Analyse")
 assert all(not b.icon().isNull() for b in R.buttons.values()), "every button has its icon"
 assert "0 images" in w.bar_lbl.text() and "not saved yet" in w.bar_lbl.text()
 # nothing is open yet: the buttons that act on an image / a box are greyed

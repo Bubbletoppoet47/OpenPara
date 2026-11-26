@@ -49,6 +49,25 @@ ICONS = {
     "ann_tab_box": ('<rect class="p" x="5" y="6.5" width="14" height="11" stroke-dasharray="2.5 1.8"/><rect class="k" x="3.3" y="4.8" width="3.4" height="3.4"/><rect class="k" x="17.3" y="4.8" width="3.4" height="3.4"/>'
                     '<rect class="k" x="3.3" y="15.8" width="3.4" height="3.4"/><rect class="k" x="17.3" y="15.8" width="3.4" height="3.4"/>', "feat"),
     "ann_tab_ai": ('<path class="a" d="M10.5 3l2.1 5.7 5.7 2.1-5.7 2.1-2.1 5.7-2.1-5.7L2.7 10.8l5.7-2.1z"/><path class="a" d="M18.5 14.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z"/>', "ai"),
+    # ---- Analyse
+    "ann_an_open": ('<path class="b" d="M3 6.5h6.5l2 2.5H21v10.5H3z"/><path class="l" d="M3 10.5h18"/><circle class="a" cx="16.5" cy="15.5" r="2.4"/>', "dat"),
+    "ann_an_run": ('<circle class="a" cx="12" cy="12" r="9"/><path class="k" d="M10 7.5v9l7-4.5z"/>', "ana"),
+    "ann_an_stop": ('<circle class="b" cx="12" cy="12" r="9"/><rect class="k" x="8.2" y="8.2" width="7.6" height="7.6"/>', "cut"),
+    "ann_an_dots_box": ('<rect class="p" x="3" y="4.5" width="18" height="15" stroke-dasharray="2.5 1.8"/><circle class="d" cx="8" cy="9.5" r="1.3"/><circle class="d" cx="12" cy="9.5" r="1.3"/>'
+                        '<circle class="d" cx="16" cy="9.5" r="1.3"/><circle class="d" cx="10" cy="14.5" r="1.3"/><circle class="d" cx="14" cy="14.5" r="1.3"/>', "feat"),
+    "ann_an_dots_all": ('<rect class="p" x="3" y="4" width="18" height="16"/><circle class="d" cx="6.5" cy="8" r="1.1"/><circle class="d" cx="10.5" cy="8" r="1.1"/><circle class="d" cx="14.5" cy="8" r="1.1"/>'
+                        '<circle class="d" cx="18" cy="8" r="1.1"/><circle class="d" cx="8.5" cy="12" r="1.1"/><circle class="d" cx="12.5" cy="12" r="1.1"/><circle class="d" cx="16.5" cy="12" r="1.1"/>'
+                        '<circle class="d" cx="6.5" cy="16" r="1.1"/><circle class="d" cx="10.5" cy="16" r="1.1"/><circle class="d" cx="14.5" cy="16" r="1.1"/><circle class="d" cx="18" cy="16" r="1.1"/>', "feat"),
+    "ann_an_save_img": ('<rect class="b" x="3" y="3" width="18" height="12.5"/><path class="a" d="M3 13l5-4.5 4 3.5 3-2.5 6 4.5v1.5H3z"/><path class="l" d="M12 17v5M9.5 19.5l2.5 2.5 2.5-2.5"/>', "dat"),
+    "ann_an_csv": ('<rect class="p" x="3" y="4" width="18" height="16"/><rect class="a" x="3" y="4" width="18" height="5.3" style="opacity:.7"/><path class="l" d="M3 9.3h18M3 14.7h18M9 4v16M15 4v16"/>', "dat"),
+    "ann_an_report": ('<path class="p" d="M5.5 2.5h9l4 4v15h-13z"/><path class="l" d="M14.5 2.5v4h4"/><rect class="a" x="8" y="12" width="2" height="6"/><rect class="a" x="11.2" y="9.5" width="2" height="8.5"/>'
+                      '<rect class="a" x="14.4" y="13.5" width="2" height="4.5"/>', "dat"),
+    "ann_an_example": ('<rect class="b" x="3" y="3.5" width="18" height="17" rx="1.5"/><path class="a" d="M12 7l1.5 3.8 3.8 1.5-3.8 1.5L12 17.6l-1.5-3.8-3.8-1.5 3.8-1.5z"/>', "ana"),
+    "ann_an_check": ('<rect class="b" x="5" y="4.5" width="14" height="16.5" rx="1.5"/><rect class="p" x="9" y="2.5" width="6" height="4" rx="1"/><path class="l" d="M8.5 13.5l2.5 2.5 4.5-5" stroke-width="2"/>', "asm"),
+    "ann_tab_results": ('<path class="l" d="M3 3.5v17h18"/><rect class="a" x="6" y="12" width="3" height="7"/><rect class="b" x="11" y="7.5" width="3" height="11.5"/><rect class="a" x="16" y="10" width="3" height="9"/>', "ana"),
+    "ann_tab_boxes": ('<rect class="a" x="3.5" y="4" width="7" height="5"/><path class="l" d="M13 6.5h8"/><rect class="b" x="3.5" y="10" width="7" height="5"/><path class="l" d="M13 12.5h8"/>'
+                      '<rect class="p" x="3.5" y="16" width="7" height="5"/><path class="l" d="M13 18.5h8"/>', "feat"),
+    "ann_tab_scrub": ('<rect class="p" x="3" y="6" width="18" height="12"/><path class="l" d="M3 9.5h18M3 14.5h18"/><path class="n" d="M12 3v18" stroke-width="2"/>', "ana"),
 }
 
 _done = False
