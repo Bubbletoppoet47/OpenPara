@@ -1,9 +1,12 @@
 """dr_panels.py - the panels of the Drawings window.
 
     NewDrawingDialog(sheet)       the first thing a new drawing asks: the sheet (standard sizes only, landscape or portrait, a preview) and the kind of projection
-    ModelViewPanel(tab)           Model View: the models, the nine orientations, the display style, the scale; picking an orientation lets the view follow the pointer to the sheet
-    ProjectedPanel(tab)           Projected View: the view to project from, the display style; the pointer picks the side
-    ToolPanel(tab)                Smart Dimension / Center Mark / Centerline / Note / Balloon / Linear Note Pattern / Line / Rectangle / Circle / Arc: what to click, the options of the tool
+    ModelViewPanel(tab)           Model View: the models, the nine orientations, the display style, the scale; picking an orientation lets the view follow the pointer to the sheet.
+                                  The style buttons and the scale field work on ONE view: the one that follows the pointer or is selected (undo takes it back); with none, they set
+                                  what the next view starts with
+    ProjectedPanel(tab)           Projected View: the view to project from, the display style and the scale (the parent's unless set); the pointer picks the side.  The same: the view
+                                  just put down is the one they change
+    ToolPanel(tab)                Dimension (the person picks the type: Horizontal, Vertical, Aligned, Diameter, Radius, Angle) / Center Mark / Centerline / Note / Balloon / Linear Note Pattern / Line / Rectangle / Circle / Arc: what to click, the options of the tool
                                   (a note's text, size and leader; the number of the next balloon; the direction, spacing and number of a note pattern), and ✔ OK to leave the tool
     OutlinePanel(tab)             the tree of the drawing (sheet, models, views and what is drawn on each, the notes, what is drawn on the sheet) with the Details of the selected item below it
 
@@ -23,6 +26,7 @@ import dr_sheet as S
 import ui_kit
 
 STYLE_BUTTONS = [("wireframe", "Wireframe"), ("hlv", "Hidden Lines\nVisible"), ("hlr", "Hidden Lines\nRemoved"), ("shaded_edges", "Shaded With\nEdges"), ("shaded", "Shaded")]
+DIM_ICON = {"h": "dr_dim_h", "v": "dr_dim_v", "a": "dr_dim_len", "dia": "dr_dim_dia", "rad": "dr_dim_rad", "ang": "dr_dim_ang"}
 BIG_QSS = "QToolButton{font-size:11px; padding:2px;} QToolButton:checked{background:#cfe3fb; border:1px solid #6aa0e0;} QToolButton:disabled{color:#a0a0a0;}"
 
 
@@ -66,7 +70,7 @@ def scale_combo(current=None):
         cb.addItem(t)
     cb.lineEdit().setPlaceholderText("1:2, 2:1, 0.5 ...")
     ui_kit.tame_combo(cb, 8)
-    cb.setCurrentIndex(-1)                                   # nothing picked: a new view takes the sheet scale
+    cb.setCurrentIndex(-1)                                   # nothing picked: a new view takes the scale the drawing starts its views at
     if current:
         cb.setCurrentText(current)
     return cb
@@ -189,6 +193,8 @@ class ModelViewPanel(QWidget):
     def __init__(self, tab):
         super().__init__()
         self.tab = tab
+        self.busy = False
+        self.start_style, self.start_scale = "hlv", ""            # what the next view starts with while no view is the one these controls work on
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.addLayout(ok_cancel(lambda: tab.finish_command(True), lambda: tab.finish_command(False)))
@@ -229,6 +235,8 @@ class ModelViewPanel(QWidget):
             b.setEnabled(on)
             if not on:
                 b.setToolTip(label.replace("\n", " ") + " is not built yet")
+            else:
+                b.clicked.connect(lambda _c=False, k=key: self.style_clicked(k))
             self.style.addButton(b)
             self.sbtn[key] = b
             row.addWidget(b)
@@ -237,15 +245,19 @@ class ModelViewPanel(QWidget):
         lay.addLayout(row)
         lay.addWidget(section("Scale"))
         self.scale = scale_combo()
-        self.scale.setToolTip("Leave on the sheet scale, or type / pick a scale for this view")
+        self.scale.setToolTip("The scale of this view: type it (1:2, 2:1, 0.5) or pick one.  Every view has a scale of its own.")
+        self.scale.activated.connect(lambda _i: self.scale_edited())
+        self.scale.lineEdit().editingFinished.connect(self.scale_edited)
         lay.addWidget(self.scale)
+        self.target = ui_kit.note("")
+        lay.addWidget(self.target)
         self.hint = ui_kit.note("")
         lay.addWidget(self.hint)
         lay.addStretch(1)
         self.refresh()
 
     def refresh(self):
-        """The drawing changed: the list of models and the sheet scale follow."""
+        """The drawing changed: the list of models follows, and the style and the scale show the view they work on."""
         d = self.tab.d
         cur = self.current_model()
         self.models.blockSignals(True)
@@ -260,10 +272,26 @@ class ModelViewPanel(QWidget):
             self.models.setCurrentRow(0)
         self.models.blockSignals(False)
         self.add_btn.setVisible(not self.tab.models_from_wires)
-        self.scale.setPlaceholderText("")
-        if d.views:
-            self.scale.lineEdit().setPlaceholderText(f"sheet scale {M.scale_text(d.scale)}")
         self.sync_hint()
+        self.show_view()
+
+    def target_view(self):
+        """The view that the style buttons and the scale field change now (None: the next view)."""
+        return self.tab.panel_view("model")
+
+    def show_view(self):
+        """The style buttons and the scale field show the view they work on; with none, what the next view starts with."""
+        v = self.target_view()
+        self.busy = True
+        try:
+            style = v["style"] if v is not None else self.start_style
+            for k, b in self.sbtn.items():
+                b.setChecked(k == style)
+            self.scale.lineEdit().setPlaceholderText(f"new views: {M.scale_text(self.tab.d.scale)}" if self.tab.d.views else "set by the first view")
+            self.scale.setCurrentText(M.scale_text(v["scale"]) if v is not None else self.start_scale)
+            self.target.setText(f"These change {v['name']}." if v is not None else "These set the style and the scale of the next view you put down.")
+        finally:
+            self.busy = False
 
     def current_model(self):
         it = self.models.currentItem()
@@ -275,11 +303,30 @@ class ModelViewPanel(QWidget):
                 return k
         return "hlv"
 
+    def style_clicked(self, key):
+        if self.busy:
+            return
+        self.start_style = key
+        self.tab.panel_style("model", key)
+
+    def scale_edited(self):
+        if self.busy:
+            return
+        text = self.scale.currentText().strip()
+        if self.target_view() is None:
+            self.start_scale = text                                  # nothing to change: the next view starts at it (checked when the view is made)
+            return
+        if not text:
+            self.show_view()
+            return
+        self.tab.panel_scale("model", text)
+        self.show_view()                                             # a scale that is not a scale goes back to the view's own
+
     def sync_hint(self):
         if not self.tab.d.models:
             self.hint.setText("There is no part or assembly in the drawing yet. " + ("Wire one into this block in the Workbench." if self.tab.models_from_wires else "Add one from a file."))
         else:
-            self.hint.setText("Pick an orientation, then click on the sheet to put the view down.")
+            self.hint.setText("Pick an orientation, then click on the sheet to put the view down.  Click a view on the sheet to change its style or its scale here.")
 
     def pick_orientation(self, name):
         for n, b in self.obtn.items():
@@ -299,11 +346,15 @@ class ModelViewPanel(QWidget):
 
 # ---------------------------------------------------------------------------------------------------------------------------- Projected View
 class ProjectedPanel(QWidget):
+    """The Projected View PropertyManager: the style and the scale of the views put down by it.  They start as the parent's; the buttons and the scale field change the view just put
+    down (or the one that is selected), and what is set here is what the next views start with."""
     TITLE = "Projected View"
 
     def __init__(self, tab):
         super().__init__()
         self.tab = tab
+        self.busy = False
+        self.start_style, self.start_scale = None, ""               # None: the parent's
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.addLayout(ok_cancel(lambda: tab.finish_command(True), lambda: tab.finish_command(False)))
@@ -323,6 +374,8 @@ class ProjectedPanel(QWidget):
             b = icon_button(I.STYLE_ICON[key], label, label.replace("\n", " "), 28)
             b.setMinimumWidth(58)
             b.setEnabled(key in M.STYLE_KEYS)
+            if key in M.STYLE_KEYS:
+                b.clicked.connect(lambda _c=False, k=key: self.style_clicked(k))
             self.style.addButton(b)
             self.sbtn[key] = b
             row.addWidget(b)
@@ -331,38 +384,102 @@ class ProjectedPanel(QWidget):
         self.same = QPushButton("Same as parent")
         self.same.setCheckable(True)
         self.same.setChecked(True)
-        self.same.toggled.connect(lambda on: [b.setEnabled(not on and k in M.STYLE_KEYS) for k, b in self.sbtn.items()])
+        self.same.setToolTip("The style of the parent view (also for the views put down next)")
+        self.same.clicked.connect(lambda _c=False: self.same_clicked())
         lay.addWidget(self.same)
-        for b in self.sbtn.values():
-            b.setEnabled(False)
         lay.addWidget(section("Scale"))
-        lay.addWidget(QLabel("The scale of the parent view."))
+        self.scale = scale_combo()
+        self.scale.setToolTip("The scale of this view: type it (1:2, 2:1, 0.5) or pick one.  Left empty, a new view takes the scale of its parent.")
+        self.scale.activated.connect(lambda _i: self.scale_edited())
+        self.scale.lineEdit().editingFinished.connect(self.scale_edited)
+        lay.addWidget(self.scale)
+        self.target = ui_kit.note("")
+        lay.addWidget(self.target)
         self.hint = ui_kit.note("")
         lay.addWidget(self.hint)
         lay.addStretch(1)
 
     def style_choice(self):
-        if self.same.isChecked():
+        """The style of the next projected view (None: its parent's)."""
+        return None if self.same.isChecked() else self.start_style
+
+    def scale_choice(self):
+        """The scale of the next projected view as a number (None: its parent's; a text that is not a scale counts as none)."""
+        text = self.start_scale.strip()
+        if not text:
             return None
-        for k, b in self.sbtn.items():
-            if b.isChecked():
-                return k
-        return None
+        try:
+            return M.parse_scale(text)
+        except M.DrawingError:
+            return None
+
+    def target_view(self):
+        return self.tab.panel_view("projected")
+
+    def parent_view(self):
+        return next((v for v in self.tab.d.views if v["id"] == self.tab.canvas.proj_parent), None)
 
     def set_parent(self, view):
         if view is None:
             self.parent_lbl.setText("Click the view on the sheet to project from.")
             self.hint.setText("")
+            self.show_view()
             return
         self.parent_lbl.setText(f"{view['name']}  ({view['orient']}, {M.scale_text(view['scale'])})")
         self.hint.setText("Move the pointer to the side of the parent where the new view should go, then click.  The view stays aligned with its parent: it only slides along its axis.")
+        self.show_view(view)
+
+    def show_view(self, parent=None):
+        """The buttons and the scale field show the view they change; with none, what the next projected view starts with (its parent's unless set here)."""
+        v = self.target_view()
+        parent = parent or self.parent_view() or (next((x for x in self.tab.d.views if x["id"] == self.tab.canvas.sel), None) if v is None else None)
+        self.busy = True
+        try:
+            if v is not None:
+                style, scale = v["style"], M.scale_text(v["scale"])
+            else:
+                style = self.start_style if not self.same.isChecked() else (parent["style"] if parent is not None else None)
+                scale = self.start_scale
+            for k, b in self.sbtn.items():
+                b.setChecked(k == style)
+            self.scale.lineEdit().setPlaceholderText(f"like the parent: {M.scale_text(parent['scale'])}" if parent is not None else "like the parent")
+            self.scale.setCurrentText(scale)
+            self.target.setText(f"These change {v['name']}." if v is not None else "These set the style and the scale of the next view you put down.")
+        finally:
+            self.busy = False
+
+    def style_clicked(self, key):
+        if self.busy:
+            return
+        self.start_style = key
+        self.busy = True
+        self.same.setChecked(False)
+        self.busy = False
+        self.tab.panel_style("projected", key)
+
+    def same_clicked(self):
+        if self.busy:
+            return
         if self.same.isChecked():
-            k = view["style"]
-            if k in self.sbtn:
-                self.sbtn[k].setChecked(True)
+            self.tab.panel_style("projected", None)                   # the parent's style
+        self.show_view()
+
+    def scale_edited(self):
+        if self.busy:
+            return
+        text = self.scale.currentText().strip()
+        v = self.target_view()
+        self.start_scale = text
+        if v is not None and not text:
+            self.show_view()
+            return
+        self.tab.panel_scale("projected", text)
+        if v is not None:
+            self.show_view()
 
 
 # ---------------------------------------------------------------------------------------------------------------------------- the tools of the Annotation and Sketch pages
+
 class FocusTextEdit(QPlainTextEdit):
     """A multi-line text box that says when the person has finished with it (it lost the focus): the text is then applied."""
     finished = pyqtSignal()
@@ -430,11 +547,9 @@ class PatternDirection(QWidget):
 
 class ToolPanel(QWidget):
     """The PropertyManager of a tool: a title, what to click, the options of the tool, and OK (leave the tool)."""
-    TITLES = {"dim": "Smart Dimension", "center_mark": "Center Mark", "centerline": "Centerline", "note": "Note", "balloon": "Balloon", "note_pattern": "Linear Note Pattern",
+    TITLES = {"dim": "Dimension", "center_mark": "Center Mark", "centerline": "Centerline", "note": "Note", "balloon": "Balloon", "note_pattern": "Linear Note Pattern",
               "line": "Line", "rect": "Rectangle", "circle": "Circle", "arc": "Arc"}
-    HELP = {"dim": ["Click a line: its length.", "Click a circle: its diameter.  An arc: its radius.",
-                    "Click two points, a point and a line, or two circles: the distance.", "Click two parallel lines: the distance between them.",
-                    "Click two lines that meet: the angle between them."],
+    HELP = {"dim": ["Pick the type first.", "Horizontal, Vertical, Length: a line or two points.", "Diameter, Radius: a circle or an arc.", "Angle: two lines that meet."],
             "center_mark": ["Click a circle or an arc (or its centre point): a cross is put on it."],
             "centerline": ["Click two parallel lines: a dash-dot line is put midway between them."],
             "note": ["Type the text, choose its size and a leader.", "Without a leader: click where the text goes.", "With a leader: click what it points at, then where the text goes."],
@@ -442,7 +557,7 @@ class ToolPanel(QWidget):
             "note_pattern": ["Click the note to repeat.", "Set the direction, the spacing and how many notes in each direction.", "Direction 2 is a second row: leave it at 1 note for a single row."],
             "line": ["Click the start, then the end.  The next click carries on from the end."], "rect": ["Click one corner, then the opposite corner."],
             "circle": ["Click the centre, then a point on the circle."], "arc": ["Click the centre, the start, then the end.  The arc runs counter-clockwise from the start."]}
-    AFTER = {"dim": "After the picks, move the pointer to where the dimension should go and click.  Drag a dimension later to move it; the number is always the model's, whatever the scale.",
+    AFTER = {"dim": "After the picks, move the pointer to where the dimension should go and click.  What it measures is the type you picked, wherever you put it.  Drag a dimension later to move it; the number is always the model's, whatever the scale.",
              "center_mark": "Pick as many as you like, then OK.", "centerline": "Pick pairs of lines, one pair after another, then OK.",
              "note": "Double-click a note later to change its text.  Drag the square at the end of its leader to point it somewhere else.",
              "balloon": "Drag the square at the end of the leader to point it at something else.  Double-click a balloon to change its number.",
@@ -463,6 +578,22 @@ class ToolPanel(QWidget):
         self.title = QLabel("")
         self.title.setStyleSheet("font-weight:bold; font-size:13px; padding:4px 0;")
         lay.addWidget(self.title)
+        # ---- the type of a dimension (the ones of the Part sketcher's Dimension menu)
+        self.opt_dim = QWidget()
+        dl = QVBoxLayout(self.opt_dim)
+        dl.setContentsMargins(0, 0, 0, 0)
+        dl.addWidget(section("Type"))
+        dgrid = QGridLayout()
+        dgrid.setSpacing(2)
+        self.dim_btn = {}
+        for i, (key, label) in enumerate(A.DIM_TYPES):
+            b = icon_button(DIM_ICON[key], label.replace(" / ", "\n"), label, 26)
+            b.clicked.connect(lambda _c=False, k=key: self.dim_type_clicked(k))
+            dgrid.addWidget(b, i // 3, i % 3)
+            b.setMinimumWidth(60)
+            self.dim_btn[key] = b
+        dl.addLayout(dgrid)
+        lay.addWidget(self.opt_dim)
         # ---- the options of a note
         self.opt_note = QWidget()
         nl = QVBoxLayout(self.opt_note)
@@ -516,6 +647,8 @@ class ToolPanel(QWidget):
         self.p_remove.clicked.connect(lambda _c=False: self.pattern_removed())
         pl.addWidget(self.p_remove)
         lay.addWidget(self.opt_pattern)
+        for w in (self.opt_dim, self.opt_note, self.opt_balloon, self.opt_pattern):
+            w.setVisible(False)                                   # set_tool shows the options of the tool that opens; the panel is not as tall as all of them together before that
         lay.addWidget(section("What to click"))
         self.what = QLabel("")
         self.what.setWordWrap(True)
@@ -530,6 +663,7 @@ class ToolPanel(QWidget):
         self.title.setText(self.TITLES.get(name, name))
         self.what.setText("\n".join("•  " + t for t in self.HELP.get(name, [])))
         self.after.setText(self.AFTER.get(name, ""))
+        self.opt_dim.setVisible(name == "dim")
         self.opt_note.setVisible(name == "note")
         self.opt_balloon.setVisible(name == "balloon")
         self.opt_pattern.setVisible(name == "note_pattern")
@@ -547,8 +681,17 @@ class ToolPanel(QWidget):
             if self.b_text.text() != o.get("balloon", ""):
                 self.b_text.setText(o.get("balloon", ""))
             self.sync_pattern()
+            for k, b in self.dim_btn.items():
+                b.setChecked(self.tab.canvas.dim_type == k)
         finally:
             self.busy = False
+
+    def dim_type_clicked(self, key):
+        if self.busy:
+            return
+        self.tab.canvas.set_dim_type(key)
+        self.tab.canvas.setFocus()
+        self.sync()
 
     def pattern_note(self):
         """The note the pattern tool is working on, or None."""
@@ -620,11 +763,24 @@ ANNOT_ICON = {"linear": "dr_dim", "diameter": "dr_dim_dia", "radius": "dr_dim_ra
               "balloon": "dr_balloon", "line": "dr_draw_line", "rect": "dr_draw_rect", "circle": "dr_draw_circle", "arc": "dr_draw_arc"}
 
 
+def annot_label(a):
+    """What an item is called: a linear dimension by what the person chose to measure (Horizontal, Vertical, Length / distance), the rest by its type."""
+    if a.get("type") == "linear":
+        return {"h": "Horizontal", "v": "Vertical"}.get(a.get("mode"), "Length / distance")
+    return ANNOT_LABEL.get(a.get("type"), "Dimension")
+
+
+def annot_icon(a):
+    if a.get("type") == "linear":
+        return DIM_ICON.get(a.get("mode") or "a", "dr_dim")
+    return ANNOT_ICON.get(a.get("type"), "dr_dim")
+
+
 def annot_text(a, fmt=None):
     """How an item reads in the Outline: 'Diameter  ⌀6', 'Center Mark', 'Balloon  3', the first line of a note, 'Line', '... (lost)'."""
     if a.get("type") in ("note", "balloon") + IT.DRAW_TYPES:
         return IT.label(a)
-    t = ANNOT_LABEL.get(a.get("type"), "Dimension")
+    t = annot_label(a)
     if a.get("type") in ("linear", "diameter", "radius", "angle"):
         try:
             t += "   " + A.text(a, fmt)
@@ -698,13 +854,11 @@ class OutlinePanel(QWidget):
         self.sh_proj = QComboBox()
         self.sh_proj.addItem("Third angle", False)
         self.sh_proj.addItem("First angle", True)
-        self.sh_scale = QLabel("")
         for c in (self.sh_size, self.sh_land, self.sh_proj):
             c.activated.connect(lambda _i: self.sheet_edited())
         f.addRow("Size", self.sh_size)
         f.addRow("Direction", self.sh_land)
         f.addRow("Projection", self.sh_proj)
-        f.addRow("Sheet scale", self.sh_scale)
         return w
 
     def _page_model(self):
@@ -861,7 +1015,7 @@ class OutlinePanel(QWidget):
             items[v["id"]] = it
             for a in d.view_items(v["id"]):
                 at = QTreeWidgetItem(it, [annot_text(a, self.tab.canvas.r.fmt)])
-                at.setIcon(0, I.icon(ANNOT_ICON.get(a.get("type"), "dr_dim"), 18))
+                at.setIcon(0, I.icon(annot_icon(a), 18))
                 at.setData(0, Qt.ItemDataRole.UserRole, ("annot", a["id"]))
                 aitems[a["id"]] = at
             for c in d.children(v["id"]):
@@ -877,7 +1031,7 @@ class OutlinePanel(QWidget):
             folder.setData(0, Qt.ItemDataRole.UserRole, ("folder", None))
             for a in recs:
                 at = QTreeWidgetItem(folder, [annot_text(a, self.tab.canvas.r.fmt)])
-                at.setIcon(0, I.icon(ANNOT_ICON.get(a.get("type"), "dr_dim"), 18))
+                at.setIcon(0, I.icon(annot_icon(a), 18))
                 at.setData(0, Qt.ItemDataRole.UserRole, ("annot", a["id"]))
                 aitems[a["id"]] = at
         self.tree.expandAll()
@@ -954,7 +1108,6 @@ class OutlinePanel(QWidget):
                 self.sh_size.setCurrentIndex(max(0, self.sh_size.findData(d.sheet["size"])))
                 self.sh_land.setCurrentIndex(0 if d.sheet["landscape"] else 1)
                 self.sh_proj.setCurrentIndex(1 if d.sheet["first_angle"] else 0)
-                self.sh_scale.setText(M.scale_text(d.scale) if d.views else "not set yet (the first view sets it)")
                 self.details.setCurrentIndex(1)
             elif k == "model":
                 m = d.model(self.cur_id)
@@ -1007,7 +1160,7 @@ class OutlinePanel(QWidget):
                 self.details.setCurrentIndex(7)
             elif k == "annot":
                 a = d.annot(self.cur_id)
-                self.a_type.setText(ANNOT_LABEL.get(a["type"], "Dimension"))
+                self.a_type.setText(annot_label(a))
                 self.a_value.setText(A.text(a, self.tab.canvas.r.fmt) if a["type"] in ("linear", "diameter", "radius", "angle") else "-")
                 self.a_view.setText(d.view(a["view"])["name"])
                 self.a_state.setText("Its geometry is not in the model any more.  Delete it, or change the model back." if a.get("lost") else "")

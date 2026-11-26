@@ -6,13 +6,16 @@ and radius), so the value it shows is the model's (never the size on the sheet: 
 the new lines (rematch).  Where it is drawn is kept in paper millimetres (how far the dimension line is from what it measures), so it keeps its look at every scale.
 
     pick(proj, p, tol)               the point or edge of a view nearest to p (view frame): {"k": "pt", "p"} | {"k": "line", "a", "b"} | {"k": "circle", "c", "r"} | {"k": "arc", ...}
-    kind_for(refs)                   what a pick sequence can measure: "linear" | "diameter" | "radius" | "angle" | None
+    DIM_TYPES                        the types of the Dimension tool, the ones of the Part sketcher's Dimension menu: Horizontal, Vertical, Length / distance, Diameter, Radius, Angle
+    dim_check(dtype, refs)           do the picks fit the type the person chose?  "ok" | "more" (one more pick is needed) | "bad"; dim_make(dtype, refs) -> (kind, mode)
+    kind_for(refs)                   what a pick sequence measures when no type is given: "linear" | "diameter" | "radius" | "angle" | None
     more_picks(refs)                 True when one more pick would still make a (different) dimension
-    new_dim(refs, bbox)              a dimension record from what was picked; None when the picks do not make a dimension
+    new_dim(refs, bbox, kind, mode)  a dimension record from what was picked; None when the picks do not make a dimension.  A linear dimension measures horizontally ("h"), vertically
+                                     ("v") or along the two points ("a") as the person chose: nothing guesses it from where the pointer is
     value(dim)                       the measured number, in the model's units (mm) or degrees
     text(dim, fmt)                   what the dimension says: "100", "⌀12", "R6", "45°"  (fmt shows a length in the units of the program)
     shape(dim, s, o)                 {"segs": [(N, 2) arrays], "kinds", "heads": [(tip, inward, size)], "at", "dir", "anchor"} on the sheet for a view of scale s with its origin at o
-    place(dim, s, o, pointer)        sets where the dimension is drawn from where the pointer is (sheet mm)
+    place(dim, s, o, pointer)        sets where the dimension is drawn from where the pointer is (sheet mm); what it measures does not change
     new_mark(kind, refs, bbox) / mark_kind_for(refs) / mark_shape(mark, s, o)    center marks (a circle) and centerlines (two parallel lines)
     rematch(annots, proj, bbox)      finds the references again in a view's new lines; the ones that cannot be found are marked "lost"
     distance(shp, p)                 how far p is from the drawn lines of a dimension / mark (sheet mm), for picking it
@@ -173,14 +176,66 @@ def mark_kind_for(refs):
     return None
 
 
+# ---------------------------------------------------------------------------------------------------------------------------- the Dimension tool: the person picks the type
+DIM_TYPES = [("h", "Horizontal"), ("v", "Vertical"), ("a", "Length / distance"), ("dia", "Diameter"), ("rad", "Radius"), ("ang", "Angle")]
+DIM_LABEL = dict(DIM_TYPES)
+DIM_NEED = {"h": "click a line, two points, a point and a vertical line, or two vertical lines",
+            "v": "click a line, two points, a point and a horizontal line, or two horizontal lines",
+            "a": "click a line, two points, a point and a line, or two parallel lines",
+            "dia": "click a circle or an arc",
+            "rad": "click an arc or a circle",
+            "ang": "click two lines that meet"}
+DIM_NEXT = {"h": "Click a second point or line to measure across to.", "v": "Click a second point or line to measure up to.", "a": "Click a second point or line to measure to.",
+            "ang": "Click the second line."}
+DIM_KIND = {"h": ("linear", "h"), "v": ("linear", "v"), "a": ("linear", "a"), "dia": ("diameter", None), "rad": ("radius", None), "ang": ("angle", None)}
+
+
+def dim_check(dtype, refs):
+    """Do the picks fit the type of dimension the person chose?  "ok": they make that dimension; "more": one more pick is needed; "bad": they cannot make it."""
+    ks = [r["k"] for r in refs]
+    n = len(refs)
+    if dtype not in DIM_KIND:
+        return "bad"
+    if n == 0:
+        return "more"
+    if dtype in ("dia", "rad"):
+        return "ok" if n == 1 and ks[0] in ("circle", "arc") else "bad"
+    if dtype == "ang":
+        if n == 1:
+            return "more" if ks[0] == "line" else "bad"
+        return "ok" if n == 2 and ks == ["line", "line"] and not same_ref(refs[0], refs[1]) and not _parallel(*refs) else "bad"
+    if n == 1:                                                     # Horizontal, Vertical, Length / distance
+        if ks[0] != "line":
+            return "more"
+        if dtype != "a":                                           # a line that has no width (no height) has nothing to measure alone: it asks for a second pick
+            a, b = refs[0]["a"], refs[0]["b"]
+            return "ok" if abs(b[0] - a[0] if dtype == "h" else b[1] - a[1]) > 1e-9 else "more"
+    elif n != 2 or same_ref(refs[0], refs[1]):
+        return "bad"
+    lines = [r for r in refs if r["k"] == "line"]
+    if len(lines) == 2 and not _parallel(*lines):
+        return "bad"                                               # two lines that meet make an angle
+    if dtype != "a" and n == 2:
+        for ln in lines:                                           # across a line, horizontally: the line has to be vertical (vertically: horizontal)
+            u = _unit(_sub(ln["b"], ln["a"]))
+            if abs(u[0] if dtype == "h" else u[1]) > 1e-6:
+                return "bad"
+    return "ok" if value(new_dim(refs, (0.0, 0.0, 0.0, 0.0), "linear", dtype)) > 1e-9 else "bad"
+
+
+def dim_make(dtype, refs):
+    """(kind, mode) of the dimension the picks make with the type: ("linear", "h"), ("diameter", None) ...; None when they do not fit."""
+    return DIM_KIND[dtype] if dim_check(dtype, refs) == "ok" else None
+
+
 # ---------------------------------------------------------------------------------------------------------------------------- the dimension record
-def new_dim(refs, bbox, kind=None):
+def new_dim(refs, bbox, kind=None, mode=None):
     kind = kind or kind_for(refs)
     if kind is None:
         return None
     d = {"type": kind, "refs": [dict(r) for r in refs], "bb": [float(x) for x in bbox], "lost": False}
     if kind == "linear":
-        d.update({"mode": "a", "side": 1, "dist": 8.0, "t": 0.0})
+        d.update({"mode": mode if mode in ("h", "v", "a") else "a", "side": 1, "dist": 8.0, "t": 0.0})
     elif kind in ("diameter", "radius"):
         d.update({"lab": [6.0, 6.0]})
     else:
@@ -398,10 +453,9 @@ def _angle(dim, s, o):
 # ---------------------------------------------------------------------------------------------------------------------------- placing
 def place(dim, s, o, pointer):
     """Puts the dimension where the pointer is (sheet mm): how far the dimension line is from what it measures, on which side, where along it; the quadrant and the radius of an angle;
-    the label of a circle.  Two points (or one line) are measured horizontally, vertically or along the line, by where the pointer is."""
+    the label of a circle.  What it measures (horizontally, vertically, along the line) was chosen with the type and stays."""
     t = dim["type"]
     if t == "linear":
-        _auto_mode(dim, s, o, pointer)
         sit, u = _sheet_items(dim, s, o)
         n = (-u[1], u[0])
         q = lambda P: _dot(P, n)
@@ -435,25 +489,6 @@ def place(dim, s, o, pointer):
                 if _in_arc(lo, hi, theta):
                     dim["s1"], dim["s2"] = s1, s2
         dim["rho"] = max(2.0, math.hypot(*d))
-
-
-def _auto_mode(dim, s, o, pointer):
-    """Two points (or one line, or two circles): horizontal when the pointer is above or below them, vertical when it is beside them, along the line between them otherwise."""
-    items = [_item_of(r) for r in dim["refs"]] if len(dim["refs"]) > 1 else [("p", dim["refs"][0]["a"]), ("p", dim["refs"][0]["b"])]
-    if any(it[0] == "l" for it in items):
-        return
-    A, B = _T(items[0][1], s, o), _T(items[1][1], s, o)
-    dx, dy = abs(B[0] - A[0]), abs(B[1] - A[1])
-    if dx < 1e-9 and dy < 1e-9:
-        return
-    if dy < 1e-6 * max(dx, 1.0):
-        dim["mode"] = "h"
-    elif dx < 1e-6 * max(dy, 1.0):
-        dim["mode"] = "v"
-    else:
-        x0, x1, y0, y1 = min(A[0], B[0]), max(A[0], B[0]), min(A[1], B[1]), max(A[1], B[1])
-        inx, iny = x0 <= pointer[0] <= x1, y0 <= pointer[1] <= y1
-        dim["mode"] = "h" if (inx and not iny) else "v" if (iny and not inx) else "a"
 
 
 # ---------------------------------------------------------------------------------------------------------------------------- marks

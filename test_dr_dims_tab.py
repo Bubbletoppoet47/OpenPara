@@ -1,5 +1,5 @@
-"""Drawings (dev add-on drawings): the Annotation tools in the window - Smart Dimension (click a line, a circle, an arc, or two things; the dimension follows the pointer and a click puts it
-down; drag it later), Center Mark and Centerline, what is drawn (pixels: extension lines, the dimension line, arrows, the numbers, the cross, the dash-dot line), selecting / deleting /
+"""Drawings (dev add-on drawings): the Annotation tools in the window - Dimension (the person picks the type first, as in the Part window: Horizontal, Vertical, Length / distance, Diameter,
+Radius, Angle; the clicks must fit it, the dimension follows the pointer and a click puts it down; drag it later), Center Mark and Centerline, what is drawn (pixels: extension lines, the dimension line, arrows, the numbers, the cross, the dash-dot line), selecting / deleting /
 dragging a dimension, Esc, undo, the numbers staying the model's when the scale changes, dimensions following a model that changes (and turning red when their geometry is gone), the file,
 and the PDF (vector, the numbers are text).   python test_dr_dims_tab.py"""
 import faulthandler
@@ -140,18 +140,42 @@ def outline_texts():
 
 
 # ---------------------------------------------------------------------------------------------------------------------------- the ribbon
-ok(all(t.act[k].isEnabled() for k in ("dim", "center_mark", "centerline")), "Smart Dimension, Center Mark and Centerline are on the Annotation page, ready to use")
+ok(all(t.act[k].isEnabled() for k in ("dim", "center_mark", "centerline")), "Dimension, Center Mark and Centerline are on the Annotation page, ready to use")
 ok(not t.act["dim"].isChecked() and cv.tool is None, "no tool is open")
 t.ribbon.setCurrentIndex(1)
-t.act["dim"].click()
+dmenu = t.act["dim"].menu()
+ok(dmenu is not None and [a_.text() for a_ in dmenu.actions()] == ["Horizontal", "Vertical", "Length / distance", "Diameter", "Radius", "Angle"],
+   "Dimension is a menu of the six types of the Part window's Dimension menu")
+ok(all(not a_.icon().isNull() for a_ in dmenu.actions()), "each with its own icon")
+TYPE_KEYS = [k for k, _l in A.DIM_TYPES]
+
+
+def pick_type(k):
+    dmenu.actions()[TYPE_KEYS.index(k)].trigger()
+    settle()
+
+
+pick_type("a")
+ok(cv.tool == "dim" and cv.dim_type == "a" and t.act["dim"].isChecked() and not t.act["center_mark"].isChecked(), "Length / distance opens the tool with that type (the button stays pressed)")
+ok(t.props.currentWidget() is t.tool_panel and t.left.currentIndex() == 1 and t.tool_panel.title.text() == "Dimension", "its panel is the Part window's property panel, with OK and Cancel")
+ok("circle" in t.tool_panel.what.text() and "two points" in t.tool_panel.what.text() and "angle" in t.tool_panel.what.text().lower() and "parallel" in t.hint_lbl.text(), "which says what each type needs")
+ok(list(t.tool_panel.dim_btn) == TYPE_KEYS and [k for k, b in t.tool_panel.dim_btn.items() if b.isChecked()] == ["a"], "the six types are buttons in the panel, the one in use is pressed")
+ok("Length / distance" in t.hint_lbl.text() and "click a line" in t.hint_lbl.text(), "and the hint bar says what to click for it")
+
+# ---------------------------------------------------------------------------------------------------------------------------- no type picked
+t.start_tool("dim")
 settle()
-ok(cv.tool == "dim" and t.act["dim"].isChecked() and not t.act["center_mark"].isChecked(), "Smart Dimension opens (its button stays pressed)")
-ok(t.props.currentWidget() is t.tool_panel and t.left.currentIndex() == 1 and t.tool_panel.title.text() == "Smart Dimension", "its panel is the Part window's property panel, with OK and Cancel")
-ok("circle" in t.tool_panel.what.text() and "parallel" in t.tool_panel.what.text() and "angle" in t.tool_panel.what.text(), "which says what each click measures")
-ok("Click a line" in t.hint_lbl.text(), "and the hint bar says what to click")
+ok(cv.tool == "dim" and cv.dim_type is None and not any(b.isChecked() for b in t.tool_panel.dim_btn.values()) and "Pick the type" in t.hint_lbl.text(),
+   "a tool opened with no type (the type is picked again each time it is opened): no button is pressed and the hint says to pick one")
+click(*S((50, 60)))
+ok(cv.float_annot is None and not cv.picks and not t.d.dims and "Pick the type" in t.hint_lbl.text(), "a click on an edge does nothing until a type is picked")
+t.tool_panel.dim_btn["a"].click()
+settle()
+ok(cv.dim_type == "a" and t.tool_panel.dim_btn["a"].isChecked() and "Length / distance" in t.hint_lbl.text(), "a type picked in the panel takes over at once")
 
 # ---------------------------------------------------------------------------------------------------------------------------- a length
 n0 = len(t.undo_stack)
+move(*S((20, 20)))
 move(*S((50, 60)))
 ok(cv.hover_pick is not None and cv.hover_pick[1]["k"] == "line", "the pointer over an edge: the edge lights up")
 click(*S((50, 60)))
@@ -159,7 +183,7 @@ ok(cv.float_annot is not None and len(t.d.dims) == 1 and len(t.undo_stack) == n0
 d1 = t.d.dims[0]
 ok(d1["type"] == "linear" and near(A.value(d1), 100.0), "the length of the edge: 100")
 move(*S((50, 75)))
-ok(d1["side"] == 1 and near(d1["dist"], 15.0, tol) and d1["mode"] == "h", f"it follows the pointer: 15 mm above the edge, horizontal ({d1['dist']:.1f})")
+ok(near(d1["dist"], 15.0, tol) and d1["mode"] == "a", f"it follows the pointer: 15 mm from the edge, along it ({d1['dist']:.1f})")
 img = cv.grab().toImage()
 ok(tinted(20, 75, lambda q: q.blue() - q.red() > 40, img) and tinted(80, 75, lambda q: q.blue() - q.red() > 40, img), "the dimension line is drawn (in the selection colour while it follows the pointer)")
 click(*S((50, 75)))
@@ -181,6 +205,12 @@ ok(near(A.value(t.d.dims[0]), 100.0) and A.text(t.d.dims[0]) == "100", "it says 
 
 # ---------------------------------------------------------------------------------------------------------------------------- a diameter
 n1 = len(t.undo_stack)
+t.tool_panel.dim_btn["dia"].click()
+settle()
+ok(cv.dim_type == "dia" and [k for k, b in t.tool_panel.dim_btn.items() if b.isChecked()] == ["dia"] and "Diameter" in t.hint_lbl.text(), "Diameter picked in the panel")
+click(*S((50, 60)))
+ok(cv.float_annot is None and not cv.picks and len(t.d.dims) == 1 and "does not fit Diameter" in t.hint_lbl.text() and "circle" in t.hint_lbl.text(),
+   "an edge is not a diameter: nothing is made, and the hint says what to click")
 click(*S((38, 30)))
 ok(cv.float_annot is not None and t.d.dims[-1]["type"] == "diameter" and near(A.value(t.d.dims[-1]), 16.0), "a click on the hole: its diameter, 16")
 click(*S((70, 50)))
@@ -192,12 +222,15 @@ ok(abs(dd["lab"][0] - 40) < 1.0 and abs(dd["lab"][1] - 20) < 1.0, f"the label is
 
 # ---------------------------------------------------------------------------------------------------------------------------- a distance between two lines
 n2 = len(t.undo_stack)
-click(*S((0, 45)))
-ok(cv.float_annot is not None and t.d.dims[-1]["type"] == "linear" and near(A.value(t.d.dims[-1]), 60.0), "the left edge: 60 long (it follows the pointer)")
+pick_type("h")
+ok(cv.dim_type == "h" and cv.tool == "dim" and [k for k, b in t.tool_panel.dim_btn.items() if b.isChecked()] == ["h"], "Horizontal picked in the menu while the tool is open")
 nd = len(t.d.dims)
+click(*S((0, 45)))
+ok(cv.float_annot is None and len(cv.picks) == 1 and "second" in t.hint_lbl.text() and len(t.d.dims) == nd,
+   "the left edge has no width of its own: Horizontal waits for a second pick")
 click(*S((100, 15)))
-ok(len(t.d.dims) == nd and cv.float_annot is not None and near(A.value(t.d.dims[-1]), 100.0) and len(t.d.dims[-1]["refs"]) == 2,
-   "a second click on the right edge: the dimension is now the distance between the two (100)")
+ok(len(t.d.dims) == nd + 1 and cv.float_annot is not None and near(A.value(t.d.dims[-1]), 100.0) and len(t.d.dims[-1]["refs"]) == 2 and t.d.dims[-1]["mode"] == "h",
+   "a second click on the right edge: the horizontal distance between the two (100)")
 move(*S((50, -12)))
 click(*S((50, -12)))
 dl = t.d.dims[-1]
@@ -207,7 +240,9 @@ ok(dark_at(*S((20, -12)), img) and dark_at(*S((80, -12)), img) and dark_at(*S((0
 
 # ---------------------------------------------------------------------------------------------------------------------------- an angle
 n3 = len(t.undo_stack)
+pick_type("ang")
 click(*S((70, 60)))
+ok(cv.float_annot is None and len(cv.picks) == 1 and "second line" in t.hint_lbl.text(), "Angle: one line is picked, the second line is asked for")
 click(*S((100, 40)))
 da = t.d.dims[-1]
 ok(cv.float_annot == da["id"] and da["type"] == "angle" and near(A.value(da), 90.0), "the top edge and the right edge: the angle between them, 90°")
@@ -220,11 +255,12 @@ ok(A.text(da) == "90°", "it says 90°")
 # ---------------------------------------------------------------------------------------------------------------------------- Esc, one thing at a time
 n4 = len(t.undo_stack)
 nd = len(t.d.dims)
+pick_type("a")
 click(*S((50, 0)))
 ok(cv.float_annot is not None and len(t.d.dims) == nd + 1 and cv.picks, "the bottom edge picked")
 QTest.keyClick(cv, Qt.Key.Key_Escape)
 settle()
-ok(cv.float_annot is None and len(t.d.dims) == nd and not cv.picks and cv.tool == "dim" and len(t.undo_stack) == n4, "Esc takes away what is half done; the tool is still open")
+ok(cv.float_annot is None and len(t.d.dims) == nd and not cv.picks and cv.tool == "dim" and cv.dim_type == "a" and len(t.undo_stack) == n4, "Esc takes away what is half done; the tool is still open, with its type")
 click(*S((60, 30)))
 ok(cv.float_annot is None and len(t.d.dims) == nd and "Nothing" in t.hint_lbl.text(), "a click on nothing says so")
 move(*S((0, 0)))
@@ -232,15 +268,36 @@ click(*S((0, 0)))
 ok(not cv.float_annot and len(cv.picks) == 1 and cv.picks[0][1]["k"] == "pt" and len(t.d.dims) == nd, "a corner is a point: one point alone measures nothing, the next click is waited for")
 click(*S((100, 60)))
 ok(cv.float_annot is not None and t.d.dims[-1]["type"] == "linear" and near(A.value(t.d.dims[-1]), (100 ** 2 + 60 ** 2) ** 0.5), "two corners: the distance between them (the diagonal)")
-move(*S((60, 80)))
-ok(t.d.dims[-1]["mode"] == "h" and near(A.value(t.d.dims[-1]), 100.0), "with the pointer above them it is measured horizontally")
-move(*S((130, 30)))
-ok(t.d.dims[-1]["mode"] == "v" and near(A.value(t.d.dims[-1]), 60.0), "beside them, vertically")
+for pointer in ((60, 80), (130, 30), (-20, -20)):
+    move(*S(pointer))
+    ok(t.d.dims[-1]["mode"] == "a" and near(A.value(t.d.dims[-1]), (100 ** 2 + 60 ** 2) ** 0.5), f"the pointer at {pointer}: it still measures along the two points (the type decides, not where the pointer is)")
+for key, want in (("h", 100.0), ("v", 60.0)):
+    t.tool_panel.dim_btn[key].click()
+    settle()
+    ok(cv.float_annot is None and not cv.picks and len(t.d.dims) == nd and cv.dim_type == key, f"another type ({key}) takes away what was half done")
+    click(*S((0, 0)))
+    click(*S((100, 60)))
+    ok(cv.float_annot is not None and t.d.dims[-1]["mode"] == key and near(A.value(t.d.dims[-1]), want), f"the same two corners, type {key}: {want:g}")
+    move(*S((60, 80)))
+    move(*S((130, 30)))
+    ok(t.d.dims[-1]["mode"] == key and near(A.value(t.d.dims[-1]), want), f"wherever the pointer goes it stays {want:g}")
+    QTest.keyClick(cv, Qt.Key.Key_Escape)
+    settle()
+t.tool_panel.dim_btn["ang"].click()
+settle()
+click(*S((70, 60)))
+click(*S((70, 0)))
+ok(cv.float_annot is None and len(cv.picks) == 1 and "does not fit Angle" in t.hint_lbl.text(), "Angle with two parallel edges: no angle, and the hint says so (the second edge is the first pick now)")
 QTest.keyClick(cv, Qt.Key.Key_Escape)
 settle()
+ok(cv.tool == "dim" and not cv.picks, "Esc takes the pick back")
 QTest.keyClick(cv, Qt.Key.Key_Escape)
 settle()
 ok(cv.tool is None and not t.act["dim"].isChecked() and t.props.currentIndex() == 0 and len(t.d.dims) == nd, "Esc once more ends the tool: its button is up and the Outline is back")
+pick_type("a")
+ok(cv.tool == "dim" and cv.dim_type == "a", "(the tool is opened again with a type picked)")
+QTest.keyClick(cv, Qt.Key.Key_Escape)
+settle()
 
 # ---------------------------------------------------------------------------------------------------------------------------- center marks and centerlines
 n5 = len(t.undo_stack)
@@ -281,7 +338,7 @@ d1 = t.d.dims[0]
 click(*S((20, 75)))
 ok(cv.sel_annot == d1["id"] and cv.sel is None and t.outline.cur_kind == "annot" and t.outline.cur_id == d1["id"] and t.outline.details.currentIndex() == 4,
    "a click on a dimension selects it: in the Outline and in the Details")
-ok(t.outline.a_value.text() == "100" and t.outline.a_type.text() == "Dimension" and t.outline.a_view.text() == v["name"] and t.act["delete"].isEnabled(), "the Details say what it is and what it says")
+ok(t.outline.a_value.text() == "100" and t.outline.a_type.text() == "Length / distance" and t.outline.a_view.text() == v["name"] and t.act["delete"].isEnabled(), "the Details say what it is and what it says")
 img = cv.grab().toImage()
 ok(tinted(20, 75, lambda q: q.blue() - q.red() > 60, img), "it is drawn in the selection colour")
 n7 = len(t.undo_stack)
@@ -311,7 +368,7 @@ QTest.mouseMove(cv, at(*S((70, 87.65))))
 QTest.mouseRelease(cv, Qt.MouseButton.LeftButton, pos=at(*S((70, 87.65))))
 settle()
 dn = t.d.dims[0]
-ok(near(dn["t"], 20.0, 2 * tol) and near(dn["dist"], dist_before, 1e-9) and len(t.undo_stack) == n8 + 1, f"dragged by its number: the number slid 20 mm along the line, the line stayed ({dn['t']:.1f}, {dn['dist']:.1f})")
+ok(near(abs(dn["t"]), 20.0, 2 * tol) and near(dn["dist"], dist_before, 1e-9) and len(t.undo_stack) == n8 + 1, f"dragged by its number: the number slid 20 mm along the line, the line stayed ({dn['t']:.1f}, {dn['dist']:.1f})")
 cv.set_selected_annot(None)
 click(*S((20, 85)))
 ok(cv.sel_annot == d1id, "it is where it was dragged to")

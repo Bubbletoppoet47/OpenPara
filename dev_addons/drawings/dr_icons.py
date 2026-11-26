@@ -62,6 +62,9 @@ DRAWINGS = {
     "dr_style": ('<path class="l" d="M4 9h11v11H4zM9 4h11v11H9zM4 9l5-5M15 9l5-5M15 20l5-5"/>', "cfg"),
     # the annotation tools
     "dr_dim": ('<path class="l" d="M4 4v10M20 4v10"/><path class="n" stroke-width="1.800" d="M4 10.500h16M7 8.500l-3 2 3 2M17 8.500l3 2-3 2"/><path class="k" d="M9 17h6v3H9z"/>', "ref"),
+    "dr_dim_h": ('<path class="l" d="M4 4v10M20 4v10"/><path class="n" stroke-width="1.800" d="M4 10.500h16M7 8.500l-3 2 3 2M17 8.500l3 2-3 2"/><path class="k" d="M9 17h6v3H9z"/>', "ref"),
+    "dr_dim_v": ('<path class="l" d="M4 4h10M4 20h10"/><path class="n" stroke-width="1.800" d="M10.500 4v16M8.500 7l2-3 2 3M8.500 17l2 3 2-3"/><path class="k" d="M17 9h3v6h-3z"/>', "ref"),
+    "dr_dim_len": ('<path class="l" d="M5.300 20.300L.300 15.300M17.300 8.300L12.300 3.300"/><path class="n" stroke-width="1.800" d="M1 16L13 4M1 16h3.200M1 16v-3.200M13 4H9.800M13 4v3.200"/><path class="k" d="M16 14h5v4h-5z"/>', "ref"),
     "dr_dim_dia": ('<circle class="p" cx="12" cy="12" r="8"/><path class="n" stroke-width="1.800" d="M5 19L19 5M5 19l3-.800M5 19l.8-3M19 5l-3 .8M19 5l-.8 3"/>', "ref"),
     "dr_dim_rad": ('<path class="p" d="M3 21V9a6 6 0 0 1 6-6h12v18z"/><path class="n" stroke-width="1.800" d="M3 21L14 8M3 21l1-3.200M3 21l3.200-.8"/>', "ref"),
     "dr_dim_ang": ('<path class="l" d="M4 20h17M4 20L16 5"/><path class="n" stroke-width="1.800" d="M12 20a8 8 0 0 0-1.800-5M16 20a12 12 0 0 0-3-8"/>', "ref"),

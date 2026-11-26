@@ -311,12 +311,12 @@ cv.set_selected(None)
 settle()
 v = t.d.views[0]
 s_, o_ = v["scale"], v["origin"]
-t.act["dim"].click()
+[a_ for a_ in t.act["dim"].menu().actions() if a_.text() == "Length / distance"][0].trigger()
 settle()
 click(*S((50.0, 60.0)))
 click(*S((50.0, 60.0 + 12.0)))
 key(Qt.Key.Key_Escape)
-ok(len(t.d.dims) == 1 and t.d.dims[0]["type"] == "linear", "Smart Dimension works on a shaded view: it picks the lines under the grey")
+ok(len(t.d.dims) == 1 and t.d.dims[0]["type"] == "linear", "Dimension works on a shaded view: it picks the lines under the grey")
 ok(near(A.value(t.d.dims[0]), 100.0, 1e-6), f"and measures the model: {A.value(t.d.dims[0]):.3f}")
 ok(abs(grey_at(S((70.0, 40.0))) - PLATE_GREY) <= 4 and dark_at(*S((50.0, 72.0))), "the dimension is painted over the grey")
 

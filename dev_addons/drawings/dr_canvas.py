@@ -5,9 +5,10 @@ Placing (like SolidWorks): begin_model(vid)       the view `vid` (just made by t
                            begin_projected(pid)  pick a side of the view `pid` by moving the pointer to it: the projected view appears there and slides along its axis; a click puts it
                                                  down (and the next one can be placed from the same parent), Esc / right click ends
 
-Annotation tools (tool_begin(name): "dim" Smart Dimension, "center_mark", "centerline", "note", "balloon", "note_pattern"; the Sketch tools "line", "rect", "circle", "arc"):
-          dim          click a line, a circle or an arc (a point for a distance between two points); a second click on another point / line / circle makes a distance or an angle;
-                       the dimension follows the pointer until a click puts it down.  Esc / right click: takes away what is half done, then ends the tool
+Annotation tools (tool_begin(name): "dim" Dimension, "center_mark", "centerline", "note", "balloon", "note_pattern"; the Sketch tools "line", "rect", "circle", "arc"):
+          dim          the person picks the TYPE first (set_dim_type: Horizontal, Vertical, Length / distance, Diameter, Radius, Angle, as in the Part sketcher); the clicks must fit the type
+                       (A.dim_check) or the hint says what to click; the dimension follows the pointer until a click puts it down, and what it measures is fixed by the type.
+                       Esc / right click: takes away what is half done, then ends the tool
           center_mark  click a circle or an arc (or its centre)
           centerline   click two parallel lines
           note         (with a leader) click what the leader points at, then where the text goes; (without) click where the text goes.  The text, size and leader come from `opts`
@@ -68,11 +69,13 @@ class SheetCanvas(QWidget):
         self.float_side = None
         self.proj_parent = None
         self.proj_style = None                      # the style of a new projected view (None: its parent's)
+        self.proj_scale = None                      # the scale of a new projected view (None: its parent's)
         self.drag = None                            # {"vid", "last": (x, y), "moved": bool} while a view is dragged, or {"pan": last QPointF}
         self.space = False
         self.cursor_mm = None                       # the pointer on the sheet
         self.tool = None                            # an annotation tool: "dim" | "center_mark" | "centerline"
         self.picks = []                             # what the tool has picked so far: [(view id, ref)]
+        self.dim_type = None                        # the type of the Dimension tool: "h" "v" "a" "dia" "rad" "ang" (A.DIM_TYPES); None until the person picks one
         self.float_annot = None                     # the dimension that follows the pointer
         self.hover_pick = None                      # (view id, ref) under the pointer, for the tool
         self.sel_annot = None                       # the selected dimension / mark
@@ -215,7 +218,7 @@ class SheetCanvas(QWidget):
                 self.d.remove_view(self.float_id)
                 self.float_id = None
             if side is not None and self.float_id is None:
-                v = self.d.add_projected(self.proj_parent, side, (x, y), style=self.proj_style)
+                v = self.d.add_projected(self.proj_parent, side, (x, y), style=self.proj_style, scale=self.proj_scale)
                 self.float_id = v["id"]
             self.float_side = side
             if self.float_id is not None:
@@ -240,7 +243,7 @@ class SheetCanvas(QWidget):
         self.update()
 
     # ---- the annotation tools
-    TOOL_HINT = {"dim": "Click a line, a circle or an arc to dimension it.  For a distance or an angle click two things.  Then click where the dimension goes.  Esc ends.",
+    TOOL_HINT = {"dim": "Pick the type of dimension, click what it measures, then click where it goes.  Esc ends.",
                  "center_mark": "Click a circle or an arc to put a center mark on it.  Esc ends.",
                  "centerline": "Click two parallel lines to put a centerline between them.  Esc ends.",
                  "note": "Click on the sheet where the text goes.  Esc ends.",
@@ -255,7 +258,7 @@ class SheetCanvas(QWidget):
     DRAW_STEP = {"line": ["Click the end of the line.", ], "rect": ["Click the opposite corner."], "circle": ["Click a point on the circle."],
                  "arc": ["Click where the arc starts.", "Click where the arc ends (counter-clockwise from the start)."]}
 
-    def tool_begin(self, name):
+    def tool_begin(self, name, dim_type=None):
         if name not in self.TOOL_HINT:
             return False
         keep = None
@@ -268,6 +271,8 @@ class SheetCanvas(QWidget):
         self.tool, self.picks, self.hover_pick = name, [], None
         self.draft, self.tool_pt, self.snap_mark = None, None, None
         self.pattern_note, self.pattern_pick = None, 0
+        if name == "dim":
+            self.dim_type = dim_type if dim_type in A.DIM_LABEL else None            # each time the tool is opened the type is picked again
         if keep is not None:
             self._pattern_pick_note(keep)
         if name == "balloon":
@@ -279,7 +284,26 @@ class SheetCanvas(QWidget):
         self.update()
         return True
 
+    def set_dim_type(self, dtype):
+        """The Dimension tool measures this type from now on; what was half picked or follows the pointer is taken away."""
+        if dtype not in A.DIM_LABEL or self.tool != "dim":
+            return False
+        self._drop_float()
+        self.picks, self.hover_pick = [], None
+        self.dim_type = dtype
+        self.options_changed.emit()
+        self.hint.emit(self._tool_hint("dim"))
+        self.update()
+        return True
+
     def _tool_hint(self, name):
+        if name == "dim":
+            t = self.dim_type
+            if t is None:
+                return "Pick the type of dimension: Horizontal, Vertical, Length / distance, Diameter, Radius or Angle.  Esc ends."
+            if self.picks and A.dim_check(t, [pk[1] for pk in self.picks]) == "more":
+                return A.DIM_NEXT[t] + "  Esc takes the pick back."
+            return f"{A.DIM_LABEL[t]}: {A.DIM_NEED[t]}, then where it goes.  Esc ends."
         if name == "note_pattern" and self.pattern_pick:
             return "Click a line of a view: the copies go along it.  Esc takes this back."
         if name == "note" and self.opts.get("leader") in ("straight", "bent"):
@@ -342,7 +366,7 @@ class SheetCanvas(QWidget):
         q = ((x - ox) / s, (y - oy) / s)
         t = tol / s
         if self.tool in ("dim",):
-            ref = A.pick(pr, q, t)
+            ref = A.pick(pr, q, t, points=self.dim_type in (None, "h", "v", "a"))        # a diameter, a radius or an angle is measured from lines and circles, not from corners
         elif self.tool == "center_mark":
             ref = A.pick(pr, q, t)
             if ref is not None and ref["k"] == "pt":                 # the centre of a circle or an arc counts
@@ -418,10 +442,15 @@ class SheetCanvas(QWidget):
         self.update()
 
     def _dim_press(self, hit, x, y):
+        t = self.dim_type
+        if t is None:
+            self.hint.emit(self._tool_hint("dim"))
+            return
         refs = [pk[1] for pk in self.picks]
         if self.float_annot is not None:
-            extend = hit is not None and len(self.picks) == 1 and A.more_picks(refs) and hit[0] == self.picks[0][0] and not A.same_ref(refs[0], hit[1])
-            if extend and A.kind_for(refs + [hit[1]]) is not None:
+            extend = (hit is not None and len(self.picks) == 1 and hit[0] == self.picks[0][0] and not A.same_ref(refs[0], hit[1])
+                      and A.dim_check(t, refs + [hit[1]]) == "ok")
+            if extend:                                             # the first thing is measured to a second one
                 self._drop_float()
                 self.picks.append(hit)
                 self._start_float(x, y)
@@ -429,12 +458,12 @@ class SheetCanvas(QWidget):
             self.d.place_annot(self.float_annot, (x, y))
             self.float_annot = None
             self.picks = []
-            self.hint.emit("Dimension added.  " + self.TOOL_HINT["dim"])
+            self.hint.emit("Dimension added.  " + self._tool_hint("dim"))
             self.changed.emit("dim")
             self.update()
             return
         if hit is None:
-            self.hint.emit("Nothing to dimension there.  Click a line, a circle, an arc or a corner.")
+            self.hint.emit("Nothing to dimension there.  " + self._tool_hint("dim"))
             return
         if self.picks and hit[0] != self.picks[0][0]:
             self.picks = []                                        # the first pick was on another view: start again from this one
@@ -444,25 +473,32 @@ class SheetCanvas(QWidget):
         self._start_float(x, y)
 
     def _start_float(self, x, y):
-        """The picks make a dimension (or not yet): it follows the pointer."""
+        """The picks make a dimension of the chosen type (it follows the pointer), need one more, or do not fit (what to click instead is said)."""
+        t = self.dim_type
         refs = [pk[1] for pk in self.picks]
-        if A.kind_for(refs) is None:
-            if len(refs) >= 2:
-                self.picks = [self.picks[-1]]
-                self.hint.emit("Those two do not make a dimension.  Click another point, line or circle.")
-            else:
-                self.hint.emit("Click a second point, line or circle to measure to.")
+        state = A.dim_check(t, refs)
+        if state == "more":
+            self.hint.emit(self._tool_hint("dim"))
             self.update()
             return
+        if state == "bad":
+            last = self.picks[-1:]
+            keep = last if len(self.picks) > 1 and A.dim_check(t, [last[0][1]]) != "bad" else []
+            self.picks = keep                                      # start again from this pick when it can be a first one
+            self.hint.emit(f"That does not fit {A.DIM_LABEL[t]}: {A.DIM_NEED[t]}.")
+            self.update()
+            return
+        kind, mode = A.dim_make(t, refs)
         try:
-            dim = self.d.add_dim(self.picks[0][0], refs)
+            dim = self.d.add_dim(self.picks[0][0], refs, kind, mode)
         except Exception as ex:                                    # noqa: BLE001
             self.hint.emit(str(ex))
             self.picks = []
             return
         self.float_annot = dim["id"]
         self.d.place_annot(dim["id"], (x, y))
-        self.hint.emit("Click where the dimension goes." + ("  Or click another thing to measure to it." if A.more_picks(refs) else ""))
+        more = t in ("h", "v", "a") and len(refs) == 1
+        self.hint.emit("Click where the dimension goes." + ("  Or click another point or line to measure to it." if more else ""))
         self.update()
 
     def _tool_move(self, x, y):

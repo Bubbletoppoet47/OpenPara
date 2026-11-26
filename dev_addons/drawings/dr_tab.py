@@ -10,8 +10,9 @@ import os
 
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
-from PyQt6.QtWidgets import (QFileDialog, QFrame, QInputDialog, QHBoxLayout, QLabel, QScrollArea, QSplitter, QStackedWidget, QTabWidget, QToolButton, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QFileDialog, QFrame, QInputDialog, QHBoxLayout, QLabel, QMenu, QScrollArea, QSplitter, QStackedWidget, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
+import dr_annot as A
 import dr_canvas as C
 import dr_geom as G
 import dr_icons as I
@@ -79,7 +80,8 @@ class DrawingTab(QWidget):
             ("redo", "dr_redo", "Redo", "Redo", lambda: self.do_redo()),
         ]), "View Layout")
         self.ribbon.addTab(self.ribbon_page([
-            ("dim", "dr_dim", "Smart\nDimension", "Dimension what you click: a length, a diameter, a radius, an angle", lambda: self.start_tool("dim")),
+            ("dim", "dr_dim", "Dimension", "Pick the type (Horizontal, Vertical, Length / distance, Diameter, Radius, Angle), click what it measures, then click where it goes",
+             lambda t: self.start_tool("dim", t), [(label, key) for key, label in A.DIM_TYPES]),
             ("note", "dr_note", "Note", "Text on the sheet, with or without a leader (straight or bent, with an arrow)", lambda: self.start_tool("note")),
             ("balloon", "dr_balloon", "Balloon", "A circle with a number and a leader to an edge or a face of a view", lambda: self.start_tool("balloon")),
             "|",
@@ -132,6 +134,7 @@ class DrawingTab(QWidget):
         bl.setContentsMargins(8, 3, 8, 3)
         self.hint_lbl = QLabel("")
         self.hint_lbl.setStyleSheet("color:#1d2a44;")
+        self.hint_lbl.setMinimumWidth(100)                   # a long hint is cut short in a narrow window; it never pushes the window wider
         bl.addWidget(self.hint_lbl, 1)
         bar.setFixedHeight(26)
         rl.addWidget(bar)
@@ -144,6 +147,7 @@ class DrawingTab(QWidget):
         fl.addWidget(self.status, 1)
         self.sheet_lbl = QLabel("")
         self.sheet_lbl.setStyleSheet("color:#6a7790; padding:2px 8px;")
+        self.sheet_lbl.setMinimumWidth(240)                  # the text changes with the selected view: it never pushes the window wider
         self.coord_lbl = QLabel("")
         self.coord_lbl.setStyleSheet("color:#6a7790; padding:2px 8px;")
         self.coord_lbl.setMinimumWidth(150)
@@ -176,7 +180,8 @@ class DrawingTab(QWidget):
                 f.setFrameShadow(QFrame.Shadow.Sunken)
                 lay.addWidget(f)
                 continue
-            key, icon_key, text, tip, fn = it
+            key, icon_key, text, tip, fn = it[:5]
+            menu = it[5] if len(it) > 5 else None                    # a button that opens a menu of choices: fn(choice) for the one picked
             b = QToolButton()
             b.setText(text)
             b.setIcon(I.icon(icon_key, 36))
@@ -190,6 +195,13 @@ class DrawingTab(QWidget):
             if fn is None:
                 b.setEnabled(False)
                 b.setToolTip((tip or text.replace("\n", " ")) + " (not built yet)")
+            elif menu:
+                m = QMenu(b)
+                for label, choice in menu:
+                    act = m.addAction(I.icon(PN.DIM_ICON.get(choice, icon_key), 20), label)
+                    act.triggered.connect(lambda _c=False, f=fn, v=choice: f(v))
+                b.setMenu(m)
+                b.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
             else:
                 b.clicked.connect(lambda _c=False, f=fn: f())
             if key:
@@ -225,13 +237,20 @@ class DrawingTab(QWidget):
             self.tool_panel.sync()
         w, h = self.d.sheet_dims()
         s = S.size(self.d.sheet["size"])[1].split("  ")[0]
-        self.sheet_lbl.setText(f"{s}   {'landscape' if self.d.sheet['landscape'] else 'portrait'}   {'1st' if self.d.sheet['first_angle'] else '3rd'} angle" +
-                               (f"   {M.scale_text(self.d.scale)}" if self.d.views else ""))
+        self.sheet_text = f"{s}   {'landscape' if self.d.sheet['landscape'] else 'portrait'}   {'1st' if self.d.sheet['first_angle'] else '3rd'} angle"
+        self.show_sheet_label()
+        self.proj_panel.show_view()
         for k in ("undo", "redo"):
             if k in self.act:
                 self.act[k].setEnabled(bool(self.undo_stack if k == "undo" else self.redo_stack))
         if "delete" in self.act:
             self.act["delete"].setEnabled(self.canvas.sel is not None or self.canvas.sel_annot is not None)
+
+    def show_sheet_label(self):
+        """The strip under the sheet: the sheet, and the style and the scale of the selected view (there is no scale of the sheet: every view has its own)."""
+        v = next((v for v in self.d.views if v["id"] == self.canvas.sel), None)
+        extra = f"   {v['name']}  {M.scale_text(v['scale'])}" if v is not None else ""
+        self.sheet_lbl.setText(getattr(self, "sheet_text", "") + extra)
 
     def do_undo(self):
         self.canvas.tool_end()
@@ -481,8 +500,9 @@ class DrawingTab(QWidget):
         for k in ("model", "projected"):
             self.act[k].setDown(False)
 
-    def start_tool(self, name):
-        """An Annotation or Sketch tool: Smart Dimension, Center Mark, Centerline (the pointer picks things on the views), Note, Balloon, Line, Rectangle, Circle, Arc."""
+    def start_tool(self, name, dim_type=None):
+        """An Annotation or Sketch tool: Dimension (dim_type: "h" "v" "a" "dia" "rad" "ang" - the person picks it in the menu of the button or in the panel), Center Mark, Centerline (the
+        pointer picks things on the views), Note, Balloon, Line, Rectangle, Circle, Arc."""
         self.cmd = None
         self.model_panel.clear_pick()
         self.canvas.end_place(emit=False)
@@ -491,7 +511,8 @@ class DrawingTab(QWidget):
         self.left.setCurrentIndex(1)
         if not self.d.views and name in NEEDS_VIEW:
             self.status.say("There is no view on the sheet yet: " + ("a balloon points at a view." if name == "balloon" else "there is nothing to pick."), "warn")
-        self.canvas.tool_begin(name)
+        self.canvas.tool_begin(name, dim_type)
+        self.tool_panel.sync()
         self.canvas.setFocus()
         for k in TOOL_KEYS:
             self.act[k].setChecked(k == name)
@@ -555,12 +576,16 @@ class DrawingTab(QWidget):
 
     def start_projected(self, parent_id):
         self.canvas.proj_style = self.proj_panel.style_choice()
-        self.proj_panel.set_parent(self.d.view(parent_id))
+        self.canvas.proj_scale = self.proj_panel.scale_choice()
         self.canvas.begin_projected(parent_id)
+        self.proj_panel.set_parent(self.d.view(parent_id))
         self.canvas.setFocus()
 
     def on_selection(self, vid):
         self.outline.select_view(vid)
+        self.model_panel.show_view()
+        self.proj_panel.show_view()
+        self.show_sheet_label()
         if "delete" in self.act:
             self.act["delete"].setEnabled(vid is not None)
         if self.cmd == "projected" and vid and self.canvas.mode == "select":
@@ -672,6 +697,67 @@ class DrawingTab(QWidget):
             self.canvas.sel = None
             self.canvas.r.cache.pop(vid, None)
             self.commit("delete")
+
+    # ---- the style buttons and the scale field of the Model View and Projected View panels: they change ONE view
+    def panel_view(self, kind):
+        """The view that the buttons and the scale field of the Model View panel (kind "model") or of the Projected View panel ("projected") change: the view that follows the pointer, or the
+        selected one.  None: the next view (the panel keeps what it starts with)."""
+        v = next((v for v in self.d.views if v["id"] == self.canvas.sel), None)
+        if v is None or v["kind"] != kind:
+            return None
+        if kind == "projected" and self.canvas.mode == "projected" and v["parent"] != self.canvas.proj_parent:
+            return None                                          # the view that the new ones are projected from is selected, not one of theirs
+        return v
+
+    def panel_style(self, kind, style):
+        """A style button of a panel was clicked (style None for a projected view: its parent's)."""
+        if kind == "projected":
+            self.canvas.proj_style = self.proj_panel.style_choice()
+            self.update_ghost()
+        v = self.panel_view(kind)
+        if v is None:
+            return
+        if style is None:
+            style = self.d.view(v["parent"])["style"]
+        if v["id"] == self.canvas.float_id:                      # still on the pointer: it is not in the undo list yet, it is put down with this style
+            self.guard(self.d.set_style, v["id"], style)
+            self.canvas.update()
+        else:
+            self.set_view_style(v["id"], style)
+
+    def panel_scale(self, kind, text):
+        """The scale field of a panel was edited."""
+        text = (text or "").strip()
+        if text:
+            try:
+                M.parse_scale(text)
+            except M.DrawingError as ex:
+                self.status.say(str(ex), "bad")
+                return
+        if kind == "projected":
+            self.canvas.proj_scale = self.proj_panel.scale_choice()
+            self.update_ghost()
+        v = self.panel_view(kind)
+        if v is None or not text:
+            return
+        if v["id"] == self.canvas.float_id:
+            if abs(v["scale"] - M.parse_scale(text)) > 1e-12:
+                self.guard(self.d.set_scale, v["id"], text)
+                self.canvas.r.cache.clear()
+                self.canvas.update()
+        else:
+            self.set_view_scale(v["id"], text)
+
+    def update_ghost(self):
+        """The projected view that follows the pointer takes the style and the scale set in the panel (the parent's where it sets none)."""
+        g, par = self.canvas.float_id, self.canvas.proj_parent
+        if self.canvas.mode != "projected" or g is None or par is None:
+            return
+        pv = self.d.view(par)
+        self.guard(self.d.set_style, g, self.canvas.proj_style or pv["style"])
+        self.guard(self.d.set_scale, g, self.canvas.proj_scale or pv["scale"])
+        self.canvas.r.cache.clear()
+        self.canvas.update()
 
     def set_view_style(self, vid, style):
         if self.d.view(vid)["style"] == style:

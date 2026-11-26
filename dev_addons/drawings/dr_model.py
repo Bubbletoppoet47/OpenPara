@@ -7,9 +7,11 @@ annotations.  Saved as an .opdraw file (JSON).
                                                 came from (a Drawing block takes its models from its wires)
     d.refresh_model(mid, data)                  the model changed: every view of it is projected again; -> the ids of the views
     d.add_view(mid, orient, center, scale=None, style="hlv")      a model view: Front, Back, Left, Right, Top, Bottom, Isometric, Trimetric, Dimetric, placed with the middle of its
-                                                lines at `center` (mm on the sheet); the scale defaults to the sheet scale
-    d.add_projected(parent, side, pos)          a view projected from `parent` to the "right" / "left" / "up" / "down" of it (third-angle: it shows the side you moved to; first-angle:
-                                                the opposite side).  It keeps the scale of its parent and stays ALIGNED: it can only slide along its axis
+                                                lines at `center` (mm on the sheet); the scale defaults to d.scale, the scale a new model view starts at
+                                                (the first view sets it so the whole model fits); every view has a scale and a style of its own
+    d.add_projected(parent, side, pos, style=None, scale=None)     a view projected from `parent` to the "right" / "left" / "up" / "down" of it (third-angle: it shows the side
+                                                you moved to; first-angle: the opposite side).  It starts at the scale and the style of its parent (or the ones given), then has
+                                                its own, and stays ALIGNED: it can only slide along its axis
     d.move_view(vid, x, y)                      moves a view (a projected one only along its axis; its own projected views move with it)
     d.set_scale(vid, s), d.set_style(vid, style), d.set_orient(vid, name)
     d.add_note / set_note / add_balloon / set_balloon_text / add_item / set_tip / move_item / drag_handle      notes, balloons and the lines, rectangles, circles and arcs of the sheet
@@ -105,7 +107,7 @@ class Drawing:
         self.views = []
         self.notes, self.dims, self.balloons, self.marks, self.lines = [], [], [], [], []
         self.counter = {"view": 0, "model": 0, "dim": 0, "mark": 0, "note": 0, "balloon": 0, "draw": 0}
-        self.scale = 1.0                                          # the sheet scale: what a new model view starts at
+        self.scale = 1.0                                          # what a new model view starts at (set by the first view); every view then has its own scale
         self.cache = {}                                           # model id -> its build123d shape (not saved)
         self._pcache = {}                                         # view id -> (its geom, the Projection made of it) (not saved)
 
@@ -267,7 +269,7 @@ class Drawing:
         if scale is None:
             first = not self.views
             scale = self.scale
-            if first:                                             # the first view sets the sheet scale: the whole model fits (and room for the projected views)
+            if first:                                             # the first view sets the scale a new view starts at: the whole model fits (and room for the projected views)
                 pr = P.project_axes(self.shape(mid), eye, up, orient, hidden=False)
                 x0, y0, x1, y1 = pr.bbox()
                 w, h = self.sheet_dims()
@@ -291,14 +293,14 @@ class Drawing:
             return up, -eye
         return -up, eye
 
-    def add_projected(self, parent_id, side, pos, style=None):
+    def add_projected(self, parent_id, side, pos, style=None, scale=None):
         """A view projected from `parent_id` to its `side` ("right", "left", "up", "down"); `pos` = (x, y) where the person clicked: only the coordinate along the axis counts (the
         other is the parent's: the views are aligned), and the lines are put there by the middle."""
         if side not in SIDES:
             raise DrawingError(f"'{side}' is not a side: right, left, up or down.")
         par = self.view(parent_id)
         eye, up = self.projected_axes(par, side)
-        v = self._new_view("projected", par["model"], "Projected", eye, up, par["scale"], style or par["style"])
+        v = self._new_view("projected", par["model"], "Projected", eye, up, par["scale"] if scale is None else float(scale), style or par["style"])
         v["parent"], v["side"] = par["id"], side
         pr = self.project(v)
         x0, y0, x1, y1 = pr.bbox()
@@ -434,10 +436,12 @@ class Drawing:
                 return a
         raise DrawingError("That item is not on the drawing.")
 
-    def add_dim(self, vid, refs, kind=None):
-        """A dimension on a view from what was picked on it (A.pick: points, lines, circles, arcs in the view's frame); -> the dimension.  Where it is drawn comes from place_annot."""
+    def add_dim(self, vid, refs, kind=None, mode=None):
+        """A dimension on a view from what was picked on it (A.pick: points, lines, circles, arcs in the view's frame); -> the dimension.  `kind` ("linear", "diameter", "radius",
+        "angle") and, for a linear one, `mode` ("h", "v", "a": horizontal, vertical, along the picks) are what the person chose; without them the picks decide (A.kind_for) and a
+        linear dimension goes along the picks.  Where it is drawn comes from place_annot."""
         v = self.view(vid)
-        d = A.new_dim(refs, self.projection(v).bbox(), kind)
+        d = A.new_dim(refs, self.projection(v).bbox(), kind, mode)
         if d is None:
             raise DrawingError("That does not make a dimension: pick a line, a circle, two points, a point and a line, or two lines.")
         self.counter["dim"] += 1

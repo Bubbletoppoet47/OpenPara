@@ -82,6 +82,25 @@ ok(A.kind_for([L1, L1]) is None and A.kind_for([P1, P1]) is None and A.kind_for(
 ok(A.mark_kind_for([C1]) == "center_mark" and A.mark_kind_for([AR]) == "center_mark" and A.mark_kind_for([L1, L2]) == "centerline", "a center mark on a circle or an arc, a centerline between two parallel lines")
 ok(A.mark_kind_for([L1, L3]) is None and A.mark_kind_for([L1]) is None and A.mark_kind_for([P1]) is None, "not on two lines that meet, one line, a point")
 
+# ----------------------------------------------------------------------------------------------------------------------------------- the Dimension tool: the picks must fit the type
+ok([k for k, _l in A.DIM_TYPES] == ["h", "v", "a", "dia", "rad", "ang"] and [l for _k, l in A.DIM_TYPES] == ["Horizontal", "Vertical", "Length / distance", "Diameter", "Radius", "Angle"],
+   "the types are the ones of the Part sketcher's Dimension menu")
+ok(A.dim_check("dia", [C1]) == "ok" and A.dim_check("dia", [AR]) == "ok" and A.dim_check("dia", [L1]) == "bad" and A.dim_check("dia", [P1]) == "bad" and A.dim_check("dia", [C1, C1]) == "bad",
+   "Diameter: one circle or one arc, nothing else")
+ok(A.dim_check("rad", [AR]) == "ok" and A.dim_check("rad", [C1]) == "ok" and A.dim_check("rad", [L1]) == "bad", "Radius: one arc or one circle")
+L3v = A.ref_of(line((0, 0), (0, 10)))
+L4v = A.ref_of(line((100, 0), (100, 10)))
+ok(A.dim_check("ang", [L1]) == "more" and A.dim_check("ang", [P1]) == "bad" and A.dim_check("ang", [C1]) == "bad" and A.dim_check("ang", [L1, L3v]) == "ok" and A.dim_check("ang", [L1, L2]) == "bad"
+   and A.dim_check("ang", [L1, L1]) == "bad", "Angle: two lines that meet (one line asks for the second; parallel lines and the same line twice are not an angle)")
+ok(A.dim_check("a", [L1]) == "ok" and A.dim_check("a", [P1]) == "more" and A.dim_check("a", [P1, P2]) == "ok" and A.dim_check("a", [P1, L2]) == "ok" and A.dim_check("a", [L1, L2]) == "ok"
+   and A.dim_check("a", [L1, L3v]) == "bad" and A.dim_check("a", [P1, P1]) == "bad", "Length / distance: a line, two points, a point and a line, two parallel lines")
+ok(A.dim_check("h", [L1]) == "ok" and A.dim_check("h", [L3v]) == "more" and A.dim_check("h", [P1, P2]) == "ok" and A.dim_check("h", [L3v, L4v]) == "ok" and A.dim_check("h", [L1, L2]) == "bad"
+   and A.dim_check("h", [P2, L3v]) == "ok", "Horizontal: a line that has a width (a line that has none waits for the second pick), two points, a point and a vertical line or two vertical lines - not across a line that runs the same way")
+ok(A.dim_check("v", [L3v]) == "ok" and A.dim_check("v", [L1]) == "more" and A.dim_check("v", [L1, L2]) == "ok" and A.dim_check("v", [L3v, L4v]) == "bad", "Vertical: the other way round")
+ok(A.dim_make("h", [P1, P2]) == ("linear", "h") and A.dim_make("v", [P1, P2]) == ("linear", "v") and A.dim_make("a", [P1, P2]) == ("linear", "a") and A.dim_make("dia", [C1]) == ("diameter", None)
+   and A.dim_make("rad", [AR]) == ("radius", None) and A.dim_make("ang", [L1, L3v]) == ("angle", None) and A.dim_make("dia", [L1]) is None, "what the picks make: the kind and the mode that go with the type")
+ok(A.dim_check("zz", [L1]) == "bad" and A.dim_check("h", []) == "more", "a type that does not exist fits nothing; no pick yet asks for one")
+
 # ----------------------------------------------------------------------------------------------------------------------------------- the numbers
 d_len = A.new_dim([L1], (0, 0, 100, 10))
 ok(near(A.value(d_len), 100.0) and A.text(d_len) == "100", "the length of a line: 100")
@@ -202,16 +221,16 @@ ok(len(sn["heads"]) == 2 and nearp(sn["heads"][0][0], (12, 0)) and sn["heads"][0
 # ----------------------------------------------------------------------------------------------------------------------------------- placing with the pointer
 p = A.new_dim([L1], (0, 0, 100, 10))
 A.place(p, 1.0, (0, 0), (50, 25))
-ok(p["side"] == 1 and near(p["dist"], 25.0) and near(p["t"], 0.0) and p["mode"] == "h", "the pointer above the line: the dimension goes above, as far as the pointer is")
+ok(p["side"] == 1 and near(p["dist"], 25.0) and near(p["t"], 0.0) and p["mode"] == "a", "the pointer above the line: the dimension goes above, as far as the pointer is")
 A.place(p, 1.0, (0, 0), (80, -12))
 ok(p["side"] == -1 and near(p["dist"], 12.0) and near(p["t"], 30.0), "below: on the other side; where the pointer is along the line decides where the number is")
-pa = A.new_dim([P1, P2], (0, 0, 100, 10))
-A.place(pa, 1.0, (0, 0), (50, 30))
-ok(pa["mode"] == "h" and near(A.value(pa), 100.0), "two points, the pointer above them: measured horizontally")
-A.place(pa, 1.0, (0, 0), (130, 5))
-ok(pa["mode"] == "v" and near(A.value(pa), 10.0), "the pointer beside them: vertically")
-A.place(pa, 1.0, (0, 0), (150, 80))
-ok(pa["mode"] == "a" and near(A.value(pa), math.hypot(100, 10)), "away from both: along the line between them")
+# what a linear dimension measures is what the person chose (Horizontal, Vertical, Length / distance); where the pointer goes never changes it
+for mode, want in (("h", 100.0), ("v", 10.0), ("a", math.hypot(100, 10))):
+    pa = A.new_dim([P1, P2], (0, 0, 100, 10), "linear", mode)
+    for pointer in ((50, 30), (130, 5), (150, 80), (-20, -30)):
+        A.place(pa, 1.0, (0, 0), pointer)
+    ok(pa["mode"] == mode and near(A.value(pa), want), f"two points, type {mode}: placed above, beside, away and below them it still measures {want:.2f}")
+ok(A.new_dim([P1, P2], (0, 0, 100, 10), "linear", "x")["mode"] == "a" and A.new_dim([P1, P2], (0, 0, 100, 10))["mode"] == "a", "a mode that is not h, v or a (or none given) goes along the two points")
 pp = A.new_dim([L1, L2], (0, 0, 100, 10))
 A.place(pp, 1.0, (0, 0), (130, 5))
 ok(near(pp["dist"], 30.0) and A.shape(pp, 1.0, (0, 0))["segs"][-1][0][0] == 130, "two parallel lines: the dimension line goes where the pointer is, 30 mm beyond their ends")
