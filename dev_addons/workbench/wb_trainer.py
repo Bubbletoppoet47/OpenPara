@@ -181,6 +181,7 @@ class TrainerAdapter(nodes.Adapter):
         if isinstance(m.get("info"), dict) and m["info"]:
             with open(tc.libs()[3].info_path(pt), "w", encoding="utf-8") as f:
                 json.dump(m["info"], f, indent=2)
+        self.state(tab, node).setdefault("placed", set()).add((m["file"], m.get("key")))
         return pt
 
     def read_back(self, tab, node, folder):
@@ -194,7 +195,9 @@ class TrainerAdapter(nodes.Adapter):
                 seen.add((v["file"], key))
                 got = self.store_model_file(tab, node, v["path"], key)
                 changed = changed or got is not None
-        keep = [m for m in node.data.get("models", []) if (m["file"], m.get("key")) in seen or m.get("stored") == "linked"]
+        placed = self.state(tab, node).setdefault("placed", set())          # the models that were in the training project at some time: one of them that is gone was removed there
+        placed |= seen
+        keep = [m for m in node.data.get("models", []) if (m["file"], m.get("key")) in seen or (m["file"], m.get("key")) not in placed]
         if len(keep) != len(node.data.get("models", [])):
             node.data["models"], changed = keep, True
         return changed
@@ -222,7 +225,12 @@ class TrainerAdapter(nodes.Adapter):
         if w is None:
             return None
         tab.adopt_editor(node, w)
-        w.workbench_block = {"label": node.label, "title": node.title, "annotator": f"{an.label} {an.title}" if an is not None else ""}
+        info = {"label": node.label, "title": node.title, "annotator": f"{an.label} {an.title}" if an is not None else "",
+                "take": lambda: self.take_now(tab, node), "changed": lambda: self.changed_in_window(tab)}
+        if hasattr(w, "set_workbench_block"):
+            w.set_workbench_block(info)
+        else:
+            w.workbench_block = info
         self.look(tab, node, folder)
         tab.say(f"{node.label} {node.title}: work in its tab. " + (f"Its dataset comes from {an.label} {an.title}." if an is not None else
                 "Wire an Annotator's Dataset into it to train on that, or import a dataset zip in its window.") + note)
@@ -320,6 +328,23 @@ class TrainerAdapter(nodes.Adapter):
             shutil.rmtree(tmp, ignore_errors=True)
         st["taken"] = ad.source_mark(tab, an)
         return None
+
+    def take_now(self, tab, node):
+        """Take from Annotator in the window: the dataset is taken again whatever the cells say.  -> None or what went wrong."""
+        st = self.state(tab, node)
+        st.pop("taken", None)
+        err = self.take(tab, node)
+        if not err:
+            for key in ("dataset", "distances"):
+                if tab.project.incoming_all(node.id, key):
+                    tab.project.mark_refreshed(node.id, key)
+            tab.scene.refresh()
+        return err
+
+    def changed_in_window(self, tab):
+        """A model was made, imported or removed in the window: the project reads it back now (the cells say so at once)."""
+        tab.sync_editors()
+        tab.scene.refresh()
 
     # ------------------------------------------------------------------ the rest of the protocol
     def closed(self, tab, node):

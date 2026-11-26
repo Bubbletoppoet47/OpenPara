@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                              QProgressBar,
                              QListWidget,
-                             QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QSplitter, QTableWidget,
+                             QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QSplitter, QStackedWidget, QTableWidget,
                              QTableWidgetItem, QVBoxLayout, QWidget)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -128,6 +128,7 @@ class TrainerTab(QWidget):
         self.temp_root = root if temp else None
         self.path = None if temp else root
         self.post = Poster()
+        self.setAcceptDrops(True)                              # model files (.pt) dropped on the window are imported
         self.job = None
         self.env = None
         self._bg = False
@@ -137,6 +138,7 @@ class TrainerTab(QWidget):
         self._closed = False
         self._distort_pictures = 0
         self._loading = False
+        self.workbench_block = None                            # set by the Workbench block that opened this window (set_workbench_block)
         self.ac, self.dz, self.sz, self.ml = tc.libs()
         self.cfg = self.sz.load_config()
         self.me = self.sz.identity(self.cfg)
@@ -238,29 +240,73 @@ class TrainerTab(QWidget):
 
     # ------------------------------------------------------------------ the window
     def _build(self):
+        import annotator_ribbon as rib                      # the Annotator's ribbon: tabs of big buttons, as in the Part window
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(6, 6, 6, 4)
-        top = QHBoxLayout()                                  # the bar: what this is and which project on the left, its commands on the right
-        top.setSpacing(8)
-        top.addWidget(ui_kit.kind_chip("Trainer", "#b83280"))
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        B = rib.button
+        self.ribbon = R = rib.Ribbon()
+        outer.addWidget(R)
+        made = R.add_page("Data", [
+            B("import_zip", "ann_import_zip", "Import\ndataset zip...", "Adds the pictures and boxes of a dataset zip (made by the Annotator or another Trainer) to this project.", self.import_zip),
+            B("take", "ann_sync", "Take from\nAnnotator", "Takes the pictures, boxes and distances of the Annotator wired into this block again (the Workbench's Refresh does the same).", self.take_from_annotator),
+            B("save_as", "ann_export_zip", "Save project\nas...", "Gives the project a .training folder of its own (or copies it to a new one).", lambda: self.save(True)),
+            "|",
+            B("clear_dist", "ann_clear_dist", "Delete distorted\ncopies", "Deletes the distorted copies of the training pictures (they are made again when training starts).", self.clear_distortions),
+        ])
+        self.take_btn, self.save_as_btn = made["take"], made["save_as"]
+        self.take_btn.setVisible(False)                      # only a block that has an Annotator wired into it
+        self.bar_buttons = [made["import_zip"], made["take"], made["save_as"], made["clear_dist"]]
+        made = R.add_page("Model", [
+            B("browse_model", "ann_model_load", "Continue from\na file...", "Pick a model file (.pt) to train further from; it must know the classes you have ticked.", self.browse_model),
+        ])
+        self.bar_buttons += [made["browse_model"]]
+        made = R.add_page("Models", [
+            B("export_model", "ann_export_zip", "Export\nmodel...", "Writes the model chosen in the list out as a file: the .pt and its information (.json) beside it.", self.export_model),
+            B("import_model", "ann_import_zip", "Import\nmodel...", "Takes a model file (.pt) into this project. A model up to 500 MB is kept inside the Workbench project, a bigger one is linked.", self.import_model),
+            B("remove_model", "ann_delete_box", "Remove\nmodel", "Deletes the model chosen in the list from this project.", self.remove_model),
+        ])
+        self.bar_buttons += [made["export_model"], made["import_model"], made["remove_model"]]
+        made = R.add_page("Train", [
+            B("start", "ann_confirm", "Start\ntraining", "Starts training with the settings of this window. Nothing else starts a training: updating the Workbench project never does.", self.start, bold=True),
+            B("stop", "ann_delete_frame", "Stop", "Stops the run (while it is being prepared: Cancel).", self.stop),
+        ])
+        self.btn_train, self.btn_stop = made["start"], made["stop"]
+        self.btn_stop.setEnabled(False)                      # (nothing runs yet)
+        made = R.add_page("Setup", [
+            B("scan", "ann_sync", "Scan\nagain", "Looks again for a Python with torch and ultralytics.", self.check_env),
+            B("browse_python", "ann_model_load", "Browse\nPython...", "Pick the python.exe that has torch and ultralytics.", self.browse_python),
+            B("download", "ann_model_dl", "Download\npackages...", "Downloads torch and ultralytics for OpenPara's own Python.", self.offer_download),
+            B("remove_pkgs", "ann_delete_box", "Remove\npackages", "Removes the packages OpenPara downloaded.", self.remove_downloaded),
+        ])
+        self.pkg_install_btn, self.pkg_remove_btn = made["download"], made["remove_pkgs"]
+        corner = QWidget()                                   # what this is and which project, beside the tabs
+        cl = QHBoxLayout(corner)
+        cl.setContentsMargins(0, 0, 8, 0)
+        cl.setSpacing(8)
+        cl.addWidget(ui_kit.kind_chip("Trainer", "#b83280"))
         self.bar_lbl = QLabel("")
         self.bar_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
-        top.addWidget(self.bar_lbl)
-        self.status = QLabel("")
+        cl.addWidget(self.bar_lbl)
+        R.setCornerWidget(corner, Qt.Corner.BottomRightCorner)
+        R.currentChanged.connect(self._on_ribbon_tab)
+        self.status = QLabel("")                             # the status bar at the bottom (built below)
         self.status.setStyleSheet(f"color:{ui_kit.WARN};")
-        top.addWidget(self.status, 1)
-        self.bar_buttons = []
-        for text, fn, tipx in (("Import dataset zip...", self.import_zip, "Adds the pictures and boxes of a dataset zip (made by the Annotator or another Trainer) to this project."),
-                               ("Save project as...", lambda: self.save(True), "Gives the project a .training folder of its own (or copies it to a new one).")):
-            b = QPushButton(text)
-            b.setToolTip(tipx)
-            b.clicked.connect(lambda _c=False, f=fn: f())
-            top.addWidget(b)
-            self.bar_buttons.append(b)
-        outer.addLayout(top)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
-        outer.addWidget(split, 1)
+        body = QWidget()
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(6, 4, 6, 2)
+        bl.addWidget(split, 1)
+        outer.addWidget(body, 1)
+        foot = QWidget()                                     # the status bar: the project and where its data comes from, then what is going on
+        fl = QHBoxLayout(foot)
+        fl.setContentsMargins(8, 2, 8, 2)
+        self.foot_lbl = QLabel("")
+        self.foot_lbl.setStyleSheet(f"color:{ui_kit.MUTED};")
+        fl.addWidget(self.foot_lbl)
+        fl.addWidget(self.status, 1)
+        outer.addWidget(foot)
         self.sections = []
 
         def section(n, title, help_text=None, summary=None):
@@ -414,10 +460,17 @@ class TrainerTab(QWidget):
         split.addWidget(sc)
         self.panel_scroll, self.panel = sc, left
 
-        # ---- right: environment, run, log, models
+        # ---- right: the run (log, models) and, on the Setup tab, the environment
+        self.stack = QStackedWidget()
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(8, 4, 2, 2)
+        setup = QWidget()
+        sv = QVBoxLayout(setup)
+        sv.setContentsMargins(8, 4, 2, 2)
+        self.stack.addWidget(right)
+        self.stack.addWidget(setup)
+        rv, run_v = sv, rv                                   # (the environment widgets go on the Setup page, the run widgets on the first)
         rv.addWidget(pane_head("Training Python"))
         prow = QHBoxLayout()
         self.py_box = QComboBox()
@@ -425,10 +478,6 @@ class TrainerTab(QWidget):
         tip(self.py_box, "python")
         self.py_box.currentIndexChanged.connect(lambda _i: self._python_chosen())
         prow.addWidget(self.py_box, 1)
-        for text, fn in (("Browse...", self.browse_python), ("Scan again", self.check_env)):
-            b = QPushButton(text)
-            b.clicked.connect(lambda _c=False, f=fn: f())
-            prow.addWidget(b)
         rv.addLayout(prow)
         rv.addWidget(hint("python"))
         self.env_label = QLabel("Looking for a Python with torch, ultralytics and a GPU ...")
@@ -436,16 +485,9 @@ class TrainerTab(QWidget):
         self.env_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         rv.addWidget(self.env_label)
         # downloading torch / ultralytics for OpenPara's own Python: the button, what it is doing, and the way to remove it again
-        prow2 = QHBoxLayout()
-        self.btn_pkg_install = QPushButton("Download torch and ultralytics...")
-        self.btn_pkg_install.clicked.connect(lambda _c=False: self.offer_download())
-        self.btn_pkg_remove = QPushButton("Remove the downloaded packages")
-        self.btn_pkg_remove.clicked.connect(lambda _c=False: self.remove_downloaded())
+        self.btn_pkg_install, self.btn_pkg_remove = self.pkg_install_btn, self.pkg_remove_btn      # (ribbon buttons: shown when the Python has what to download / remove)
         for b in (self.btn_pkg_install, self.btn_pkg_remove):
             b.setVisible(False)
-            prow2.addWidget(b)
-        prow2.addStretch(1)
-        rv.addLayout(prow2)
         self.pkg_box = QWidget()
         pk = QHBoxLayout(self.pkg_box)
         pk.setContentsMargins(0, 0, 0, 0)
@@ -461,21 +503,9 @@ class TrainerTab(QWidget):
         pk.addWidget(self.pkg_cancel)
         self.pkg_box.setVisible(False)
         rv.addWidget(self.pkg_box)
-        row = QHBoxLayout()
-        rv.addSpacing(6)
+        rv.addStretch(1)
+        rv = run_v
         rv.addWidget(pane_head("Run"))
-        self.btn_train = ui_kit.primary(QPushButton("Start training"))       # the action that moves the work on
-        self.btn_train.setMinimumHeight(34)
-        self.btn_train.setMinimumWidth(170)
-        self.btn_train.clicked.connect(self.start)
-        self.btn_stop = QPushButton("Stop")
-        self.btn_stop.setMinimumHeight(34)
-        self.btn_stop.clicked.connect(self.stop)
-        self.btn_stop.setEnabled(False)
-        for b in (self.btn_train, self.btn_stop):
-            row.addWidget(b)
-        row.addStretch(1)
-        rv.addLayout(row)
         self.prep_bar = QProgressBar()                         # shown while a run is being prepared (before the training program starts)
         self.prep_bar.setTextVisible(True)
         self.prep_bar.setVisible(False)
@@ -489,11 +519,12 @@ class TrainerTab(QWidget):
         self.log.setStyleSheet("font-family: Consolas, monospace;")
         rv.addWidget(self.log, 1)
         rv.addWidget(pane_head("Models trained in this project"))
-        rv.addWidget(ui_kit.note("They are also offered in the Annotator's AI model box."))
+        self.models_note = ui_kit.note("They are also offered in the Annotator's AI model box.")
+        rv.addWidget(self.models_note)
         self.models_list = QListWidget()
-        self.models_list.setMaximumHeight(110)
+        self.models_list.setMaximumHeight(150)
         rv.addWidget(self.models_list)
-        split.addWidget(right)
+        split.addWidget(self.stack)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
         ui_kit.fit_panel(split, sc, left, lo=480, hi=700)
@@ -556,9 +587,16 @@ class TrainerTab(QWidget):
         self.size_box.blockSignals(False)
 
     def refresh_bar(self):
-        """The bar says which project this is, and the folded steps their one-line summary."""
+        """The ribbon's corner says which project this is, the status bar where its data comes from, and the folded steps their one-line summary."""
         try:
-            self.bar_lbl.setText(f"<b>{self.title()}</b>" if self.path else "A new project (not saved yet)")
+            wb = self.workbench_block
+            if wb:
+                self.bar_lbl.setText(f"<b>{wb['label']} {wb['title']}</b>")
+                self.foot_lbl.setText("A block of a Workbench project   |   " + (f"Fed by {wb['annotator']}" if wb.get("annotator") else
+                                                                                 "No Annotator is wired into it: import a dataset zip here, or wire an Annotator's Dataset in the Workbench"))
+            else:
+                self.bar_lbl.setText(f"<b>{self.title()}</b>" if self.path else "A new project (not saved yet)")
+                self.foot_lbl.setText(f"Project: {self.path}" if self.path else "")
             for sec in self.sections:
                 sec.refresh_summary()
         except (AttributeError, RuntimeError):
@@ -636,8 +674,113 @@ class TrainerTab(QWidget):
         for v in self.tp.list_models():
             sc = v.get("scores") or {}
             kind = {"two": "classes + boxes + distance", "old": "classes + boxes + distance (earlier kind)"}.get(tc.checkpoint_kind(v["path"]), "classes + boxes")
-            self.models_list.addItem(f"{self.ml.mr.SIZE_NAMES.get(v['size'], '?')}   {kind}   {time.strftime('%Y-%m-%d %H:%M', time.localtime(v['ts']))}"
-                                     + (f"   mAP50 {sc['map50']}" if "map50" in sc else "") + self.ml.distance_text(sc))
+            it = QListWidgetItem(f"{self.ml.mr.SIZE_NAMES.get(v['size'], '?')}   {kind}   {time.strftime('%Y-%m-%d %H:%M', time.localtime(v['ts']))}"
+                                 + (f"   mAP50 {sc['map50']}" if "map50" in sc else "") + self.ml.distance_text(sc))
+            it.setData(Qt.ItemDataRole.UserRole, v["path"])
+            it.setToolTip(v["file"])
+            self.models_list.addItem(it)
+
+    # ------------------------------------------------------------------ the ribbon, a block of the Workbench, the models
+    def _on_ribbon_tab(self, index):
+        """The Setup tab shows the Python and its packages; every other tab shows the run and the models."""
+        self.stack.setCurrentIndex(1 if self.ribbon.tabText(index) == "Setup" else 0)
+
+    def set_workbench_block(self, info):
+        """Called by the Workbench block that opened this window.  Its models are kept in the Workbench project (they are not also put in the Annotator's Models folder), the
+        project is the block's own (no Save project as), and `info` says what the status bar shows: {"label", "title", "annotator": the Annotator wired in or "",
+        "take": a function that takes that Annotator's dataset again (-> None or what went wrong), "changed": a function that tells the Workbench a model was made or removed}."""
+        self.workbench_block = info
+        self.tp.publish_shared = False
+        self.save_as_btn.setVisible(False)
+        self.take_btn.setVisible(bool(info.get("annotator")) and callable(info.get("take")))
+        self.models_note.setText("They are kept in the Workbench project, inside its file.")
+        self.refresh_bar()
+
+    def _models_changed_here(self):
+        fn = (self.workbench_block or {}).get("changed")
+        if callable(fn):
+            try:
+                fn()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def take_from_annotator(self):
+        fn = (self.workbench_block or {}).get("take")
+        if not callable(fn) or self.running() or self._bg or self.preparing():
+            return
+        err = fn()
+        self.status.setText("")
+        if err:
+            QMessageBox.warning(self, "Take from Annotator", err)
+        else:
+            self.refresh_data()
+
+    def _chosen_model(self):
+        it = self.models_list.currentItem()
+        if it is None and self.models_list.count() == 1:
+            it = self.models_list.item(0)
+        return it.data(Qt.ItemDataRole.UserRole) if it is not None else None
+
+    def export_model(self):
+        path = self._chosen_model()
+        if not path:
+            QMessageBox.information(self, "Export model", "Choose a model in the list of models first.")
+            return
+        dest, _ = QFileDialog.getSaveFileName(self, "Export the model as a file", os.path.basename(path), "Model (*.pt)")
+        if not dest:
+            return
+        try:
+            out = self.tp.export_model(path, dest)
+        except OSError as e:
+            QMessageBox.critical(self, "Export model", f"Could not write the model: {e}")
+            return
+        self.status.setText(f"Exported {os.path.basename(out)}, with its information in {os.path.basename(self.ml.info_path(out))}.")
+
+    def import_model(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Import model file(s)", "", "Model (*.pt)")
+        if paths:
+            self.import_model_files(paths)
+
+    def import_model_files(self, paths):
+        """Takes model files into the project (the Workbench block then keeps each inside its project file up to 500 MB, or linked).  A .pt file can run code when it is loaded:
+        the person is asked once."""
+        paths = [p for p in paths if p.lower().endswith(".pt") and os.path.isfile(p)]
+        if not paths:
+            return 0
+        r = QMessageBox.question(self, "Import model", "A model file (.pt) can contain code that runs when it is loaded.\n\nImport only models you made or trust. Import " + (
+            f"these {len(paths)} files?" if len(paths) > 1 else os.path.basename(paths[0]) + "?"), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if r != QMessageBox.StandardButton.Yes:
+            return 0
+        done, failed = [], []
+        for p in paths:
+            try:
+                done.append(os.path.basename(self.tp.import_model(p)))
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"{os.path.basename(p)}: {e}")
+        self.refresh_models()
+        self._models_changed_here()
+        self.status.setText((f"Imported {', '.join(done)}. " if done else "") + ("; ".join(failed)))
+        return len(done)
+
+    def remove_model(self):
+        path = self._chosen_model()
+        if not path:
+            QMessageBox.information(self, "Remove model", "Choose a model in the list of models first.")
+            return
+        r = QMessageBox.question(self, "Remove model", f"Remove {os.path.basename(path)} from this project?\n\nIt cannot be got back from here (export it first to keep a copy).",
+                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if r != QMessageBox.StandardButton.Yes:
+            return
+        self.tp.remove_model(path)
+        self.refresh_models()
+        self._models_changed_here()
+
+    def dragEnterEvent(self, e):
+        if any(u.toLocalFile().lower().endswith(".pt") for u in e.mimeData().urls()):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        self.import_model_files([u.toLocalFile() for u in e.mimeData().urls()])
 
     # ------------------------------------------------------------------ settings changes
     def _role_changed(self, sid, role):
@@ -1236,10 +1379,12 @@ class TrainerTab(QWidget):
         elif res and res.get("ok") and res.get("warning"):
             self.run_label.setText("Finished, but not with what was asked for - see the end of the log. " + res["warning"])
             self.refresh_models()
+            self._models_changed_here()
             self._tell_annotators()
         elif res and res.get("ok"):
-            self.run_label.setText("Finished. The new model is saved and the annotator lists it.")
+            self.run_label.setText("Finished. The new model is saved" + (" in this project." if self.workbench_block else " and the annotator lists it."))
             self.refresh_models()
+            self._models_changed_here()
             self._tell_annotators()
         else:
             self.run_label.setText("Training did not finish - see the log. Nothing was saved from this run.")

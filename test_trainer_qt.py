@@ -12,7 +12,7 @@ CORE = os.path.join(HERE, "core") if os.path.isdir(os.path.join(HERE, "core")) e
 ADD = os.path.join(HERE, "addons") if os.path.isdir(os.path.join(HERE, "addons")) else os.path.join(HERE, "addons_src")
 for p in (CORE, os.path.join(ADD, "annotator", "app"), os.path.join(ADD, "trainer")):
     sys.path.insert(0, p)
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox, QToolButton
 app = QApplication([])
 import numpy as np, cv2
 import annotator_core as ac, dataset_zip as dz, share_zip as sz, model_library as ml, ext
@@ -87,10 +87,13 @@ w = tt.make_tab(None); w.host = host; w.resize(1200, 800); w.show(); pump(4)
 assert isinstance(w, tt.TrainerTab) and w.title() == "Trainer" and not w.is_dirty() and w.temp_root
 assert "No pictures yet" in w.data_info.text()
 # the look of the family: the bar (what it is, which project, its commands on the right), three numbered foldable steps, the main action in teal
-assert "not saved yet" in w.bar_lbl.text() and [b.text() for b in w.bar_buttons] == ["Import dataset zip...", "Save project as..."]
+assert "not saved yet" in w.bar_lbl.text() and [b.text() for b in w.bar_buttons][:3] == ["Import\ndataset zip...", "Take from\nAnnotator", "Save project\nas..."]
+# the look of the Annotator: a ribbon of tabs of big buttons on top, a status bar at the bottom
+assert [w.ribbon.tabText(i) for i in range(w.ribbon.count())] == ["Data", "Model", "Models", "Train", "Setup"] and w.take_btn.isHidden() and not w.save_as_btn.isHidden()
+assert w.btn_train.text() == "Start\ntraining" and w.btn_stop.text() == "Stop" and not w.btn_stop.isEnabled()
 assert [(s.number, s.title) for s in w.sections] == [(1, "Data"), (2, "Distortions"), (3, "Model")]
 assert not w.findChildren(tt.QGroupBox), "no grey group boxes"
-assert "font-weight:600" in w.btn_train.styleSheet() and w.btn_train.text() == "Start training"
+assert "font-weight:600" in w.btn_train.styleSheet()
 assert w.panel_scroll.viewport().width() >= w.panel.minimumSizeHint().width(), "the left panel shows its contents whole"
 assert w.type_box.findData("fake") >= 0 and w.type_box.findData("yolo") >= 0 and w.type_box.findData("yolo_scratch") < 0
 # only random-weight types are offered: nothing in the type box or its explanation offers a pretrained start
@@ -102,8 +105,8 @@ fm = w.type_box.fontMetrics()
 assert max(fm.horizontalAdvance(w.type_box.itemText(i)) for i in range(4)) + 40 <= w.type_box.width(), w.type_box.width()
 assert w.sets_table.columnWidth(3) >= 110 and not w.sets_table.horizontalScrollBar().isVisible()
 import re
-labels = {b.text() for b in w.findChildren(tt.QPushButton)}
-assert "Export master zip..." not in labels and "My name..." not in labels and "Import dataset zip..." in labels
+labels = {b.text() for b in w.findChildren(tt.QPushButton)} | {b.text() for b in w.findChildren(QToolButton)}
+assert "Export master zip..." not in labels and "My name..." not in labels and "Import\ndataset zip..." in labels
 assert not hasattr(w, "start_box") and w.cont_on.text() == "Continue from existing model" and not w.cont_row.isEnabled()
 hints = " ".join(l.text() for l in w.findChildren(tt.QLabel))
 for word in ("lighter or darker", "grain", "JPEG quality", "distorted versions", "resized to this many pixels", "One epoch"):

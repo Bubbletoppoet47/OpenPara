@@ -692,6 +692,7 @@ class TrainingProject:
         self.models_dir = os.path.join(self.root, "models")
         self.runs_dir = os.path.join(self.root, "runs")
         self.cache_dir = os.path.join(self.root, "weights_cache")
+        self.publish_shared = True           # a finished model is also saved in the Annotator's Models folder (a Workbench block keeps its models in its own project instead)
         try:
             with open(self.file, encoding="utf-8") as f:
                 self.meta = json.load(f)
@@ -902,6 +903,53 @@ class TrainingProject:
             out += self.ml.list_versions(self.models_dir, key)
         return sorted(out, key=lambda v: v["ts"], reverse=True)
 
+    def import_model(self, path):
+        """Takes a model file (a .pt, with its .json information when there is one next to it) into this project's models.  -> the path of the copy.
+        The kind is read from the file (a distance model goes with the Scratch models); a file that is here already (same name and size) is not copied again."""
+        ml = self.ml
+        key = "scratch" if checkpoint_kind(path) in ("two", "old") else "assist"
+        d = ml.folder_path(self.models_dir, key)
+        os.makedirs(d, exist_ok=True)
+        stem, n = os.path.splitext(os.path.basename(path))[0], 1
+        dest = os.path.join(d, stem + ".pt")
+        while os.path.exists(dest):
+            if os.path.getsize(dest) == os.path.getsize(path):
+                return dest
+            n += 1
+            dest = os.path.join(d, f"{stem}_{n}.pt")
+        tmp = dest + ".part"
+        shutil.copyfile(path, tmp)
+        os.replace(tmp, dest)
+        info = ml.read_info(path)
+        if info:
+            info = dict(info, kind=key)
+            ml._write_json_atomic(ml.info_path(dest), info)
+        else:
+            ml.ensure_info(key, dest)                    # the size is read from the model itself (needs torch; without it the model is listed with no size)
+        return dest
+
+    def export_model(self, path, dest):
+        """Writes the model `path` out as a file: the .pt as `dest` (made to end in .pt) and its information as the .json beside it.  -> the .pt written."""
+        ml = self.ml
+        if not dest.lower().endswith(".pt"):
+            dest += ".pt"
+        os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+        tmp = dest + ".part"
+        shutil.copyfile(path, tmp)
+        os.replace(tmp, dest)
+        info = ml.read_info(path)
+        if info:
+            ml._write_json_atomic(ml.info_path(dest), info)
+        return dest
+
+    def remove_model(self, path):
+        """Deletes a model of this project (the .pt and its .json)."""
+        for f in (path, self.ml.info_path(path)):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
     def newest_matching(self, key, size, classes):
         """The newest saved model of this size whose classes are exactly `classes` (to continue from), or None."""
         best = None
@@ -986,7 +1034,7 @@ class TrainingProject:
                # distance_only: the detector of the model to continue from is kept as it is, only the distance model is trained
                "distance_only": bool(prev and spec.get("distance") and m.get("distance_only", True)),
                "cfg": spec.get("cfg", "yolo26{size}.yaml"), "fallback": spec.get("fallback", "yolo11{size}.yaml"),
-               "models_key": spec["models_key"], "models_dirs": [self.models_dir, annotator_models_dir()],
+               "models_key": spec["models_key"], "models_dirs": [self.models_dir] + ([annotator_models_dir()] if self.publish_shared else []),
                "trainer": (m.get("name") or "").strip() or me_name or "trainer", "lib_dir": ANNOTATOR_APP}
         with open(os.path.join(run_dir, "job.json"), "w", encoding="utf-8") as f:
             json.dump(job, f, indent=2)

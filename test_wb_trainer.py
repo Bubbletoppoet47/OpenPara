@@ -36,6 +36,7 @@ atexit.register(shutil.rmtree, UD, True)
 atexit.register(shutil.rmtree, DEV, True)
 atexit.register(shutil.rmtree, T, True)
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 MSGS = []
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
@@ -73,6 +74,18 @@ def ok(cond, text):
 
 import annotator_core as ac
 import model_library as ml
+FAKE = os.path.join(T, "fake_train.py")
+open(FAKE, "w").write(f'''import os, sys, time
+sys.path.insert(0, {TRN!r})
+import job_common as jc
+job = jc.load_job()
+print("fake training", job["classes"], job["counts"], flush=True)
+for e in range(2):
+    print("epoch", e, flush=True); time.sleep(0.1)
+best = os.path.join(job["run_dir"], "best.pt"); open(best, "wb").write(b"weights" * 40)
+sys.exit(jc.finish(job, best, {{"epoch": 1, "total_epochs": 2, "map50": 0.6, "map50_95": 0.4}}))
+''')
+ext.add_model_trainer("fake", label="Fake model", script=FAKE, sizes=("n", "s"), default_size="n")
 import gpd_app
 import trainer_core as tc
 import trainer_tab as tt
@@ -271,6 +284,84 @@ ok([x["file"] for x in w.tp.list_models()] == [mname] and any("not where it was"
 wb_trainer.MODEL_LIMIT = 500 * 1024 * 1024
 
 # ============================================================================================================================ the Annotator changes again; the block on its own; delete
+print("--- the window as a block: ribbon, Take from Annotator, a run, export, import, remove")
+from PyQt6.QtWidgets import QToolButton
+
+
+def wait(cond, secs=90):
+    t0 = time.time()
+    while not cond():
+        app.processEvents()
+        time.sleep(0.05)
+        assert time.time() - t0 < secs, "timed out"
+
+
+nA = next(x for x in P.nodes.values() if x.kind == "annotator" and x.title == "Cups")
+ok([w.ribbon.tabText(i) for i in range(w.ribbon.count())] == ["Data", "Model", "Models", "Train", "Setup"], "the window has the Annotator's layout: a ribbon of Data, Model, Models, Train and Setup")
+ok(not w.take_btn.isHidden() and w.save_as_btn.isHidden(), "Take from Annotator is there, Save project as is not (the project is the block's)")
+ok(f"Fed by {nA.label} Cups" in w.foot_lbl.text() and f"{nT.label} Cup trainer" in w.bar_lbl.text(), f"the status bar says where the data comes from ({w.foot_lbl.text()})")
+ok(w.tp.publish_shared is False and not w.btn_stop.isEnabled(), "its models stay in the project (not also in the Annotator's Models folder)")
+w.ribbon.setCurrentIndex(w.ribbon.page_index["Setup"])
+ok(w.stack.currentIndex() == 1, "the Setup tab shows the Python and its packages")
+w.ribbon.setCurrentIndex(w.ribbon.page_index["Train"])
+ok(w.stack.currentIndex() == 0, "the other tabs show the run")
+
+pr = ac.Project(proj)
+pr.editor_id = "tester1"
+pr.import_video(video("second.mp4", 40), stride=3, session_name="setB")
+for k, i in enumerate([i for i in sorted(pr.manifest["images"]) if pr.manifest["images"][i].get("session_id") == "setB"][:4]):
+    pr.set_boxes(i, [(k % 2, 0.5, 0.5, 0.3, 0.3)])
+pr.save_manifest()
+W.sync_editors()
+ok(st(nT.id, "dataset") == wp.REFRESH, "a second set in the Annotator: the Trainer says refresh")
+w.take_btn.click()
+pump(4)
+ok(st(nT.id, "dataset") == wp.OK and len(w.tp.data.manifest["images"]) == 8 and w.sets_table.rowCount() == 2, f"Take from Annotator takes it and the cells say so ({len(w.tp.data.manifest['images'])} pictures)")
+w.sets_table.cellWidget(1, 3).setCurrentIndex(1)
+ok(w.tp.data.session_role("setB") == "val", "(set B is the validation set)")
+w.env = {"python": sys.executable, "torch": "x", "ultralytics": "x", "cuda": False, "gpu": None, "cuda_build": None, "ok": True, "problems": [], "warnings": []}
+w._update_env_view()
+w.type_box.setCurrentIndex(w.type_box.findData("fake"))
+n0 = len(nT.data["models"])
+runs0 = len(os.listdir(w.tp.runs_dir))
+ok(W.update_project()[1] == [] and len(os.listdir(w.tp.runs_dir)) == runs0, "Update Project still starts nothing")
+w.btn_train.click()
+wait(lambda: w.running())
+wait(lambda: w.job is None)
+pump(6)
+ok("in this project" in w.run_label.text(), f"a run from the ribbon finishes ({w.run_label.text()})")
+newm = [m for m in nT.data["models"] if m["file"] == os.path.basename(w.models_list.item(0).data(Qt.ItemDataRole.UserRole))]
+ok(len(nT.data["models"]) == n0 + 1 and len(newm) == 1 and newm[0]["stored"] == "inside", f"the block has the new model at once, inside the project ({len(nT.data['models'])} models)")
+ok(ml.list_versions(tc.annotator_models_dir(), "assist") == [], "and the run did not put one in the Annotator's Models folder")
+ok(st(nT.id, "training") == wp.OK and W.sync_editors() == [], "Training is ok and nothing is left to read back")
+
+w.models_list.setCurrentRow(0)
+newest = w.models_list.item(0).data(Qt.ItemDataRole.UserRole)
+out_pt = os.path.join(T, "exported", "my_model.pt")
+QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out_pt, ""))
+w.export_model()
+info_out = out_pt[:-3] + ".json"
+ok(os.path.isfile(out_pt) and open(out_pt, "rb").read() == open(newest, "rb").read() and os.path.isfile(info_out), "Export writes the model as a .pt and its information as a .json")
+ok(json.load(open(info_out)).get("classes") == ["cup", "bottle"], "with its classes")
+QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([out_pt], ""))
+m0 = len(w.tp.list_models())
+w.import_model()
+ok(len(w.tp.list_models()) == m0 + 1 and w.models_list.count() == m0 + 1, "Import takes the file into the project")
+ok(len(nT.data["models"]) == n0 + 2 and next(m for m in nT.data["models"] if m["file"] == "my_model.pt")["info"].get("classes") == ["cup", "bottle"], "and the block keeps it inside, with its information")
+big2 = os.path.join(T, "big2.pt")
+open(big2, "wb").write(os.urandom(3000))
+wb_trainer.MODEL_LIMIT = 1000
+W.notes = []
+ok(w.import_model_files([big2]) == 1, "a model file can be dropped on the window too")
+mm = next(m for m in nT.data["models"] if m["file"] == "big2.pt")
+ok(mm["stored"] == "linked" and any("limit" in n for n in W.notes), "one over the limit is linked, and said")
+wb_trainer.MODEL_LIMIT = 500 * 1024 * 1024
+for want in ("my_model.pt", "big2.pt"):
+    row = next(r for r in range(w.models_list.count()) if os.path.basename(w.models_list.item(r).data(Qt.ItemDataRole.UserRole)) == want)
+    w.models_list.setCurrentRow(row)
+    w.remove_model()
+ok(not any(m["file"] in ("my_model.pt", "big2.pt") for m in nT.data["models"]) and len(nT.data["models"]) == n0 + 1, "Remove model takes it out of the project, linked ones too")
+
 print("--- changes, export, delete")
 pr = ac.Project(proj)
 img1 = sorted(pr.manifest["images"])[0]
@@ -281,7 +372,7 @@ nA = next(x for x in P.nodes.values() if x.kind == "annotator" and x.title == "C
 ok(st(nT.id, "dataset") == wp.REFRESH, f"a change in the Annotator makes the Trainer say refresh ({st(nT.id, 'dataset')})")
 ok(W.refresh_project()[1] == [] and st(nT.id, "dataset") == wp.OK, "Refresh takes it")
 nbox = sum(len(w.tp.data.get_boxes(i)) for i in w.tp.data.manifest["images"])
-ok(nbox == 5, f"the Trainer's window has the new boxes ({nbox} in all)")
+ok(nbox == 9, f"the Trainer's window has the new boxes ({nbox} in all)")
 adt = wb_nodes.adapter_for("trainer")
 out = os.path.join(T, "out")
 os.makedirs(out)
