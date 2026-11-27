@@ -26,6 +26,10 @@ Not filed here: the *Today* board (the old window with stand-in pictures) and bo
 
 ## Where the build is
 
-`b828756` (ribbon on top and one side panel, 2026-11-25) and `85513fc` (the Analyse tab, 2026-11-25). Differences from the boards are not listed yet (ANN-1).
+`b828756` (ribbon on top and one side panel, 2026-11-25) and `85513fc` (the Analyse tab, 2026-11-25) are on `origin/dev`.
+
+Compared with board 1 on 2026-11-26 and changed (local, not pushed; ANN-1 in `../../ISSUES.md`): box labels as tabs of the class colour with one decimal, the LiDAR caption on a chip, the frames of a set named by their number, the set box (`20261125_184611   3 / 4`), the status line, the bar (`Lab walk · 4 images`), `No AI model loaded`, `Clear & retry AI`, and a project whose frames are all confirmed opens on a frame instead of an empty list and a dark picture area.
+
+Still different from board 1, for Ian to say: the list opens on *To do* (the board has *All* pressed); the picture area is `#1e1e1e`, the board's is a bluer `#20262f`; the LiDAR dots are smaller than the board's.
 
 `source/` holds the board files and the picture they use (`source/_blob/`, referred to as `/_blob/<id>` in the HTML).

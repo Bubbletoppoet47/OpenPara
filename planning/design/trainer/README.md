@@ -1,6 +1,6 @@
 # Trainer, Trained models and Model testing
 
-**Status:** approved by Ian (he called these "the trainer mockups that we already did", 2026-11-26). Partly built; the build does not look like the boards yet (TRN-1, TRN-2 in `../../ISSUES.md`).
+**Status:** approved by Ian (he called these "the trainer mockups that we already did", 2026-11-26). Built to boards 2 and 3 locally, waiting for Ian to look (TRN-1, TRN-2 in `../../ISSUES.md`).
 
 Hosted copy, interactive, on Ian's Claude account: <https://claude.ai/artifact/QYgZwSXJrNatemHwBkNntQ>
 
@@ -30,7 +30,7 @@ The numbers on the boards are example numbers.
 
 Built so far: the window in the Annotator's layout (`88ab86b`), the wires from the Annotator (`01570a9`), Trained models (`b03f554`), Model testing (`d37321a`, `a25d364`), the distance-only model types (`2094ed2` to `8cc6d65`), the Charts tab (`612d624`), models inside the `.opara` (`684ccda`).
 
-Not matching yet: Ian's screenshot of 2026-11-26 shows five tabs (*Data*, *Model*, *Models*, *Train*, *Setup*) where boards 2 and 3 have four. The full comparison is TRN-2; the neural-network options of the PDF are TRN-1.
+Rebuilt to boards 2 and 3 (`6dcdb6a`, `404d675`, local, not pushed): four pages, the kind as ribbon buttons, the layers table and the neurons-per-layer bars, every option of the PDF's network on the Model page, the classic regressors' tuning, and on the Train page the runs, the run now and live charts while a network trains, with Stop that finishes the run that is going first. It differs from the boards in five places (TRN-1 and TRN-2 in `../../ISSUES.md` list them): a *Models made here* list on the Train page, Start/Stop on both pages, the *Shape* read-out (`32 x 4` where the board says `8 : 1`), five rows that the PDF asks for and the board does not show, and a Log tab beside the live charts.
 
 Spec behind the Model tab and the Train tab: `../spec/Distance_Model_Comparison_Handoff.pdf` (the model families and the network ladder in section 7, what the Trainer must do in section 9).
 
