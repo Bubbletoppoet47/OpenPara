@@ -53,10 +53,11 @@ Areas: ANN Annotator, TRN Trainer, WB Workbench, DRW Drawings, VIS Visualize, CP
 
 ### Open
 
-- **WB-1** STEP and STL files cannot be dropped into the Workbench. Reported by Ian, 2026-11-26: he wants to drag a complete STEP file, or an STL file, from the file explorer onto the Workbench and be able to work with it. *Decided with Ian, 2026-11-26:* a STEP file with several solids asks each time: one Assembly block, one Part block per solid, or one Part with all the solids. An STL becomes a mesh body, with no limit on the number of triangles (raw STL files can be very complex): it can be meshed, analysed, drawn and visualised, but not edited with features. Today a drop is read by `wb_import.what_is` and takes only `.gpd`, `.gpa`, `.opara`, an analysis folder and the files of the tools; anything else says "not a kind of file the workbench can import". The Part window already reads STEP (`exchange.read_step`, `exchange_dialog.run_import`); nothing reads an STL into a part (`shared/solid.tet_mesh` can fill a surface mesh with tetrahedra; `shared/solid.faceted_solid` makes an exact solid but is slow for a large mesh, so it is not used). *Fixed when:* a `.step`, `.stp` and `.stl` file dropped on the Workbench becomes a block (STEP with the question above), it can be wired into an analysis, a drawing or a Visualize node, and a test drops a small file of each.
+*(nothing open)*
 
 ### Done
 
+- 2026-11-26 `5df8128` (local, not pushed) **WB-1** A STEP (`.step`, `.stp`) or STL file dropped on the Workbench, or taken by Import, becomes a block. STEP with several solids asks each time: one Assembly block, one Part block per solid, or one Part block with all the solids. An STL is a mesh body (a closed surface, repaired first; the triangles are kept, and the solid with a flat face for every triangle is made from them, with no limit). It wires into an analysis and a drawing. *Not done:* wiring into a Visualize node (it takes no wire until VIS-1); making the solid of a large mesh is slow (about 20 s for 32 000 triangles), and the mesh is not meshed straight from its triangles by the analyses (they use the solid). *Test:* `test_wb_step_stl.py`.
 - 2026-11-26 `d0aab72` A Trainer block's Setup cell asks for what its model type needs.
 - 2026-11-26 `a25d364` Model testing takes distance-only models, with boxes from a detector, and compares runs.
 - 2026-11-26 `684ccda` Distance-only models live inside the `.opara` and in the Trained models list.
@@ -70,12 +71,11 @@ Areas: ANN Annotator, TRN Trainer, WB Workbench, DRW Drawings, VIS Visualize, CP
 
 ### Open
 
-- **DRW-1** A model view cannot be turned in its own plane. Reported by Ian, 2026-11-26. *Decided with Ian, 2026-11-26:* each view offers **Turn left 90°** and **Turn right 90°**, and it acts like a piece of paper being turned: the orientation (Isometric, Front ...) does not change, only how the picture sits on the sheet, and it can be pressed again and again. Only that view turns (see DRW-2). Dimensions and notes fixed to the view turn with it. Today a model view takes one of nine fixed orientations (`P.ORIENTATIONS`) set in the View properties box (`v_orient`, `dr_panels.py`; `Drawing.set_orient`, `dr_model.py`) and has no turn of its own. *Fixed when:* a model view has the two buttons, four presses one way give the view back as it was, a left and a right press cancel, what is fixed to the view turns with it, the turn is kept in the drawing file, and a test covers it.
-- **DRW-2** Projected views stay linked to the view they were made from. Reported by Ian, 2026-11-26. *Decided with Ian, 2026-11-26:* a projected view is made from the original's direction, and after that it is a view of its own, like a model view: its own orientation, scale, style, position and turn, free to move. Changing or turning the original changes nothing else; all views still redraw when the model itself changes. Drawings that are already saved open with their projected views made independent too. Today a projected view keeps the direction its side means, takes its parent's scale, moves only along its axis, and moves and redraws with its parent (`add_projected`, `reproject`, `move_view`, `dr_model.py`). *Fixed when:* a projected view can be moved anywhere, given another orientation, scale or style, and turned, without anything else changing; an old drawing opens with its views where they were; a test covers each.
+*(nothing open)*
 
 ### Done
 
-*(nothing recorded yet)*
+- 2026-11-26 `5592b67` (local, not pushed) **DRW-1** and **DRW-2** Every view has **Turn left 90°** / **Turn right 90°** (ribbon and the view's details): the picture turns on the sheet like a sheet of paper, the orientation label stays, four presses give the original back, left and right cancel, the dimensions, marks, balloons and note leaders of the view turn with it, only that view turns, the turn is kept in the file and in undo. A projected view is a model view of its own once it is put down (own orientation, scale, style, position, turn; nothing else moves with it); a model that changes still draws every view again; an old drawing opens with its projected views free, where they were. *Tests:* `test_dr_turn.py` (new), `test_dr_model.py`, `test_dr_annot.py`, `test_dr_tab.py`, `test_dr_view_panels.py`. *Mine:* choosing an orientation (or the one the view already has) puts the view upright again; a view projected from an Isometric view is called *Custom*.
 
 ---
 
@@ -109,10 +109,10 @@ Areas: ANN Annotator, TRN Trainer, WB Workbench, DRW Drawings, VIS Visualize, CP
 - **CPL-2** *(limit)* 3D analyses are not shown inside the Coupled Physics window; they keep their own tabs.
 - **CPL-3** *(limit)* The heat-flux tracers of a 3D part are bent with a displacement blended from the nearest points of the surface, not a solved displacement of the inside. It is for the picture only. The part is drawn faded while the tracers are on.
 - **CPL-4** The Viz tab has only been tried in a headless Qt. Nothing of it (the 2D heat picture, the 3D picture, the tracers) has been seen on a real screen or on Windows. Design: `design/combined-physics/`. *Fixed when:* Ian has looked at the Viz tab of the example project on his computer and said what is off.
-- **CPL-5** The Viz tab turns the part by itself in the second half of an animation. Reported by Ian, 2026-11-26: he does not like it and wants the animation to stay in the view that is set. It is the box "Turn the part in the second half of the animation" (ticked by default; `turn_on`, `camera_at`, `V3.turn_at` in `coupled_viz.py`). *Fixed when:* the camera is the same for every frame of an animation and of a saved animation unless the person changes the view; a test checks it. (Full rotations and a picked view are wanted in the Visualize node: VIS-1.)
 
 ### Done
 
+- 2026-11-26 `228a685` (local, not pushed) **CPL-5** The Viz tab no longer turns the part by itself: the box, `turn_on`, `camera_at` and `turn_at` are gone, and the camera is the same for every frame of the animation, of a saved animation and of a saved picture (the view the person set). Tests: `test_coupled_viz3d.py`, `test_coupled_viz3d_core.py`. Full rotations and a picked view come with the Visualize node (VIS-1).
 - 2026-11-26 `970764c` Viz: heat-flux tracers for a 2D heat and stress solve with no flow (before it was not drawn), and inside a 3D part. Tests: `test_coupled_viz_heat.py`, `test_coupled_viz3d_tracers.py`.
 - 2026-11 `e9a58d7` Viz draws a 3D heat and stress solve (software z-buffer, no OpenGL).
 
