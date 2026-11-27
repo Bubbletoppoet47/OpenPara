@@ -389,3 +389,63 @@ def table_rows(spec):
                 row += [lo, hi]
             rows.append(row)
     return head, rows
+
+
+# ------------------------------------------------------------------------------------------------------------------ the run in progress (the Train page's live charts)
+# train_nn_job.py writes live.json into the run folder while it trains; its "rows" are the epochs of the run that is training now (the columns of curve.csv).
+def _live_pts(rows, col, scale, label, ylog=False):
+    return [(float(r["epoch"]), float(r[col]) * scale, f"{label}, epoch {int(r['epoch'])}: {float(r[col]) * scale:.4g}") for r in rows
+            if col in r and finite(r[col]) and (not ylog or float(r[col]) > 0)]
+
+
+def _live_span(spec, rows, epochs):
+    """The epochs still to come, shaded; it also makes the axis run to the last epoch."""
+    last = int(rows[-1]["epoch"]) if rows else 0
+    if epochs and epochs > last:
+        spec["spans"].append((float(last), float(epochs), ""))
+
+
+def live_error(rows, epochs, target_err=0.075):
+    """Median relative error of the run that is training: validation and training, the target as a dashed line."""
+    spec = _spec("Median relative error", "epoch", "error (%)", y0=True, xint=True)
+    if not rows:
+        spec["empty"] = "Waiting for the first epoch ..."
+        return spec
+    spec["series"].append(_series("Validation", 1, points=_live_pts(rows, "val_median_rel_err", 100.0, "validation")))
+    spec["series"].append(_series("Training", 2, points=_live_pts(rows, "train_median_rel_err", 100.0, "training")))
+    spec["hlines"].append((target_err * 100.0, f"{target_err * 100:g} % target"))
+    _live_span(spec, rows, epochs)
+    return spec
+
+
+def live_grad(rows, epochs, n_hidden):
+    """The gradient norm of the first and of the last hidden layer (the vanishing gradient shows as a gap between them)."""
+    spec = _spec("Gradient norm per layer", "epoch", "gradient norm", ylog=True, xint=True)
+    if not rows:
+        spec["empty"] = "Waiting for the first epoch ..."
+        return spec
+    layers = [1] if n_hidden <= 1 else [1, n_hidden]
+    for i, l in enumerate(layers):
+        spec["series"].append(_series(f"Hidden {l}", i * 2, dash=bool(i), points=_live_pts(rows, f"grad_norm_{l}", 1.0, f"hidden layer {l}", ylog=True)))
+    if not any(sr["points"] for sr in spec["series"]):
+        spec["empty"] = "No gradient numbers yet."
+    _live_span(spec, rows, epochs)
+    return spec
+
+
+def live_units(rows, epochs, n_hidden):
+    """Saturated and dead units, the mean over the hidden layers."""
+    spec = _spec("Saturated and dead units", "epoch", "units (%)", y0=True, xint=True)
+    if not rows:
+        spec["empty"] = "Waiting for the first epoch ..."
+        return spec
+    for name, key, slot, dash in (("Saturated", "saturation", 3, False), ("Dead", "dead", 5, True)):
+        pts = []
+        for r in rows:
+            v = [float(r[f"{key}_{l}"]) for l in range(1, n_hidden + 1) if f"{key}_{l}" in r and finite(r[f"{key}_{l}"])]
+            if v:
+                m = sum(v) / len(v) * 100.0
+                pts.append((float(r["epoch"]), m, f"{name.lower()} units, epoch {int(r['epoch'])}: {m:.3g} %"))
+        spec["series"].append(_series(name, slot, dash=dash, points=pts))
+    _live_span(spec, rows, epochs)
+    return spec

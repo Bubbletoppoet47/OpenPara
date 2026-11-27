@@ -189,4 +189,41 @@ ok("the toy: the roots predict the measured steps to settle within 40 % where th
 assert cd.figure("sweep", None)["empty"] and cd.figure("learning", cd.RunData(os.path.join(TMP, "nothing")))["empty"]
 ok("no run: the chart says so in a sentence")
 
+# ---------------------------------------------------------------- the live charts (the run that is training)
+def fake_rows(n, n_hidden=3, ylog_bad=False):
+    out = []
+    for e in range(1, n + 1):
+        r = {"epoch": e, "val_median_rel_err": 0.5 / e + 0.05, "train_median_rel_err": 0.4 / e + 0.03, "train_loss": 1.0 / e, "val_loss": 1.2 / e}
+        for l in range(1, n_hidden + 1):
+            r[f"grad_norm_{l}"] = (0.0 if ylog_bad and e == 2 else 10.0 ** (-l) / e)
+            r[f"saturation_{l}"], r[f"dead_{l}"] = 0.1 * l, 0.02 * l
+        out.append(r)
+    return out
+
+
+lr_rows = fake_rows(12)
+le = cd.live_error(lr_rows, 40, 0.075)
+assert [s["name"] for s in le["series"]] == ["Validation", "Training"] and all(len(s["points"]) == 12 for s in le["series"]) and le["y0"] and le["xint"]
+assert abs(le["series"][0]["points"][0][1] - 55.0) < 1e-9 and abs(le["hlines"][0][0] - 7.5) < 1e-9 and "7.5" in le["hlines"][0][1]
+assert le["spans"] == [(12.0, 40.0, "")], "the epochs still to come are shaded and the axis runs to the last epoch"
+assert cd.live_error(fake_rows(40), 40)["spans"] == [] and cd.live_error(lr_rows, None)["spans"] == []
+assert cd.live_error([], 40)["empty"] and not cd.live_error(lr_rows, 40)["empty"]
+ok("live error chart: validation and training error in percent, the target as a line, the epochs still to come shaded; nothing yet says so in a sentence")
+
+lg = cd.live_grad(lr_rows, 40, 3)
+assert lg["ylog"] and [s["name"] for s in lg["series"]] == ["Hidden 1", "Hidden 3"] and lg["series"][1]["dash"] and not lg["series"][0]["dash"]
+assert lg["series"][0]["points"][0][1] > lg["series"][1]["points"][0][1], "the gradient of the last hidden layer is the smaller one here"
+assert [s["name"] for s in cd.live_grad(lr_rows, 40, 1)["series"]] == ["Hidden 1"], "one hidden layer: one line"
+holes = cd.live_grad(fake_rows(5, ylog_bad=True), 40, 3)
+assert all(len(s["points"]) == 4 for s in holes["series"]), "a zero cannot be drawn on a log axis: that epoch is left out, the rest is kept"
+assert cd.live_grad([], 40, 3)["empty"] and cd.live_grad([{"epoch": 1}], 40, 3)["empty"] == "No gradient numbers yet."
+ok("live gradient chart: first and last hidden layer on a log axis, zeros left out, one line for a network with one hidden layer")
+
+lu = cd.live_units(lr_rows, 40, 3)
+assert [s["name"] for s in lu["series"]] == ["Saturated", "Dead"] and lu["series"][1]["dash"]
+assert abs(lu["series"][0]["points"][0][1] - 20.0) < 1e-9 and abs(lu["series"][1]["points"][0][1] - 4.0) < 1e-9, "the mean over the hidden layers, in percent"
+assert cd.live_units([], 40, 3)["empty"] and lu["spans"] == [(12.0, 40.0, "")]
+assert all(len(s["points"]) == 12 for s in lu["series"])
+ok("live units chart: saturated and dead units as the mean over the hidden layers, in percent")
+
 print("chart data ok", flush=True)

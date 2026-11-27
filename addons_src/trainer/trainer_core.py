@@ -1209,6 +1209,16 @@ class Job:
         except subprocess.TimeoutExpired:
             self.proc.kill()
 
+    STOP_AFTER_FILE = "stop_after_run"                         # the network job looks for this between its runs
+
+    def stop_after_run(self):
+        """Asks a distance-network job to finish the run that is going, start no other, and make its model from the runs that finished."""
+        try:
+            with open(os.path.join(self.run_dir, self.STOP_AFTER_FILE), "w", encoding="utf-8") as f:
+                f.write("stop")
+        except OSError:
+            self.stop()
+
     def result(self):
         try:
             with open(os.path.join(self.run_dir, "result.json"), encoding="utf-8") as f:

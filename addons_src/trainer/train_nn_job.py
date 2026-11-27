@@ -144,6 +144,68 @@ def fmt(v):
     return "" if v is None else f"{v:.6g}" if isinstance(v, float) else v
 
 
+LIVE_COLS = ("epoch", "val_median_rel_err", "train_median_rel_err", "train_loss", "val_loss")
+
+
+class Live:
+    """live.json in the run folder: the list of runs and the curves of the one that is training, for the Trainer window to draw while it goes.  Written whole (a temporary
+    file, then renamed) at most a few times a second."""
+
+    def __init__(self, run, plan, epochs, target_err):
+        self.path = os.path.join(run, "live.json")
+        self.runs = plan
+        self.epochs, self.target = int(epochs), float(target_err)
+        self.rows, self.n_hidden = [], 1
+        self._t = 0.0
+
+    def begin(self, i, n_hidden):
+        self.rows, self.n_hidden = [], int(n_hidden)
+        self.runs[i].update(status="running", epoch=0)
+        self.write(force=True)
+
+    def epoch(self, i, row, rows):
+        self.runs[i].update(epoch=int(row["epoch"]), val_err=_num(row.get("val_median_rel_err")))
+        self.rows = rows
+        self.write()
+
+    def end(self, i, status, epochs_run=None, val_err=None):
+        self.runs[i].update(status=status, val_err=_num(val_err), epoch=int(epochs_run if epochs_run is not None else self.runs[i].get("epoch") or 0))
+        self.write(force=True)
+
+    def skip_rest(self):
+        for r in self.runs:
+            if r["status"] == "queued":
+                r["status"] = "skipped"
+        self.rows = []
+        self.write(force=True)
+
+    def write(self, force=False):
+        now = time.time()
+        if not force and now - self._t < 0.4:
+            return
+        self._t = now
+        keep = [c for c in self.rows[-1]] if self.rows else []
+        cols = [c for c in keep if c in LIVE_COLS or c.startswith(("grad_norm_", "saturation_", "dead_"))]
+        rows = [{c: _num(r.get(c)) for c in cols} for r in self.rows]
+        data = {"version": 1, "epochs": self.epochs, "target_err": self.target, "n_hidden": self.n_hidden, "runs": self.runs, "current": {"rows": rows}}
+        tmp = self.path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, self.path)
+        except OSError:
+            pass                                                         # (the window only draws less: training goes on)
+
+
+def _num(v):
+    """A float for the JSON file (None for a number that is not one)."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
 def main():
     job = jc.load_job()
     P = dict(DEFAULTS, **(job.get("params") or {}))
@@ -187,20 +249,33 @@ def main():
     records, failed = [], {}
     done = 0
     t_start = time.time()
+    plan = [{"tag": f"lr{lr:g}_s{s}", "rung": rung_key(rung), "lr": float(lr), "seed": s, "status": "queued", "epoch": 0, "epochs": epochs, "val_err": None}
+            for rung in rungs for lr in lr_lists[rung] for s in range(seed0, seed0 + n_seeds)]
+    live = Live(run, plan, epochs, float(P["target_err"]))
+    live.write(force=True)
+    stop_flag = os.path.join(run, "stop_after_run")                      # the window asks for it: finish the run that is going and start no other
+    halted = False
     for rung in rungs:
         cfg, key = cfgs[rung], rung_key(rung)
         print(f"[{key}] {cfg['name']}: {cfg['change']}", flush=True)
         for lr in lr_lists[rung]:
             for s in range(seed0, seed0 + n_seeds):
+                if os.path.exists(stop_flag):
+                    halted = True
+                    break
                 done += 1
                 tag = f"lr{lr:g}_s{s}"
+                slot = done - 1
+                live.begin(slot, len(cfg["hidden"]))
                 try:
                     every = int(P["every"] or max(1, epochs // 10))
-                    r = nn.fit(cfg, Xtr, train.dist, Xva, val.dist, epochs=epochs, seed=s, lr=lr, log=(print if total == 1 else None), target_err=float(P["target_err"]), every=every)
+                    r = nn.fit(cfg, Xtr, train.dist, Xva, val.dist, epochs=epochs, seed=s, lr=lr, log=(print if total == 1 else None), target_err=float(P["target_err"]), every=every,
+                               on_epoch=lambda row, rows, i=slot: live.epoch(i, row, rows))
                 except Exception as e:  # noqa: BLE001
                     traceback.print_exc()
                     failed[f"{key} {tag}"] = f"{type(e).__name__}: {e}"
                     print(f"  ({done}/{total}) {tag}: failed: {failed[f'{key} {tag}']}", flush=True)
+                    live.end(slot, "failed")
                     continue
                 curve = os.path.join("runs", key, tag, "curve.csv")
                 write_curve(os.path.join(run, curve), r["rows"])
@@ -216,8 +291,16 @@ def main():
                     print(f"  ({done}/{total}) {tag}: {r['epochs_run']} epochs, validation median error {pct(rec['median_rel_err'])}, within 20%: {pct(rec['within20'])}"
                           + (f", reached {P['target_err'] * 100:g}% at epoch {r['epochs_to_target']}" if r["epochs_to_target"] else "") + f"   [{r['seconds']:.1f} s]", flush=True)
                 records.append(rec)
+                live.end(slot, "diverged" if r["diverged"] else "done", r["epochs_run"], None if r["diverged"] else rec["median_rel_err"])
+            if halted:
+                break
+        if halted:
+            break
+    if halted:
+        live.skip_rest()
+        print(f"\nStopped after the run that was going: {len(records)} of {total} runs finished. The model is made from those.", flush=True)
     if not records:
-        return fail(job, "No network could be trained: " + "; ".join(f"{k}: {v}" for k, v in failed.items()))
+        return fail(job, ("Stopped before any run had finished: no model was made." if halted else "No network could be trained: " + "; ".join(f"{k}: {v}" for k, v in failed.items())))
 
     # ------------------------------------------------------------ the learning rate and the run of each rung
     os.makedirs(os.path.join(run, "models"), exist_ok=True)
@@ -348,7 +431,7 @@ def main():
                                                                                                        "dist_within_20": o["res"]["metrics"]["within20"],
                                                                                                        "dist_mae_m": o["res"]["metrics"]["mae_m"]}} for o in made.values()],
                     runs=len(records), diverged=n_div, failed=failed, paired=paired, selection=SELECTION_NOTE, formula=ref_m,
-                    warning=("; ".join(f"{k}: {v}" for k, v in failed.items()) or None))
+                    warning=("; ".join(f"{k}: {v}" for k, v in failed.items()) or None), stopped_early=(len(records) if halted else None), planned=total)
     return 0
 
 

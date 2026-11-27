@@ -416,12 +416,13 @@ def median_rel(pred, true):
     return float(np.median(np.abs(pred - true) / true))
 
 
-def fit(cfg, Xtr, dtr, Xva, dva, *, epochs=1000, seed=0, lr=None, log=None, target_err=0.075, every=1, stop=None):
+def fit(cfg, Xtr, dtr, Xva, dva, *, epochs=1000, seed=0, lr=None, log=None, target_err=0.075, every=1, stop=None, on_epoch=None):
     """Trains a network of the settings `cfg` (rung_config) on standardised inputs Xtr (n, n_in) with labelled distances dtr (metres), watching the validation boxes Xva, dva.
     -> {"net", "target", "rows" (one dict per epoch), "diverged", "diverged_epoch", "best_epoch", "final": {...}, "epochs_run", "epochs_to_target", "seconds"}.
     Each row has: epoch, train_loss, val_loss, val_median_rel_err, val_within20, lr, momentum, epoch_seconds, and per layer l: grad_norm_l, update_ratio_l, weight_norm_l (and
     saturation_l, dead_l for the hidden ones) - the quantities of the specification's table.  A run is `diverged` when its loss is not finite or is above 10 x its first value: it
-    stops there and is counted, not dropped.  With early stopping the weights of the best epoch (by validation median error) are kept."""
+    stops there and is counted, not dropped.  With early stopping the weights of the best epoch (by validation median error) are kept.
+    `on_epoch(row, rows)`, when given, is called after every epoch (the Trainer window draws the run while it trains)."""
     lr = float(lr if lr is not None else cfg.get("lr") or default_lr(cfg))
     Xtr, Xva = np.asarray(Xtr, float), np.asarray(Xva, float)
     target = Target.fit(cfg["target"], dtr)
@@ -480,6 +481,7 @@ def fit(cfg, Xtr, dtr, Xva, dva, *, epochs=1000, seed=0, lr=None, log=None, targ
         row = {"epoch": ep, "train_loss": train_loss, "val_loss": vl, "val_median_rel_err": err, "val_within20": float(np.mean(np.abs(pm - dva) / dva <= 0.2)), "lr": lr,
                "momentum": cfg["momentum"]}
         _y, cache_all = net.forward(Xtr, train=False)
+        row["train_median_rel_err"] = median_rel(target.decode(_y), dtr)
         sat, dead = net.unit_stats(cache_all)
         for l in range(net.L):
             row[f"grad_norm_{l + 1}"] = gsum[l] / max(nb, 1)
@@ -490,6 +492,8 @@ def fit(cfg, Xtr, dtr, Xva, dva, *, epochs=1000, seed=0, lr=None, log=None, targ
             row[f"dead_{l + 1}"] = dead[l]
         row["epoch_seconds"] = time.time() - t0
         rows.append(row)
+        if on_epoch is not None:
+            on_epoch(row, rows)
         if reached is None and err <= target_err:
             reached = ep
         if err < best["err"]:

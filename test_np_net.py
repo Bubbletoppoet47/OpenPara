@@ -283,6 +283,14 @@ sig = nn.fit(nn.rung_config(0, hidden=(16, 8)), Xa, D[:500], Xb, D[500:], epochs
 assert 0.0 <= sig["rows"][-1]["saturation_1"] <= 1.0 and sig["rows"][-1]["dead_1"] == 0.0
 ok("saturation is logged for tanh and sigmoid units, dead units for ReLU (and not the other way round)")
 
+seen = []
+watched = nn.fit(nn.rung_config(6, hidden=(16, 8)), Xa, D[:500], Xb, D[500:], epochs=8, seed=2, lr=0.003, on_epoch=lambda row, rows: seen.append((row["epoch"], len(rows))))
+assert seen == [(i, i) for i in range(1, 9)], "on_epoch is called after every epoch, with the row and the rows so far"
+assert [r["train_loss"] for r in watched["rows"]] == [r["train_loss"] for r in rowsx[:8]], "watching a run does not change it"
+assert all("train_median_rel_err" in r and 0 < r["train_median_rel_err"] < 5 for r in rowsx), "the error on the training boxes is logged beside the validation error"
+assert rowsx[-1]["train_median_rel_err"] < 0.10, rowsx[-1]["train_median_rel_err"]
+ok("on_epoch is called after each epoch without changing the run, and every row has the median error on the training boxes (the live chart draws both)")
+
 same = nn.fit(nn.rung_config(6, hidden=(16, 8)), Xa, D[:500], Xb, D[500:], epochs=8, seed=2, lr=0.003)
 assert [r["train_loss"] for r in same["rows"]] == [r["train_loss"] for r in rowsx[:8]], "the same seed gives the same curve"
 other = nn.fit(nn.rung_config(6, hidden=(16, 8)), Xa, D[:500], Xb, D[500:], epochs=8, seed=3, lr=0.003)
