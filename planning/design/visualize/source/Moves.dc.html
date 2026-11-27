@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>What moves out of the simulation windows</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+
+body{margin:0}
+.win{position:relative;box-sizing:border-box;background:#efefef;color:#2b2b2b;display:flex;flex-direction:column;overflow:hidden;font-family:Inter,'Segoe UI',system-ui,sans-serif;font-size:12px;border:1px solid #bcbcbc}
+.ribbon{height:78px;flex:none;display:flex;align-items:center;padding:0 6px;border-bottom:1px solid #bcbcbc}
+.grp{display:flex;align-items:center;gap:1px;padding:0 5px;border-right:1px solid #9f9f9f;height:66px}
+.rb{width:66px;height:68px;box-sizing:border-box;border:1px solid transparent;border-radius:3px;background:transparent;display:flex;flex-direction:column;align-items:center;gap:3px;padding:5px 2px 0;font:11px/13px Inter,'Segoe UI',sans-serif;color:#1c1c1c;text-align:center}
+.rb.on{background:#cfe3fb;border-color:#6aa0e0}
+.rb.dim{opacity:.45}
+.ic{width:30px;height:30px;flex:none;fill:none;stroke:#10204d;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.tabs{height:27px;flex:none;display:flex;align-items:flex-end;padding:0 4px;gap:1px;border-bottom:1px solid #bcbcbc}
+.tab{padding:4px 15px;background:#e2e2e2;border:1px solid #bcbcbc;border-bottom:0;color:#1f1f1f;font:12px Inter,'Segoe UI',sans-serif}
+.tab.on{background:#fff;font-weight:600;padding-bottom:5px}
+.hd{font-size:11px;font-weight:600;letter-spacing:1px;color:#4a5872;text-transform:uppercase}
+.mu{color:#5a6577;font-size:11.5px}
+.card{background:#fff;border:1px solid #ababab;padding:10px 12px;box-sizing:border-box}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:28px;font-size:12.5px;color:#1f2a3c}
+.fld{border:1px solid #bdbdbd;border-radius:3px;background:#fff;padding:3px 8px;font-size:12.5px;min-width:60px;text-align:right;box-sizing:border-box;color:#1f2a3c}
+.fld.off{background:#f1f1f1;color:#9aa3b2;border-color:#d4d4d4}
+.seg{display:flex}
+.seg span{padding:4px 11px;border:1px solid #bdbdbd;border-left-width:0;background:#fff;font-size:12px;color:#1f2a3c}
+.seg span:first-child{border-left-width:1px;border-radius:3px 0 0 3px}
+.seg span:last-child{border-radius:0 3px 3px 0}
+.seg span.on{background:#cfe3fb;border-color:#6aa0e0;color:#10204d;font-weight:600}
+.btn{border:1px solid #9aa4b5;border-radius:3px;background:#fbfbfb;padding:4px 12px;font:12.5px Inter,'Segoe UI',sans-serif;color:#1f2a3c;display:inline-block}
+.btn.pri{background:#1f3a6e;border-color:#1f3a6e;color:#fff;font-weight:600}
+.chip{color:#fff;font-weight:600;font-size:11px;padding:2px 10px;border-radius:10px;display:inline-block}
+.tag{font-size:11px;font-weight:600;padding:1px 8px;border-radius:9px;display:inline-block;white-space:nowrap}
+
+</style>
+</helmet>
+<div style="position:relative;width:1500px;height:820px;background:#fff;font-family:Inter,system-ui,sans-serif;font-size:13px;line-height:1.35;color:#182441;overflow:hidden">
+<div style="position:absolute;left:40px;top:22px;width:1420px;height:54px;"><div style="font-size:19px;font-weight:700">What moves out of the simulation windows</div><div style="color:#55637f;margin-top:2px">Every simulation window keeps its basic view, its field choice and the Animate preview (Frames, Duration, Playback, Play). Only the files it writes move to the Visualize node.</div></div>
+<div style="position:absolute;left:40px;top:94px;width:450px;height:20px;"><b>Today, in each simulation window</b></div>
+<div style="position:absolute;left:560px;top:94px;width:450px;height:20px;"><b>After, in each simulation window</b></div>
+<div style="position:absolute;left:1090px;top:94px;width:370px;height:20px;"><b>In the Visualize node (result view)</b></div>
+<div style="position:absolute;left:40px;top:120px;width:450px;height:200px;"><div class="card" style="width:450px;height:200px;font-family:Inter,sans-serif;font-size:12.5px;color:#1f2a3c"><div class="hd" style="margin-bottom:8px">Animate</div><div class="row"><span>Frames</span><span class="fld">40</span></div><div class="row"><span>Duration (s)</span><span class="fld">4.0</span></div><div class="row"><span>Playback</span><span class="fld" style="min-width:92px;text-align:left">Loop &#9662;</span></div><div style="display:flex;gap:8px;margin-top:8px;align-items:center"><span class="btn">&#9654; Play</span><span class="btn">Export animation...</span></div></div></div>
+<div style="position:absolute;left:560px;top:120px;width:450px;height:200px;"><div class="card" style="width:450px;height:200px;font-family:Inter,sans-serif;font-size:12.5px;color:#1f2a3c"><div class="hd" style="margin-bottom:8px">Animate</div><div class="row"><span>Frames</span><span class="fld">40</span></div><div class="row"><span>Duration (s)</span><span class="fld">4.0</span></div><div class="row"><span>Playback</span><span class="fld" style="min-width:92px;text-align:left">Loop &#9662;</span></div><div style="display:flex;gap:8px;margin-top:8px;align-items:center"><span class="btn">&#9654; Play</span><span class="btn" style="border-style:dashed;color:#9aa3b2;text-decoration:line-through">Export animation...</span><span class="tag" style="background:#fff;border:1px solid #c27a00;color:#c27a00">Moved to Visualize</span></div></div></div>
+<div style="position:absolute;left:494px;top:190px;width:62px;height:40px;"><div style="text-align:center;font-size:11.5px;color:#55637f;line-height:16px">removed</div></div><svg role="img" aria-label="Arrow: removed" width="62" height="14" viewBox="0 0 62 14" style="position:absolute;left:494px;top:210px;overflow:visible"><defs><marker id="ma1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M1 1 L9 5 L1 9 Z" fill="#1f3a6e"/></marker></defs><path d="M0 7 H60" stroke="#1f3a6e" stroke-width="2" fill="none" marker-end="url(#ma1)"/></svg>
+<div style="position:absolute;left:1014px;top:190px;width:72px;height:40px;"><div style="text-align:center;font-size:11.5px;color:#55637f;line-height:16px">moves</div></div><svg role="img" aria-label="Arrow: moves" width="72" height="14" viewBox="0 0 72 14" style="position:absolute;left:1014px;top:210px;overflow:visible"><defs><marker id="ma2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M1 1 L9 5 L1 9 Z" fill="#1f3a6e"/></marker></defs><path d="M0 7 H70" stroke="#1f3a6e" stroke-width="2" fill="none" marker-end="url(#ma2)"/></svg>
+<div style="position:absolute;left:1090px;top:120px;width:370px;height:192px;box-sizing:border-box;background:#fff;border:1px solid #8793ad;border-radius:3px;overflow:hidden"><div style="height:22px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;padding-right:8px;background:#cbd3e0;border-bottom:1px solid #8793ad"><span style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;background:#2a7a4f;color:#fff;font-weight:700;font-size:12px">C</span><span style="font-size:11px;font-weight:600;color:#2b3550">Component Tools</span></div><div style="height:34px;box-sizing:border-box;display:flex;align-items:center;gap:8px;"><span style="width:26px;text-align:center;color:#55637f;font-size:11px;flex:none">1</span><svg aria-hidden="true" width="18" height="18" viewBox="0 0 18 18" style="flex:none;fill:none;stroke:#1f3a6e;stroke-width:1.5;"><path d="M1.5 9 C4 4.5 14 4.5 16.5 9 C14 13.5 4 13.5 1.5 9 Z"/><circle cx="9" cy="9" r="2.4"/></svg><span style="font-weight:700;white-space:nowrap">Visualize</span><span style="margin-left:auto;margin-right:10px;font-size:10.5px;font-weight:600;color:#2b3550;background:#e9edf5;border:1px solid #8793ad;border-radius:9px;padding:0 8px">Result view</span></div><div style="height:34px;box-sizing:border-box;display:flex;align-items:center;gap:8px;border-top:1px solid #dde2ec;"><span style="width:26px;text-align:center;color:#55637f;font-size:11px;flex:none">2</span><svg aria-hidden="true" width="18" height="18" viewBox="0 0 18 18" style="flex:none;fill:none;stroke:#1f3a6e;stroke-width:1.5;"><path d="M1.5 9 H9 M6.5 6 L9.5 9 L6.5 12"/><rect x="10" y="3" width="6" height="12" rx="1"/></svg><span style="white-space:nowrap">Input</span><span style="margin-left:auto;font-size:11px;color:#55637f;white-space:nowrap">Bracket in air</span><span style="margin-left:8px;margin-right:10px;display:flex"><svg aria-label="Up to date" role="img" width="16" height="16" viewBox="0 0 16 16" style="flex:none;fill:none;stroke:#2a7a4f;stroke-width:2"><path d="M3 8.5 L6.5 12 L13 4.5"/></svg></span></div><div style="height:34px;box-sizing:border-box;display:flex;align-items:center;gap:8px;border-top:1px solid #dde2ec;"><span style="width:26px;text-align:center;color:#55637f;font-size:11px;flex:none">3</span><svg aria-hidden="true" width="18" height="18" viewBox="0 0 18 18" style="flex:none;fill:none;stroke:#1f3a6e;stroke-width:1.5;"><path d="M3 5 H15 M3 9 H15 M3 13 H15"/><circle cx="6" cy="5" r="1.6" fill="#fff"/><circle cx="11" cy="9" r="1.6" fill="#fff"/><circle cx="7" cy="13" r="1.6" fill="#fff"/></svg><span style="white-space:nowrap">Setup</span><span style="margin-left:auto;font-size:11px;color:#55637f;white-space:nowrap">1 turn, 8 s</span><span style="margin-left:8px;margin-right:10px;display:flex"><svg aria-label="Up to date" role="img" width="16" height="16" viewBox="0 0 16 16" style="flex:none;fill:none;stroke:#2a7a4f;stroke-width:2"><path d="M3 8.5 L6.5 12 L13 4.5"/></svg></span></div><div style="height:34px;box-sizing:border-box;display:flex;align-items:center;gap:8px;border-top:1px solid #dde2ec;"><span style="width:26px;text-align:center;color:#55637f;font-size:11px;flex:none">4</span><svg aria-hidden="true" width="18" height="18" viewBox="0 0 18 18" style="flex:none;fill:none;stroke:#1f3a6e;stroke-width:1.5;"><ellipse cx="9" cy="5" rx="6" ry="2.5"/><path d="M3 5 V13 C3 14.5 6 15.5 9 15.5 C12 15.5 15 14.5 15 13 V5"/></svg><span style="white-space:nowrap">Kept copy</span><span style="margin-left:auto;font-size:11px;color:#55637f;white-space:nowrap">120 frames, 38 MB</span><span style="margin-left:8px;margin-right:10px;display:flex"><svg aria-label="Up to date" role="img" width="16" height="16" viewBox="0 0 16 16" style="flex:none;fill:none;stroke:#2a7a4f;stroke-width:2"><path d="M3 8.5 L6.5 12 L13 4.5"/></svg></span></div><div style="height:34px;box-sizing:border-box;display:flex;align-items:center;gap:8px;border-top:1px solid #dde2ec;"><span style="width:26px;text-align:center;color:#55637f;font-size:11px;flex:none">5</span><svg aria-hidden="true" width="18" height="18" viewBox="0 0 18 18" style="flex:none;fill:none;stroke:#1f3a6e;stroke-width:1.5;"><path d="M3 11 V15 H15 V11"/><path d="M9 3 V11 M6 6 L9 3 L12 6"/></svg><span style="white-space:nowrap">Export</span><span style="margin-left:auto;font-size:11px;color:#55637f;white-space:nowrap">GIF MP4 WebP APNG PNG</span><span style="margin-left:8px;margin-right:10px;display:flex"><svg aria-label="Up to date" role="img" width="16" height="16" viewBox="0 0 16 16" style="flex:none;fill:none;stroke:#2a7a4f;stroke-width:2"><path d="M3 8.5 L6.5 12 L13 4.5"/></svg></span></div></div>
+<div style="position:absolute;left:1084px;top:187px;width:12px;height:12px;box-sizing:border-box;border-radius:999px;background:#1f3a6e;border:2px solid #1f3a6e"></div>
+<div style="position:absolute;left:1090px;top:318px;width:370px;text-align:center;color:#55637f;font-size:12px">plus Rotation and Save picture (View and Export tabs of its window)</div>
+<div style="position:absolute;left:40px;top:352px;width:1420px;height:22px;"><b>Where each window writes files today</b></div>
+<div style="position:absolute;left:40px;top:380px;width:1420px;height:32px;box-sizing:border-box;background:#e9edf5;border-top:1px solid #8793ad;border-bottom:1px solid #8793ad;"></div>
+<div style="position:absolute;left:52px;top:387px;width:300px;height:20px;font-weight:600;color:#2b3550">Window</div>
+<div style="position:absolute;left:360px;top:387px;width:690px;height:20px;font-weight:600;color:#2b3550">Moves out of the window</div>
+<div style="position:absolute;left:1070px;top:387px;width:380px;height:20px;font-weight:600;color:#2b3550">Code</div>
+<div style="position:absolute;left:40px;top:412px;width:1420px;height:44px;box-sizing:border-box;background:#fff;border-bottom:1px solid #dde2ec"></div>
+<div style="position:absolute;left:52px;top:412px;width:300px;height:44px;display:flex;align-items:center;font-weight:600">1D Beam / Truss</div>
+<div style="position:absolute;left:360px;top:412px;width:690px;height:44px;display:flex;align-items:center;line-height:1.3">Export animation... (GIF, MP4, PNG pictures)</div>
+<div style="position:absolute;left:1070px;top:412px;width:380px;height:44px;display:flex;align-items:center;color:#55637f;font-size:12px">addons_src/simulation/beam_tab.py</div>
+<div style="position:absolute;left:40px;top:456px;width:1420px;height:44px;box-sizing:border-box;background:#f6f8fb;border-bottom:1px solid #dde2ec"></div>
+<div style="position:absolute;left:52px;top:456px;width:300px;height:44px;display:flex;align-items:center;font-weight:600">2D Static Structural</div>
+<div style="position:absolute;left:360px;top:456px;width:690px;height:44px;display:flex;align-items:center;line-height:1.3">Export animation... (GIF, MP4, PNG pictures)</div>
+<div style="position:absolute;left:1070px;top:456px;width:380px;height:44px;display:flex;align-items:center;color:#55637f;font-size:12px">addons_src/simulation/physics_tab.py</div>
+<div style="position:absolute;left:40px;top:500px;width:1420px;height:44px;box-sizing:border-box;background:#fff;border-bottom:1px solid #dde2ec"></div>
+<div style="position:absolute;left:52px;top:500px;width:300px;height:44px;display:flex;align-items:center;font-weight:600">2D Fluid Flow</div>
+<div style="position:absolute;left:360px;top:500px;width:690px;height:44px;display:flex;align-items:center;line-height:1.3">Export animation... (GIF, MP4, PNG pictures)</div>
+<div style="position:absolute;left:1070px;top:500px;width:380px;height:44px;display:flex;align-items:center;color:#55637f;font-size:12px">addons_src/simulation/cfd_tab.py</div>
+<div style="position:absolute;left:40px;top:544px;width:1420px;height:44px;box-sizing:border-box;background:#f6f8fb;border-bottom:1px solid #dde2ec"></div>
+<div style="position:absolute;left:52px;top:544px;width:300px;height:44px;display:flex;align-items:center;font-weight:600">2D Thermal</div>
+<div style="position:absolute;left:360px;top:544px;width:690px;height:44px;display:flex;align-items:center;line-height:1.3">Export animation... (transient runs)</div>
+<div style="position:absolute;left:1070px;top:544px;width:380px;height:44px;display:flex;align-items:center;color:#55637f;font-size:12px">dev_addons/thermal2d/thermal_tab.py</div>
+<div style="position:absolute;left:40px;top:588px;width:1420px;height:44px;box-sizing:border-box;background:#fff;border-bottom:1px solid #dde2ec"></div>
+<div style="position:absolute;left:52px;top:588px;width:300px;height:44px;display:flex;align-items:center;font-weight:600">3D Static Structural</div>
+<div style="position:absolute;left:360px;top:588px;width:690px;height:44px;display:flex;align-items:center;line-height:1.3">Export animation... (WebP, APNG, GIF, MP4, PNG pictures)</div>
+<div style="position:absolute;left:1070px;top:588px;width:380px;height:44px;display:flex;align-items:center;color:#55637f;font-size:12px">dev_addons/solid_fea/solid_tab.py</div>
+<div style="position:absolute;left:40px;top:632px;width:1420px;height:44px;box-sizing:border-box;background:#f6f8fb;border-bottom:1px solid #dde2ec"></div>
+<div style="position:absolute;left:52px;top:632px;width:300px;height:44px;display:flex;align-items:center;font-weight:600">3D Thermal</div>
+<div style="position:absolute;left:360px;top:632px;width:690px;height:44px;display:flex;align-items:center;line-height:1.3">Export animation... (transient runs; a steady result has one picture)</div>
+<div style="position:absolute;left:1070px;top:632px;width:380px;height:44px;display:flex;align-items:center;color:#55637f;font-size:12px">dev_addons/thermal3d/thermal3d_tab.py</div>
+<div style="position:absolute;left:40px;top:676px;width:1420px;height:52px;box-sizing:border-box;background:#fff;border-bottom:1px solid #dde2ec"></div>
+<div style="position:absolute;left:52px;top:676px;width:300px;height:52px;display:flex;align-items:center;font-weight:600">Coupled Physics, Viz tab</div>
+<div style="position:absolute;left:360px;top:676px;width:690px;height:52px;display:flex;align-items:center;line-height:1.3">Save image (PNG) and Save animation... The auto-turn in the second half goes (CPL-5): the Rotation of the node replaces it</div>
+<div style="position:absolute;left:1070px;top:676px;width:380px;height:52px;display:flex;align-items:center;color:#55637f;font-size:12px">dev_addons/coupled/coupled_viz.py</div>
+<div style="position:absolute;left:40px;top:742px;width:1420px;height:40px;"><span style="font-weight:700">One writer.</span> <span style="color:#182441">addons_src/simulation/anim_export.py writes GIF, MP4, WebP, APNG and PNG pictures for all of them. It stays as it is; the Visualize node calls it. A transient run keeps every frame, with no new cap, and the node shows the size it adds to the project file.</span></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1500,"height":820}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

@@ -93,6 +93,7 @@ Areas: ANN Annotator, TRN Trainer, WB Workbench, DRW Drawings, VIS Visualize, CP
   7. **Transient runs.** The node keeps every frame the simulation window holds, with no new cap, and shows what the frames add to the size of the project file.
   8. It works for 1D, 2D and 3D results and for Coupled Physics.
   9. **Style.** The node follows the program's theme and palette (GEN-4).
+  *Designs:* drawn 2026-11-26, five boards in `design/visualize/` (Workbench block, result window, render studio, Export, what moves out of the simulation windows). Waiting for Ian to approve; four questions for him are in its README. Nothing is built.
   *What the code is today:* The Visualize add-on (`addons_src/render/`) is a picture-and-video studio for a part or assembly working on its own copy of the model in a `.gpv` folder, with no idea of a result field. In the Workbench `visualize` is a one-cell block (a document, no inputs). Animate and Export animation are in `beam_tab`, `physics_tab` (2D FEA), `cfd_tab`, `thermal_tab` (2D heat), `solid_tab` (3D FEA), `thermal3d_tab`, and Save animation in `coupled_viz`; they share `addons_src/simulation/anim_export.py` (WebP, APNG, GIF, MP4, PNG pictures). A result window draws a frame from the result and the chosen field (`field_values(ramp)` in 3D FEA), so what the node must keep is the field on screen, the shape it is drawn on and the frames of a ramp or a transient run. *Fixed when:* the designs are drawn and approved (they go in `planning/design/`), and then it is built in steps, each with its own item.
 ### Done
 

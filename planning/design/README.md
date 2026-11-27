@@ -8,12 +8,13 @@ This folder keeps the designs we have agreed, as pictures you can open without a
 
 | Area | Folder | Status | Built in | Open items |
 |---|---|---|---|---|
-| Trainer, Trained models, Model testing, and the four blocks wired | [`trainer/`](trainer/README.md) | Approved by Ian, 2026-11-26. Partly built; does not look like the boards yet | `88ab86b`, `01570a9`, `b03f554`, `d37321a`, `a25d364`, `612d624` | TRN-1, TRN-2 |
-| Annotator redesign (ribbon, side panel, Analyse tab) | [`annotator/`](annotator/README.md) | The redesign Ian expects. Built; his screenshot of 2026-11-26 does not match it | `b828756`, `85513fc` | ANN-1, ANN-2 |
+| Trainer, Trained models, Model testing, and the four blocks wired | [`trainer/`](trainer/README.md) | Approved by Ian, 2026-11-26. Built to the boards, local and not pushed; five differences for Ian to say are in its README | `88ab86b`, `01570a9`, `b03f554`, `d37321a`, `a25d364`, `612d624`; local: `6dcdb6a`, `404d675` | TRN-1, TRN-2 (done locally) |
+| Annotator redesign (ribbon, side panel, Analyse tab) | [`annotator/`](annotator/README.md) | The redesign Ian expects. Built; the window now matches board 1 (local, not pushed); three differences for Ian to say are in its README | `b828756`, `85513fc`; local: `8b39da8` | ANN-1 (done locally), ANN-2 |
 | Combined Physics window (Fluid, Thermal, Structural, Coupled, Viz) | [`combined-physics/`](combined-physics/README.md) | Built | `2ffb240`, `e9a58d7`, `970764c` | CPL-1 to CPL-4 |
 | 2D Static Structural (material per region, Supports and Loads pages, Mesh page) | [`static-structural-2d/`](static-structural-2d/README.md) | Built | `320c6f4` | none |
 | FEA Outline and Details (every analysis window) | [`fea-outline/`](fea-outline/README.md) | Outline and Details column built; whether each analysis matches the outline board is unchecked | `6324847` | none |
 | Workbench look: the quiet header | [`workbench-look/`](workbench-look/README.md) | Option 3 of 4, built | `77f5c57` | none |
+| Visualize node (Workbench block, result window, render studio, Export, what moves out of the simulation windows) | [`visualize/`](visualize/README.md) | Drawn 2026-11-26. Waiting for Ian to approve. Not built | none | VIS-1 |
 | Theme and palette | [`theme/`](theme/README.md) | Written from the code; the plan approved by Ian 2026-11-26; swatch sheet not yet looked at by him | `tools/check_palette.py`, `test_palette.py` | GEN-5 |
 
 **Status words.** *Approved* means Ian said so, with the date. *Built* means it is in the program, with the commit. A design that is built has no separate sign-off recorded unless it says *Approved*.

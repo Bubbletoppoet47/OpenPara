@@ -1,0 +1,19 @@
+{
+  "v": 3,
+  "createdOnFiles": { "v": 1, "at": "2026-11-26T20:40:00Z" },
+  "title": "Visualize node",
+  "launch": { "view": "canvas" },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": { "x": 0, "y": 0, "w": 1500, "h": 860, "title": "1 · Workbench: two Visualize nodes" },
+    "Result.dc.html": { "x": 1580, "y": 0, "w": 1500, "h": 900, "title": "2 · Visualize window: a simulation result" },
+    "Studio.dc.html": { "x": 0, "y": 1020, "w": 1500, "h": 900, "title": "3 · Visualize window: a part or an assembly" },
+    "Export.dc.html": { "x": 1580, "y": 1020, "w": 1500, "h": 900, "title": "4 · Visualize window: Export" },
+    "Moves.dc.html": { "x": 0, "y": 2040, "w": 1500, "h": 820, "title": "5 · What moves out of the simulation windows" }
+  },
+  "order": ["Main.dc.html", "Result.dc.html", "Studio.dc.html", "Export.dc.html", "Moves.dc.html"],
+  "notes": {
+    "title": { "x": 0, "y": -260, "text": "Visualize node: proposed (VIS-1)", "kind": "title1", "maxW": 3080 }
+  },
+  "designSystems": []
+}
