@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Annotate tab</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<style>
+body{margin:0;font-family:Inter,'Segoe UI',system-ui,sans-serif}
+.win{width:1500px;height:900px;box-sizing:border-box;background:#efefef;color:#2b2b2b;display:flex;flex-direction:column;overflow:hidden;font-size:12px;border:1px solid #bcbcbc}
+.ribbon{height:78px;flex:none;display:flex;align-items:center;padding:0 6px;border-bottom:1px solid #bcbcbc}
+.grp{display:flex;align-items:center;gap:1px;padding:0 5px;border-right:1px solid #9f9f9f;height:66px}
+.grp.last{border-right:0}
+.rb{width:66px;height:68px;box-sizing:border-box;border:1px solid transparent;border-radius:3px;background:transparent;display:flex;flex-direction:column;align-items:center;gap:3px;padding:5px 2px 0;font:11px/13px Inter,'Segoe UI',sans-serif;color:#1c1c1c;text-align:center}
+.rb.on{background:#fbfbfb;border-color:#c9c9c9}
+.ic{width:30px;height:30px;flex:none;fill:none;stroke:#10204d;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.tabs{height:27px;flex:none;display:flex;align-items:flex-end;padding:0 4px;gap:1px;border-bottom:1px solid #bcbcbc}
+.tab{padding:4px 15px;background:#e2e2e2;border:1px solid #bcbcbc;border-bottom:0;color:#1f1f1f;font:12px Inter,'Segoe UI',sans-serif}
+.tab.on{background:#fff;font-weight:600;padding-bottom:5px}
+.hd{font-size:11px;font-weight:600;letter-spacing:1px;color:#4a5872;text-transform:uppercase}
+.cls{display:flex;align-items:center;gap:8px;height:26px;padding:0 10px;font-size:12.5px;color:#1f2a3c}
+.cls.on{background:#dbe9fb}
+.sw{width:12px;height:12px;border-radius:2px;flex:none}
+.ptab{width:56px;height:46px;box-sizing:border-box;border:1px solid #c9c9c9;border-bottom:0;background:#e8e8e8;display:flex;align-items:center;justify-content:center}
+.ptab.on{background:#fafafb}
+.fr{display:flex;align-items:center;gap:8px;height:38px;padding:0 10px;color:#1f2a3c;font-size:12.5px}
+.fr.on{background:#e6f0fc;box-shadow:inset 0 -2px 0 #006ec8}
+.fr img{width:44px;height:33px;object-fit:cover;border:1px solid #c9c9c9;flex:none}
+.mu{color:#5a6577;font-size:11.5px}
+</style>
+</helmet>
+<div class="win">
+  <div class="ribbon">
+    <div class="grp">
+      <button class="rb on" aria-label="Confirm image"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="15" r="11" fill="#0e7f86" stroke="#0b5f65"/><path d="M9.5 15.5l4 4 7-8" stroke="#fff" stroke-width="2.2"/></svg><span style="font-weight:600">Confirm<br>image</span></button>
+      <button class="rb" aria-label="Previous image"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="15" r="11" fill="#e3ecfb"/><path d="M17.5 9.5l-5.5 5.5 5.5 5.5"/></svg><span>Previous<br>image</span></button>
+      <button class="rb" aria-label="Next image"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="15" r="11" fill="#e3ecfb"/><path d="M12.5 9.5l5.5 5.5-5.5 5.5"/></svg><span>Next<br>image</span></button>
+    </div>
+    <div class="grp">
+      <button class="rb" aria-label="Fit to screen"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M5 11V5h6M19 5h6v6M25 19v6h-6M11 25H5v-6"/><rect x="11" y="11" width="8" height="8" fill="#cfe0fa"/></svg><span>Fit to<br>screen</span></button>
+      <button class="rb" aria-label="Rotate 90 degrees"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M24 15a9 9 0 1 1-3-6.7"/><path d="M24 4v6h-6" stroke="#d99a2b"/></svg><span>Rotate<br>90°</span></button>
+      <button class="rb" aria-label="Delete frame"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M6 8h18M12 8V5h6v3M8 8l1 17h12l1-17" fill="#e3ecfb"/><path d="M13 12v9M17 12v9"/></svg><span>Delete<br>frame…</span></button>
+    </div>
+    <div class="grp">
+      <button class="rb on" aria-label="LiDAR dots and pick distance"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M5 7h20M5 13h20M5 19h8" stroke="#3369d3" stroke-width="2.6" stroke-dasharray="0.1 5.4"/><circle cx="21" cy="21" r="5" fill="#fff" stroke="#d99a2b"/><circle cx="21" cy="21" r="1.4" fill="#d99a2b" stroke="none"/></svg><span>LiDAR<br>distance</span></button>
+      <button class="rb" aria-label="Clear distance of box"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M4 20l16-16 6 6-16 16z" fill="#e3ecfb"/><path d="M10 14l2 2M14 10l2 2M18 6l2 2"/><path d="M21 21l6 6M27 21l-6 6" stroke="#b3261e"/></svg><span>Clear<br>distance</span></button>
+      <button class="rb" aria-label="Delete selected box"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="7" width="18" height="15" stroke-dasharray="3 2.5" fill="#e3ecfb"/><path d="M19 19l7 7M26 19l-7 7" stroke="#b3261e"/></svg><span>Delete<br>box</span></button>
+    </div>
+    <div class="grp last">
+      <button class="rb" aria-label="Clear boxes and retry AI"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M13 4l2.2 6.3 6.3 2.2-6.3 2.2L13 21l-2.2-6.3-6.3-2.2 6.3-2.2z" fill="#cfe0fa"/><path d="M26 17a6 6 0 1 1-2-4.4" stroke="#d99a2b"/><path d="M26 10v4h-4" stroke="#d99a2b"/></svg><span>Clear &amp;<br>retry AI</span></button>
+    </div>
+  </div>
+  <div class="tabs">
+    <button class="tab on">Annotate</button>
+    <button class="tab">Data</button>
+    <button class="tab">Models</button>
+    <button class="tab">Analyse</button>
+    <button class="tab">Setup</button>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:8px;padding:0 8px 4px">
+      <span style="background:#b83280;color:#fff;font-weight:600;font-size:11px;padding:2px 10px;border-radius:10px">Annotator</span>
+      <span class="mu"><b style="color:#1f2a3c;font-weight:600">Lab walk</b> · 4 images</span>
+    </div>
+  </div>
+  <div style="flex:1;display:flex;gap:4px;padding:4px;min-height:0">
+    <div style="width:330px;flex:none;display:flex;flex-direction:column;gap:4px">
+      <div style="background:#fff;border:1px solid #ababab;padding:8px 0 6px">
+        <div class="hd" style="padding:0 10px 6px">Classes</div>
+        <div class="cls on"><span class="sw" style="background:#e8503a"></span><span style="flex:1">[1] person</span><span class="mu">3</span></div>
+        <div class="cls"><span class="sw" style="background:#19a86b"></span><span style="flex:1">[2] bag</span><span class="mu">0</span></div>
+        <div style="padding:6px 10px 0"><button style="border:0;background:transparent;color:#1a56c4;font:12px Inter,sans-serif;padding:0">Edit classes…</button></div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <div style="display:flex;gap:0;padding-left:0">
+          <button class="ptab on" aria-label="Frames"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="5" width="22" height="20" rx="2" fill="#e3ecfb"/><path d="M4 11h22M4 19h22M10 5v20M20 5v20" stroke-width="1.2"/></svg></button>
+          <button class="ptab" aria-label="Selected box"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="5" y="6" width="20" height="18" stroke-dasharray="3 2.5" fill="#e3ecfb"/><rect x="3" y="4" width="4" height="4" fill="#fff"/><rect x="23" y="22" width="4" height="4" fill="#fff"/></svg></button>
+          <button class="ptab" aria-label="AI assist"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M13 4l2.2 6.3 6.3 2.2-6.3 2.2L13 21l-2.2-6.3-6.3-2.2 6.3-2.2z" fill="#cfe0fa"/><path d="M23 18l1.2 3.3 3.3 1.2-3.3 1.2L23 27l-1.2-3.3-3.3-1.2 3.3-1.2z" fill="#d99a2b" stroke-width="1"/></svg></button>
+        </div>
+        <div style="flex:1;background:#fff;border:1px solid #ababab;display:flex;flex-direction:column;min-height:0">
+          <div style="padding:8px 10px;border-bottom:1px solid #e3e3e3;display:flex;flex-direction:column;gap:6px">
+            <div class="mu">Working set</div>
+            <div style="border:1px solid #bdbdbd;border-radius:3px;padding:4px 8px;display:flex;justify-content:space-between;font-size:12.5px;color:#1f2a3c"><span>20261125_184611</span><span class="mu">3 / 4 ▾</span></div>
+            <div style="display:flex;gap:0;font-size:12px">
+              <button style="flex:1;padding:4px 0;border:1px solid #bdbdbd;background:#fff;color:#1f2a3c;border-radius:3px 0 0 3px;font:12px Inter,sans-serif">To do</button>
+              <button style="flex:1;padding:4px 0;border:1px solid #1a56c4;background:#e6f0fc;color:#1a56c4;font:600 12px Inter,sans-serif;border-radius:0 3px 3px 0">All</button>
+            </div>
+          </div>
+          <div class="fr"><span style="color:#2e7d32;width:14px">✓</span><img src="/_blob/2dfc160423ba19b6e9fbc9403e8fb03f" alt="Frame 000000" style="object-position:30% 70%"><span style="flex:1">000000</span><span class="mu">2 boxes</span></div>
+          <div class="fr on"><span style="color:#2e7d32;width:14px">✓</span><img src="/_blob/2dfc160423ba19b6e9fbc9403e8fb03f" alt="Frame 000001" style="object-position:35% 70%"><span style="flex:1">000001</span><span class="mu">3 boxes</span></div>
+          <div class="fr"><span style="color:#2e7d32;width:14px">✓</span><img src="/_blob/2dfc160423ba19b6e9fbc9403e8fb03f" alt="Frame 000002" style="object-position:40% 70%"><span style="flex:1">000002</span><span class="mu">3 boxes</span></div>
+          <div class="fr"><span style="color:#5a6577;width:14px">○</span><img src="/_blob/2dfc160423ba19b6e9fbc9403e8fb03f" alt="Frame 000003" style="object-position:45% 70%"><span style="flex:1">000003</span><span class="mu">AI draft</span></div>
+          <div style="flex:1"></div>
+          <div class="mu" style="padding:8px 10px;border-top:1px solid #e3e3e3">Set 20261125_184611 · 3 of 4 annotated</div>
+        </div>
+      </div>
+    </div>
+    <div style="flex:1;background:#23272e;position:relative;overflow:hidden;min-width:0">
+      <img src="/_blob/2dfc160423ba19b6e9fbc9403e8fb03f" alt="Current frame" style="position:absolute;left:71px;top:0;width:1016px;height:762px">
+      <svg viewBox="0 0 960 720" aria-hidden="true" style="position:absolute;left:71px;top:0;width:1016px;height:762px">
+        <defs><pattern id="dots" width="11" height="9" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.5" fill="#3369d3"/></pattern></defs>
+        <rect x="0" y="150" width="960" height="490" fill="url(#dots)" opacity="0.55"/>
+        <g fill="none" stroke="#e8503a" stroke-width="2.5">
+          <rect x="260" y="266" width="140" height="344"/>
+          <rect x="648" y="324" width="84" height="196"/>
+          <rect x="102" y="346" width="56" height="124"/>
+        </g>
+        <g fill="#e8503a"><rect x="260" y="244" width="106" height="22"/><rect x="648" y="302" width="106" height="22"/><rect x="102" y="324" width="106" height="22"/></g>
+        <g fill="#fff" font-size="14" font-weight="600" font-family="Inter,sans-serif"><text x="267" y="260">person 3.2 m</text><text x="655" y="318">person 6.7 m</text><text x="109" y="340">person 10.4 m</text></g>
+        <g fill="#fff" stroke="#e8503a" stroke-width="2.5"><circle cx="330" cy="438" r="6"/><circle cx="690" cy="422" r="6"/><circle cx="130" cy="408" r="6"/></g>
+      </svg>
+      <div style="position:absolute;left:10px;top:10px;background:rgba(20,24,30,.78);color:#fff;padding:5px 10px;border-radius:3px;font-size:12px">LiDAR depth: 4,840 points, 0.5 m (red) to 6 m (blue)</div>
+      <div style="position:absolute;left:10px;bottom:10px;background:rgba(20,24,30,.78);color:#e6e9ee;padding:5px 10px;border-radius:3px;font-size:12px">Drag: new box · Click: select · Double-click: delete</div>
+      <div style="position:absolute;right:10px;bottom:10px;background:rgba(20,24,30,.78);color:#e6e9ee;padding:5px 10px;border-radius:3px;font-size:12px">Frame 2 of 4</div>
+    </div>
+  </div>
+  <div style="height:24px;flex:none;border-top:1px solid #bcbcbc;display:flex;align-items:center;justify-content:space-between;padding:0 8px;color:#3e3e3e;font-size:12px">
+    <span>vid_20261125_184611_000001 | 3 boxes (3 with distance) | annotated | 4 images in project</span>
+    <span>No AI model loaded</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1500,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

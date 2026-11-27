@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Analyse tab</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<style>
+body{margin:0;font-family:Inter,'Segoe UI',system-ui,sans-serif}
+.win{width:1500px;height:900px;box-sizing:border-box;background:#efefef;color:#2b2b2b;display:flex;flex-direction:column;overflow:hidden;font-size:12px;border:1px solid #bcbcbc}
+.ribbon{height:78px;flex:none;display:flex;align-items:center;padding:0 6px;border-bottom:1px solid #bcbcbc}
+.grp{display:flex;align-items:center;gap:1px;padding:0 5px;border-right:1px solid #9f9f9f;height:66px}
+.grp.last{border-right:0}
+.rb{width:66px;height:68px;box-sizing:border-box;border:1px solid transparent;border-radius:3px;background:transparent;display:flex;flex-direction:column;align-items:center;gap:3px;padding:5px 2px 0;font:11px/13px Inter,'Segoe UI',sans-serif;color:#1c1c1c;text-align:center}
+.rb.on{background:#fbfbfb;border-color:#c9c9c9}
+.rb.off{opacity:.45}
+.ic{width:30px;height:30px;flex:none;fill:none;stroke:#10204d;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.tabs{height:27px;flex:none;display:flex;align-items:flex-end;padding:0 4px;gap:1px;border-bottom:1px solid #bcbcbc}
+.tab{padding:4px 15px;background:#e2e2e2;border:1px solid #bcbcbc;border-bottom:0;color:#1f1f1f;font:12px Inter,'Segoe UI',sans-serif}
+.tab.on{background:#fff;font-weight:600;padding-bottom:5px}
+.hd{font-size:11px;font-weight:600;letter-spacing:1px;color:#4a5872;text-transform:uppercase}
+.ptab{width:56px;height:46px;box-sizing:border-box;border:1px solid #c9c9c9;border-bottom:0;background:#e8e8e8;display:flex;align-items:center;justify-content:center}
+.ptab.on{background:#fafafb}
+.mu{color:#5a6577;font-size:11.5px}
+.fld{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:#1f2a3c}
+.sel{border:1px solid #bdbdbd;border-radius:3px;padding:4px 8px;background:#fff}
+.trow{display:flex;flex-direction:column;gap:5px;padding:9px 12px;border-bottom:1px solid #e6e6e6}
+.bar{height:8px;background:#e3e6ec;border-radius:2px;position:relative}
+.bar i{position:absolute;left:0;top:0;bottom:0;background:#0e7f86;border-radius:2px}
+.sc{height:26px;display:flex;gap:2px;position:relative}
+.sc i{flex:1;display:block}
+.c1{background:#2aa3ab}.c2{background:#e0702f}.c3{background:#6b7380}
+.chip{padding:3px 11px;border:1px solid #4a5160;border-radius:11px;color:#e6e9ee;font:12px Inter,sans-serif;background:transparent}
+.chip.on{background:#e6e9ee;color:#1b1f25;font-weight:600}
+.dr{display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:12.5px;color:#1f2a3c}
+</style>
+</helmet>
+<div class="win">
+  <div class="ribbon">
+    <div class="grp">
+      <button class="rb" aria-label="Open session"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M3 9h9l2 3h13v13H3z" fill="#e3ecfb"/><path d="M3 25l4-9h22l-4 9" fill="#cfe0fa"/></svg><span>Open<br>session…</span></button>
+      <button class="rb on" aria-label="Run analysis"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="16" width="5" height="10" fill="#cfe0fa"/><rect x="12" y="11" width="5" height="15" fill="#cfe0fa"/><rect x="20" y="6" width="5" height="20" fill="#cfe0fa"/><path d="M5 4l9 5.5L5 15z" fill="#0e7f86" stroke="#0b5f65"/></svg><span style="font-weight:600">Run<br>analysis</span></button>
+      <button class="rb off" aria-label="Stop"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="7" y="7" width="16" height="16" rx="2" fill="#f3c9c4" stroke="#b3261e"/></svg><span>Stop</span></button>
+    </div>
+    <div class="grp">
+      <button class="rb on" aria-label="Dots in boxes"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="5" width="22" height="20" stroke-dasharray="3 2.5" fill="#e3ecfb"/><path d="M8 11h14M8 17h14" stroke="#3369d3" stroke-width="2.6" stroke-dasharray="0.1 5.4"/></svg><span>Dots in<br>boxes</span></button>
+      <button class="rb" aria-label="All dots"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M5 7h20M5 13h20M5 19h20M5 25h20" stroke="#3369d3" stroke-width="2.6" stroke-dasharray="0.1 5.4"/></svg><span>All<br>dots</span></button>
+    </div>
+    <div class="grp last">
+      <button class="rb" aria-label="Save frame image"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="5" width="22" height="16" rx="2" fill="#e3ecfb"/><path d="M4 18l6-6 5 5 4-4 7 7"/><circle cx="20" cy="10" r="2"/><path d="M15 29v-5m0 5l-2-2m2 2l2-2" stroke="#d99a2b"/></svg><span>Save frame<br>image</span></button>
+      <button class="rb" aria-label="Export CSV"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="5" width="22" height="20" rx="2" fill="#e3ecfb"/><path d="M4 11h22M4 17h22M12 5v20M19 5v20"/></svg><span>Export<br>CSV</span></button>
+      <button class="rb" aria-label="Export report"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M7 3h12l5 5v19H7z" fill="#e3ecfb"/><path d="M19 3v5h5M11 14h9M11 18h9M11 22h6"/></svg><span>Export<br>report</span></button>
+    </div>
+  </div>
+  <div class="tabs">
+    <button class="tab">Annotate</button>
+    <button class="tab">Data</button>
+    <button class="tab">Models</button>
+    <button class="tab on">Analyse</button>
+    <button class="tab">Setup</button>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:8px;padding:0 8px 4px">
+      <span style="background:#b83280;color:#fff;font-weight:600;font-size:11px;padding:2px 10px;border-radius:10px">Annotator</span>
+      <span class="mu"><b style="color:#1f2a3c;font-weight:600">Lab walk</b> · 4 images</span>
+    </div>
+  </div>
+  <div style="flex:1;display:flex;gap:4px;padding:4px;min-height:0">
+    <div style="width:330px;flex:none;display:flex;flex-direction:column;gap:4px">
+      <div style="background:#fff;border:1px solid #ababab;padding:8px 10px 10px;display:flex;flex-direction:column;gap:8px">
+        <div class="hd">Analysis setup</div>
+        <div><div class="mu" style="margin-bottom:3px">Session folder</div><div class="fld sel"><span>…\dataset\20261125_184611</span><span class="mu">1,284 frames</span></div></div>
+        <div><div class="mu" style="margin-bottom:3px">Model</div><div class="fld sel"><span>Small 2026-11-12 20:02</span><span class="mu">has distance ▾</span></div></div>
+        <div class="fld"><span>Confidence at least</span><span style="font-weight:600">85%</span></div>
+        <div style="height:6px;background:#d5dbe6;border-radius:3px;position:relative;margin:0 2px"><div style="position:absolute;left:0;top:0;bottom:0;width:78%;background:#1a56c4;border-radius:3px"></div><div style="position:absolute;left:78%;top:-5px;width:14px;height:14px;margin-left:-7px;border-radius:7px;background:#fff;border:2px solid #1a56c4"></div></div>
+        <div class="fld"><span>Pass when within</span><span class="sel" style="padding:2px 10px;font-weight:600">± 10 %</span></div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <div style="display:flex">
+          <button class="ptab on" aria-label="Results"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="16" width="5" height="10" fill="#cfe0fa"/><rect x="12" y="11" width="5" height="15" fill="#cfe0fa"/><rect x="20" y="6" width="5" height="20" fill="#cfe0fa"/></svg></button>
+          <button class="ptab" aria-label="Boxes"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="5" width="22" height="20" rx="2" fill="#e3ecfb"/><path d="M4 11h22M4 17h22M12 5v20M19 5v20" stroke-width="1.2"/></svg></button>
+          <button class="ptab" aria-label="Frames"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M4 9h22v12H4z" fill="#e3ecfb"/><path d="M9 9v12M14 9v12M19 9v12" stroke-width="1.2"/><path d="M12 4v22" stroke="#d99a2b"/></svg></button>
+        </div>
+        <div style="flex:1;background:#fff;border:1px solid #ababab;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+          <div style="padding:9px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e6e6e6"><span class="hd">Results · 2,310 boxes</span><span style="font-size:10.5px;color:#5a4a00;background:#f6e7a8;padding:2px 7px;border-radius:9px;font-weight:600">Sample numbers</span></div>
+          <div class="trow"><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-weight:600;color:#1f2a3c">Closest point</span><span style="font-size:20px;font-weight:600;color:#0e7f86">91%</span></div><div class="bar"><i style="width:91%"></i></div><div class="mu">Some LiDAR point in the box is within ±10% of the prediction · 1,998 of 2,196</div></div>
+          <div class="trow"><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-weight:600;color:#1f2a3c">Median of points</span><span style="font-size:20px;font-weight:600;color:#0e7f86">84%</span></div><div class="bar"><i style="width:84%"></i></div><div class="mu">Middle value of the points in the box · 1,845 of 2,196</div></div>
+          <div class="trow"><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-weight:600;color:#1f2a3c">Average of points</span><span style="font-size:20px;font-weight:600;color:#0e7f86">62%</span></div><div class="bar"><i style="width:62%"></i></div><div class="mu">Mean of all points in the box · 1,362 of 2,196</div></div>
+          <div class="trow" style="border-bottom:0"><div style="display:flex;justify-content:space-between"><span style="font-weight:600;color:#1f2a3c">No LiDAR in the box</span><span style="font-weight:600;color:#6b7380">114 boxes</span></div><div class="mu">Under 3 points, or beyond the 10 m dot range. Not counted as pass or fail.</div></div>
+          <div style="padding:8px 12px 10px;border-top:1px solid #e6e6e6">
+            <div class="hd" style="padding-bottom:6px">Closest point, by distance</div>
+            <div class="dr"><span style="width:52px">0–3 m</span><div class="bar" style="flex:1;margin-top:5px"><i style="width:96%"></i></div><span style="width:34px;text-align:right">96%</span></div>
+            <div class="dr"><span style="width:52px">3–6 m</span><div class="bar" style="flex:1;margin-top:5px"><i style="width:93%"></i></div><span style="width:34px;text-align:right">93%</span></div>
+            <div class="dr"><span style="width:52px">6–10 m</span><div class="bar" style="flex:1;margin-top:5px"><i style="width:86%"></i></div><span style="width:34px;text-align:right">86%</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="flex:1;background:#23272e;position:relative;overflow:hidden;min-width:0">
+      <img src="/_blob/2dfc160423ba19b6e9fbc9403e8fb03f" alt="Frame 412 with the model's boxes" style="position:absolute;left:145px;top:0;width:867px;height:650px">
+      <svg viewBox="0 0 960 720" aria-hidden="true" style="position:absolute;left:145px;top:0;width:867px;height:650px">
+        <defs><pattern id="pd" width="11" height="9" patternUnits="userSpaceOnUse"><circle cx="3" cy="3" r="2" fill="#fff" stroke="#10204d" stroke-width="0.8"/></pattern></defs>
+        <g fill="url(#pd)"><rect x="260" y="266" width="140" height="344"/><rect x="648" y="324" width="84" height="196"/><rect x="500" y="336" width="60" height="116"/></g>
+        <g fill="none" stroke-width="2.5">
+          <rect x="260" y="266" width="140" height="344" stroke="#2aa3ab" stroke-width="4.5"/>
+          <rect x="648" y="324" width="84" height="196" stroke="#2aa3ab"/>
+          <rect x="102" y="346" width="56" height="124" stroke="#9aa3b2" stroke-dasharray="6 4"/>
+          <rect x="500" y="336" width="60" height="116" stroke="#e0702f"/>
+        </g>
+        <circle cx="338" cy="474" r="10" fill="none" stroke="#ffd23f" stroke-width="3.5"/>
+        <rect x="352" y="458" width="64" height="20" fill="#10204d"/>
+        <g font-size="13" font-weight="600" font-family="Inter,sans-serif" fill="#fff">
+          <text x="359" y="473">3.19 m</text>
+          <rect x="260" y="244" width="176" height="22" fill="#0e7f86"/><text x="267" y="260">person 0.93 · 3.2 m  ✓</text>
+          <rect x="648" y="302" width="176" height="22" fill="#0e7f86"/><text x="655" y="318">person 0.91 · 6.7 m  ✓</text>
+          <rect x="102" y="324" width="176" height="22" fill="#6b7380"/><text x="109" y="340">person 0.88 · 10.4 m  –</text>
+          <rect x="500" y="314" width="176" height="22" fill="#c4501a"/><text x="507" y="330">person 0.86 · 4.9 m  ✕</text>
+        </g>
+      </svg>
+      <div style="position:absolute;right:10px;top:10px;width:292px;box-sizing:border-box;background:#fff;border:1px solid #ababab;border-radius:3px;padding:10px 12px;color:#1f2a3c">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:6px;border-bottom:1px solid #e6e6e6"><span style="font-weight:600;font-size:13px">Box 1 of 4 · person 0.93</span><span class="mu">212 points</span></div>
+        <div class="dr" style="padding-top:8px"><span>Predicted</span><b style="font-weight:600">3.20 m</b></div>
+        <div class="dr"><span>Closest point</span><span>3.19 m · off by 0.01 m <b style="color:#0e7f86">✓</b></span></div>
+        <div class="dr"><span>Median</span><span>3.24 m · off by 1% <b style="color:#0e7f86">✓</b></span></div>
+        <div class="dr"><span>Average</span><span>4.05 m · off by 27% <b style="color:#c4501a">✕</b></span></div>
+        <div class="mu" style="padding-top:6px">Pass means within ±10%. Points in the box include the wall behind the person.</div>
+      </div>
+      <div style="position:absolute;left:0;right:0;bottom:0;height:112px;background:#1b1f25;border-top:1px solid #3a404a;padding:8px 12px 8px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px;color:#e6e9ee;font-size:12.5px">
+          <button aria-label="Previous frame" style="width:28px;height:26px;border:1px solid #4a5160;background:transparent;color:#e6e9ee;border-radius:3px;font:14px Inter,sans-serif">‹</button>
+          <button aria-label="Next frame" style="width:28px;height:26px;border:1px solid #4a5160;background:transparent;color:#e6e9ee;border-radius:3px;font:14px Inter,sans-serif">›</button>
+          <span style="font-weight:600">Frame 412 of 1,284</span>
+          <span style="color:#aeb6c4">· 4 boxes: 2 pass, 1 fail, 1 no LiDAR</span>
+          <div style="flex:1"></div>
+          <button class="chip on">All frames</button><button class="chip">With a fail</button><button class="chip">No LiDAR</button>
+        </div>
+        <div class="sc"><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c2"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c3"></i><i class="c3"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c2"></i><i class="c2"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c3"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c2"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c2"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i><i class="c1"></i>
+          <div style="position:absolute;left:32%;top:-4px;bottom:-4px;width:3px;margin-left:-1px;background:#fff;border-radius:1px"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:#aeb6c4;font-size:11px"><span>0</span><span>Teal: all boxes pass · Orange: a box fails · Grey: no LiDAR in the frame</span><span>1,284</span></div>
+      </div>
+    </div>
+  </div>
+  <div style="height:24px;flex:none;border-top:1px solid #bcbcbc;display:flex;align-items:center;justify-content:space-between;padding:0 8px;color:#3e3e3e;font-size:12px">
+    <span>Analysed 1,284 frames | model Small 2026-11-12 20:02 | confidence at least 85% | pass within ±10%</span>
+    <span>Mock-up with sample numbers</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1500,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

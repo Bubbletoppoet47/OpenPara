@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Outline for every analysis</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+*{box-sizing:border-box}
+</style>
+</helmet>
+<div style="width:1440px; height:1500px; padding:48px; background:#e9edf3; color:#1f2a3c; font-family:'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif; font-size:13px; display:flex; flex-direction:column; gap:0;">
+
+  <h1 style="margin:0; font-size:32px; line-height:40px; font-weight:700; color:#16324f; text-wrap:balance;">One outline shape for every kind of analysis</h1>
+  <p style="margin:8px 0 0; max-width:900px; font-size:15px; line-height:1.5; color:#3d4a62;">The order is always the same: geometry, material, mesh, what acts on the model, then the solution. Only the middle changes with the physics. Folders open to show the items you insert yourself, one for each support, load or local mesh size.</p>
+
+  <div style="display:flex; gap:22px; margin-top:20px; color:#3d4a62; font-size:12px; align-items:center;">
+    <span style="display:inline-flex; align-items:center; gap:7px;"><svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 3l3.5 4 3.5-4z" fill="#53647c"></path></svg>Folder</span>
+    <span style="display:inline-flex; align-items:center; gap:7px;"><svg aria-hidden="true" width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="#8b95a8"></circle></svg>Fixed item</span>
+    <span style="display:inline-flex; align-items:center; gap:7px;"><svg aria-hidden="true" width="9" height="9" viewBox="0 0 9 9"><rect x="1" y="1" width="7" height="7" fill="#ffffff" stroke="#0e7f86" stroke-width="1.6"></rect></svg>Item you insert</span>
+  </div>
+
+  <div style="display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:24px; margin-top:20px;">
+    <sc-for list="{{ cards }}" as="c" hint-placeholder-count="6">
+      <section style="background:#f7f8fb; border:1px solid #c9d0dd; border-radius:6px; padding:14px 16px 12px; display:flex; flex-direction:column;">
+        <h2 style="margin:0 0 8px; padding-bottom:8px; border-bottom:1px solid #d9dfe9; font-size:16px; font-weight:700; color:#16324f;">{{ c.title }}</h2>
+        <div style="flex:1 1 auto;">
+          <sc-for list="{{ c.rows }}" as="r" hint-placeholder-count="10">
+            <div style="display:flex; align-items:center; gap:8px; height:24px; padding-left:{{ r.pad }}px;">
+              <sc-if value="{{ r.isF }}" hint-placeholder-val="{{ true }}">
+                <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10" style="flex:0 0 auto;"><path d="M1.5 3l3.5 4 3.5-4z" fill="#53647c"></path></svg>
+              </sc-if>
+              <sc-if value="{{ r.isP }}" hint-placeholder-val="{{ false }}">
+                <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10" style="flex:0 0 auto;"><circle cx="5" cy="5" r="3" fill="#8b95a8"></circle></svg>
+              </sc-if>
+              <sc-if value="{{ r.isI }}" hint-placeholder-val="{{ false }}">
+                <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10" style="flex:0 0 auto;"><rect x="1.5" y="1.5" width="7" height="7" fill="#ffffff" stroke="#0e7f86" stroke-width="1.6"></rect></svg>
+              </sc-if>
+              <span style="flex:0 0 auto; white-space:nowrap; font-weight:{{ r.w }}; color:#1f2a3c;">{{ r.label }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <p style="margin:10px 0 0; padding-top:8px; border-top:1px solid #d9dfe9; color:#53647c; font-size:12px; line-height:1.45;">{{ c.note }}</p>
+      </section>
+    </sc-for>
+  </div>
+
+  <h2 style="margin:40px 0 12px; font-size:20px; font-weight:700; color:#16324f;">Where today’s numbered sections go</h2>
+  <div style="display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:16px 24px;">
+    <sc-for list="{{ moves }}" as="m" hint-placeholder-count="6">
+      <div style="background:#f7f8fb; border:1px solid #d9dfe9; border-radius:4px; padding:10px 14px;">
+        <div style="color:#53647c; font-size:12px;">Today: {{ m.from }}</div>
+        <div style="margin-top:3px; font-weight:600; color:#16324f;">{{ m.to }}</div>
+        <div style="margin-top:4px; color:#3d4a62; font-size:12px; line-height:1.45;">{{ m.more }}</div>
+      </div>
+    </sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const R = (kind, label, hint, depth) => ({ isF: kind === 'f', isP: kind === 'p', isI: kind === 'i', label: label, hint: hint || '', pad: (depth || 0) * 18, w: kind === 'f' ? 600 : 400 });
+    const sol = [R('f', 'Solution'), R('p', 'Solution information', '', 1), R('p', 'Results', '', 1)];
+    const cards = [
+      {
+        title: '3D Static Structural',
+        note: 'No Analysis settings item: the 3D solver has nothing to set there today.',
+        rows: [R('p', 'Geometry', 'part or assembly, faces'), R('p', 'Material', 'one per body'), R('f', 'Mesh', 'size, type, order'), R('i', 'Face sizing', 'one per local size', 1),
+          R('f', 'Supports'), R('i', 'Fixed support', '', 1), R('i', 'One-direction support', '', 1), R('i', 'Bearing support', '', 1),
+          R('f', 'Loads'), R('i', 'Force on faces', '', 1), R('i', 'Pressure', '', 1), R('i', 'Force at vertex', '', 1), R('i', 'Gravity', '', 1)].concat(sol)
+      },
+      {
+        title: '3D Thermal',
+        note: 'Conditions come in six kinds. Each one you insert is its own item, with its own marks.',
+        rows: [R('p', 'Geometry', 'part or assembly, faces'), R('p', 'Material', 'conductivity, density, heat capacity'), R('f', 'Mesh', 'size, type, order'), R('i', 'Face sizing', 'one per local size', 1),
+          R('f', 'Conditions'), R('i', 'Fixed temperature', '', 1), R('i', 'Heat flux', '', 1), R('i', 'Heat flow', '', 1), R('i', 'Convection', '', 1), R('i', 'Radiation', '', 1), R('i', 'Insulated', '', 1)].concat(sol)
+      },
+      {
+        title: '2D Static Structural',
+        note: 'Regions (which part of the sketch is material) and edge splitting stay in Geometry.',
+        rows: [R('p', 'Geometry', 'sketch, regions, edges'), R('p', 'Material', 'plane stress or strain, thickness'), R('p', 'Mesh', 'element size, order'),
+          R('f', 'Supports'), R('i', 'Support', 'one per support', 1),
+          R('f', 'Loads'), R('i', 'Force', '', 1), R('i', 'Pressure', '', 1), R('i', 'Traction', '', 1),
+          R('p', 'Analysis settings', 'linear, nonlinear, triggers')].concat(sol)
+      },
+      {
+        title: '2D Thermal',
+        note: 'Same shape as 3D Thermal, drawn from a sketch.',
+        rows: [R('p', 'Geometry', 'sketch, regions, edges'), R('p', 'Material', 'conductivity, density, heat capacity'), R('p', 'Mesh', 'element size, order'),
+          R('f', 'Conditions', 'temperature, flux, flow and more'), R('i', 'Temperature', '', 1), R('i', 'Heat flux', '', 1), R('i', 'Heat flow', '', 1)].concat(sol)
+      },
+      {
+        title: '2D Fluid Flow',
+        note: 'The inlet, outlet and walls are fields of Fluid and flow today. They could become items later.',
+        rows: [R('p', 'Geometry', 'sketch, bodies'), R('p', 'Fluid and flow', 'fluid, speed'), R('p', 'Domain', 'margins around the bodies'), R('p', 'Mesh', 'sizes, boundary layer'), R('p', 'Solver', 'steady state, time marching')].concat(sol)
+      },
+      {
+        title: '1D Beam and Truss',
+        note: 'Joints and Ties come before the mesh because they change what the members are.',
+        rows: [R('p', 'Geometry', 'sketch, profile sketches'), R('p', 'Material', 'one for all, or per member'), R('p', 'Joints', 'rigid or pinned'), R('p', 'Ties', 'point on a member'), R('p', 'Mesh', 'elements per member'),
+          R('f', 'Supports'), R('i', 'Support', 'one per support', 1),
+          R('f', 'Loads'), R('i', 'Load', 'one per load', 1),
+          R('p', 'Analysis settings', 'linear, nonlinear, triggers')].concat(sol)
+      }
+    ];
+    const moves = [
+      { from: '1  Geometry', to: 'Geometry', more: 'The part or assembly, its dimensions, its faces and the face splitting.' },
+      { from: '2  Material and analysis', to: 'Material, and Analysis settings', more: 'The solver choice and its triggers (1D and 2D) get their own item.' },
+      { from: '3  Supports', to: 'Supports: one item for each support', more: 'The buttons become Insert. The conditions table becomes the items.' },
+      { from: '4  Loads', to: 'Loads: one item for each load', more: 'The list of conditions on the model is the outline itself.' },
+      { from: '5  Mesh', to: 'Mesh: one Face sizing item for each local size', more: 'The global size, type and order stay in the Mesh details.' },
+      { from: '6  Results', to: 'Solution: Solution information and Results', more: 'Solve stays in the toolbar and in the Solution details.' }
+    ];
+    return { cards: cards, moves: moves };
+  }
+}
+</script>
+</body>
+</html>

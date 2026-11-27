@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Where every button goes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<style>
+body{margin:0;font-family:Inter,'Segoe UI',system-ui,sans-serif}
+.sheet{width:1500px;height:700px;box-sizing:border-box;background:#f7f7f8;color:#1f2a3c;padding:30px 32px;display:flex;gap:40px;overflow:hidden}
+.col{flex:1;min-width:0;display:flex;flex-direction:column}
+.ch{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:0 0 8px;border-bottom:2px solid #1f2a3c;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#4a5872}
+.gh{padding:16px 0 5px;font-size:13px;font-weight:600;color:#1f2a3c}
+.r{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:5px 0;border-bottom:1px solid #e1e4ea;font-size:12.5px;line-height:17px}
+.r span:first-child{color:#4a5872}
+.r b{font-weight:500;color:#1f2a3c}
+.new{background:#e3f1f2;border:1px solid #0e7f86;border-radius:3px;padding:10px 12px;margin-top:20px;font-size:13px;line-height:19px}
+.new b{font-weight:600}
+</style>
+</helmet>
+<div class="sheet">
+  <div class="col">
+    <div class="ch"><span>Today: menus</span><span>Goes to</span></div>
+    <div class="gh">File</div>
+    <div class="r"><span>Import Video…</span><b>Data › Import video</b></div>
+    <div class="r"><span>Import Gimble Session…</span><b>Data › Import Gimble session</b></div>
+    <div class="r"><span>Gimble: Download Recordings…</span><b>Data › Download recordings</b></div>
+    <div class="r"><span>Gimble: Status…</span><b>Data › Gimble status</b></div>
+    <div class="r"><span>Gimble: Send a Model…</span><b>Models › Send model to Gimble</b></div>
+    <div class="r"><span>Export dataset as zip…</span><b>Data › Export zip</b></div>
+    <div class="r"><span>Import dataset zip…</span><b>Data › Import zip</b></div>
+    <div class="r"><span>Download models from GitHub…</span><b>Models › Download models</b></div>
+    <div class="r"><span>Open in browser (tablet)…</span><b>Data › Tablet mode</b></div>
+    <div class="gh">Edit</div>
+    <div class="r"><span>Classes…</span><b>Setup › Classes, and the class list at the top of the side panel</b></div>
+    <div class="r"><span>Hotkeys…</span><b>Setup › Hotkeys</b></div>
+    <div class="r"><span>My name…</span><b>Setup › My name</b></div>
+    <div class="r"><span>AI confidence…</span><b>Models › AI confidence</b></div>
+    <div class="gh">Manage</div>
+    <div class="r"><span>Sessions…</span><b>Data › Sessions</b></div>
+    <div class="r"><span>Sync Deleted Files</span><b>Data › Sync deleted files</b></div>
+  </div>
+  <div class="col">
+    <div class="ch"><span>Today: toolbar and panels</span><span>Goes to</span></div>
+    <div class="gh">Toolbar row</div>
+    <div class="r"><span>Confirm image</span><b>Annotate › Confirm image, first in the ribbon</b></div>
+    <div class="r"><span>LiDAR dots + pick distance (D/P)</span><b>Annotate › LiDAR distance</b></div>
+    <div class="r"><span>Fit to screen (F)</span><b>Annotate › Fit to screen</b></div>
+    <div class="r"><span>AI model: list, and its status text</span><b>Models › Load AI model; status bar, right</b></div>
+    <div class="gh">Left panel</div>
+    <div class="r"><span>Classes list</span><b>Top of the side panel, always visible</b></div>
+    <div class="r"><span>AI assist class boxes</span><b>Side panel, AI tab</b></div>
+    <div class="r"><span>Clear boxes and retry AI</span><b>Annotate › Clear &amp; retry AI</b></div>
+    <div class="r"><span>Delete selected box, Clear distance of box</span><b>Annotate › Delete box, Clear distance</b></div>
+    <div class="r"><span>Paragraphs of help text</span><b>Hover tips, plus one hint line on the picture</b></div>
+    <div class="gh">Right panel</div>
+    <div class="r"><span>Working set list, Show annotated too</span><b>Side panel, Frames tab: set list and To do / All</b></div>
+    <div class="r"><span>Prev, Next</span><b>Annotate › Previous image, Next image</b></div>
+    <div class="r"><span>Rotate 90°, Delete frame…</span><b>Annotate › Rotate 90°, Delete frame…</b></div>
+    <div class="r"><span>Image list</span><b>Side panel, Frames tab, with thumbnails</b></div>
+    <div class="new"><b>New: post-analysis.</b> Analyse tab in the ribbon (board A), or an Analyse mode on a rail at the left edge (board B). Same buttons and same results either way.</div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1500,"height":700}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

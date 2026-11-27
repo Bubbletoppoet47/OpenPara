@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Material and analysis, per region</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+.win{width:1500px;height:950px;box-sizing:border-box;display:flex;flex-direction:column;background:#f0f0f0;font:13px/1.3 Inter,system-ui,sans-serif;color:#1b1f24;position:relative;overflow:hidden}
+.menu{height:20px;display:flex;gap:18px;padding:0 10px;align-items:center}
+.asv{height:27px;display:flex;gap:10px;padding:0 10px;align-items:center}
+.tgl{width:38px;height:20px;border-radius:10px;background:#d3d6dc;position:relative}
+.tgl i{position:absolute;left:3px;top:3px;width:14px;height:14px;border-radius:7px;background:#fff}
+.ttl{height:28px;display:flex;gap:8px;padding:0 4px;align-items:center;color:#3b424c}
+.pill{background:#7a4ccf;color:#fff;font-weight:700;font-size:12px;border-radius:11px;padding:4px 12px}
+.body{height:796px;display:flex;gap:4px;padding:0 4px}
+.lcol{width:420px;display:flex;flex-direction:column}
+.outline{height:260px;background:#fff;border:1px solid #d5dce5;box-sizing:border-box}
+.oh{height:24px;background:#dde6ee;font-weight:700;display:flex;align-items:center;padding-left:10px}
+.orow{height:24px;display:flex;align-items:center;gap:8px;padding-left:22px;font-weight:600}
+.orow.kid{padding-left:40px;font-weight:400}
+.orow.sel{background:#cfe8ea}
+.split{height:6px;display:flex;justify-content:center;align-items:center}
+.split i{width:28px;height:2px;background:#c3cbd6}
+.dhead{height:24px;background:#dde6ee;font-weight:700;display:flex;align-items:center;padding-left:10px}
+.dbody{flex:1;background:#f7f8fc;border:1px solid #d5dce5;border-top:0;padding:10px 12px;position:relative;overflow:hidden}
+.help{position:absolute;right:10px;top:8px;width:18px;height:18px;border-radius:9px;background:#3b424c;color:#fff;font:700 12px/18px Inter;text-align:center}
+.lbl{font-weight:700;margin:0 0 4px}
+.mut{color:#566070;font-size:12px}
+.tbl{border:1px solid #c8d0db;background:#fff}
+.th{height:24px;background:#e8edf3;display:grid;grid-template-columns:150px 1fr;align-items:center;font-weight:600;font-size:12px;padding:0 8px;gap:8px}
+.tr{height:34px;display:grid;grid-template-columns:150px 1fr;align-items:center;padding:0 8px;gap:8px;border-top:1px solid #e2e7ee}
+.tr.sel{background:#cfe8ea}
+.rn{display:flex;align-items:center;gap:8px;font-weight:500}
+.sbox{height:24px;border:1px solid #aeb8c6;border-radius:3px;background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 8px;box-sizing:border-box}
+.frow{display:grid;grid-template-columns:1fr 150px;align-items:center;height:28px;gap:10px}
+.inp{height:22px;border:1px solid #aeb8c6;border-radius:3px;background:#fff;padding:0 6px;display:flex;align-items:center;box-sizing:border-box}
+.bdg{width:18px;height:18px;border-radius:3px;font:700 10px/16px Inter;text-align:center;box-sizing:border-box;flex:none}
+.bA{background:#2f6fd6;color:#fff;line-height:18px}
+.bB{background:#e8722a;color:#fff;line-height:18px}
+.r1{background:#bcd0f0;color:#1f3f8f;border:1px solid #6f8fcb}
+.r2{background:#fbe3b5;color:#7a4a00;border:1px solid #d9a441}
+.cv{flex:1;background:#fff;position:relative;overflow:hidden}
+.dot{position:absolute;width:6px;height:6px;border-radius:3px;background:#1f3f8f}
+.chip{position:absolute;height:24px;border-radius:12px;background:rgba(255,255,255,.94);border:1px solid #b3bdcb;display:flex;align-items:center;gap:7px;padding:0 10px 0 3px;font-size:12px;font-weight:600;white-space:nowrap}
+.arr{position:absolute;width:36px;height:2px;background:#c62828}
+.arr::before{content:"";position:absolute;left:-1px;top:-4px;border:5px solid transparent;border-right:8px solid #c62828;border-left:0}
+.note{position:absolute;background:#c2185b;color:#fff;font:600 12px/1.25 Inter;padding:6px 12px 6px 6px;border-radius:15px;display:flex;gap:8px;align-items:center;max-width:330px}
+.note b{width:20px;height:20px;border-radius:10px;background:#fff;color:#c2185b;font:700 12px/20px Inter;text-align:center;flex:none}
+.stat{height:22px;padding:0 10px;display:flex;align-items:center}
+.tabs{height:34px;display:flex;align-items:flex-end;padding-left:4px;gap:2px}
+.tab{height:28px;padding:0 14px;display:flex;align-items:center;gap:8px;border:1px solid #cfd3da;border-bottom:0;background:#e6e8ec}
+.tab.on{background:#f8f9fb;height:32px}
+.msg{height:23px;padding:0 6px;display:flex;align-items:center;color:#3b424c}
+</style>
+</helmet>
+<div class="win">
+  <div class="menu"><span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span></div>
+  <div class="asv"><span>AutoSave</span><div class="tgl"><i></i></div></div>
+  <div class="ttl"><span class="pill">2D FEA</span><span>of the part <b>Plate</b> (the copy in the project) - works on: sketch of the part, or a slice</span></div>
+  <div class="body">
+    <div class="lcol">
+      <div class="outline">
+        <div class="oh">Outline</div>
+        <div class="orow"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7.5l3.2 3L12 3.5" fill="none" stroke="#2e7d32" stroke-width="2"/></svg>Geometry</div>
+        <div class="orow"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7.5l3.2 3L12 3.5" fill="none" stroke="#2e7d32" stroke-width="2"/></svg>Material and analysis</div>
+        <div class="orow kid"><span class="bdg r1">1</span>Region 1 &middot; Structural steel (A36)</div>
+        <div class="orow kid sel"><span class="bdg r2">2</span>Region 2 &middot; Aluminum 6061</div>
+        <div class="orow"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M8 1L3 8h3.5L5.5 13 11 5.5H7.5z" fill="#d98e04"/></svg>Mesh</div>
+        <div class="orow"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7.5l3.2 3L12 3.5" fill="none" stroke="#2e7d32" stroke-width="2"/></svg>Supports</div>
+        <div class="orow kid"><span class="bdg bA">A</span>Fixed 1</div>
+        <div class="orow"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7.5l3.2 3L12 3.5" fill="none" stroke="#2e7d32" stroke-width="2"/></svg>Loads</div>
+        <div class="orow kid"><span class="bdg bB">B</span>Pressure 1</div>
+      </div>
+      <div class="split"><i></i></div>
+      <div class="dhead">Details of &ldquo;Material and analysis&rdquo;</div>
+      <div class="dbody">
+        <div class="help">?</div>
+        <p class="lbl" style="margin-top:0">Regions</p>
+        <p class="mut" style="margin:0 0 8px;width:340px">Regions that touch along an edge are fully bonded: the mesh shares its nodes there, so they move together.</p>
+        <div class="tbl">
+          <div class="th"><span>Region</span><span>Material</span></div>
+          <div class="tr"><span class="rn"><span class="bdg r1">1</span>Region 1</span><span class="sbox"><span>Structural steel (A36)</span><span aria-hidden="true">&#9662;</span></span></div>
+          <div class="tr sel"><span class="rn"><span class="bdg r2">2</span>Region 2</span><span class="sbox"><span>Aluminum 6061</span><span aria-hidden="true">&#9662;</span></span></div>
+        </div>
+        <p class="lbl" style="margin:14px 0 2px">Properties of Region 2</p>
+        <div class="frow"><span>E (MPa)</span><span class="inp">68900</span></div>
+        <div class="frow"><span>Poisson's ratio</span><span class="inp">0.33</span></div>
+        <div class="frow"><span>Yield strength (MPa)</span><span class="inp">276</span></div>
+        <div class="frow"><span>Ultimate strength (MPa)</span><span class="inp">310</span></div>
+        <div class="frow"><span>Thermal expansion &alpha; (1/K)</span><span class="inp">2.3e-05</span></div>
+        <p class="lbl" style="margin:14px 0 2px">Analysis (all regions)</p>
+        <div style="display:flex;gap:28px;height:26px;align-items:center"><span>&#9673; Plane stress</span><span>&#9675; Plane strain</span></div>
+        <div class="frow"><span>Thickness (mm)</span><span class="inp">10</span></div>
+        <div class="mut" style="height:24px;display:flex;align-items:center">&#9656; Solver settings (linear, nonlinear, triggers)</div>
+      </div>
+    </div>
+    <div class="cv">
+      <div style="position:absolute;left:107px;top:270px;width:855px;height:257px;box-sizing:border-box;background:#bcd0f0;border:2px solid #1f3f8f"></div>
+      <div style="position:absolute;left:407px;top:339px;width:255px;height:120px;box-sizing:border-box;background:#fbe3b5;border:3px solid #138a86;box-shadow:0 0 0 3px rgba(19,138,134,.25)"></div>
+      <div class="dot" style="left:104px;top:267px"></div><div class="dot" style="left:959px;top:267px"></div>
+      <div class="dot" style="left:104px;top:524px"></div><div class="dot" style="left:959px;top:524px"></div>
+      <div class="dot" style="left:404px;top:336px"></div><div class="dot" style="left:659px;top:336px"></div>
+      <div class="dot" style="left:404px;top:456px"></div><div class="dot" style="left:659px;top:456px"></div>
+      <div style="position:absolute;left:105px;top:270px;width:4px;height:257px;background:#2e9d4f"></div>
+      <div class="bdg bA" style="position:absolute;left:97px;top:376px">A</div>
+      <div class="arr" style="left:962px;top:292px"></div><div class="arr" style="left:962px;top:334px"></div><div class="arr" style="left:962px;top:377px"></div>
+      <div class="arr" style="left:962px;top:420px"></div><div class="arr" style="left:962px;top:462px"></div><div class="arr" style="left:962px;top:505px"></div>
+      <div class="bdg bB" style="position:absolute;left:953px;top:376px">B</div>
+      <div class="chip" style="left:119px;top:282px"><span class="bdg r1">1</span>Region 1 &middot; Structural steel (A36)</div>
+      <div class="chip" style="left:415px;top:347px;border-color:#138a86"><span class="bdg r2">2</span>Region 2 &middot; Aluminum 6061</div>
+      <div class="chip" style="left:571px;top:447px;height:20px;font-size:11px;padding:0 9px;color:#3b424c;font-weight:500">bonded</div>
+      <div class="note" style="left:107px;top:196px"><b>1</b>Every region is tinted and named in the view. Click one to select its row; select a row to see it here.</div>
+      <div class="note" style="left:107px;top:130px"><b>2</b>A material for each region. They are fully bonded where they touch.</div>
+      <div class="mut" style="position:absolute;left:14px;bottom:12px">Region 2 is selected: its outline is teal in the view and its row is highlighted.</div>
+    </div>
+  </div>
+  <div class="stat">Imported Sketch1: 8 edges, 2 closed region(s).</div>
+  <div class="tabs"><div class="tab">Workbench *</div><div class="tab on">B Plate 2D</div></div>
+  <div class="msg">B Plate 2D: work in its tab. The project takes the changes when you save it or come back here. The results stay in the tab only.</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1500,"height":950}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

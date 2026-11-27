@@ -1,0 +1,699 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>3D FEA window</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+*{box-sizing:border-box}
+button{font:inherit;color:inherit}
+.trow{background:transparent;border:1px solid transparent;color:#1f2a3c;cursor:pointer;text-align:left}
+.trow:hover{background:#e3ebf7}
+.trow.sel{background:#cfe0fb;border-color:#8fb0e0;color:#12223f}
+.btn{background:linear-gradient(#fbfcfe,#e3e8f0);border:1px solid;border-color:#ffffff #a8b1c3 #a8b1c3 #ffffff;border-radius:3px;padding:5px 12px;min-height:30px;color:#1f2a3c;cursor:pointer}
+.btn:hover{background:linear-gradient(#ffffff,#dbe8fa)}
+.solve{background:linear-gradient(#17949b,#0e7f86);color:#ffffff;font-weight:700;border:1px solid;border-color:#5fc3c8 #0a5f64 #0a5f64 #5fc3c8;border-radius:5px;padding:5px 18px;min-height:30px;cursor:pointer}
+.solve:hover{background:linear-gradient(#1ea4ab,#12949c)}
+.fld{background:#ffffff;border:1px solid #a8b1c3;border-radius:3px;padding:4px 6px;min-height:26px;color:#1f2a3c;width:100%;min-width:0;font:inherit}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #2f6fdc;outline-offset:1px}
+@media (max-width:760px){.vsplit{display:none}.leftcol{width:100% !important}}
+</style>
+</helmet>
+<div style="width:100%; min-height:900px; background:#e9edf3; color:#1f2a3c; font-family:'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif; font-size:13px; display:flex; flex-direction:column;" onMouseMove="{{ onMove }}" onMouseUp="{{ onEnd }}" onMouseLeave="{{ onEnd }}">
+
+  <div aria-hidden="true" style="display:flex; align-items:flex-end; gap:2px; padding:8px 10px 0; background:#dfe5ef; border-bottom:1px solid #a8b1c3;">
+    <div style="padding:6px 14px; border:1px solid #c9d0dd; border-bottom:none; border-radius:4px 4px 0 0; background:linear-gradient(#fbfcfe,#e3e8f0); color:#53647c;">Workbench</div>
+    <div style="padding:6px 14px; border:1px solid #a8b1c3; border-bottom:none; border-radius:4px 4px 0 0; background:#f7f8fb; color:#16324f; font-weight:600; margin-bottom:-1px;">Bar stress (3D FEA)</div>
+  </div>
+
+  <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 12px; background:#f7f8fb; border-bottom:1px solid #d9dfe9;">
+    <div style="flex:1 1 280px; min-width:0; color:#53647c;">Geometry comes from the Part block <b style="color:#16324f;">Bar</b> of the Workbench project.</div>
+    <button type="button" class="btn" onClick="{{ doRefresh }}">Refresh from Bar</button>
+    <button type="button" class="btn" onClick="{{ doMesh }}">Generate mesh</button>
+    <button type="button" class="solve" onClick="{{ doSolve }}">Solve</button>
+    <button type="button" class="btn" onClick="{{ doSave }}">Save</button>
+  </div>
+
+  <div style="display:flex; flex-wrap:wrap; align-items:stretch; flex:1 1 auto;">
+
+    <div class="leftcol" style="display:flex; flex-direction:column; flex:0 0 auto; width:{{ leftW }}px; max-width:100%; height:780px; background:#f7f8fb; border-right:1px solid #a8b1c3;">
+
+      <section aria-label="Outline" style="flex:0 0 auto; height:{{ outlineH }}px; display:flex; flex-direction:column; min-height:0;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 10px; background:linear-gradient(#f9fafd,#e6ebf3); border-bottom:1px solid #c9d0dd; font-weight:600; color:#16324f;">
+          <span>Outline</span>
+          <span style="font-weight:400; color:#53647c; font-size:12px;">{{ countText }}</span>
+        </div>
+        <nav aria-label="Analysis outline" style="flex:1 1 0; min-height:0; overflow:auto; padding:6px;">
+          <sc-for list="{{ tree }}" as="n" hint-placeholder-count="10">
+            <div style="display:flex; align-items:center; padding-left:{{ n.pad }}px;">
+              <sc-if value="{{ n.hasCaret }}" hint-placeholder-val="{{ false }}">
+                <button type="button" onClick="{{ n.toggle }}" aria-label="{{ n.caretLabel }}" aria-expanded="{{ n.openStr }}" style="width:22px; height:26px; border:0; background:transparent; padding:0; cursor:pointer; display:flex; align-items:center; justify-content:center; flex:0 0 auto;">
+                  <sc-if value="{{ n.isOpen }}" hint-placeholder-val="{{ true }}">
+                    <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 3l3.5 4 3.5-4z" fill="#53647c"></path></svg>
+                  </sc-if>
+                  <sc-if value="{{ n.isShut }}" hint-placeholder-val="{{ false }}">
+                    <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10"><path d="M3 1.5l4 3.5-4 3.5z" fill="#53647c"></path></svg>
+                  </sc-if>
+                </button>
+              </sc-if>
+              <sc-if value="{{ n.noCaret }}" hint-placeholder-val="{{ false }}">
+                <span style="width:22px; flex:0 0 auto;"></span>
+              </sc-if>
+              <button type="button" class="trow {{ n.cls }}" onClick="{{ n.pick }}" aria-current="{{ n.cur }}" style="flex:1 1 auto; min-width:0; height:26px; padding:0 8px 0 4px; border-radius:3px; display:flex; align-items:center; gap:7px; font-weight:{{ n.weight }};">
+                <sc-if value="{{ n.mOk }}" hint-placeholder-val="{{ true }}">
+                  <svg role="img" aria-label="Up to date" width="14" height="14" viewBox="0 0 14 14" style="flex:0 0 auto;"><path d="M2.5 7.5l3 3 6-6.5" fill="none" stroke="#2e7d32" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                </sc-if>
+                <sc-if value="{{ n.mUpd }}" hint-placeholder-val="{{ false }}">
+                  <svg role="img" aria-label="Needs update" width="14" height="14" viewBox="0 0 14 14" style="flex:0 0 auto;"><path d="M8.2 0.8L2.6 8h3.8l-1 5.2 6-7.6H7.6z" fill="#f2b705" stroke="#7a5600" stroke-width="1" stroke-linejoin="round"></path></svg>
+                </sc-if>
+                <sc-if value="{{ n.mInc }}" hint-placeholder-val="{{ false }}">
+                  <svg role="img" aria-label="Incomplete" width="14" height="14" viewBox="0 0 14 14" style="flex:0 0 auto;"><circle cx="7" cy="7" r="6.3" fill="#1f5fbf"></circle><text x="7" y="10.6" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif">?</text></svg>
+                </sc-if>
+                <sc-if value="{{ n.mNone }}" hint-placeholder-val="{{ false }}">
+                  <span style="width:14px; flex:0 0 auto;"></span>
+                </sc-if>
+                <span style="white-space:nowrap; flex:0 0 auto;">{{ n.label }}</span>
+              </button>
+            </div>
+          </sc-for>
+        </nav>
+      </section>
+
+      <button type="button" aria-label="Resize the outline and the details (drag, or use the up and down arrow keys)" onMouseDown="{{ dragY }}" onKeyDown="{{ keyY }}" style="height:9px; flex:0 0 auto; cursor:ns-resize; border:0; padding:0; background:#dfe5ef; display:flex; align-items:center; justify-content:center;">
+        <span style="display:block; width:40px; height:3px; border-radius:2px; background:#8b95a8;"></span>
+      </button>
+
+      <section aria-label="Details" style="flex:1 1 0; min-height:0; display:flex; flex-direction:column;">
+        <div style="flex:0 0 auto; padding:6px 10px; background:linear-gradient(#f9fafd,#e6ebf3); border-bottom:1px solid #c9d0dd; font-weight:600; color:#16324f; overflow-wrap:anywhere;">{{ details.title }}</div>
+        <div style="flex:1 1 0; min-height:0; overflow:auto; background:#ffffff;">
+          <sc-for list="{{ details.groups }}" as="g" hint-placeholder-count="3">
+            <div>
+              <button type="button" onClick="{{ g.toggle }}" aria-expanded="{{ g.openStr }}" style="width:100%; display:flex; align-items:center; gap:7px; padding:5px 8px; border:0; border-top:1px solid #c9d0dd; border-bottom:1px solid #c9d0dd; background:linear-gradient(#f9fafd,#e6ebf3); color:#16324f; font-weight:600; cursor:pointer; text-align:left;">
+                <sc-if value="{{ g.open }}" hint-placeholder-val="{{ true }}">
+                  <svg aria-hidden="true" width="11" height="11" viewBox="0 0 11 11" style="flex:0 0 auto;"><rect x="0.5" y="0.5" width="10" height="10" fill="#ffffff" stroke="#6b7a92"></rect><path d="M3 5.5h5" stroke="#3d4a62" stroke-width="1.2"></path></svg>
+                </sc-if>
+                <sc-if value="{{ g.shut }}" hint-placeholder-val="{{ false }}">
+                  <svg aria-hidden="true" width="11" height="11" viewBox="0 0 11 11" style="flex:0 0 auto;"><rect x="0.5" y="0.5" width="10" height="10" fill="#ffffff" stroke="#6b7a92"></rect><path d="M3 5.5h5M5.5 3v5" stroke="#3d4a62" stroke-width="1.2"></path></svg>
+                </sc-if>
+                <span>{{ g.name }}</span>
+              </button>
+              <sc-if value="{{ g.open }}" hint-placeholder-val="{{ true }}">
+                <div>
+                  <sc-for list="{{ g.rows }}" as="r" hint-placeholder-count="4">
+                    <div style="display:grid; grid-template-columns:{{ r.cols }}; align-items:stretch; border-bottom:1px solid #e1e6ef; min-height:30px;">
+                      <sc-if value="{{ r.hasLabel }}" hint-placeholder-val="{{ true }}">
+                        <label for="{{ r.fid }}" style="background:#eef1f6; border-right:1px solid #d9dfe9; padding:6px 8px; color:#3d4a62; display:flex; align-items:center; overflow-wrap:anywhere;">{{ r.label }}</label>
+                      </sc-if>
+                      <div style="padding:3px 8px; display:flex; align-items:center; gap:6px; min-width:0;">
+                        <sc-if value="{{ r.isText }}" hint-placeholder-val="{{ false }}">
+                          <input id="{{ r.fid }}" type="text" class="fld" value="{{ r.value }}" onChange="{{ r.change }}">
+                          <span style="color:#53647c; flex:0 0 auto;">{{ r.unit }}</span>
+                        </sc-if>
+                        <sc-if value="{{ r.isSelect }}" hint-placeholder-val="{{ false }}">
+                          <select id="{{ r.fid }}" class="fld" value="{{ r.value }}" onChange="{{ r.change }}">
+                            <sc-for list="{{ r.options }}" as="o" hint-placeholder-count="3">
+                              <option value="{{ o.t }}">{{ o.t }}</option>
+                            </sc-for>
+                          </select>
+                        </sc-if>
+                        <sc-if value="{{ r.isCheck }}" hint-placeholder-val="{{ false }}">
+                          <input id="{{ r.fid }}" type="checkbox" checked="{{ r.on }}" onChange="{{ r.toggle }}" style="width:16px; height:16px;">
+                        </sc-if>
+                        <sc-if value="{{ r.isInfo }}" hint-placeholder-val="{{ false }}">
+                          <output id="{{ r.fid }}" style="overflow-wrap:anywhere;">{{ r.value }}</output>
+                        </sc-if>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <sc-if value="{{ details.hasActions }}" hint-placeholder-val="{{ true }}">
+          <div style="flex:0 0 auto; display:flex; flex-wrap:wrap; gap:8px; padding:8px 10px; border-top:1px solid #c9d0dd; background:#eef1f6;">
+            <sc-for list="{{ details.actions }}" as="a" hint-placeholder-count="2">
+              <sc-if value="{{ a.primary }}" hint-placeholder-val="{{ false }}">
+                <button type="button" class="solve" onClick="{{ a.go }}">{{ a.label }}</button>
+              </sc-if>
+              <sc-if value="{{ a.plain }}" hint-placeholder-val="{{ true }}">
+                <button type="button" class="btn" onClick="{{ a.go }}">{{ a.label }}</button>
+              </sc-if>
+            </sc-for>
+          </div>
+        </sc-if>
+      </section>
+    </div>
+
+    <button type="button" class="vsplit" aria-label="Resize the left panel (drag, or use the left and right arrow keys)" onMouseDown="{{ dragX }}" onKeyDown="{{ keyX }}" style="width:9px; flex:0 0 auto; cursor:ew-resize; border:0; padding:0; background:#dfe5ef; display:flex; align-items:center; justify-content:center;">
+      <span style="display:block; width:3px; height:40px; border-radius:2px; background:#8b95a8;"></span>
+    </button>
+
+    <section aria-label="3D view" style="position:relative; flex:1 1 520px; min-width:0; min-height:420px; background:linear-gradient(180deg,#d6dfee,#f5f8fd); overflow:hidden;">
+      <svg viewBox="0 0 1000 720" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{{ vp.alt }}" style="position:absolute; left:0; top:0; width:100%; height:100%;">
+        <defs>
+          <linearGradient id="resU" gradientUnits="userSpaceOnUse" x1="228" y1="605" x2="834.2" y2="255">
+            <stop offset="0" stop-color="#2d5bd6"></stop>
+            <stop offset="0.25" stop-color="#2fb8d6"></stop>
+            <stop offset="0.5" stop-color="#5cc46a"></stop>
+            <stop offset="0.75" stop-color="#e8d24a"></stop>
+            <stop offset="1" stop-color="#d9482f"></stop>
+          </linearGradient>
+        </defs>
+
+        <polygon points="228.0,535.0 834.2,185.0 773.6,150.0 167.4,500.0" fill="{{ vp.topFill }}" stroke="#4a5b78" stroke-width="1.5" stroke-linejoin="round"></polygon>
+        <polygon points="228.0,605.0 834.2,255.0 834.2,185.0 228.0,535.0" fill="{{ vp.frontFill }}" stroke="#4a5b78" stroke-width="1.5" stroke-linejoin="round"></polygon>
+        <polygon points="228.0,605.0 167.4,570.0 167.4,500.0 228.0,535.0" fill="{{ vp.endFill }}" stroke="#4a5b78" stroke-width="1.5" stroke-linejoin="round"></polygon>
+
+        <g visibility="{{ vp.meshVis }}" fill="none" stroke="#33415c" stroke-width="0.8" stroke-opacity="0.55">
+          <path d="M228.0,535.0L167.4,500.0M263.7,514.4L203.0,479.4M299.3,493.8L238.7,458.8M335.0,473.2L274.4,438.2M370.6,452.6L310.0,417.6M406.3,432.1L345.7,397.1M442.0,411.5L381.3,376.5M477.6,390.9L417.0,355.9M513.3,370.3L452.7,335.3M548.9,349.7L488.3,314.7M584.6,329.1L524.0,294.1M620.2,308.5L559.6,273.5M655.9,287.9L595.3,252.9M691.6,267.4L630.9,232.4M727.2,246.8L666.6,211.8M762.9,226.2L702.3,191.2M798.5,205.6L737.9,170.6M834.2,185.0L773.6,150.0M228.0,535.0L834.2,185.0M197.7,517.5L803.9,167.5M167.4,500.0L773.6,150.0M228.0,535.0L233.3,496.9M167.4,500.0L233.3,496.9M233.3,496.9L299.3,493.8M233.3,496.9L238.7,458.8M299.3,493.8L304.7,455.7M238.7,458.8L304.7,455.7M304.7,455.7L370.6,452.6M304.7,455.7L310.0,417.6M370.6,452.6L376.0,414.6M310.0,417.6L376.0,414.6M376.0,414.6L442.0,411.5M376.0,414.6L381.3,376.5M442.0,411.5L447.3,373.4M381.3,376.5L447.3,373.4M447.3,373.4L513.3,370.3M447.3,373.4L452.7,335.3M513.3,370.3L518.6,332.2M452.7,335.3L518.6,332.2M518.6,332.2L584.6,329.1M518.6,332.2L524.0,294.1M584.6,329.1L589.9,291.0M524.0,294.1L589.9,291.0M589.9,291.0L655.9,287.9M589.9,291.0L595.3,252.9M655.9,287.9L661.3,249.9M595.3,252.9L661.3,249.9M661.3,249.9L727.2,246.8M661.3,249.9L666.6,211.8M727.2,246.8L732.6,208.7M666.6,211.8L732.6,208.7M732.6,208.7L798.5,205.6M732.6,208.7L737.9,170.6M798.5,205.6L803.9,167.5M737.9,170.6L803.9,167.5"></path>
+          <path d="M228.0,605.0L228.0,535.0M263.7,584.4L263.7,514.4M299.3,563.8L299.3,493.8M335.0,543.2L335.0,473.2M370.6,522.6L370.6,452.6M406.3,502.1L406.3,432.1M442.0,481.5L442.0,411.5M477.6,460.9L477.6,390.9M513.3,440.3L513.3,370.3M548.9,419.7L548.9,349.7M584.6,399.1L584.6,329.1M620.2,378.5L620.2,308.5M655.9,357.9L655.9,287.9M691.6,337.4L691.6,267.4M727.2,316.8L727.2,246.8M762.9,296.2L762.9,226.2M798.5,275.6L798.5,205.6M834.2,255.0L834.2,185.0M228.0,605.0L834.2,255.0M228.0,570.0L834.2,220.0M228.0,535.0L834.2,185.0M228.0,605.0L263.7,549.4M228.0,535.0L263.7,549.4M263.7,549.4L299.3,563.8M263.7,549.4L299.3,493.8M299.3,563.8L335.0,508.2M299.3,493.8L335.0,508.2M335.0,508.2L370.6,522.6M335.0,508.2L370.6,452.6M370.6,522.6L406.3,467.1M370.6,452.6L406.3,467.1M406.3,467.1L442.0,481.5M406.3,467.1L442.0,411.5M442.0,481.5L477.6,425.9M442.0,411.5L477.6,425.9M477.6,425.9L513.3,440.3M477.6,425.9L513.3,370.3M513.3,440.3L548.9,384.7M513.3,370.3L548.9,384.7M548.9,384.7L584.6,399.1M548.9,384.7L584.6,329.1M584.6,399.1L620.2,343.5M584.6,329.1L620.2,343.5M620.2,343.5L655.9,357.9M620.2,343.5L655.9,287.9M655.9,357.9L691.6,302.4M655.9,287.9L691.6,302.4M691.6,302.4L727.2,316.8M691.6,302.4L727.2,246.8M727.2,316.8L762.9,261.2M727.2,246.8L762.9,261.2M762.9,261.2L798.5,275.6M762.9,261.2L798.5,205.6M798.5,275.6L834.2,220.0M798.5,205.6L834.2,220.0"></path>
+          <path d="M197.7,587.5L197.7,517.5M228.0,570.0L167.4,535.0M228.0,605.0L197.7,552.5M197.7,552.5L167.4,500.0M197.7,587.5L167.4,535.0M228.0,570.0L197.7,517.5"></path>
+        </g>
+
+        <polygon points="228.0,605.0 167.4,570.0 167.4,500.0 228.0,535.0" fill="none" stroke="#e07b00" stroke-width="3.5" stroke-dasharray="7 4" visibility="{{ vp.fsVis }}"></polygon>
+
+        <polygon points="228.0,605.0 167.4,570.0 167.4,500.0 228.0,535.0" fill="{{ vp.supFill }}" fill-opacity="{{ vp.supOp }}" stroke="{{ vp.supStroke }}" stroke-width="{{ vp.supSW }}" stroke-linejoin="round" visibility="{{ vp.supVis }}"></polygon>
+
+        <polygon points="834.2,255.0 773.6,220.0 773.6,150.0 834.2,185.0" fill="{{ vp.loadCol }}" fill-opacity="0.18" stroke="#ffb000" stroke-width="3" stroke-dasharray="7 4" visibility="{{ vp.loadSelVis }}"></polygon>
+        <g visibility="{{ vp.loadVis }}" stroke="{{ vp.loadCol }}" stroke-width="{{ vp.loadW }}" stroke-linecap="round">
+          <line x1="819.0" y1="211.2" x2="957.0" y2="131.5"></line>
+          <line x1="803.9" y1="202.5" x2="941.9" y2="122.8"></line>
+          <line x1="788.7" y1="193.8" x2="926.7" y2="114.1"></line>
+        </g>
+        <g visibility="{{ vp.loadVis }}" fill="{{ vp.loadCol }}">
+          <polygon points="964.5,127.2 957.8,137.5 952.3,128.0"></polygon>
+          <polygon points="949.4,118.5 942.6,128.8 937.1,119.2"></polygon>
+          <polygon points="934.2,109.8 927.4,120.0 921.9,110.5"></polygon>
+        </g>
+        <g visibility="{{ vp.t0.vis }}">
+          <line x1="{{ vp.t0.lx1 }}" y1="{{ vp.t0.ly1 }}" x2="{{ vp.t0.lx2 }}" y2="{{ vp.t0.ly2 }}" stroke="#1f2a3c" stroke-width="1.2"></line>
+          <polygon points="{{ vp.t0.pts }}" fill="{{ vp.t0.fill }}" stroke="{{ vp.t0.ring }}" stroke-width="{{ vp.t0.rw }}" stroke-linejoin="round"></polygon>
+          <text x="{{ vp.t0.tx }}" y="{{ vp.t0.ty }}" text-anchor="middle" font-size="13" font-weight="700" fill="{{ vp.t0.ink }}" font-family="Segoe UI, Arial, sans-serif">{{ vp.t0.letter }}</text>
+        </g>
+        <g visibility="{{ vp.t1.vis }}">
+          <line x1="{{ vp.t1.lx1 }}" y1="{{ vp.t1.ly1 }}" x2="{{ vp.t1.lx2 }}" y2="{{ vp.t1.ly2 }}" stroke="#1f2a3c" stroke-width="1.2"></line>
+          <polygon points="{{ vp.t1.pts }}" fill="{{ vp.t1.fill }}" stroke="{{ vp.t1.ring }}" stroke-width="{{ vp.t1.rw }}" stroke-linejoin="round"></polygon>
+          <text x="{{ vp.t1.tx }}" y="{{ vp.t1.ty }}" text-anchor="middle" font-size="13" font-weight="700" fill="{{ vp.t1.ink }}" font-family="Segoe UI, Arial, sans-serif">{{ vp.t1.letter }}</text>
+        </g>
+        <g visibility="{{ vp.t2.vis }}">
+          <line x1="{{ vp.t2.lx1 }}" y1="{{ vp.t2.ly1 }}" x2="{{ vp.t2.lx2 }}" y2="{{ vp.t2.ly2 }}" stroke="#1f2a3c" stroke-width="1.2"></line>
+          <polygon points="{{ vp.t2.pts }}" fill="{{ vp.t2.fill }}" stroke="{{ vp.t2.ring }}" stroke-width="{{ vp.t2.rw }}" stroke-linejoin="round"></polygon>
+          <text x="{{ vp.t2.tx }}" y="{{ vp.t2.ty }}" text-anchor="middle" font-size="13" font-weight="700" fill="{{ vp.t2.ink }}" font-family="Segoe UI, Arial, sans-serif">{{ vp.t2.letter }}</text>
+        </g>
+        <g visibility="{{ vp.t3.vis }}">
+          <line x1="{{ vp.t3.lx1 }}" y1="{{ vp.t3.ly1 }}" x2="{{ vp.t3.lx2 }}" y2="{{ vp.t3.ly2 }}" stroke="#1f2a3c" stroke-width="1.2"></line>
+          <polygon points="{{ vp.t3.pts }}" fill="{{ vp.t3.fill }}" stroke="{{ vp.t3.ring }}" stroke-width="{{ vp.t3.rw }}" stroke-linejoin="round"></polygon>
+          <text x="{{ vp.t3.tx }}" y="{{ vp.t3.ty }}" text-anchor="middle" font-size="13" font-weight="700" fill="{{ vp.t3.ink }}" font-family="Segoe UI, Arial, sans-serif">{{ vp.t3.letter }}</text>
+        </g>
+        <g visibility="{{ vp.t4.vis }}">
+          <line x1="{{ vp.t4.lx1 }}" y1="{{ vp.t4.ly1 }}" x2="{{ vp.t4.lx2 }}" y2="{{ vp.t4.ly2 }}" stroke="#1f2a3c" stroke-width="1.2"></line>
+          <polygon points="{{ vp.t4.pts }}" fill="{{ vp.t4.fill }}" stroke="{{ vp.t4.ring }}" stroke-width="{{ vp.t4.rw }}" stroke-linejoin="round"></polygon>
+          <text x="{{ vp.t4.tx }}" y="{{ vp.t4.ty }}" text-anchor="middle" font-size="13" font-weight="700" fill="{{ vp.t4.ink }}" font-family="Segoe UI, Arial, sans-serif">{{ vp.t4.letter }}</text>
+        </g>
+        <g visibility="{{ vp.t5.vis }}">
+          <line x1="{{ vp.t5.lx1 }}" y1="{{ vp.t5.ly1 }}" x2="{{ vp.t5.lx2 }}" y2="{{ vp.t5.ly2 }}" stroke="#1f2a3c" stroke-width="1.2"></line>
+          <polygon points="{{ vp.t5.pts }}" fill="{{ vp.t5.fill }}" stroke="{{ vp.t5.ring }}" stroke-width="{{ vp.t5.rw }}" stroke-linejoin="round"></polygon>
+          <text x="{{ vp.t5.tx }}" y="{{ vp.t5.ty }}" text-anchor="middle" font-size="13" font-weight="700" fill="{{ vp.t5.ink }}" font-family="Segoe UI, Arial, sans-serif">{{ vp.t5.letter }}</text>
+        </g>
+
+        <g stroke-width="2.2" stroke-linecap="round" fill="none">
+          <line x1="70" y1="680" x2="109.8" y2="657" stroke="#d33333"></line>
+          <line x1="70" y1="680" x2="30.2" y2="657" stroke="#2a9a3a"></line>
+          <line x1="70" y1="680" x2="70" y2="634" stroke="#2a5fd6"></line>
+        </g>
+        <g font-size="13" font-weight="700" font-family="Segoe UI, Arial, sans-serif">
+          <text x="116" y="655" fill="#b02020">X</text>
+          <text x="14" y="655" fill="#1f7a2c">Y</text>
+          <text x="65" y="626" fill="#2149b0">Z</text>
+        </g>
+      </svg>
+
+      <sc-if value="{{ vp.showLegend }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute; left:16px; top:16px; background:rgba(255,255,255,0.9); border:1px solid #c9d0dd; border-radius:4px; padding:8px 10px; max-width:70%;">
+          <div style="font-weight:600; color:#16324f; margin-bottom:6px;">{{ vp.legendTitle }}</div>
+          <div style="display:flex; gap:10px;">
+            <div style="width:16px; height:150px; flex:0 0 auto; background:{{ vp.legendBg }}; border:1px solid #6b7a92;"></div>
+            <div style="display:flex; flex-direction:column; justify-content:space-between; font-size:12px; color:#1f2a3c;">
+              <span>{{ vp.legendTop }}</span>
+              <span>{{ vp.legendBottom }}</span>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+      <div style="position:absolute; left:16px; top:14px; display:flex; flex-direction:column; gap:6px; max-width:60%;">
+        <sc-for list="{{ vp.legend }}" as="l" hint-placeholder-count="2">
+          <div style="display:flex; align-items:center; gap:8px; color:#1f2a3c; font-size:14px;">
+            <span style="flex:0 0 auto; width:24px; height:24px; border-radius:3px; border:{{ l.rw }}px solid {{ l.ring }}; background:{{ l.fill }}; color:{{ l.ink }}; font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center;">{{ l.letter }}</span>
+            <span>{{ l.text }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </section>
+  </div>
+
+  <div aria-live="polite" style="padding:6px 12px; background:#eef1f6; border-top:1px solid #c9d0dd; color:#3d4a62; font-size:12px;">{{ msg }}</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  S() {
+    const s = this.state || {};
+    return {
+      sel: s.sel || 'mesh',
+      meshed: !!s.meshed,
+      solved: !!s.solved,
+      outlineH: s.outlineH == null ? 300 : s.outlineH,
+      leftW: s.leftW == null ? 380 : s.leftW,
+      drag: s.drag || null,
+      vals: s.vals || {},
+      shut: s.shut || {},
+      fold: s.fold || {},
+      msg: s.msg || '',
+      seq: s.seq || 4,
+      items: s.items || [
+        { id: 'i1', parent: 'mesh', type: 'facesize', n: 1, applied: true },
+        { id: 'i2', parent: 'supports', type: 'fixed', n: 1, applied: true },
+        { id: 'i3', parent: 'loads', type: 'force', n: 1, applied: true }
+      ]
+    };
+  }
+
+  TYPES() {
+    return {
+      facesize: { name: 'Face sizing', parent: 'mesh' },
+      fixed: { name: 'Fixed support', parent: 'supports' },
+      slide: { name: 'One-direction support', parent: 'supports' },
+      bearing: { name: 'Bearing support', parent: 'supports' },
+      force: { name: 'Force', parent: 'loads' },
+      pressure: { name: 'Pressure', parent: 'loads' },
+      point: { name: 'Force at vertex', parent: 'loads' },
+      gravity: { name: 'Gravity', parent: 'loads' }
+    };
+  }
+
+  MATS() {
+    return {
+      'Steel (generic)': { E: '200000', nu: '0.30', rho: '7850', sy: '250', su: '400' },
+      'Aluminum 6061': { E: '68900', nu: '0.33', rho: '2700', sy: '276', su: '310' },
+      'Titanium': { E: '113800', nu: '0.342', rho: '4430', sy: '880', su: '950' }
+    };
+  }
+
+  COLORS() {
+    return {
+      fixed: { fill: '#2f6fdc', ink: '#ffffff' },
+      slide: { fill: '#e0b000', ink: '#1f2a3c' },
+      bearing: { fill: '#7a4dc2', ink: '#ffffff' },
+      force: { fill: '#d12f2f', ink: '#ffffff' },
+      pressure: { fill: '#e8742a', ink: '#1f2a3c' },
+      point: { fill: '#a61e4d', ink: '#ffffff' },
+      gravity: { fill: '#1f7a2c', ink: '#ffffff' }
+    };
+  }
+
+  lab(it) {
+    return this.TYPES()[it.type].name + (it.n > 1 ? ' ' + it.n : '');
+  }
+
+  scope(it) {
+    if (!it.applied) return 'no faces yet';
+    if (it.type === 'gravity') return 'whole part';
+    if (it.type === 'point') return '1 vertex';
+    return '1 face';
+  }
+
+  why(S) {
+    const sups = S.items.filter((i) => i.parent === 'supports');
+    const lds = S.items.filter((i) => i.parent === 'loads');
+    if (!sups.length) return 'There is no support yet: the part would fly away.';
+    if (!lds.length) return 'There is no load yet.';
+    const bad = S.items.find((i) => !i.applied);
+    if (bad) return this.lab(bad) + ' has no faces yet.';
+    return '';
+  }
+
+  markOf(id, S) {
+    const bad = (p) => S.items.some((i) => i.parent === p && !i.applied);
+    const none = (p) => !S.items.some((i) => i.parent === p);
+    if (id === 'root') return '';
+    if (id === 'geometry' || id === 'material') return 'ok';
+    if (id === 'mesh') return bad('mesh') ? 'incomplete' : (S.meshed ? 'ok' : 'update');
+    if (id === 'supports') return (none('supports') || bad('supports')) ? 'incomplete' : 'ok';
+    if (id === 'loads') return (none('loads') || bad('loads')) ? 'incomplete' : 'ok';
+    if (id === 'solution' || id === 'info') return this.why(S) ? 'incomplete' : (S.solved ? 'ok' : 'update');
+    if (id === 'results') return S.solved ? 'ok' : 'incomplete';
+    const it = S.items.find((i) => i.id === id);
+    if (it) return it.applied ? 'ok' : 'incomplete';
+    return '';
+  }
+
+  edit(id, value, meshy, label) {
+    const T = this.S();
+    const vals = Object.assign({}, T.vals);
+    vals[id] = value;
+    if (id === 'mat.name') {
+      const m = this.MATS()[value];
+      if (m) { vals['mat.E'] = m.E; vals['mat.nu'] = m.nu; vals['mat.rho'] = m.rho; vals['mat.sy'] = m.sy; vals['mat.su'] = m.su; }
+    } else if (id.indexOf('mat.') === 0) {
+      vals['mat.name'] = 'Custom (edited)';
+    }
+    const patch = { vals: vals };
+    if (id.indexOf('res.') !== 0) {
+      const stale = [];
+      if (T.solved) { patch.solved = false; stale.push('the solution'); }
+      if ((meshy || id.indexOf('geo.') === 0) && T.meshed) { patch.meshed = false; stale.push('the mesh'); }
+      patch.msg = 'Changed “' + label + '”.' + (stale.length ? ' The outline now says ' + stale.join(' and ') + ' needs an update.' : '');
+    }
+    this.setState(patch);
+  }
+
+  insert(type) {
+    const T = this.S();
+    const info = this.TYPES()[type];
+    const same = T.items.filter((i) => i.type === type).map((i) => i.n);
+    const n = (same.length ? Math.max.apply(null, same) : 0) + 1;
+    const id = 'i' + T.seq;
+    const it = { id: id, parent: info.parent, type: type, n: n, applied: type === 'gravity' };
+    const patch = { items: T.items.concat([it]), seq: T.seq + 1, sel: id, solved: false };
+    if (type === 'facesize') patch.meshed = false;
+    patch.msg = 'Inserted “' + this.lab(it) + '”.' + (it.applied ? '' : ' It has no faces yet: it is marked incomplete and Solve will say so.');
+    this.setState(patch);
+  }
+
+  apply(id) {
+    const T = this.S();
+    const it = T.items.find((i) => i.id === id);
+    const patch = { items: T.items.map((i) => (i.id === id ? Object.assign({}, i, { applied: true }) : i)), solved: false };
+    if (it && it.type === 'facesize') patch.meshed = false;
+    patch.msg = 'Applied the face selected in the 3D view to “' + (it ? this.lab(it) : '') + '”. (Mock-up: it always takes one face.)';
+    this.setState(patch);
+  }
+
+  remove(id) {
+    const T = this.S();
+    const it = T.items.find((i) => i.id === id);
+    if (!it) return;
+    const patch = { items: T.items.filter((i) => i.id !== id), sel: it.parent, solved: false };
+    if (it.type === 'facesize') patch.meshed = false;
+    patch.msg = 'Removed “' + this.lab(it) + '”.';
+    this.setState(patch);
+  }
+
+  doMesh() {
+    this.setState({ meshed: true, solved: false, msg: 'Mesh generated (6 mm elements). The Mesh item is up to date; the solution now says update.' });
+  }
+
+  doSolve() {
+    const T = this.S();
+    const w = this.why(T);
+    if (w) {
+      this.setState({ msg: 'Cannot solve yet: ' + w });
+      return;
+    }
+    this.setState({ meshed: true, solved: true, msg: 'Solved. Pick Results in the outline to see it. Hand check: the displacement is F L / (A E) = 1000 N × 100 mm / (100 mm² × 200 000 MPa) = 0.005 mm.' });
+  }
+
+  renderVals() {
+    const S = this.S();
+    const self = this;
+    const val = (id, d) => (S.vals[id] === undefined ? d : S.vals[id]);
+    const sel = S.sel;
+    const item = S.items.find((i) => i.id === sel);
+    const kids = (p) => S.items.filter((i) => i.parent === p);
+    const labels = { root: 'Bar stress', geometry: 'Geometry', material: 'Material', mesh: 'Mesh', supports: 'Supports', loads: 'Loads', solution: 'Solution', info: 'Solution information', results: 'Results' };
+    const nameOf = (id) => (item && item.id === id ? self.lab(item) : labels[id]);
+
+    // ---------------------------------------------------------------- the outline
+    const mk = (id, label, depth, hint, folder, hasKids) => {
+      const shut = !!S.shut[id];
+      const m = self.markOf(id, S);
+      return {
+        id: id, label: label, hint: hint, pad: 4 + depth * 16,
+        hasCaret: !!hasKids, noCaret: !hasKids, isOpen: !!hasKids && !shut, isShut: !!hasKids && shut,
+        caretLabel: (shut ? 'Expand ' : 'Collapse ') + label, openStr: String(!shut),
+        toggle: () => { const T = self.S(); self.setState({ shut: Object.assign({}, T.shut, { [id]: !T.shut[id] }) }); },
+        pick: () => self.setState({ sel: id }),
+        cls: id === sel ? 'sel' : '', cur: id === sel ? 'true' : 'false',
+        weight: folder ? 600 : 400,
+        mOk: m === 'ok', mUpd: m === 'update', mInc: m === 'incomplete', mNone: m === ''
+      };
+    };
+    const itemRow = (it) => mk(it.id, self.lab(it), 2, (it.type === 'facesize' ? val(it.id + '.size', '2') + ' mm, ' : '') + self.scope(it), false, false);
+    const tree = [];
+    tree.push(mk('root', 'Bar stress', 0, '3D Static Structural', true, false));
+    tree.push(mk('geometry', 'Geometry', 1, 'Bar (linked)', false, false));
+    tree.push(mk('material', 'Material', 1, String(val('mat.name', 'Steel (generic)')), false, false));
+    tree.push(mk('mesh', 'Mesh', 1, val('mesh.size', '6') + ' mm', true, kids('mesh').length > 0));
+    if (!S.shut.mesh) kids('mesh').forEach((it) => tree.push(itemRow(it)));
+    tree.push(mk('supports', 'Supports', 1, String(kids('supports').length), true, kids('supports').length > 0));
+    if (!S.shut.supports) kids('supports').forEach((it) => tree.push(itemRow(it)));
+    tree.push(mk('loads', 'Loads', 1, String(kids('loads').length), true, kids('loads').length > 0));
+    if (!S.shut.loads) kids('loads').forEach((it) => tree.push(itemRow(it)));
+    tree.push(mk('solution', 'Solution', 1, '', true, true));
+    if (!S.shut.solution) {
+      tree.push(mk('info', 'Solution information', 2, '', false, false));
+      tree.push(mk('results', 'Results', 2, S.solved ? String(val('res.field', 'Displacement magnitude')) : '', false, false));
+    }
+    const open = S.items.filter((i) => !i.applied).length;
+    const countText = open ? (open === 1 ? '1 item to finish' : open + ' items to finish') : '';
+
+    // ---------------------------------------------------------------- the details
+    const fin = (r, key) => Object.assign({
+      fid: 'd-' + (r.id || key), hasLabel: r.k !== 'note', cols: r.k === 'note' ? 'minmax(0,1fr)' : '42% minmax(0,1fr)',
+      isText: r.k === 'text', isSelect: r.k === 'select', isCheck: r.k === 'check', isInfo: r.k === 'info', isNote: r.k === 'note',
+      on: r.k === 'check' ? !!r.value : false
+    }, r);
+    const g = (name, dflt, rows) => {
+      const key = sel + '/' + name;
+      const isOpen = S.fold[key] === undefined ? dflt : S.fold[key];
+      return {
+        name: name, open: isOpen, shut: !isOpen, openStr: String(isOpen),
+        toggle: () => { const T = self.S(); self.setState({ fold: Object.assign({}, T.fold, { [key]: !isOpen }) }); },
+        rows: rows.filter((r) => r.k !== 'note').map((r, i) => fin(r, key + i))
+      };
+    };
+    const T = (id, label, dflt, unit, meshy) => ({ k: 'text', id: id, label: label, value: String(val(id, dflt)), unit: unit || '', change: (e) => self.edit(id, e.target.value, !!meshy, label) });
+    const SEL = (id, label, dflt, options) => ({ k: 'select', id: id, label: label, value: String(val(id, dflt)), options: options.map((t) => ({ t: t })), change: (e) => self.edit(id, e.target.value, id.indexOf('mesh.') === 0, label) });
+    const CHK = (id, label, dflt, meshy) => ({ k: 'check', id: id, label: label, value: !!val(id, dflt), toggle: (e) => self.edit(id, !!e.target.checked, !!meshy, label) });
+    const INFO = (label, value) => ({ k: 'info', label: label, value: String(value) });
+    const NOTE = (text) => ({ k: 'note', label: '', value: text });
+    const act = (label, go, primary) => ({ label: label, go: go, primary: !!primary, plain: !primary });
+    const say = (text) => () => self.setState({ msg: text });
+
+    const why = self.why(S);
+    const kidsText = (p) => {
+      const list = kids(p);
+      return list.length ? list.map((it) => INFO(self.lab(it), self.scope(it))) : [NOTE('Nothing yet.')];
+    };
+    const insertNote = NOTE('Select face(s) in the 3D view first, then insert. Each one becomes its own item in the outline, with its own marks.');
+
+    let status = { m: '', t: '' };
+    let groups = [];
+    let actions = [];
+
+    if (sel === 'root') {
+      status = { m: '', t: why ? 'Not ready: ' + why : (S.solved ? 'Solved.' : 'Ready to solve.') };
+      groups = [
+        g('Analysis', true, [INFO('Name', 'Bar stress'), INFO('Type', '3D Static Structural'), INFO('Units', 'The program’s units (File > Units)')]),
+        g('Source', true, [INFO('Geometry from', 'Part block “Bar”'), INFO('Workbench project', 'Example: a bar, a plate and a frame')]),
+        g('Setup', true, [INFO('Supports', kids('supports').length), INFO('Loads', kids('loads').length), INFO('Still to finish', open ? open : 'nothing')])
+      ];
+    } else if (sel === 'geometry') {
+      const H = parseFloat(val('geo.H', '10'));
+      const vol = isFinite(H) ? String(Math.round(1000 * H)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' mm³' : '—';
+      status = { m: 'ok', t: 'Up to date with the part “Bar”. After the part changes, this item says refresh.' };
+      groups = [
+        g('Source', true, [INFO('Linked to', 'Bar (Part block)'), INFO('Status', 'Up to date'), NOTE('A standalone analysis shows Import source and Update from original here, in place of the link.')]),
+        g('Body', true, [INFO('Bodies', '1'), INFO('Volume', vol), INFO('Faces', '6')]),
+        g('Part dimensions', true, [T('geo.H', 'H (depth)', '10', 'mm', true)]),
+        g('Split a flat face', false, [NOTE('Select a flat face, then cut it into patches to load or support only a part of it.'), T('geo.cols', 'Columns', '2', '', true), T('geo.rows', 'Rows', '1', '', true)])
+      ];
+      actions = [act('Refresh from Bar', say('Geometry copied again from the part Bar. (Mock-up: nothing changed.)')), act('Split selected face', say('Split the selected face into patches. (Mock-up)'))];
+    } else if (sel === 'material') {
+      status = { m: 'ok', t: 'The material is set.' };
+      groups = [
+        g('Material', true, [SEL('mat.name', 'Material', 'Steel (generic)', ['Steel (generic)', 'Aluminum 6061', 'Titanium', 'Custom (edited)'])]),
+        g('Properties', true, [T('mat.E', 'Young’s modulus E', '200000', 'MPa'), T('mat.nu', 'Poisson’s ratio', '0.30', ''), T('mat.rho', 'Density', '7850', 'kg/m³'), T('mat.sy', 'Yield strength', '250', 'MPa'), T('mat.su', 'Ultimate strength', '400', 'MPa')]),
+        g('Library', false, [NOTE('The same library the 1D and 2D analyses use. “Add material” stores the numbers above under a name of your own.')])
+      ];
+      actions = [act('Add material…', say('Opens the Add material box. (Mock-up)'))];
+    } else if (sel === 'mesh') {
+      status = S.meshed ? { m: 'ok', t: 'The mesh matches the geometry and the sizes below.' } : { m: self.markOf('mesh', S), t: self.markOf('mesh', S) === 'incomplete' ? why || 'A face sizing has no faces yet.' : 'No mesh yet, or something it depends on changed: press Generate mesh.' };
+      groups = [
+        g('Defaults', true, [SEL('mesh.type', 'Mesh type', 'Tetrahedra', ['Tetrahedra', 'Hex-dominant']), SEL('mesh.order', 'Element order', 'Quadratic', ['Quadratic', 'Linear']), T('mesh.size', 'Element size', '6', 'mm', true)]),
+        g('Sizing', true, [T('mesh.growth', 'Growth rate', '1.3', '', true), T('mesh.min', 'Minimum size', 'auto', 'mm', true), CHK('mesh.curv', 'Refine at curved surfaces', true, true), T('mesh.circle', 'Elements per circle', '10', '', true)]),
+        g('Adaptive refinement', false, [CHK('mesh.adapt', 'Refine where the answer needs it', false, true), T('mesh.tol', 'Tolerance', '2', '%', true)]),
+        g('Statistics', false, [NOTE('After meshing, the number of nodes and elements and the quality report appear here.')])
+      ];
+      actions = [act('Generate mesh', () => self.doMesh(), true), act('Insert face sizing', () => self.insert('facesize'))];
+    } else if (sel === 'supports') {
+      const n = kids('supports').length;
+      const bad = kids('supports').find((i) => !i.applied);
+      status = n === 0 ? { m: 'incomplete', t: 'There is no support yet: the part would fly away. Insert one.' } : bad ? { m: 'incomplete', t: self.lab(bad) + ' has no faces yet.' } : { m: 'ok', t: n + (n === 1 ? ' support applied.' : ' supports applied.') };
+      groups = [g('On this model', true, kidsText('supports')), g('Insert', true, [insertNote])];
+      actions = [act('Fixed support', () => self.insert('fixed')), act('One direction', () => self.insert('slide')), act('Bearing (hole face)', () => self.insert('bearing'))];
+    } else if (sel === 'loads') {
+      const n = kids('loads').length;
+      const bad = kids('loads').find((i) => !i.applied);
+      status = n === 0 ? { m: 'incomplete', t: 'There is no load yet. Insert one.' } : bad ? { m: 'incomplete', t: self.lab(bad) + ' has no faces yet.' } : { m: 'ok', t: n + (n === 1 ? ' load applied.' : ' loads applied.') };
+      groups = [g('On this model', true, kidsText('loads')), g('Insert', true, [insertNote])];
+      actions = [act('Force on face(s)', () => self.insert('force')), act('Pressure', () => self.insert('pressure')), act('Force at vertex', () => self.insert('point')), act('Gravity', () => self.insert('gravity'))];
+    } else if (item) {
+      const scopeRows = item.applied
+        ? [INFO('Geometry', self.scope(item))]
+        : [INFO('Geometry', 'No faces selected'), NOTE('Select face(s) in the 3D view, then press Apply.')];
+      const id = item.id;
+      let def = [];
+      if (item.type === 'fixed') def = [INFO('Type', 'Fixed'), NOTE('Holds the selected faces in every direction.')];
+      else if (item.type === 'slide') def = [INFO('Type', 'One direction (normal)'), NOTE('Holds the faces only in the direction normal to them; they slide freely along it.')];
+      else if (item.type === 'bearing') def = [INFO('Type', 'Bearing'), NOTE('For the round face of a hole. One bearing alone leaves the part free to turn about its hole: add a second one on another hole.')];
+      else if (item.type === 'force') def = [T(id + '.fx', 'X', id === 'i3' ? '1000' : '0', 'N'), T(id + '.fy', 'Y', '0', 'N'), T(id + '.fz', 'Z', '0', 'N'), NOTE('A total force spread over the selected faces.')];
+      else if (item.type === 'pressure') def = [T(id + '.p', 'Pressure', '10', 'MPa'), NOTE('Positive pushes into the part.')];
+      else if (item.type === 'point') def = [T(id + '.fx', 'X', '0', 'N'), T(id + '.fy', 'Y', '0', 'N'), T(id + '.fz', 'Z', '0', 'N')];
+      else if (item.type === 'gravity') def = [T(id + '.g', 'Acceleration', '9.81', 'm/s²'), SEL(id + '.dir', 'Direction', '−Z', ['−X', '−Y', '−Z', '+X', '+Y', '+Z'])];
+      else if (item.type === 'facesize') def = [T(id + '.size', 'Element size', '2', 'mm', true), NOTE('The elements grow back to the global size away from these faces, at the growth rate.')];
+      status = item.applied ? { m: 'ok', t: item.type === 'gravity' ? 'Acts on the whole part.' : 'Applied to ' + self.scope(item) + '.' } : { m: 'incomplete', t: 'No faces yet: select face(s) in the 3D view, then press Apply.' };
+      groups = [g('Scope', true, scopeRows), g('Definition', true, def)];
+      if (!item.applied && item.type !== 'gravity') actions.push(act('Apply selected face(s)', () => self.apply(id), true));
+      actions.push(act('Remove', () => self.remove(id)));
+    } else if (sel === 'solution') {
+      status = why ? { m: 'incomplete', t: 'Cannot solve yet: ' + why } : S.solved ? { m: 'ok', t: 'Solved. Every item above is up to date.' } : { m: 'update', t: 'Not solved, or the setup changed since: press Solve.' };
+      groups = [g('Where things stand', true, [INFO('Setup', why || 'Complete'), INFO('Mesh', S.meshed ? 'Generated' : 'Not generated'), INFO('Solution', S.solved ? 'Up to date' : 'Needs update')])];
+      actions = [act('Solve', () => self.doSolve(), true)];
+    } else if (sel === 'info') {
+      status = why ? { m: 'incomplete', t: 'Nothing to report: ' + why } : S.solved ? { m: 'ok', t: 'The solver’s report for this solve.' } : { m: 'update', t: 'Nothing yet: press Solve.' };
+      groups = [g('Messages', true, [NOTE(S.solved ? 'Solved. Largest displacement about 0.005 mm; the hand check F L / (A E) gives 0.005 mm.' : 'The messages of the solver and the mesh quality report appear here after Solve.')]), g('Timings', false, [NOTE('How long each stage took (mesh, assemble, solve, stresses), as a report you can copy.')])];
+    } else if (sel === 'results') {
+      status = S.solved ? { m: 'ok', t: 'The 3D view shows the picked result.' } : { m: 'incomplete', t: 'Nothing to show until you solve.' };
+      groups = S.solved ? [
+        g('Result', true, [SEL('res.field', 'Show', 'Displacement magnitude', ['Displacement magnitude', 'Von Mises stress', 'Safety factor (yield)']), SEL('res.cmap', 'Colours', 'Rainbow', ['Rainbow', 'Grey'])]),
+        g('Deformed shape', true, [CHK('res.def', 'Show deformed shape', true), T('res.scale', 'Scale', 'auto', '')]),
+        g('Probe', false, [T('res.probe', 'Probe at x, y, z', '', 'mm')])
+      ] : [g('Result', true, [NOTE('Press Solve, then come back to pick what to look at.')])];
+    }
+
+    const details = {
+      title: 'Details of “' + nameOf(sel) + '”',
+      sOk: status.m === 'ok', sUpd: status.m === 'update', sInc: status.m === 'incomplete',
+      groups: groups.filter((x) => x.rows.length > 0), actions: actions, hasActions: actions.length > 0
+    };
+
+    // ---------------------------------------------------------------- the 3D view
+    // The view shows only what the selected item is about: the analysis (top) shows every support and load, Supports or one support shows
+    // the supports, Loads or one load shows the loads, Mesh shows the mesh, Solution and Results show the result. Geometry, Material and
+    // Solution information show the bare body.
+    let shows = 'none';
+    if (sel === 'root') shows = 'all';
+    else if (sel === 'supports' || (item && item.parent === 'supports')) shows = 'supports';
+    else if (sel === 'loads' || (item && item.parent === 'loads')) shows = 'loads';
+    else if (sel === 'mesh' || (item && item.parent === 'mesh')) shows = 'mesh';
+    else if (sel === 'solution' || sel === 'results') shows = 'result';
+    const COL = self.COLORS();
+    const sups = S.items.filter((i) => i.parent === 'supports' && i.applied);
+    const lds = S.items.filter((i) => i.parent === 'loads' && i.applied);
+    let conds = [];
+    if (shows === 'all') conds = sups.concat(lds);
+    else if (shows === 'supports') conds = sups;
+    else if (shows === 'loads') conds = lds;
+    const shownSup = conds.filter((i) => i.parent === 'supports');
+    const shownLoad = conds.filter((i) => i.parent === 'loads');
+    const fmtN = (x) => (isFinite(x) ? String(Math.round(x * 100) / 100) : '—');
+    const condText = (it) => {
+      const id = it.id;
+      if (it.type === 'force' || it.type === 'point') {
+        const fx = parseFloat(val(id + '.fx', id === 'i3' ? '1000' : '0')), fy = parseFloat(val(id + '.fy', '0')), fz = parseFloat(val(id + '.fz', '0'));
+        return self.TYPES()[it.type].name + ': ' + fmtN(Math.sqrt(fx * fx + fy * fy + fz * fz)) + ' N';
+      }
+      if (it.type === 'pressure') return 'Pressure: ' + val(id + '.p', '10') + ' MPa';
+      if (it.type === 'gravity') return 'Gravity: ' + val(id + '.g', '9.81') + ' m/s²';
+      return self.TYPES()[it.type].name;
+    };
+    const selId = item ? item.id : '';
+    let si = 0, li = 0;
+    const tag = (it, k) => {
+      const c = COL[it.type];
+      const isSup = it.parent === 'supports';
+      const idx = isSup ? si++ : li++;
+      const tipX = isSup ? 170 : 856, tipY = isSup ? 548 - 34 * idx : 152 - 34 * idx;
+      const x0 = tipX - 32, y0 = tipY - 11;
+      const isSel = it.id === selId;
+      return {
+        vis: 'visible', fill: c.fill, ink: c.ink, letter: String.fromCharCode(65 + k), ring: isSel ? '#ffb000' : '#1f2a3c', rw: isSel ? 3 : 1,
+        pts: x0 + ',' + y0 + ' ' + (x0 + 22) + ',' + y0 + ' ' + tipX + ',' + tipY + ' ' + (x0 + 22) + ',' + (y0 + 22) + ' ' + x0 + ',' + (y0 + 22),
+        tx: x0 + 11, ty: y0 + 16, lx1: tipX, ly1: tipY, lx2: isSup ? 197.7 : 877, ly2: isSup ? 552.5 : 160
+      };
+    };
+    const noTag = { vis: 'hidden', fill: '#ffffff', ink: '#ffffff', letter: '', ring: '#1f2a3c', rw: 1, pts: '0,0 0,0 0,0', tx: 0, ty: 0, lx1: 0, ly1: 0, lx2: 0, ly2: 0 };
+    const slot = (k) => (k < conds.length ? tag(conds[k], k) : noTag);
+    const legend = conds.map((it, k) => {
+      const c = COL[it.type];
+      const isSel = it.id === selId;
+      return { letter: String.fromCharCode(65 + k), text: condText(it), fill: c.fill, ink: c.ink, ring: isSel ? '#ffb000' : '#1f2a3c', rw: isSel ? 3 : 1 };
+    });
+    const selSupItem = !!item && item.parent === 'supports' && item.applied;
+    const selLoadItem = !!item && item.parent === 'loads' && item.applied;
+    const selFsItem = !!item && item.type === 'facesize' && item.applied;
+    const showRes = shows === 'result' && S.solved;
+    const fld = String(val('res.field', 'Displacement magnitude'));
+    let top = '#cfd8e6', front = '#aebad0', end = '#97a5be';
+    let legendTitle = fld, legendBg = 'linear-gradient(to top,#2d5bd6,#2fb8d6,#5cc46a,#e8d24a,#d9482f)', legendTop = '0.005 mm', legendBottom = '0 mm';
+    if (showRes) {
+      if (fld === 'Displacement magnitude') { top = 'url(#resU)'; front = 'url(#resU)'; end = '#2d5bd6'; }
+      else if (fld === 'Von Mises stress') { top = '#5cc46a'; front = '#5cc46a'; end = '#5cc46a'; legendBg = '#5cc46a'; legendTop = 'about 10 MPa'; legendBottom = 'about 10 MPa'; legendTitle = 'Von Mises stress (F / A, the same all along)'; }
+      else { top = '#2d5bd6'; front = '#2d5bd6'; end = '#2d5bd6'; legendBg = '#2d5bd6'; legendTop = 'about 25'; legendBottom = 'about 25'; legendTitle = 'Safety factor (yield 250 MPa / 10 MPa)'; }
+    }
+    const vp = {
+      alt: 'The bar in an isometric view.' + (conds.length ? ' It shows ' + conds.length + (conds.length === 1 ? ' condition' : ' conditions') + ', each with a lettered tag.' : '') + (shows === 'mesh' && S.meshed ? ' The mesh is shown.' : '') + (showRes ? ' The result is shown in colour.' : ''),
+      topFill: top, frontFill: front, endFill: end,
+      meshVis: shows === 'mesh' && S.meshed ? 'visible' : 'hidden',
+      fsVis: selFsItem ? 'visible' : 'hidden',
+      supVis: shownSup.length ? 'visible' : 'hidden', supFill: shownSup.length ? COL[shownSup[0].type].fill : '#2f6fdc', supOp: 0.55,
+      supStroke: selSupItem ? '#ffb000' : '#1d4fb3', supSW: selSupItem ? 3.5 : 1.5,
+      loadVis: shownLoad.length ? 'visible' : 'hidden', loadCol: shownLoad.length ? COL[shownLoad[0].type].fill : '#d12f2f',
+      loadSelVis: selLoadItem ? 'visible' : 'hidden', loadW: selLoadItem ? 4.5 : 3,
+      legend: legend, t0: slot(0), t1: slot(1), t2: slot(2), t3: slot(3), t4: slot(4), t5: slot(5),
+      showLegend: showRes, legendTitle: legendTitle, legendBg: legendBg, legendTop: legendTop, legendBottom: legendBottom
+    };
+
+    // ---------------------------------------------------------------- the splitters
+    const clampY = (v) => Math.max(120, Math.min(560, v));
+    const clampX = (v) => Math.max(300, Math.min(640, v));
+    return {
+      tree: tree, details: details, vp: vp, countText: countText,
+      msg: S.msg || 'Mock-up: nothing here is connected to the program, and the 3D view is drawn by hand. Click the outline: the view shows only what the selected item is about.',
+      outlineH: S.outlineH, leftW: S.leftW,
+      doRefresh: say('Geometry copied again from the part Bar. (Mock-up: nothing changed.)'),
+      doMesh: () => self.doMesh(),
+      doSolve: () => self.doSolve(),
+      doSave: say('Saved into the Workbench project. (Mock-up)'),
+      dragY: (e) => { e.preventDefault(); self.setState({ drag: { axis: 'y', start: e.clientY, base: self.S().outlineH } }); },
+      dragX: (e) => { e.preventDefault(); self.setState({ drag: { axis: 'x', start: e.clientX, base: self.S().leftW } }); },
+      onMove: (e) => {
+        const d = self.S().drag;
+        if (!d) return;
+        if (d.axis === 'y') self.setState({ outlineH: clampY(d.base + (e.clientY - d.start)) });
+        else self.setState({ leftW: clampX(d.base + (e.clientX - d.start)) });
+      },
+      onEnd: () => { if (self.S().drag) self.setState({ drag: null }); },
+      keyY: (e) => {
+        const cur = self.S().outlineH;
+        if (e.key === 'ArrowUp') { e.preventDefault(); self.setState({ outlineH: clampY(cur - 24) }); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); self.setState({ outlineH: clampY(cur + 24) }); }
+      },
+      keyX: (e) => {
+        const cur = self.S().leftW;
+        if (e.key === 'ArrowLeft') { e.preventDefault(); self.setState({ leftW: clampX(cur - 24) }); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); self.setState({ leftW: clampX(cur + 24) }); }
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

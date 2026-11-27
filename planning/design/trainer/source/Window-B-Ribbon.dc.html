@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trainer, Option B: ribbon</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+select{font-family:inherit;font-size:13px;color:#10204d}
+.ce{box-sizing:border-box;height:24px;padding:0 8px;display:flex;align-items:center;border-right:1px solid #dfe3ea;border-bottom:1px solid #dfe3ea;overflow:hidden;white-space:nowrap;font-variant-numeric:tabular-nums}
+.ci{width:100%;height:100%;box-sizing:border-box;border:0;background:#ffffff;padding:0 8px;text-align:right;font:inherit;font-variant-numeric:tabular-nums}
+.ci:focus{outline:2px solid #2b7de9;outline-offset:-2px}
+.rb{width:68px;height:68px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:3px;padding:4px 2px;font-family:inherit;font-size:11px;line-height:1.2;text-align:center;color:#10204d;background:transparent;border:1px solid transparent;border-radius:3px}
+.fi{height:24px;box-sizing:border-box;border:1px solid #b9bec9;background:#ffffff;padding:0 8px;font:inherit;font-variant-numeric:tabular-nums}
+.fi:focus{outline:2px solid #2b7de9;outline-offset:-2px}
+.cap{font-size:11px;font-weight:700;letter-spacing:0.06em;color:#4a5872}
+.lb{box-sizing:border-box;height:22px;padding:0 10px;font:inherit;font-size:12px;color:#10204d;background:#ffffff;border:1px solid #b9bec9;border-radius:3px}
+</style>
+</helmet>
+<div style="width:1280px;height:800px;box-sizing:border-box;display:flex;flex-direction:column;background:#efefef;font-family:Inter,system-ui,sans-serif;font-size:13px;line-height:1.35;color:#10204d;overflow:hidden">
+<div style="height:78px;flex:none;box-sizing:border-box;display:flex;align-items:center;padding:0 6px;border-bottom:1px solid #c8c8c8">
+<button type="button" class="rb">
+<svg aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" style="fill:none;stroke:#4b5870;stroke-width:1.7"><rect x="5" y="9" width="24" height="18" rx="1.5"></rect><path d="M5 9 V5 H13 V9"></path></svg>Detector</button>
+<button type="button" class="rb">
+<svg aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" style="fill:none;stroke:#4b5870;stroke-width:1.7"><rect x="5" y="4" width="24" height="17" rx="1.5"></rect><path d="M5 27 H29 M5 24 V30 M29 24 V30 M17 25 V29"></path></svg>Detector + distance</button>
+<button type="button" class="rb">
+<svg aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" style="fill:none;stroke:#4b5870;stroke-width:1.7"><path d="M4 28 C12 27 14 11 30 6"></path><circle cx="10" cy="25" r="1.8"></circle><circle cx="18" cy="16" r="1.8"></circle><circle cx="27" cy="8" r="1.8"></circle></svg>Distance: classic</button>
+<button type="button" class="rb" aria-pressed="true" style="background:#cfe3fb;border:1px solid #6aa0e0;font-weight:600">
+<svg aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" style="fill:none;stroke:#4b5870;stroke-width:1.7"><circle cx="6" cy="17" r="2.6"></circle><circle cx="17" cy="8" r="2.6"></circle><circle cx="17" cy="26" r="2.6"></circle><circle cx="28" cy="17" r="2.6"></circle><path d="M8.5 15.5 L14.5 9.5 M8.5 18.5 L14.5 24.5 M19.5 9.5 L25.5 15.5 M19.5 24.5 L25.5 18.5"></path></svg>Distance: network</button>
+<div style="width:1px;align-self:stretch;margin:6px 8px;background:#d0d0d0"></div>
+<div style="display:flex;flex-direction:column;gap:4px;width:210px;flex:none">
+<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#4a5872"><span style="width:74px">Parameters</span><input class="fi" type="text" value="{{totalShown}}" onChange="{{onTotal}}" style="width:100px;text-align:right;color:{{totalColor}}"></label>
+<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#4a5872"><span style="width:74px">Shape</span><input class="fi" type="text" value="{{shapeShown}}" onChange="{{onShape}}" style="width:100px;text-align:right;color:{{shapeColor}}"></label>
+<div style="font-size:11px;color:#4a5872">{{depthText}}</div>
+</div>
+<div style="width:1px;align-self:stretch;margin:6px 8px;background:#d0d0d0"></div>
+<button type="button" class="rb" style="font-weight:600">
+<svg aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" style="fill:none;stroke:#4b5870;stroke-width:1.7"><circle cx="17" cy="17" r="12"></circle><path d="M14 11 L24 17 L14 23 Z" fill="#4b5870"></path></svg>Start training</button>
+<button type="button" class="rb" disabled style="color:#a0a0a0">
+<svg aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" style="fill:none;stroke:#a0a0a0;stroke-width:1.7"><circle cx="17" cy="17" r="12"></circle><rect x="12" y="12" width="10" height="10"></rect></svg>Stop</button>
+</div>
+<div style="height:28px;flex:none;box-sizing:border-box;display:flex;align-items:flex-end;padding:0 0 0 4px">
+<span style="padding:5px 13px;background:#e8e8e8;border:1px solid #c8c8c8;margin-right:-1px">Data</span>
+<span style="padding:5px 13px;background:#fcfcfc;border:1px solid #c8c8c8;border-bottom:1px solid #fcfcfc;margin-right:-1px">Model</span>
+<span style="padding:5px 13px;background:#e8e8e8;border:1px solid #c8c8c8;margin-right:-1px">Train</span>
+<span style="padding:5px 13px;background:#e8e8e8;border:1px solid #c8c8c8">Setup</span>
+<span style="flex:1"></span>
+<span style="align-self:center;background:#b83280;color:#ffffff;font-weight:600;font-size:12px;border-radius:999px;padding:2px 14px;margin-right:10px">Trainer</span>
+<span style="align-self:center;font-weight:600;color:#4a5872;margin-right:10px">Trainer Test 1 <span style="font-weight:400">- 21,522 pictures</span></span>
+</div>
+<div style="flex:1;min-height:0;display:flex;gap:4px;padding:4px 4px 0 4px">
+<div style="width:336px;flex:none;box-sizing:border-box;background:#ffffff;border:1px solid #cfcfcf;padding:10px 6px 10px 6px;display:flex;flex-direction:column;gap:6px;overflow:hidden">
+<div style="display:flex;align-items:center;justify-content:space-between;padding:0 2px"><span class="cap">LAYERS</span>
+<span style="display:flex;gap:4px"><button type="button" class="lb" onClick="{{addLayer}}">+ layer</button><button type="button" class="lb" onClick="{{delLayer}}">- layer</button></span></div>
+<div style="border-top:1px solid #dfe3ea;border-left:1px solid #dfe3ea">
+<div style="display:flex;background:#eef1f6;font-weight:600;color:#4b5870;font-size:12px"><div class="ce" style="width:82px">Layer</div><div class="ce" style="width:74px;justify-content:flex-end">Neurons</div><div class="ce" style="width:76px">Activation</div><div class="ce" style="width:88px;justify-content:flex-end">Parameters</div></div>
+<div style="max-height:250px;overflow:auto">
+<div style="display:flex"><div class="ce" style="width:82px">Input</div><div class="ce" style="width:74px;justify-content:flex-end">6</div><div class="ce" style="width:76px;color:#4b5870">none</div><div class="ce" style="width:88px;justify-content:flex-end;color:#4b5870">0</div></div>
+<sc-for list="{{rows}}" as="row" hint-placeholder-count="4">
+<div style="display:flex"><div class="ce" style="width:82px">{{row.name}}</div><div class="ce" style="width:74px;padding:0"><input class="ci" type="text" aria-label="{{row.name}} neurons" value="{{row.neurons}}" onChange="{{row.onNeurons}}" style="color:#1a56c4"></div><div class="ce" style="width:76px">ReLU</div><div class="ce" style="width:88px;justify-content:flex-end">{{row.params}}</div></div>
+</sc-for>
+<div style="display:flex"><div class="ce" style="width:82px">Output</div><div class="ce" style="width:74px;justify-content:flex-end">1</div><div class="ce" style="width:76px">linear</div><div class="ce" style="width:88px;justify-content:flex-end">{{outParams}}</div></div>
+</div>
+<div style="display:flex;font-weight:700;background:#f7f8fb"><div class="ce" style="width:82px;border-top:2px solid #8793ad">Total</div><div class="ce" style="width:74px;border-top:2px solid #8793ad"></div><div class="ce" style="width:76px;border-top:2px solid #8793ad"></div><div class="ce" style="width:88px;justify-content:flex-end;border-top:2px solid #8793ad">{{total}}</div></div>
+</div>
+<div class="cap" style="margin-top:10px;padding:0 2px">LEARNING</div>
+<div style="display:grid;grid-template-columns:118px minmax(0, 1fr);gap:6px 8px;align-items:center;padding:0 2px">
+<span>Recipe</span><select aria-label="Recipe" style="height:24px;border:1px solid #b9bec9;background:#ffffff"><option>Modern (rung 8)</option></select>
+<span>Loss</span><select aria-label="Loss" style="height:24px;border:1px solid #b9bec9;background:#ffffff"><option>Smooth-L1</option></select>
+<span>Optimiser</span><select aria-label="Optimiser" style="height:24px;border:1px solid #b9bec9;background:#ffffff"><option>Adam</option></select>
+<span>Learning rate</span><input class="fi" type="text" aria-label="Learning rate" value="0.001" style="text-align:right">
+<span>Weight decay</span><input class="fi" type="text" aria-label="Weight decay" value="0.0001" style="text-align:right">
+<span>Epochs</span><input class="fi" type="text" aria-label="Epochs" value="200" style="text-align:right">
+<span>Stop early after</span><input class="fi" type="text" aria-label="Stop early after, epochs" value="50" style="text-align:right">
+<span>Batch norm</span><input type="checkbox" aria-label="Batch norm" checked="{{bn}}" onChange="{{onBn}}" style="justify-self:start;accent-color:#2b7de9">
+</div>
+</div>
+<div style="flex:1;min-width:0;box-sizing:border-box;background:#ffffff;border:1px solid #cfcfcf;padding:12px 18px 10px 18px;display:flex;flex-direction:column">
+<div class="cap">NEURONS PER LAYER</div>
+<div style="position:relative;height:{{plotH}}px;margin:18px 0 0 40px;border-left:1px solid #8793ad;border-bottom:1px solid #8793ad">
+<sc-for list="{{ticks}}" as="t" hint-placeholder-count="5">
+<div style="position:absolute;left:0;right:0;bottom:{{t.pos}}px;border-top:1px solid #dfe3ea"></div>
+<div style="position:absolute;left:-46px;width:38px;text-align:right;bottom:{{t.labelPos}}px;font-size:11px;line-height:12px;color:#4b5870">{{t.label}}</div>
+</sc-for>
+<div style="position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:flex-end">
+<sc-for list="{{bars}}" as="b" hint-placeholder-count="6">
+<div style="flex:1;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center">
+<div style="font-size:11px;line-height:14px;color:#4b5870;white-space:nowrap">{{b.valueText}}</div>
+<div style="width:62%;max-width:56px;height:{{b.h}}px;background:{{b.fill}}"></div>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="display:flex;margin:4px 0 0 40px">
+<sc-for list="{{bars}}" as="b" hint-placeholder-count="6">
+<div style="flex:1;min-width:0;text-align:center;font-size:11px;line-height:14px;color:#4b5870;white-space:nowrap">{{b.label}}</div>
+</sc-for>
+</div>
+<div class="cap" style="margin-top:auto;padding-bottom:6px">DATA</div>
+<div style="border-top:1px solid #dfe3ea;border-left:1px solid #dfe3ea;display:grid;grid-template-columns:repeat(4, minmax(0, 1fr))">
+<div class="ce" style="background:#eef1f6;font-weight:600;color:#4b5870;font-size:12px">Pictures</div><div class="ce" style="background:#eef1f6;font-weight:600;color:#4b5870;font-size:12px">Boxes</div><div class="ce" style="background:#eef1f6;font-weight:600;color:#4b5870;font-size:12px">Distance boxes</div><div class="ce" style="background:#eef1f6;font-weight:600;color:#4b5870;font-size:12px">Validation distance boxes</div>
+<div class="ce">21,522</div><div class="ce">85,836</div><div class="ce">28,248</div><div class="ce">793</div>
+</div>
+</div>
+</div>
+<div style="height:22px;flex:none;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;padding:0 6px;border-top:1px solid #cfcfcf;font-size:12px;color:#000000">
+<span>Project: D:\Trainer Test 1.training &nbsp;|&nbsp; Fed by A Annotator</span>
+<span>{{summary}}</span>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+uni(w, L, bn) { return (6 * w + w) + (L - 1) * (w * w + w) + (w + 1) + (bn ? 2 * w * L : 0); }
+count(layers, bn) {
+let p = 0, prev = 6;
+for (const n of layers) { p += prev * n + n; prev = n; }
+p += prev + 1;
+if (bn) { for (const n of layers) { p += 2 * n; } }
+return p;
+}
+solve(P, r, bn) {
+let best = null;
+for (let L = 1; L <= 64; L++) {
+let lo = 1, hi = 100000000;
+while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (this.uni(mid, L, bn) <= P) { lo = mid; } else { hi = mid - 1; } }
+for (const w of [lo, lo + 1]) {
+const p = this.uni(w, L, bn);
+const sc = Math.abs(p - P) / P * 4 + Math.abs(Math.log((w / L) / r));
+if (best === null || sc < best.sc) { best = { sc: sc, w: w, L: L, p: p }; }
+}
+}
+return best;
+}
+parseTotal(t) {
+const m = /^([0-9]*\.?[0-9]+)\s*([kKmM]?)$/.exec(String(t).replace(/[,\s]/g, ''));
+if (!m) { return null; }
+const v = Math.round(parseFloat(m[1]) * (m[2] === '' ? 1 : (m[2].toLowerCase() === 'k' ? 1000 : 1000000)));
+return (v >= 20 && v <= 200000000) ? v : null;
+}
+parseShape(t) {
+const m = /^\s*([0-9]*\.?[0-9]+)\s*(?::\s*([0-9]*\.?[0-9]+))?\s*$/.exec(String(t));
+if (!m) { return null; }
+const b = m[2] === undefined ? 1 : parseFloat(m[2]);
+const r = parseFloat(m[1]) / b;
+return (isFinite(r) && r >= 0.05 && r <= 10000) ? r : null;
+}
+fmt(n) { return Math.round(n).toLocaleString('en-US'); }
+shapeOf(layers) {
+const mean = layers.reduce((a, n) => a + n, 0) / layers.length;
+const r = Math.round(mean / layers.length * 10) / 10;
+return String(r) + ' : 1';
+}
+cur() {
+const s = this.state || {};
+const bn = s.bn === undefined ? true : s.bn;
+const totalText = s.totalText === undefined ? '3,681' : s.totalText;
+const shapeText = s.shapeText === undefined ? '8 : 1' : s.shapeText;
+let layers = s.layers;
+if (!layers) {
+const sol = this.solve(this.parseTotal(totalText) || 3681, this.parseShape(shapeText) || 8, bn);
+layers = new Array(sol.L).fill(sol.w);
+}
+return { bn: bn, totalText: totalText, shapeText: shapeText, layers: layers, texts: s.texts || [], src: s.src || 'typed' };
+}
+resolve(c, totalText, shapeText, bn) {
+const P = this.parseTotal(totalText), r = this.parseShape(shapeText);
+const next = { bn: bn, totalText: totalText, shapeText: shapeText, src: 'typed', layers: c.layers, texts: c.texts };
+if (P !== null && r !== null) { const sol = this.solve(P, r, bn); next.layers = new Array(sol.L).fill(sol.w); next.texts = []; }
+this.setState(next);
+}
+onTotalValue(v) { const c = this.cur(); this.resolve(c, v, c.src === 'layers' ? this.shapeOf(c.layers) : c.shapeText, c.bn); }
+onShapeValue(v) { const c = this.cur(); this.resolve(c, c.src === 'layers' ? this.fmt(this.count(c.layers, c.bn)) : c.totalText, v, c.bn); }
+onBnValue(on) {
+const c = this.cur();
+if (c.src === 'layers') { this.setState({ bn: on, layers: c.layers, texts: c.texts, src: 'layers', totalText: c.totalText, shapeText: c.shapeText }); }
+else { this.resolve(c, c.totalText, c.shapeText, on); }
+}
+setNeurons(i, raw) {
+const c = this.cur();
+const layers = c.layers.slice(), texts = c.texts.slice();
+texts[i] = raw;
+const n = parseInt(raw, 10);
+if (isFinite(n) && n >= 1 && n <= 100000) { layers[i] = n; }
+this.setState({ layers: layers, texts: texts, src: 'layers', bn: c.bn, totalText: c.totalText, shapeText: c.shapeText });
+}
+changeDepth(delta) {
+const c = this.cur();
+let layers = c.layers.slice();
+if (delta > 0) { layers.push(layers[layers.length - 1]); } else if (layers.length > 1) { layers.pop(); }
+this.setState({ layers: layers, texts: [], src: 'layers', bn: c.bn, totalText: c.totalText, shapeText: c.shapeText });
+}
+renderVals() {
+const c = this.cur();
+const layers = c.layers;
+const total = this.count(c.layers, c.bn);
+const fromLayers = c.src === 'layers';
+const P = this.parseTotal(c.totalText), r = this.parseShape(c.shapeText);
+const totalOk = fromLayers || P !== null, shapeOk = fromLayers || r !== null;
+const rows = [];
+let prev = 6;
+for (let i = 0; i < layers.length; i++) {
+const n = layers[i];
+const p = prev * n + n + (c.bn ? 2 * n : 0);
+rows.push({ no: 7 + i, name: 'Hidden ' + (i + 1), neurons: c.texts[i] !== undefined ? c.texts[i] : String(n), params: this.fmt(p), onNeurons: (e) => this.setNeurons(i, e.target.value) });
+prev = n;
+}
+const outParams = prev + 1;
+const values = [6].concat(layers, [1]);
+const labels = ['In'].concat(layers.map((n, i) => 'H' + (i + 1)), ['Out']);
+const maxV = Math.max.apply(null, values);
+const rawStep = maxV / 4;
+const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+const step = [1, 2, 5, 10].map((k) => k * mag).find((s2) => s2 >= rawStep);
+const axisMax = step * 4;
+const plotH = 300;
+const showValues = values.length <= 16;
+const strideLabel = Math.ceil(values.length / 16);
+const bars = values.map((v, i) => ({
+label: (i % strideLabel === 0 || i === values.length - 1) ? labels[i] : '',
+valueText: showValues ? this.fmt(v) : '',
+h: Math.max(2, Math.round(v / axisMax * plotH)),
+fill: (i === 0 || i === values.length - 1) ? '#4b5870' : '#2b7de9'
+}));
+const ticks = [0, 1, 2, 3, 4].map((k) => ({ label: this.fmt(step * k), pos: Math.round(plotH * k / 4), labelPos: Math.round(plotH * k / 4) - 6 }));
+const uniform = layers.every((n) => n === layers[0]);
+const depthText = layers.length + ' hidden layers' + (uniform ? ' of ' + this.fmt(layers[0]) : '');
+const summary = depthText + ', ' + this.fmt(total) + ' parameters';
+return {
+bn: c.bn,
+totalShown: fromLayers ? this.fmt(total) : c.totalText,
+shapeShown: fromLayers ? this.shapeOf(layers) : c.shapeText,
+totalColor: totalOk ? (fromLayers ? '#4b5870' : '#1a56c4') : '#b3261e',
+shapeColor: shapeOk ? (fromLayers ? '#4b5870' : '#1a56c4') : '#b3261e',
+rows: rows,
+outParams: this.fmt(outParams),
+total: this.fmt(total),
+depthText: depthText,
+summary: summary,
+plotH: plotH,
+bars: bars,
+ticks: ticks,
+onTotal: (e) => this.onTotalValue(e.target.value),
+onShape: (e) => this.onShapeValue(e.target.value),
+onBn: (e) => this.onBnValue(e.target.checked),
+addLayer: () => this.changeDepth(1),
+delLayer: () => this.changeDepth(-1)
+};
+}
+}
+</script>
+</body>
+</html>

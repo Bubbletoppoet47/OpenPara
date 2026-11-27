@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ribbon tabs</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<style>
+body{margin:0;font-family:Inter,'Segoe UI',system-ui,sans-serif}
+.sheet{width:1500px;height:700px;box-sizing:border-box;background:#f7f7f8;color:#2b2b2b;padding:32px 32px 28px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden}
+.row{display:flex;align-items:center;gap:20px}
+.lab{width:170px;flex:none;display:flex;flex-direction:column;gap:3px}
+.lab b{font-size:15px;font-weight:600;color:#1f2a3c}
+.lab span{font-size:12px;line-height:16px;color:#5a6577}
+.band{height:78px;flex:1;box-sizing:border-box;background:#efefef;border:1px solid #bcbcbc;display:flex;align-items:center;padding:0 6px;min-width:0}
+.grp{display:flex;align-items:center;gap:1px;padding:0 5px;border-right:1px solid #9f9f9f;height:66px}
+.grp.last{border-right:0}
+.rb{min-width:66px;height:68px;box-sizing:border-box;border:1px solid transparent;border-radius:3px;background:transparent;display:flex;flex-direction:column;align-items:center;gap:3px;padding:5px 4px 0;font:11px/13px Inter,'Segoe UI',sans-serif;color:#1c1c1c;text-align:center;white-space:nowrap}
+.rb.on{background:#fbfbfb;border-color:#c9c9c9}
+.rb.off{opacity:.45}
+.ic{width:30px;height:30px;flex:none;fill:none;stroke:#10204d;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.note{font-size:12.5px;color:#5a6577;line-height:18px;padding-top:2px}
+</style>
+</helmet>
+<div class="sheet">
+  <div class="row">
+    <div class="lab"><b>Annotate</b><span>Draw, review and confirm. The tab it opens on.</span></div>
+    <div class="band">
+      <div class="grp">
+        <button class="rb on" aria-label="Confirm image"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="15" r="11" fill="#0e7f86" stroke="#0b5f65"/><path d="M9.5 15.5l4 4 7-8" stroke="#fff" stroke-width="2.2"/></svg><span style="font-weight:600">Confirm<br>image</span></button>
+        <button class="rb" aria-label="Previous image"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="15" r="11" fill="#e3ecfb"/><path d="M17.5 9.5l-5.5 5.5 5.5 5.5"/></svg><span>Previous<br>image</span></button>
+        <button class="rb" aria-label="Next image"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="15" r="11" fill="#e3ecfb"/><path d="M12.5 9.5l5.5 5.5-5.5 5.5"/></svg><span>Next<br>image</span></button>
+      </div>
+      <div class="grp">
+        <button class="rb" aria-label="Fit to screen"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M5 11V5h6M19 5h6v6M25 19v6h-6M11 25H5v-6"/><rect x="11" y="11" width="8" height="8" fill="#cfe0fa"/></svg><span>Fit to<br>screen</span></button>
+        <button class="rb" aria-label="Rotate 90 degrees"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M24 15a9 9 0 1 1-3-6.7"/><path d="M24 4v6h-6" stroke="#d99a2b"/></svg><span>Rotate<br>90°</span></button>
+        <button class="rb" aria-label="Delete frame"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M6 8h18M12 8V5h6v3M8 8l1 17h12l1-17" fill="#e3ecfb"/><path d="M13 12v9M17 12v9"/></svg><span>Delete<br>frame…</span></button>
+      </div>
+      <div class="grp">
+        <button class="rb on" aria-label="LiDAR dots and pick distance"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M5 7h20M5 13h20M5 19h8" stroke="#3369d3" stroke-width="2.6" stroke-dasharray="0.1 5.4"/><circle cx="21" cy="21" r="5" fill="#fff" stroke="#d99a2b"/><circle cx="21" cy="21" r="1.4" fill="#d99a2b" stroke="none"/></svg><span>LiDAR<br>distance</span></button>
+        <button class="rb" aria-label="Clear distance of box"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M4 20l16-16 6 6-16 16z" fill="#e3ecfb"/><path d="M10 14l2 2M14 10l2 2M18 6l2 2"/><path d="M21 21l6 6M27 21l-6 6" stroke="#b3261e"/></svg><span>Clear<br>distance</span></button>
+        <button class="rb" aria-label="Delete selected box"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="7" width="18" height="15" stroke-dasharray="3 2.5" fill="#e3ecfb"/><path d="M19 19l7 7M26 19l-7 7" stroke="#b3261e"/></svg><span>Delete<br>box</span></button>
+      </div>
+      <div class="grp last">
+        <button class="rb" aria-label="Clear boxes and retry AI"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M13 4l2.2 6.3 6.3 2.2-6.3 2.2L13 21l-2.2-6.3-6.3-2.2 6.3-2.2z" fill="#cfe0fa"/><path d="M26 17a6 6 0 1 1-2-4.4" stroke="#d99a2b"/><path d="M26 10v4h-4" stroke="#d99a2b"/></svg><span>Clear &amp;<br>retry AI</span></button>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="lab"><b>Data</b><span>Bring data in, send it out, look after the sessions.</span></div>
+    <div class="band">
+      <div class="grp">
+        <button class="rb" aria-label="Import video"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="4" width="22" height="16" rx="2" fill="#e3ecfb"/><path d="M9 4v16M21 4v16M4 9h5M4 15h5M21 9h5M21 15h5"/><path d="M15 28v-6m0 6l-2.5-2.5M15 28l2.5-2.5" stroke="#d99a2b"/></svg><span>Import<br>video…</span></button>
+        <button class="rb" aria-label="Import dataset zip"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="5" y="12" width="20" height="14" rx="2" fill="#e3ecfb"/><path d="M15 12v14" stroke-dasharray="2 2"/><path d="M15 2v8m0 0l-3-3m3 3l3-3" stroke="#d99a2b"/></svg><span>Import<br>zip…</span></button>
+      </div>
+      <div class="grp">
+        <button class="rb" aria-label="Export dataset zip"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="5" y="12" width="20" height="14" rx="2" fill="#e3ecfb"/><path d="M15 12v14" stroke-dasharray="2 2"/><path d="M15 10V2m0 0l-3 3m3-3l3 3" stroke="#d99a2b"/></svg><span>Export<br>zip…</span></button>
+        <button class="rb" aria-label="Open in browser for a tablet"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="6" y="3" width="18" height="24" rx="3" fill="#e3ecfb"/><circle cx="15" cy="23" r="1.2" fill="#10204d"/><path d="M11 9h8M11 13h8M11 17h5"/></svg><span>Tablet<br>mode…</span></button>
+      </div>
+      <div class="grp">
+        <button class="rb" aria-label="Sessions"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M15 5l11 5-11 5-11-5z" fill="#cfe0fa"/><path d="M4 15l11 5 11-5M4 20l11 5 11-5"/></svg><span>Sessions…</span></button>
+        <button class="rb" aria-label="Sync deleted files"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M5 12a10 10 0 0 1 18-3M25 18a10 10 0 0 1-18 3"/><path d="M24 4v6h-6M6 26v-6h6" stroke="#d99a2b"/></svg><span>Sync deleted<br>files</span></button>
+      </div>
+      <div class="grp last">
+        <button class="rb" aria-label="Import Gimble session"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M4 9h8l2 3h12v13H4z" fill="#e3ecfb"/><path d="M9 20h12" stroke="#3369d3" stroke-width="2.6" stroke-dasharray="0.1 4.2"/></svg><span>Import Gimble<br>session…</span></button>
+        <button class="rb" aria-label="Download Gimble recordings"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="3" y="10" width="12" height="14" rx="2" fill="#e3ecfb"/><path d="M17 17h10m0 0l-3-3m3 3l-3 3" stroke="#d99a2b"/></svg><span>Download<br>recordings…</span></button>
+        <button class="rb" aria-label="Gimble status"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="5" width="22" height="16" rx="2" fill="#e3ecfb"/><path d="M7 14h4l2-5 3 9 2-4h5" stroke="#3369d3"/><path d="M11 25h8"/></svg><span>Gimble<br>status…</span></button>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="lab"><b>Models</b><span>Choose, fetch and send the models the AI helper uses.</span></div>
+    <div class="band">
+      <div class="grp">
+        <button class="rb" aria-label="Load AI model"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2" fill="#cfe0fa"/><path d="M12 4v4M18 4v4M12 22v4M18 22v4M4 12h4M4 18h4M22 12h4M22 18h4"/></svg><span>Load AI<br>model ▾</span></button>
+        <button class="rb" aria-label="Download models from GitHub"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M9 21a5 5 0 0 1 0-10 7 7 0 0 1 13.5 1.5A4.5 4.5 0 0 1 22 21z" fill="#e3ecfb"/><path d="M15 13v10m0 0l-3-3m3 3l3-3" stroke="#d99a2b"/></svg><span>Download<br>models…</span></button>
+        <button class="rb" aria-label="AI confidence"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M4 10h22M4 20h22"/><circle cx="19" cy="10" r="3.2" fill="#d99a2b"/><circle cx="10" cy="20" r="3.2" fill="#d99a2b"/></svg><span>AI<br>confidence…</span></button>
+      </div>
+      <div class="grp last">
+        <button class="rb" aria-label="Send a model to the Gimble"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="14" y="10" width="12" height="14" rx="2" fill="#e3ecfb"/><path d="M3 17h10m0 0l-3-3m3 3l-3 3" stroke="#d99a2b"/></svg><span>Send model<br>to Gimble…</span></button>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="lab"><b>Analyse</b><span>New. Check a model against the LiDAR on a recorded session.</span></div>
+    <div class="band">
+      <div class="grp">
+        <button class="rb" aria-label="Open session"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M3 9h9l2 3h13v13H3z" fill="#e3ecfb"/><path d="M3 25l4-9h22l-4 9" fill="#cfe0fa"/></svg><span>Open<br>session…</span></button>
+        <button class="rb on" aria-label="Run analysis"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="16" width="5" height="10" fill="#cfe0fa"/><rect x="12" y="11" width="5" height="15" fill="#cfe0fa"/><rect x="20" y="6" width="5" height="20" fill="#cfe0fa"/><path d="M5 4l9 5.5L5 15z" fill="#0e7f86" stroke="#0b5f65"/></svg><span style="font-weight:600">Run<br>analysis</span></button>
+        <button class="rb off" aria-label="Stop"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="7" y="7" width="16" height="16" rx="2" fill="#f3c9c4" stroke="#b3261e"/></svg><span>Stop</span></button>
+      </div>
+      <div class="grp">
+        <button class="rb on" aria-label="Dots in boxes"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="5" width="22" height="20" stroke-dasharray="3 2.5" fill="#e3ecfb"/><path d="M8 11h14M8 17h14" stroke="#3369d3" stroke-width="2.6" stroke-dasharray="0.1 5.4"/></svg><span>Dots in<br>boxes</span></button>
+        <button class="rb" aria-label="All dots"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M5 7h20M5 13h20M5 19h20M5 25h20" stroke="#3369d3" stroke-width="2.6" stroke-dasharray="0.1 5.4"/></svg><span>All<br>dots</span></button>
+      </div>
+      <div class="grp last">
+        <button class="rb" aria-label="Save frame image"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="5" width="22" height="16" rx="2" fill="#e3ecfb"/><path d="M4 18l6-6 5 5 4-4 7 7"/><circle cx="20" cy="10" r="2"/><path d="M15 29v-5m0 5l-2-2m2 2l2-2" stroke="#d99a2b"/></svg><span>Save frame<br>image</span></button>
+        <button class="rb" aria-label="Export CSV"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="5" width="22" height="20" rx="2" fill="#e3ecfb"/><path d="M4 11h22M4 17h22M12 5v20M19 5v20"/></svg><span>Export<br>CSV</span></button>
+        <button class="rb" aria-label="Export report"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M7 3h12l5 5v19H7z" fill="#e3ecfb"/><path d="M19 3v5h5M11 14h9M11 18h9M11 22h6"/></svg><span>Export<br>report</span></button>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="lab"><b>Setup</b><span>Things you set once.</span></div>
+    <div class="band">
+      <div class="grp last">
+        <button class="rb" aria-label="Classes"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><path d="M4 15V5h10l12 12-10 10z" fill="#cfe0fa"/><circle cx="10" cy="10" r="1.8" fill="#10204d"/></svg><span>Classes…</span></button>
+        <button class="rb" aria-label="Hotkeys"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><rect x="3" y="8" width="24" height="15" rx="2" fill="#e3ecfb"/><path d="M7 13h2M12 13h2M17 13h2M22 13h1M8 18h14"/></svg><span>Hotkeys…</span></button>
+        <button class="rb" aria-label="My name"><svg class="ic" viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="11" r="4.5" fill="#cfe0fa"/><path d="M6 25c1-5 5-7.5 9-7.5s8 2.5 9 7.5"/></svg><span>My name…</span></button>
+      </div>
+    </div>
+  </div>
+  <div class="note">Buttons keep today's wording, shortened to fit under an icon. The long help text that fills today's panels moves into hover tips, so the panels hold only controls.</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1500,"height":700}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

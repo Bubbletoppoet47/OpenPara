@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mesh page, details from the top</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+.sheet{width:1400px;height:900px;box-sizing:border-box;background:#e9ecf1;font:13px/1.3 Inter,system-ui,sans-serif;color:#1b1f24;position:relative;overflow:hidden;padding:24px 33px 0}
+.cols{display:flex;gap:28px}
+.col{width:426px;flex:none}
+.cap{height:28px;font-weight:700;font-size:14px;display:flex;align-items:center;gap:8px}
+.tag{font-size:11px;font-weight:600;border-radius:9px;padding:2px 8px;background:#3b424c;color:#fff}
+.tag.new{background:#0b6e6a}
+.panel{width:426px;height:792px;box-sizing:border-box;display:flex;flex-direction:column;background:#f0f0f0;padding:0 3px}
+.outline{background:#fff;border:1px solid #d5dce5;box-sizing:border-box}
+.oh{height:24px;background:#dde6ee;font-weight:700;display:flex;align-items:center;padding-left:10px;gap:6px}
+.orow{height:24px;display:flex;align-items:center;gap:8px;padding-left:22px;font-weight:600}
+.orow.kid{padding-left:40px;font-weight:400}
+.orow.sel{background:#cfe8ea}
+.split{height:6px;display:flex;justify-content:center;align-items:center}
+.split i{width:28px;height:2px;background:#c3cbd6}
+.dhead{height:24px;background:#dde6ee;font-weight:700;display:flex;align-items:center;padding-left:10px}
+.dbody{flex:1;background:#f7f8fc;border:1px solid #d5dce5;border-top:0;padding:10px 12px;position:relative;overflow:hidden}
+.help{position:absolute;right:10px;top:8px;width:18px;height:18px;border-radius:9px;background:#3b424c;color:#fff;font:700 12px/18px Inter;text-align:center}
+.mut{color:#566070;font-size:12px}
+.btn{height:34px;border:1px solid #b6bfcc;border-radius:3px;background:linear-gradient(#fdfdfe,#e9edf2);display:flex;align-items:center;justify-content:center;box-sizing:border-box}
+.fr{display:flex;align-items:center;gap:10px;height:30px}
+.fr span.t{flex:none}
+.inp{flex:1;height:24px;border:1px solid #aeb8c6;border-radius:3px;background:#fff;padding:0 8px;display:flex;align-items:center;box-sizing:border-box;justify-content:space-between}
+.inp.dis{color:#8a93a1;background:#f1f3f6}
+.cb{display:flex;align-items:center;gap:8px;height:28px}
+.bx{width:14px;height:14px;border:1px solid #6b7686;border-radius:2px;background:#fff;box-sizing:border-box;flex:none;display:flex;align-items:center;justify-content:center}
+.bx.on{background:#2f6fd6;border-color:#2f6fd6}
+.ind{margin-left:16px}
+.tbl{border:1px solid #c8d0db;background:#fff;height:130px}
+.th{height:24px;background:#e8edf3;display:grid;grid-template-columns:110px 1fr;align-items:center;font-weight:600;font-size:12px;padding:0 6px;gap:6px}
+.bdg{width:18px;height:18px;border-radius:3px;font:700 10px/16px Inter;text-align:center;box-sizing:border-box;flex:none}
+.bA{background:#2f6fd6;color:#fff;line-height:18px}
+.bB{background:#e8722a;color:#fff;line-height:18px}
+.note{position:absolute;background:#c2185b;color:#fff;font:600 12px/1.25 Inter;padding:6px 12px 6px 6px;border-radius:15px;display:flex;gap:8px;align-items:center}
+.note b{width:20px;height:20px;border-radius:10px;background:#fff;color:#c2185b;font:700 12px/20px Inter;text-align:center;flex:none}
+</style>
+</helmet>
+<div class="sheet">
+  <div class="cols">
+    <div class="col">
+      <div class="cap">Now: the Mesh page <span class="tag">real window</span></div>
+      <img src="/_blob/ba692b89d7bf3fa8b78fe00f3969f9e8" width="426" height="792" alt="The Mesh page of the current 2D Static Structural window: Element size at the top, then a large gap, then the Advanced mesh options and Adaptive mesh tick boxes and the Mesh button lower down" style="display:block;border:1px solid #cfd6df">
+    </div>
+    <div class="col">
+      <div class="cap">Proposed: Advanced off <span class="tag new">mockup</span></div>
+      <div class="panel">
+        <div class="outline" style="height:260px">
+          <div class="oh">Outline</div>
+          <div class="orow"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7.5l3.2 3L12 3.5" fill="none" stroke="#2e7d32" stroke-width="2"/></svg>Geometry</div>
+          <div class="orow"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7.5l3.2 3L12 3.5" fill="none" stroke="#2e7d32" stroke-width="2"/></svg>Material and analysis</div>
+          <div class="orow sel"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M8 1L3 8h3.5L5.5 13 11 5.5H7.5z" fill="#d98e04"/></svg>Mesh</div>
+          <div class="orow"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7.5l3.2 3L12 3.5" fill="none" stroke="#2e7d32" stroke-width="2"/></svg>Supports</div>
+          <div class="orow kid"><span class="bdg bA">A</span>Fixed 1</div>
+          <div class="orow"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7.5l3.2 3L12 3.5" fill="none" stroke="#2e7d32" stroke-width="2"/></svg>Loads</div>
+          <div class="orow kid"><span class="bdg bB">B</span>Pressure 1</div>
+          <div class="orow"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M8 1L3 8h3.5L5.5 13 11 5.5H7.5z" fill="#d98e04"/></svg>Results</div>
+        </div>
+        <div class="split"><i></i></div>
+        <div class="dhead">Details of &ldquo;Mesh&rdquo;</div>
+        <div class="dbody">
+          <div class="help">?</div>
+          <div class="fr" style="margin-top:22px"><span class="t">Element size (mm)</span><span class="inp">3.333</span></div>
+          <div class="cb"><span class="bx"></span>Advanced mesh options</div>
+          <div class="cb"><span class="bx"></span>Adaptive mesh (h)</div>
+          <div class="btn" style="margin-top:6px">Mesh</div>
+          <p class="mut" style="margin:10px 0 0">Not meshed yet.</p>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="cap">Proposed: Advanced on <span class="tag new">mockup</span></div>
+      <div class="panel">
+        <div class="outline" style="height:52px">
+          <div class="oh"><span aria-hidden="true">&#9656;</span>Outline</div>
+          <div class="orow sel"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M8 1L3 8h3.5L5.5 13 11 5.5H7.5z" fill="#d98e04"/></svg>Mesh</div>
+        </div>
+        <div class="split"><i></i></div>
+        <div class="dhead">Details of &ldquo;Mesh&rdquo;</div>
+        <div class="dbody">
+          <div class="help">?</div>
+          <div class="fr" style="margin-top:22px"><span class="t">Element size (mm)</span><span class="inp">3.333</span></div>
+          <div class="cb"><span class="bx on"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 5.2l2.4 2.3L8.5 2.5" fill="none" stroke="#fff" stroke-width="1.6"/></svg></span>Advanced mesh options</div>
+          <div class="ind">
+            <div class="fr"><span class="t">Element order</span><span class="inp"><span>Quadratic (6-node triangles)</span><span aria-hidden="true">&#9662;</span></span></div>
+            <div class="fr"><span class="t">Minimum size (mm)</span><span class="inp dis">auto</span></div>
+            <div class="fr"><span class="t">Growth rate</span><span class="inp">1.3</span></div>
+            <div class="cb"><span class="bx"></span>Refine at curved edges <span class="inp dis" style="flex:none;width:112px;margin-left:8px">10 per circle</span></div>
+            <p class="mut" style="margin:6px 0 6px">Smaller elements on single edges, points and regions: select them in the view, type a size, press the button.</p>
+            <div class="fr"><span class="inp dis">size</span><span class="btn" style="flex:none;width:118px;height:28px">Set on selection</span></div>
+            <div class="tbl"><div class="th"><span>Where</span><span>Size</span></div></div>
+            <div class="btn" style="margin-top:6px">Remove selected size</div>
+          </div>
+          <div class="cb" style="margin-top:6px"><span class="bx"></span>Adaptive mesh (h)</div>
+          <div class="btn" style="margin-top:6px">Mesh</div>
+          <p class="mut" style="margin:10px 0 0">Not meshed yet.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note" style="left:487px;top:858px"><b>4</b>Details start at the top. Ticking Advanced pulls the divider up so the whole page shows, with no scrolling.</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1400,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

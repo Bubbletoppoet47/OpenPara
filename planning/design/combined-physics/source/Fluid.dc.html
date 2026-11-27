@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Combined window, Fluid tab</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap">
+<style>
+body{margin:0;background:#efefef}
+.win{width:1200px;height:720px;display:flex;flex-direction:column;background:#efefef;font:12.5px/1.35 Inter,"Segoe UI",system-ui,sans-serif;color:#1f2933;overflow:hidden}
+.menu{height:22px;flex:none;display:flex;gap:16px;align-items:center;padding:0 10px;background:#f4f4f4}
+.info{height:30px;flex:none;display:flex;gap:10px;align-items:center;padding:0 6px;color:#4a5563}
+.badge{background:#6d33c0;color:#fff;font-weight:600;border-radius:11px;padding:3px 12px}
+.main{flex:1;display:flex;min-height:0}
+.side{width:380px;flex:none;display:flex;flex-direction:column;margin:0 4px 0 4px}
+.strip{height:56px;flex:none;display:flex;gap:4px;padding:4px 0 6px}
+.seg{flex:1;min-width:0;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;border:1px solid #c5ced9;border-radius:6px;background:#e4ebf2;color:#1f2933;font:inherit;font-size:11.5px;cursor:pointer;padding:0}
+.seg .st{position:absolute;top:3px;right:4px}
+.seg svg.ic{width:18px;height:18px;fill:none;stroke:#374151;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.seg.on{background:#fff;border-color:#1f7a84;border-bottom:3px solid #1f7a84;font-weight:600}
+.hdr{height:26px;flex:none;display:flex;align-items:center;padding:0 10px;background:#e4ebf2;font-weight:600}
+.tree{height:200px;flex:none;background:#fff;overflow:hidden}
+.row{height:24px;display:flex;align-items:center;gap:8px;padding:0 10px;font-weight:600}
+.row.sub{padding-left:34px;font-weight:400}
+.row.sel{background:#cfe8ea}
+.tag{width:15px;height:15px;border-radius:3px;display:inline-flex;align-items:center;justify-content:center;background:#c62828;color:#fff;font-size:10px;font-weight:600}
+.tag.g{background:#23744a}
+.details{flex:1;min-height:0;background:#f7f8fb;border:1px solid #dfe5ee;padding:10px 12px;overflow:hidden}
+.f{display:grid;grid-template-columns:150px 1fr;gap:6px 8px;align-items:center;margin-bottom:6px}
+.in{background:#fff;border:1px solid #c5ced9;border-radius:3px;padding:3px 7px;min-height:18px}
+.muted{color:#4a5563}
+.sub2{font-weight:600;margin:10px 0 6px}
+.wall{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #dfe5ee;border-radius:3px;padding:5px 8px;margin-bottom:4px}
+.view{flex:1;background:#fff;border:1px solid #dfe5ee;min-width:0}
+.tabs{height:28px;flex:none;display:flex;gap:2px;align-items:flex-end;padding:0 4px;background:#e8e8e8}
+.tab{padding:5px 14px;background:#dcdcdc;border-radius:4px 4px 0 0;color:#374151}
+.tab.on{background:#fff;font-weight:600;color:#1f2933}
+.status{height:24px;flex:none;display:flex;align-items:center;padding:0 8px;background:#ebebeb;color:#374151}
+</style>
+</helmet>
+<div class="win">
+  <div class="menu"><span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span></div>
+  <div class="info"><span class="badge">Coupled Physics</span><span>of the part <b>Square</b> (the copy in the project) · fluid, heat and stress analyses of one sketch</span></div>
+  <div class="main">
+    <aside class="side">
+      <div class="strip">
+        <button class="seg on" type="button"><svg class="ic" viewBox="0 0 18 18" aria-hidden="true"><path d="M1.5 5.5c2-2 3 2 5 0s3 2 5 0 3 2 4 0M1.5 9.5c2-2 3 2 5 0s3 2 5 0 3 2 4 0M1.5 13.5c2-2 3 2 5 0s3 2 5 0 3 2 4 0"/></svg>Fluid<svg class="st" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5l2.5 2.5L10 3.2" fill="none" stroke="#3d8c6c" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="seg" type="button"><svg class="ic" viewBox="0 0 18 18" aria-hidden="true"><path d="M7.2 10.8V4a1.8 1.8 0 013.6 0v6.8a3.2 3.2 0 11-3.6 0z"/><path d="M9 7.5v5"/></svg>Thermal<svg class="st" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5l2.5 2.5L10 3.2" fill="none" stroke="#3d8c6c" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="seg" type="button"><svg class="ic" viewBox="0 0 18 18" aria-hidden="true"><path d="M2.5 3v12M2.5 5.5c5 0 8 2 13 7"/></svg>Structural<svg class="st" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5l2.5 2.5L10 3.2" fill="none" stroke="#3d8c6c" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="seg" type="button"><svg class="ic" viewBox="0 0 18 18" aria-hidden="true"><circle cx="6.5" cy="9" r="4"/><circle cx="11.5" cy="9" r="4"/></svg>Coupled<svg class="st" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true"><path d="M7 1L3 7h3l-1 4 4-6H6z" fill="#e0a100"/></svg></button>
+        <button class="seg" type="button"><svg class="ic" viewBox="0 0 18 18" aria-hidden="true"><path d="M1.5 9S4.5 4 9 4s7.5 5 7.5 5-3 5-7.5 5S1.5 9 1.5 9z"/><circle cx="9" cy="9" r="2.2"/></svg>Viz<svg class="st" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true"><path d="M7 1L3 7h3l-1 4 4-6H6z" fill="#e0a100"/></svg></button>
+      </div>
+      <div class="hdr">Outline</div>
+      <div class="tree">
+        <div class="row"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5l2.5 2.5L10 3.2" fill="none" stroke="#3d8c6c" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Geometry</div>
+        <div class="row sel"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5l2.5 2.5L10 3.2" fill="none" stroke="#3d8c6c" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Fluid and flow</div>
+        <div class="row sub"><span class="tag">A</span>Left wall: fixed temperature</div>
+        <div class="row sub"><span class="tag g">B</span>Three walls of the thermal analysis</div>
+        <div class="row"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5l2.5 2.5L10 3.2" fill="none" stroke="#3d8c6c" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Domain</div>
+        <div class="row"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M7 1L3 7h3l-1 4 4-6H6z" fill="#e0a100"/></svg>Mesh</div>
+        <div class="row"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5l2.5 2.5L10 3.2" fill="none" stroke="#3d8c6c" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Solver</div>
+        <div class="row"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M7 1L3 7h3l-1 4 4-6H6z" fill="#e0a100"/></svg>Results</div>
+      </div>
+      <div class="hdr">Details of “Fluid and flow”</div>
+      <div class="details">
+        <div class="f"><span>Fluid</span><span class="in">Air</span></div>
+        <div class="f"><span>Speed (m/s)</span><span class="in">0.03</span></div>
+        <div class="f"><span>Direction (deg)</span><span class="in">0</span></div>
+        <div class="f"><span>Heat transfer</span><span class="muted">included: the temperature of the fluid is solved</span></div>
+        <div class="f"><span>Inlet temperature</span><span class="in">20 °C</span></div>
+        <div class="sub2">Walls</div>
+        <div class="wall"><span class="tag">A</span><span>Left wall</span><span class="muted" style="margin-left:auto">fixed 50 °C</span></div>
+        <div class="wall"><span class="tag g">B</span><span>Top, right, bottom</span><span class="muted" style="margin-left:auto">walls of the thermal analysis</span></div>
+      </div>
+    </aside>
+    <section class="view">
+      <svg width="100%" height="100%" viewBox="0 0 810 614" role="img" aria-label="Model view: the square body in a slow air stream from the left. The left edge is red, a fixed temperature of 50 degrees. The other three edges are green: walls of the thermal analysis.">
+        <rect x="150" y="150" width="330" height="330" fill="#5a5a64"/>
+        <line x1="150" y1="150" x2="150" y2="480" stroke="#d62728" stroke-width="6"/>
+        <line x1="150" y1="150" x2="480" y2="150" stroke="#2e8b57" stroke-width="6"/>
+        <line x1="480" y1="150" x2="480" y2="480" stroke="#2e8b57" stroke-width="6"/>
+        <line x1="150" y1="480" x2="480" y2="480" stroke="#2e8b57" stroke-width="6"/>
+        <g stroke="#6b7280" stroke-width="2" fill="none"><path d="M30 215h70m-10-8l10 8-10 8"/><path d="M30 315h70m-10-8l10 8-10 8"/><path d="M30 415h70m-10-8l10 8-10 8"/></g>
+        <text x="30" y="190" font-size="12" fill="#374151" font-family="Inter,sans-serif">air 0.03 m/s, 20 °C</text>
+        <rect x="112" y="300" width="15" height="15" rx="3" fill="#c62828"/><text x="116" y="312" font-size="10" font-weight="600" fill="#fff" font-family="Inter,sans-serif">A</text>
+        <rect x="487" y="305" width="15" height="15" rx="3" fill="#23744a"/><text x="491" y="317" font-size="10" font-weight="600" fill="#fff" font-family="Inter,sans-serif">B</text>
+        <g font-family="Inter,sans-serif" font-size="12" fill="#374151"><line x1="30" y1="560" x2="62" y2="560" stroke="#d62728" stroke-width="5"/><text x="70" y="564">Fixed temperature</text><line x1="210" y1="560" x2="242" y2="560" stroke="#2e8b57" stroke-width="5"/><text x="250" y="564">Wall of the thermal analysis (gives and takes heat)</text></g>
+      </svg>
+    </section>
+  </div>
+  <div class="tabs"><span class="tab">Example: a bar, a plate and a frame</span><span class="tab on">O Air, heat and bending</span></div>
+  <div class="status">Fluid: set up here. Solving the three together is in the Coupled tab.</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":720}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

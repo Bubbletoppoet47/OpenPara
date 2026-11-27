@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workbench header colours</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+.wb{position:relative;width:1180px;height:700px;background:#f0f0f0;font-family:Inter,system-ui,sans-serif;color:#10204d;overflow:hidden}
+.blk{position:absolute;width:200px;box-sizing:border-box;border:1px solid #8793ad;border-radius:3px;background:#fff;box-shadow:inset 1px 1px 0 #fff,inset -1px -1px 0 #b6bfd0,0 1px 3px rgba(16,32,77,.22);z-index:2}
+.hd{height:20px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;font-size:12px;font-weight:700;border-radius:2px 2px 0 0;box-shadow:inset 0 1px 0 rgba(255,255,255,.3),inset 0 -1px 0 rgba(0,0,0,.25)}
+.hd span{font-weight:500;font-size:11px}
+.lt{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;border-radius:3px;font-size:12px;font-weight:700;margin-left:-4px}
+.row{display:flex;align-items:center;height:30px;box-sizing:border-box;border-top:1px solid #dde2ec;background:#fff}
+.row.alt{background:#f5f7fb}
+.row.nrow{height:40px;border-top:0}
+.no{width:18px;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#5a6577;background:#e9edf5;border-right:1px solid #dde2ec;flex:none}
+.ico{width:18px;height:18px;margin-left:10px;flex:none}
+.ico.big{width:26px;height:26px;margin-left:8px}
+.nm{margin-left:8px;font-size:13px;flex:1}
+.bn{margin-left:10px;font-size:13px;font-weight:700;flex:1}
+.mk{width:18px;height:18px;margin-right:8px;flex:none}
+.cap{position:absolute;width:200px;text-align:center;font-size:13px;font-weight:700;color:#10204d}
+.w{position:absolute;background:#1f3a6e;z-index:1}
+.dot{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:#1f3a6e;border:2px solid #fff;box-shadow:0 0 0 1px #1f3a6e;box-sizing:border-box;z-index:3}
+.gh{display:flex;align-items:center;gap:6px;height:24px;padding:0 8px;font-size:13px;font-weight:700}
+.gh .cr{width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid #5a6577}
+.ti{display:flex;align-items:center;gap:8px;height:22px;padding:0 8px 0 26px;font-size:13px}
+.ti img{width:18px;height:18px}
+.sw{width:10px;height:10px;border-radius:2px;box-shadow:inset 1px 1px 0 rgba(255,255,255,.35),inset -1px -1px 0 rgba(0,0,0,.25);flex:none}
+.bt{white-space:nowrap;flex:none;font:500 13px Inter,system-ui,sans-serif;color:#10204d;background:transparent;border:1px solid transparent;border-radius:3px;padding:4px 8px;cursor:default}
+.bt:hover{background:#e3e7ef;border-color:#c9d0dc}
+</style>
+</helmet>
+<div class="wb">
+
+<!-- toolbox -->
+<div style="position:absolute;left:0;top:0;width:232px;height:700px;background:#ffffff;border-right:1px solid #c9d0dc;box-sizing:border-box">
+<div style="height:40px;display:flex;align-items:center;padding:0 12px;background:#f0f0f0;border-bottom:1px solid #d3d8e2;font-size:13px;font-weight:600;color:#5a6577;box-sizing:border-box">Toolbox</div>
+<div class="gh" style="margin-top:6px"><span class="cr"></span><i class="sw" style="background:{{sw.ana}};display:{{gsw}}"></i>Analysis Systems</div>
+<div class="ti"><i class="sw" style="background:{{tc.solid}};display:{{tsw}}"></i><img src="/_blob/d3426b099927d65e4e5e006aced5c4c1" alt="">3D Static Structural</div>
+<div class="ti"><i class="sw" style="background:{{tc.thermal3d}};display:{{tsw}}"></i><img src="/_blob/23b6c14954e18fc1a0079eaffff513de" alt="">3D Thermal</div>
+<div class="ti"><i class="sw" style="background:{{tc.fea}};display:{{tsw}}"></i><img src="/_blob/82a2d24c0eb2770b90680116b31160fd" alt="">2D Static Structural</div>
+<div class="ti"><i class="sw" style="background:{{tc.thermal}};display:{{tsw}}"></i><img src="/_blob/2b4dac18404d55fd1665f134c8372045" alt="">2D Thermal</div>
+<div class="ti"><i class="sw" style="background:{{tc.cfd}};display:{{tsw}}"></i><img src="/_blob/a1794cebca177d1d4634441e8695a4fa" alt="">2D Fluid Flow</div>
+<div class="ti"><i class="sw" style="background:{{tc.beam}};display:{{tsw}}"></i><img src="/_blob/5803565e056a463e30a467dfdfcb970f" alt="">1D Beam / Truss</div>
+<div class="gh"><span class="cr"></span><i class="sw" style="background:{{sw.geo}};display:{{gsw}}"></i>Geometry</div>
+<div class="ti"><i class="sw" style="background:{{tc.part}};display:{{tsw}}"></i><img src="/_blob/90950eb0d805b9596f74a4a3b1a18372" alt="">Part</div>
+<div class="ti"><i class="sw" style="background:{{tc.assembly}};display:{{tsw}}"></i><img src="/_blob/63af5cdf8bf08d51007bdd2f68e899b2" alt="">Assembly</div>
+<div class="gh"><span class="cr"></span><i class="sw" style="background:{{sw.com}};display:{{gsw}}"></i>Component Tools</div>
+<div class="ti"><i class="sw" style="background:{{tc.sheets}};display:{{tsw}}"></i><img src="/_blob/6f17ef6d4111baad33ac2de71e9dce40" alt="">Sheets</div>
+<div class="ti"><i class="sw" style="background:{{tc.pdf}};display:{{tsw}}"></i><img src="/_blob/0055595609d838a436264022634f7384" alt="">PDF Editor</div>
+<div class="ti"><i class="sw" style="background:{{tc.controls}};display:{{tsw}}"></i><img src="/_blob/7e1d564e0c7c4c5289c9870bf1d42854" alt="">Controls</div>
+<div class="ti"><i class="sw" style="background:{{tc.circuits}};display:{{tsw}}"></i><img src="/_blob/002544fe63181f3ab27e3525b445c2ca" alt="">Circuits</div>
+<div class="ti"><i class="sw" style="background:{{tc.visualize}};display:{{tsw}}"></i><img src="/_blob/ad2e6515eda9b5a4f99f71049da7816b" alt="">Visualize</div>
+<div class="ti"><i class="sw" style="background:{{tc.motor}};display:{{tsw}}"></i><img src="/_blob/a0b5327b543547f4cdb91bad346be415" alt="">Motor Control</div>
+<div class="ti"><i class="sw" style="background:{{tc.trainer}};display:{{tsw}}"></i><img src="/_blob/795948aa8d8fe64d5b71d146729c2984" alt="">Trainer</div>
+<div class="ti"><i class="sw" style="background:{{tc.annotator}};display:{{tsw}}"></i><img src="/_blob/9328e602d708d5e3c3bf82bbe7c96f2f" alt="">Annotator</div>
+<div class="ti"><i class="sw" style="background:{{tc.truss}};display:{{tsw}}"></i><img src="/_blob/a35f3a8de8e9882257e4b02d192d65a4" alt="">Truss Generator</div>
+<div class="gh"><span class="cr"></span><i class="sw" style="background:{{sw.des}};display:{{gsw}}"></i>Design Exploration</div>
+<div class="ti"><i class="sw" style="background:{{tc.study}};display:{{tsw}}"></i><img src="/_blob/582f3a6cb70932038a4bad0a21062e96" alt="">Parametric Study</div>
+</div>
+
+<!-- bar and strip -->
+<div style="position:absolute;left:232px;top:0;right:0;height:40px;display:flex;align-items:center;gap:6px;padding:0 12px;background:#f0f0f0;border-bottom:1px solid #d3d8e2;box-sizing:border-box">
+<span style="display:inline-block;background:#10204d;color:#ffffff;font-size:11px;font-weight:600;border-radius:9px;padding:2px 10px">Workbench</span>
+<span style="font-size:13px;color:#5a6577;margin:0 10px 0 4px;white-space:nowrap;flex:none">Test OpenPara Project.opara</span>
+<button type="button" class="bt">New</button>
+<button type="button" class="bt">Open</button>
+<button type="button" class="bt">Save</button>
+<button type="button" class="bt">Save As</button>
+<button type="button" class="bt">Refresh Project</button>
+<button type="button" class="bt">Update Project</button>
+<button type="button" class="bt">Import</button>
+<button type="button" class="bt">Fit</button>
+<button type="button" class="bt">Project Report</button>
+</div>
+<div style="position:absolute;left:232px;top:40px;right:0;height:28px;display:flex;align-items:center;padding:0 16px;background:#e9edf5;border-bottom:1px solid #d3d8e2;font-size:12px;font-weight:600;box-sizing:border-box">Project Schematic</div>
+
+<!-- schematic -->
+<div style="position:absolute;left:232px;top:68px;right:0;bottom:0;background-color:#ffffff;background-image:radial-gradient(#d5dde8 1px,transparent 1px);background-size:20px 20px">
+
+<!-- wires, behind the dots -->
+<div class="w" style="left:240px;top:115px;width:90px;height:2px"></div>
+<div class="w" style="left:284px;top:20px;width:2px;height:397px"></div>
+<div class="w" style="left:285px;top:415px;width:45px;height:2px"></div>
+<div class="w" style="left:284px;top:19px;width:347px;height:2px"></div>
+<div class="w" style="left:629px;top:20px;width:2px;height:227px"></div>
+<div class="w" style="left:595px;top:245px;width:65px;height:2px"></div>
+<div class="w" style="left:530px;top:145px;width:65px;height:2px"></div>
+<div class="w" style="left:594px;top:146px;width:2px;height:331px"></div>
+<div class="w" style="left:530px;top:475px;width:65px;height:2px"></div>
+<div class="w" style="left:240px;top:445px;width:90px;height:2px"></div>
+
+<!-- dots -->
+<div class="dot" style="left:240px;top:116px"></div>
+<div class="dot" style="left:330px;top:116px"></div>
+<div class="dot" style="left:240px;top:446px"></div>
+<div class="dot" style="left:330px;top:446px"></div>
+<div class="dot" style="left:330px;top:416px"></div>
+<div class="dot" style="left:530px;top:146px"></div>
+<div class="dot" style="left:530px;top:476px"></div>
+<div class="dot" style="left:660px;top:246px"></div>
+
+<!-- A  Part -->
+<div class="blk" style="left:40px;top:40px;height:92px">
+<div class="hd" style="background:{{a.bg}};color:{{a.fg}}"><b class="lt" style="background:{{a.chip}};color:{{a.chipFg}}">A</b><span>Geometry</span></div>
+<div class="row nrow"><div class="no">1</div><img class="ico big" src="/_blob/ba2e3f2887eb055fb720339bf539d326" alt=""><b class="bn">Part</b></div>
+<div class="row"><div class="no">2</div><img class="ico" src="/_blob/90950eb0d805b9596f74a4a3b1a18372" alt=""><span class="nm">Part</span><img class="mk" src="/_blob/a3298ea32cd4d7e2fd9dc97abe680b56" alt="up to date"></div>
+</div>
+<div class="cap" style="left:40px;top:138px">Part</div>
+
+<!-- B  Part (profile) -->
+<div class="blk" style="left:40px;top:370px;height:92px">
+<div class="hd" style="background:{{b.bg}};color:{{b.fg}}"><b class="lt" style="background:{{b.chip}};color:{{b.chipFg}}">B</b><span>Geometry</span></div>
+<div class="row nrow"><div class="no">1</div><img class="ico big" src="/_blob/ba2e3f2887eb055fb720339bf539d326" alt=""><b class="bn">Part</b></div>
+<div class="row"><div class="no">2</div><img class="ico" src="/_blob/90950eb0d805b9596f74a4a3b1a18372" alt=""><span class="nm">Part</span><img class="mk" src="/_blob/a3298ea32cd4d7e2fd9dc97abe680b56" alt="up to date"></div>
+</div>
+<div class="cap" style="left:40px;top:468px">Part</div>
+
+<!-- C  2D Thermal -->
+<div class="blk" style="left:330px;top:40px;height:182px">
+<div class="hd" style="background:{{c.bg}};color:{{c.fg}}"><b class="lt" style="background:{{c.chip}};color:{{c.chipFg}}">C</b><span>Analysis Systems</span></div>
+<div class="row nrow"><div class="no">1</div><img class="ico big" src="/_blob/730d369082f20556e1069abff2cc7ee3" alt=""><b class="bn">2D Thermal</b></div>
+<div class="row"><div class="no">2</div><img class="ico" src="/_blob/8da2ad211dbc768cb9a0d8fb88978c9a" alt=""><span class="nm">Sketch</span><img class="mk" src="/_blob/a3298ea32cd4d7e2fd9dc97abe680b56" alt="up to date"></div>
+<div class="row alt"><div class="no">3</div><img class="ico" src="/_blob/90947269566c59955e0bb4234a18173f" alt=""><span class="nm">Setup</span><img class="mk" src="/_blob/7449d88017cf8f33b7ef35e565eb1444" alt="incomplete"></div>
+<div class="row"><div class="no">4</div><img class="ico" src="/_blob/2a7d6bc8376dc181e9c5f81502423222" alt=""><span class="nm">Solution</span><img class="mk" src="/_blob/7449d88017cf8f33b7ef35e565eb1444" alt="incomplete"></div>
+<div class="row alt"><div class="no">5</div><img class="ico" src="/_blob/3f91b0e8350a3a4c2fcc4ca47b93717b" alt=""><span class="nm">Results</span><img class="mk" src="/_blob/7449d88017cf8f33b7ef35e565eb1444" alt="incomplete"></div>
+</div>
+<div class="cap" style="left:330px;top:228px">2D Thermal</div>
+
+<!-- D  1D Beam / Truss: a sketch and a profile -->
+<div class="blk" style="left:330px;top:340px;height:212px">
+<div class="hd" style="background:{{d.bg}};color:{{d.fg}}"><b class="lt" style="background:{{d.chip}};color:{{d.chipFg}}">D</b><span>Analysis Systems</span></div>
+<div class="row nrow"><div class="no">1</div><img class="ico big" src="/_blob/67dd07e72450383f28322fbbca6c977d" alt=""><b class="bn">1D Beam / Truss</b></div>
+<div class="row"><div class="no">2</div><img class="ico" src="/_blob/8da2ad211dbc768cb9a0d8fb88978c9a" alt=""><span class="nm">Sketch</span><img class="mk" src="/_blob/a3298ea32cd4d7e2fd9dc97abe680b56" alt="up to date"></div>
+<div class="row alt"><div class="no">3</div><img class="ico" src="/_blob/ab8d28dcfa564eeb5a60d2b890e1ff0f" alt=""><span class="nm">Profile</span><img class="mk" src="/_blob/a3298ea32cd4d7e2fd9dc97abe680b56" alt="up to date"></div>
+<div class="row"><div class="no">4</div><img class="ico" src="/_blob/90947269566c59955e0bb4234a18173f" alt=""><span class="nm">Setup</span><img class="mk" src="/_blob/dd2996ccf6af1648b16689d3e4523af5" alt="needs update"></div>
+<div class="row alt"><div class="no">5</div><img class="ico" src="/_blob/2a7d6bc8376dc181e9c5f81502423222" alt=""><span class="nm">Solution</span><img class="mk" src="/_blob/bf2e9dc8dab27ce3aefe761ab505b2f5" alt="refresh"></div>
+<div class="row"><div class="no">6</div><img class="ico" src="/_blob/3f91b0e8350a3a4c2fcc4ca47b93717b" alt=""><span class="nm">Results</span><img class="mk" src="/_blob/7449d88017cf8f33b7ef35e565eb1444" alt="incomplete"></div>
+</div>
+<div class="cap" style="left:330px;top:558px">1D Beam / Truss</div>
+
+<!-- E  Parametric Study: three wires into Parameters (selected) -->
+<div class="blk" style="left:660px;top:170px;height:152px;outline:2px solid #2f6fed;outline-offset:2px">
+<div class="hd" style="background:{{e.bg}};color:{{e.fg}}"><b class="lt" style="background:{{e.chip}};color:{{e.chipFg}}">E</b><span>Design Exploration</span></div>
+<div class="row nrow"><div class="no">1</div><img class="ico big" src="/_blob/38fedad7df2035461a403361e253ea54" alt=""><b class="bn">Parametric Study</b></div>
+<div class="row"><div class="no">2</div><img class="ico" src="/_blob/582f3a6cb70932038a4bad0a21062e96" alt=""><span class="nm">Parameters</span><img class="mk" src="/_blob/a3298ea32cd4d7e2fd9dc97abe680b56" alt="up to date"></div>
+<div class="row alt"><div class="no">3</div><img class="ico" src="/_blob/2a7d6bc8376dc181e9c5f81502423222" alt=""><span class="nm">Study</span><img class="mk" src="/_blob/dd2996ccf6af1648b16689d3e4523af5" alt="needs update"></div>
+<div class="row"><div class="no">4</div><img class="ico" src="/_blob/3f91b0e8350a3a4c2fcc4ca47b93717b" alt=""><span class="nm">Results</span><img class="mk" src="/_blob/7449d88017cf8f33b7ef35e565eb1444" alt="incomplete"></div>
+</div>
+<div class="cap" style="left:660px;top:330px">Parametric Study</div>
+
+<!-- F  Sheets -->
+<div class="blk" style="left:660px;top:420px;height:92px">
+<div class="hd" style="background:{{f.bg}};color:{{f.fg}}"><b class="lt" style="background:{{f.chip}};color:{{f.chipFg}}">F</b><span>Component Tools</span></div>
+<div class="row nrow"><div class="no">1</div><img class="ico big" src="/_blob/5daf370eb40f68dd87e2d25d1cfdbbac" alt=""><b class="bn">Sheets</b></div>
+<div class="row"><div class="no">2</div><img class="ico" src="/_blob/6f17ef6d4111baad33ac2de71e9dce40" alt=""><span class="nm">Sheets</span><img class="mk" src="/_blob/ebcd14703171422f0ec675aef6917d10" alt="failed"></div>
+</div>
+<div class="cap" style="left:660px;top:518px">Sheets</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"scheme":{"editor":"enum","options":["1","2","3","4"],"default":"1"},"$preview":{"width":1180,"height":700}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const s = String(this.props.scheme ?? '1');
+    const teal = '#0b7a70', purple = '#6a3fb8', green = '#2a7a4f', blue = '#2a62d4', amber = '#8f5a00', red = '#b3362e', magenta = '#a02c72', slate = '#5a6574';
+    let g = { geo: teal, ana: purple, com: green, des: blue };
+    if (s === '2') g = { geo: teal, ana: blue, com: purple, des: amber };
+    const quiet = s === '3';
+    const byTool = s === '4';
+    const head = (c) => quiet
+      ? { bg: '#cbd3e0', fg: '#10204d', chip: c, chipFg: '#ffffff' }
+      : { bg: c, fg: '#ffffff', chip: 'transparent', chipFg: '#ffffff' };
+    const tc = byTool
+      ? { solid: purple, thermal3d: purple, fea: purple, thermal: purple, cfd: purple, beam: purple, part: blue, assembly: blue, sheets: green, pdf: red,
+          controls: purple, circuits: teal, visualize: purple, motor: slate, trainer: magenta, annotator: magenta, truss: blue, study: purple }
+      : { solid: g.ana, thermal3d: g.ana, fea: g.ana, thermal: g.ana, cfd: g.ana, beam: g.ana, part: g.geo, assembly: g.geo, sheets: g.com, pdf: g.com,
+          controls: g.com, circuits: g.com, visualize: g.com, motor: g.com, trainer: g.com, annotator: g.com, truss: g.com, study: g.des };
+    return {
+      sw: g,
+      tc: tc,
+      gsw: byTool ? 'none' : 'inline-block',
+      tsw: byTool ? 'inline-block' : 'none',
+      a: head(tc.part), b: head(tc.part), c: head(tc.thermal), d: head(tc.beam), e: head(tc.study), f: head(tc.sheets)
+    };
+  }
+}
+</script>
+</body>
+</html>

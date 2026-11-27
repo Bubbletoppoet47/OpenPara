@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trained models window</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+select{font-family:inherit;font-size:13px;color:#10204d}
+.ce{box-sizing:border-box;height:24px;padding:0 8px;display:flex;align-items:center;border-right:1px solid #dfe3ea;border-bottom:1px solid #dfe3ea;overflow:hidden;white-space:nowrap;font-variant-numeric:tabular-nums}
+.hc{background:#eef1f6;font-weight:600;color:#4b5870;font-size:12px}
+.rb{width:68px;height:68px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:3px;padding:4px 2px;font-family:inherit;font-size:11px;line-height:1.2;text-align:center;color:#10204d;background:transparent;border:1px solid transparent;border-radius:3px}
+.fi{height:24px;box-sizing:border-box;border:1px solid #b9bec9;background:#ffffff;padding:0 8px;font:inherit;font-variant-numeric:tabular-nums;color:#10204d}
+.cap{font-size:11px;font-weight:700;letter-spacing:0.06em;color:#4a5872}
+.lb{box-sizing:border-box;height:24px;padding:0 10px;font:inherit;font-size:12px;color:#10204d;background:#ffffff;border:1px solid #b9bec9;border-radius:3px}
+</style>
+</helmet>
+<div style="width:1280px;height:800px;box-sizing:border-box;display:flex;flex-direction:column;background:#efefef;font-family:Inter,system-ui,sans-serif;font-size:13px;line-height:1.35;color:#10204d;overflow:hidden">
+<div style="height:78px;flex:none;box-sizing:border-box;display:flex;align-items:center;padding:0 6px;border-bottom:1px solid #c8c8c8">
+<button type="button" class="rb"><svg aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" style="fill:none;stroke:#4b5870;stroke-width:1.7"><path d="M8 4 H22 L27 9 V30 H8 Z"></path><path d="M22 4 V9 H27"></path><path d="M17 14 V24 M13 20 L17 24 L21 20"></path></svg>Import model...</button>
+<button type="button" class="rb"><svg aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" style="fill:none;stroke:#4b5870;stroke-width:1.7"><path d="M4 9 H13 L16 12 H30 V28 H4 Z"></path><path d="M17 17 V25 M14 22 L17 25 L20 22"></path></svg>Import folder...</button>
+<div style="width:1px;align-self:stretch;margin:6px 8px;background:#d0d0d0"></div>
+<button type="button" class="rb"><svg aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" style="fill:none;stroke:#4b5870;stroke-width:1.7"><path d="M8 4 H22 L27 9 V30 H8 Z"></path><path d="M22 4 V9 H27"></path><path d="M17 25 V15 M13 19 L17 15 L21 19"></path></svg>Export...</button>
+<button type="button" class="rb"><svg aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" style="fill:none;stroke:#4b5870;stroke-width:1.7"><path d="M6 28 L8 21 L22 7 L27 12 L13 26 Z"></path><path d="M19 10 L24 15"></path></svg>Rename...</button>
+<div style="width:1px;align-self:stretch;margin:6px 8px;background:#d0d0d0"></div>
+<button type="button" class="rb"><svg aria-hidden="true" width="34" height="34" viewBox="0 0 34 34" style="fill:none;stroke:#4b5870;stroke-width:1.7"><path d="M8 10 H26 M13 10 V6 H21 V10 M10 10 L11 29 H23 L24 10 M15 14 V25 M19 14 V25"></path></svg>Remove</button>
+</div>
+<div style="height:28px;flex:none;box-sizing:border-box;display:flex;align-items:flex-end;padding:0 0 0 4px"><span style="padding:5px 13px;background:#fcfcfc;border:1px solid #c8c8c8;border-bottom:1px solid #fcfcfc;margin-right:-1px">Models</span><span style="flex:1"></span><span style="align-self:center;background:#b83280;color:#ffffff;font-weight:600;font-size:12px;border-radius:999px;padding:2px 14px;margin-right:10px">Trained models</span><span style="align-self:center;font-weight:600;color:#4a5872;margin-right:10px">Test OpenPara Project - 7 models</span></div>
+<div style="flex:1;min-height:0;display:flex;gap:4px;padding:4px 4px 0 4px">
+<div style="width:336px;flex:none;box-sizing:border-box;background:#ffffff;border:1px solid #cfcfcf;padding:10px 6px;display:flex;flex-direction:column;gap:6px;overflow:hidden">
+<div class="cap" style="padding:0 2px">SMALL_2026-11-14_0541</div>
+<div style="border-top:1px solid #dfe3ea;border-left:1px solid #dfe3ea">
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Name</div><div class="ce " style="width:220px;color:#10204d">Small_2026-11-14_0541</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Kind</div><div class="ce " style="width:220px;color:#10204d">Detector + distance</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Size</div><div class="ce " style="width:220px;color:#10204d">Small (YOLO26s)</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Parameters</div><div class="ce " style="width:220px;color:#10204d">9,465,567</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Classes</div><div class="ce " style="width:220px;color:#10204d">8</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Trained on</div><div class="ce " style="width:220px;color:#10204d">21,522 pictures</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Boxes</div><div class="ce " style="width:220px;color:#10204d">85,836 (28,248 with distance)</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Distance error</div><div class="ce " style="width:220px;color:#10204d">7.0 % median</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Made by</div><div class="ce " style="width:220px;color:#10204d">Ian Selga, 2026-11-14 05:41</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Needs</div><div class="ce " style="width:220px;color:#10204d">torch, ultralytics, GPU</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Made for</div><div class="ce " style="width:220px;color:#10204d">Gimble rig camera</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Stored</div><div class="ce " style="width:220px;color:#10204d">Linked, Models\Scratch</div></div>
+<div style="display:flex;"><div class="ce hc" style="width:100px;">Used by</div><div class="ce " style="width:220px;color:#10204d">D Model testing</div></div>
+</div>
+</div>
+<div style="flex:1;min-width:0;box-sizing:border-box;background:#ffffff;border:1px solid #cfcfcf;padding:10px 18px;display:flex;overflow:hidden">
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px"><div class="cap">MODELS IN THIS PROJECT</div><div style="border-top:1px solid #dfe3ea;border-left:1px solid #dfe3ea;align-self:flex-start"><div style="display:flex;"><div class="ce hc" style="width:266px;">Model</div><div class="ce hc" style="width:150px;">Kind</div><div class="ce hc" style="width:190px;">Size</div><div class="ce hc" style="width:96px;">Stored</div><div class="ce hc" style="width:100px;">Made</div><div class="ce hc" style="width:90px;">From</div></div>
+<div style="display:flex;background:#e8f1fd;"><div class="ce " style="width:266px;">Small_2026-11-14_0541_Ian_Selga</div><div class="ce " style="width:150px;">Detector + distance</div><div class="ce " style="width:190px;">Small (YOLO26s)</div><div class="ce " style="width:96px;">Linked</div><div class="ce " style="width:100px;">2026-11-14</div><div class="ce " style="width:90px;">Imported</div></div>
+<div style="display:flex;"><div class="ce " style="width:266px;">Medium_2026-10-08_1530_Ian_Selga</div><div class="ce " style="width:150px;">Detector + distance</div><div class="ce " style="width:190px;">Medium</div><div class="ce " style="width:96px;">Linked</div><div class="ce " style="width:100px;">2026-10-08</div><div class="ce " style="width:90px;">Imported</div></div>
+<div style="display:flex;"><div class="ce " style="width:266px;">Nano_2026-10-08_0609_Ian_Selga</div><div class="ce " style="width:150px;">Detector</div><div class="ce " style="width:190px;">Nano</div><div class="ce " style="width:96px;">Linked</div><div class="ce " style="width:100px;">2026-10-08</div><div class="ce " style="width:90px;">Imported</div></div>
+<div style="display:flex;"><div class="ce " style="width:266px;">DistNet_4x32_2026-11-26</div><div class="ce " style="width:150px;">Distance only</div><div class="ce " style="width:190px;">4 x 32, 3,681 parameters</div><div class="ce " style="width:96px;">Inside project</div><div class="ce " style="width:100px;">2026-11-26</div><div class="ce " style="width:90px;">B Trainer</div></div>
+<div style="display:flex;"><div class="ce " style="width:266px;">GradBoost_2026-11-26</div><div class="ce " style="width:150px;">Distance only</div><div class="ce " style="width:190px;">Gradient boosting</div><div class="ce " style="width:96px;">Inside project</div><div class="ce " style="width:100px;">2026-11-26</div><div class="ce " style="width:90px;">B Trainer</div></div>
+<div style="display:flex;"><div class="ce " style="width:266px;">GaussProc_2026-11-26</div><div class="ce " style="width:150px;">Distance only</div><div class="ce " style="width:190px;">Gaussian process, RBF</div><div class="ce " style="width:96px;">Inside project</div><div class="ce " style="width:100px;">2026-11-26</div><div class="ce " style="width:90px;">B Trainer</div></div>
+<div style="display:flex;"><div class="ce " style="width:266px;">Pinhole_2026-11-26</div><div class="ce " style="width:150px;">Distance only</div><div class="ce " style="width:190px;">Pinhole formula</div><div class="ce " style="width:96px;">Inside project</div><div class="ce " style="width:100px;">2026-11-26</div><div class="ce " style="width:90px;">B Trainer</div></div></div></div>
+</div>
+</div>
+<div style="height:22px;flex:none;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;padding:0 6px;border-top:1px solid #cfcfcf;font-size:12px;color:#000000"><span>Project: Test OpenPara Project.opara &nbsp;|&nbsp; Used by D Model testing</span><span>Mock-up, example numbers</span></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
