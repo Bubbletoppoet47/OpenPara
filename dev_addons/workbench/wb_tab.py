@@ -214,7 +214,7 @@ class WorkbenchTab(QWidget):
         act("refresh", "Refresh Project", lambda: self.refresh_project(), "Refresh the cells that take data from another block (the geometry of an analysis)")
         act("update", "Update Project", lambda: self.update_project(), "Refresh and compute everything that is out of date, in the order of the wires")
         bar.addSeparator()
-        act("import", "Import...", self.import_dialog, "Add parts, assemblies, tool files or another project (.opara) from files as blocks")
+        act("import", "Import...", self.import_dialog, "Add parts, assemblies, STEP or STL files, tool files or another project (.opara) from files as blocks")
         act("import_folder", "Import Folder...", self.import_folder_dialog, "Add an analysis project folder (.gpv, .gpf ...) or a Truss Generator folder as a block")
         act("fit", "Fit", self.view.fit_all, "Show the whole schematic")
         act("report", "Project Report", self.show_report, "What is in the project, the status of every cell, what Update would do and what is wrong")
@@ -779,7 +779,7 @@ class WorkbenchTab(QWidget):
 
     def import_dialog(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Import into the project", os.path.dirname(self.path) if self.path else "",
-                                                "Parts, assemblies, tools and projects (*.gpd *.gpa *.opsheet *.opctl *.opcirc *.opara);;All files (*)")
+                                                "Parts, assemblies, STEP and STL files, tools and projects (*.gpd *.gpa *.step *.stp *.stl *.opsheet *.opctl *.opcirc *.opara);;All files (*)")
         return self.import_many(files)
 
     def import_folder_dialog(self):
@@ -793,6 +793,8 @@ class WorkbenchTab(QWidget):
             n = self.import_file(f, None if x is None else x + i * (cv.BLOCK_W + 2 * cv.GRID), y)
             if n is not None:
                 out.append(n)
+            elif getattr(self, "import_cancelled", False):
+                continue
             else:
                 bad.append(f"{os.path.basename(str(f).rstrip('/' + chr(92)))}: {self.line.text()}")
         if bad:

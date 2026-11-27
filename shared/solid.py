@@ -1,7 +1,7 @@
 """Solids from a closed triangle mesh.
 
     faceted_solid(mesh)          -> build123d Solid with one planar face per triangle (sewn).  Exact copy of the mesh; slow for large meshes
-                                    (a few seconds per 10 000 triangles), so it refuses above `max_tris`.
+                                    (some seconds per 10 000 triangles).  `max_tris` (default 30 000) refuses a larger one; max_tris=None has no limit (an STL dropped on the Workbench).
     tet_mesh(mesh, size)         -> pyvista UnstructuredGrid of tetrahedra filling the mesh (gmsh); the mesh's own triangles are the boundary
     check(solid or grid, mesh)   -> volume difference to the mesh volume
 
@@ -21,41 +21,13 @@ def mesh_volume(mesh):
 
 
 def faceted_solid(mesh, max_tris=30000, tol=None):
-    from OCP.BRep import BRep_Builder
-    from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing)
-    from OCP.gp import gp_Pnt
-    from OCP.ShapeFix import ShapeFix_Solid
-    from OCP.TopAbs import TopAbs_SHELL
-    from OCP.TopExp import TopExp_Explorer
-    from OCP.TopoDS import TopoDS
-    from build123d import Solid
+    """max_tris=None: any number of triangles (it takes as long as it takes)."""
+    import exchange
 
     P, T = R.arrays(mesh)
-    if len(T) > max_tris:
+    if max_tris is not None and len(T) > max_tris:
         raise ValueError(f"{len(T)} triangles is too many for a faceted solid (limit {max_tris}). Reduce the mesh first.")
-    d = R.diag_of(P)
-    sew = BRepBuilderAPI_Sewing(1e-7 * d if tol is None else tol)
-    pts = [gp_Pnt(float(x), float(y), float(z)) for x, y, z in P]
-    for a, b, c in T:
-        poly = BRepBuilderAPI_MakePolygon(pts[a], pts[b], pts[c], True)
-        if not poly.IsDone():
-            continue
-        face = BRepBuilderAPI_MakeFace(poly.Wire(), True)
-        if face.IsDone():
-            sew.Add(face.Face())
-    sew.Perform()
-    shape = sew.SewedShape()
-    ex = TopExp_Explorer(shape, TopAbs_SHELL)
-    if not ex.More():
-        raise ValueError("Sewing produced no shell.")
-    shell = TopoDS.Shell(ex.Current())
-    ms = BRepBuilderAPI_MakeSolid(shell)
-    fx = ShapeFix_Solid(ms.Solid())
-    fx.Perform()
-    s = Solid(fx.Solid())
-    if s.volume < 0:
-        s = Solid(fx.Solid().Reversed())
-    return s
+    return exchange.solid_from_mesh(P, T, tol)
 
 
 def tet_mesh(mesh, size=None, smooth_retry=True):

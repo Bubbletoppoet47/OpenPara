@@ -1273,12 +1273,15 @@ class MainWindow(QMainWindow):
     def imported_panel(self, form, f):
         """An imported body: where it came from and its size.  Its own dimensions cannot be edited (a STEP file has no sketches), but features can be added on top."""
         form.addRow("From", QLabel(f.get("source", "a STEP file")))
+        if f.get("mesh_tris"):
+            form.addRow("Mesh body", QLabel(f"{f['mesh_tris']} triangles, each one a flat face"))
         s = self.doc.after.get(f["id"])
         if s is not None:
             b = s.bounding_box()
             form.addRow("Size", QLabel(f"{unitctl.to_disp(b.size.X):.4g} x {unitctl.to_disp(b.size.Y):.4g} x {unitctl.to_disp(b.size.Z):.4g} {unitctl.length_unit()}"))
             form.addRow("Volume", QLabel(unitctl.volume_text(s.volume, 5)))
-        form.addRow(QLabel("The shape is stored inside this part. Add sketches, cuts, holes and fillets on top of it."))
+        form.addRow(QLabel("The shape is stored inside this part. Add sketches, cuts, holes and fillets on top of it." if not f.get("mesh_tris") else
+                           "The triangles are stored inside this part; the solid, one flat face for each, is made from them when the part is opened.  A sketch and a cut work on it, a fillet does not."))
 
     def partgen_panel(self, form, f):
         """A generated part: the add-on's summary, or a note that the add-on is needed (the data stays in the file)."""

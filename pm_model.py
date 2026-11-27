@@ -850,17 +850,19 @@ class Document:
         return out
 
     def run_imported(self, f, solid):
-        """A body brought in from a STEP file: the shape is kept inside the feature (compressed BREP text), so the part does not depend on the file."""
+        """A body brought in from a STEP file: the shape is kept inside the feature (compressed BREP text), so the part does not depend on the file.  A mesh body (an STL) keeps its
+        triangles instead (`mesh`, much smaller) and the solid is made from them when the part is built."""
         import exchange
         memo = self.__dict__.setdefault("_imported_memo", {})
         text = f.get("brep") or ""
-        if not text:
+        mesh = f.get("mesh") or ""                              # a mesh body (an STL): the triangles are kept, the solid with a flat face for each is made from them
+        if not text and not mesh:
             raise ModelError("this imported body holds no shape")
-        key = hash(text)
+        key = hash(text or mesh)
         tool = memo.get(key)
         if tool is None:
             try:
-                tool = exchange.unpack(text)
+                tool = exchange.unpack(text) if text else exchange.mesh_solid(mesh)
             except Exception as ex:
                 raise ModelError(f"the stored shape could not be read: {ex}")
             memo[key] = tool

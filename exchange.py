@@ -4,6 +4,9 @@
     export_stl(path, shape, tol, ang)         a binary STL in mm
     export_stl_each(folder, items, tol, ang)  one numbered STL per item; returns the paths
     read_step(path)                           [(name, solid)] - one entry per solid in the file
+    pack_mesh(P, T) / unpack_mesh(text)       the triangles of a mesh body (an STL dropped on the Workbench) as compact text (float32 points, int32 triangles, zlib, base64)
+    solid_from_mesh(P, T)                     a solid with one flat face for every triangle of a closed mesh (any number: some seconds for every 10 000)
+    mesh_solid(text)                          the same from a pack_mesh text; the last few are kept, because making one takes a while
     pack(shape) / unpack(text)                a shape as compact text (BREP, zlib, base64) so an imported body is saved inside the .gpd file
     place(shape, M)                           the shape moved by a 4 x 4 matrix (an assembly pose)
 """
@@ -14,7 +17,7 @@ import tempfile
 import zlib
 
 import numpy as np
-from build123d import Compound, Location, Shape, export_brep, export_step as _export_step, export_stl as _export_stl, import_brep, import_step as _import_step
+from build123d import Compound, Location, Shape, Solid, export_brep, export_step as _export_step, export_stl as _export_stl, import_brep, import_step as _import_step
 from OCP.gp import gp_Trsf
 
 
@@ -137,6 +140,70 @@ def read_step(path):
         names[n] = names.get(n, 0) + 1
         res.append((n if names[n] == 1 else f"{n}_{names[n]}", s))
     return res
+
+
+def pack_mesh(P, T):
+    import io
+    buf = io.BytesIO()
+    np.savez_compressed(buf, P=np.asarray(P, np.float32), T=np.asarray(T, np.int32))
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def unpack_mesh(text):
+    import io
+    z = np.load(io.BytesIO(base64.b64decode(text)))
+    return z["P"].astype(float), z["T"].astype(np.int64)
+
+
+def solid_from_mesh(P, T, tol=None):
+    """A build123d Solid with one planar face per triangle of the closed mesh (points P (n, 3), triangles T (m, 3)), sewn.  An exact copy of the mesh, however many triangles it has; it
+    takes about 20 seconds for 30 000.  ValueError when the triangles do not make a shell."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
+    from OCP.gp import gp_Pnt
+    from OCP.ShapeFix import ShapeFix_Solid
+    from OCP.TopAbs import TopAbs_SHELL
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+    P = np.asarray(P, float)
+    T = np.asarray(T, np.int64).reshape(-1, 3)
+    d = float(np.linalg.norm(P.max(0) - P.min(0))) if len(P) else 0.0
+    sew = BRepBuilderAPI_Sewing(1e-7 * d if tol is None else tol)
+    pts = [gp_Pnt(float(x), float(y), float(z)) for x, y, z in P]
+    for a, b, c in T:
+        poly = BRepBuilderAPI_MakePolygon(pts[a], pts[b], pts[c], True)
+        if not poly.IsDone():
+            continue
+        face = BRepBuilderAPI_MakeFace(poly.Wire(), True)
+        if face.IsDone():
+            sew.Add(face.Face())
+    sew.Perform()
+    shape = sew.SewedShape()
+    found = TopExp_Explorer(shape, TopAbs_SHELL)
+    if not found.More():
+        raise ValueError("Sewing produced no shell.")
+    shell = TopoDS.Shell(found.Current())
+    fixer = ShapeFix_Solid(BRepBuilderAPI_MakeSolid(shell).Solid())
+    fixer.Perform()
+    s = Solid(fixer.Solid())
+    if s.volume < 0:
+        s = Solid(fixer.Solid().Reversed())
+    return s
+
+
+_MESH_SOLIDS = {}
+
+
+def mesh_solid(text):
+    """The solid of a mesh body kept as text (pack_mesh).  Making it takes a while, so the last three are kept for the next time (a part is rebuilt again and again)."""
+    key = hash(text)
+    s = _MESH_SOLIDS.get(key)
+    if s is None:
+        P, T = unpack_mesh(text)
+        s = solid_from_mesh(P, T)
+        _MESH_SOLIDS[key] = s
+        while len(_MESH_SOLIDS) > 3:
+            _MESH_SOLIDS.pop(next(iter(_MESH_SOLIDS)))
+    return s
 
 
 def pack(shape):
