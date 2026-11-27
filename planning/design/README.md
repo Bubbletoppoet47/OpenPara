@@ -14,6 +14,7 @@ This folder keeps the designs we have agreed, as pictures you can open without a
 | 2D Static Structural (material per region, Supports and Loads pages, Mesh page) | [`static-structural-2d/`](static-structural-2d/README.md) | Built | `320c6f4` | none |
 | FEA Outline and Details (every analysis window) | [`fea-outline/`](fea-outline/README.md) | Outline and Details column built; whether each analysis matches the outline board is unchecked | `6324847` | none |
 | Workbench look: the quiet header | [`workbench-look/`](workbench-look/README.md) | Option 3 of 4, built | `77f5c57` | none |
+| Theme and palette | [`theme/`](theme/README.md) | Written from the code; the plan approved by Ian 2026-11-26; swatch sheet not yet looked at by him | `tools/check_palette.py`, `test_palette.py` | GEN-5 |
 
 **Status words.** *Approved* means Ian said so, with the date. *Built* means it is in the program, with the commit. A design that is built has no separate sign-off recorded unless it says *Approved*.
 
@@ -36,7 +37,8 @@ The hosted copies are on Ian's Claude account; the links open for him.
 2. Make `planning/design/<area>/` with the numbered PNGs, `source/` and a `README.md` like the others: status, hosted link, pictures, what the boards decide, where the build is.
 3. Add a row to the index above.
 4. Point the open items in `../ISSUES.md` at the folder.
-5. Write *Approved* only when Ian said so, with the date. Do not delete a design that is replaced: change its status to *Replaced by* and say what by. Git keeps the history either way.
+5. Run `python tools/check_palette.py` on every new icon, stylesheet or screen that goes with the design, and look at the swatches in [`theme/`](theme/README.md): the board uses the program's palette, or says in its README which colours it adds and why.
+6. Write *Approved* only when Ian said so, with the date. Do not delete a design that is replaced: change its status to *Replaced by* and say what by. Git keeps the history either way.
 
 ## Not filed
 

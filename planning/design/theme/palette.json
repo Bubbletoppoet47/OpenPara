@@ -1,0 +1,26 @@
+{
+  "about": "The colours the approved designs use that are not in icon_kit.py. icon_kit.py (LOOK and HUES, and the muted tones it draws from each hue) is the rest of the palette and is read by tools/check_palette.py, not copied here. To add a colour: put it here with what it is for and where it is used, and say why in the commit.",
+  "status": "Written from the code on 2026-11-26. Ian approved the plan (a palette taken from the icon kit, a checker, a baseline for the old colours) the same day; the swatch sheet has not been looked at by him yet.",
+  "tiers": {
+    "workbench": {
+      "title": "The Workbench",
+      "role": "The quiet header design (option 3): the colours the Workbench adds to the kit's. The last four are the groups of the toolbox: the letter chip of a block and the swatch. Its body grey and its ink are the kit's.",
+      "colours": [
+        {"name": "block edge", "hex": "#8793ad", "use": "The edge of a block's bar and body on the canvas", "source": "dev_addons/workbench/wb_icons.py, EDGE"},
+        {"name": "wire navy", "hex": "#1f3a6e", "use": "The wires between blocks and the dots they end in", "source": "dev_addons/workbench/wb_icons.py, WIRE_NAVY"},
+        {"name": "Analysis Systems", "hex": "#6a3fb8", "use": "The letter chip of a block and the toolbox swatch", "source": "dev_addons/workbench/wb_icons.py, GROUP_COLOR"},
+        {"name": "Geometry", "hex": "#0b7a70", "use": "The letter chip of a block and the toolbox swatch", "source": "dev_addons/workbench/wb_icons.py, GROUP_COLOR"},
+        {"name": "Component Tools", "hex": "#2a7a4f", "use": "The letter chip of a block and the toolbox swatch", "source": "dev_addons/workbench/wb_icons.py, GROUP_COLOR"},
+        {"name": "Design Exploration", "hex": "#2a62d4", "use": "The letter chip of a block and the toolbox swatch", "source": "dev_addons/workbench/wb_icons.py, GROUP_COLOR"}
+      ]
+    },
+    "ribbon": {
+      "title": "The ribbon",
+      "role": "The Annotator's ribbon, which the Trainer window uses too (design A): a pressed button.",
+      "colours": [
+        {"name": "pressed fill", "hex": "#cfe3fb", "use": "The background of a checked ribbon button", "source": "addons_src/annotator/app/annotator_ribbon.py, BUTTON_QSS"},
+        {"name": "pressed edge", "hex": "#6aa0e0", "use": "The border of a checked ribbon button", "source": "addons_src/annotator/app/annotator_ribbon.py, BUTTON_QSS"}
+      ]
+    }
+  }
+}
