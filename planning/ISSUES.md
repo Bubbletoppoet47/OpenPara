@@ -93,4 +93,5 @@ Areas: ANN Annotator, TRN Trainer, WB Workbench, CPL Coupled Physics, GEN whole 
 
 ### Done
 
-*(nothing recorded yet)*
+- 2026-11-26 `007710d` The approved designs are filed in `planning/design/`: a picture of every board, a note on what each decides, the specs.
+- 2026-11-26 `344d096` This list (`planning/ISSUES.md`); a push that changes only `planning/` does not build.
