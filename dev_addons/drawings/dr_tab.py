@@ -20,6 +20,7 @@ import dr_items as IT
 import dr_model as M
 import dr_panels as PN
 import dr_pdf
+import dr_proj as P
 import dr_sheet as S
 import ui_kit
 
@@ -70,8 +71,13 @@ class DrawingTab(QWidget):
             ("sheet", "dr_sheet", "Sheet\nSetup", "The size of the sheet (standard sizes), landscape or portrait, third or first angle", lambda: self.sheet_dialog()),
             ("fit", "dr_fit", "Fit to\nWindow", "Show the whole sheet", lambda: self.canvas.fit()),
             "|",
+            ("turn_left", "dr_turn_left", "Turn\nLeft 90\u00b0", "Turn the selected view 90 degrees to the left on the sheet, like a sheet of paper.  Its dimensions, balloons and notes with leaders turn with it; press again to go on",
+             lambda: self.turn_selected(1)),
+            ("turn_right", "dr_turn_right", "Turn\nRight 90\u00b0", "Turn the selected view 90 degrees to the right on the sheet, like a sheet of paper.  Its dimensions, balloons and notes with leaders turn with it; press again to go on",
+             lambda: self.turn_selected(-1)),
+            "|",
             ("refresh", "dr_refresh", "Refresh\nViews", "Draw the lines of every view again from its model", lambda: self.refresh_views()),
-            ("delete", "dr_delete", "Delete", "Delete the selected view (and the views projected from it) or the selected dimension, note, balloon or drawn line", lambda: self.delete_selected()),
+            ("delete", "dr_delete", "Delete", "Delete the selected view or the selected dimension, note, balloon or drawn line", lambda: self.delete_selected()),
             "|",
             ("save", "dr_save", "Save", "Save the drawing (.opdraw)", lambda: self.save()),
             ("pdf", "dr_pdf", "Export\nPDF", "Write the sheet as a PDF at its true paper size", lambda: self.export_pdf_dialog()),
@@ -245,6 +251,15 @@ class DrawingTab(QWidget):
                 self.act[k].setEnabled(bool(self.undo_stack if k == "undo" else self.redo_stack))
         if "delete" in self.act:
             self.act["delete"].setEnabled(self.canvas.sel is not None or self.canvas.sel_annot is not None)
+        self.update_turn_buttons()
+
+    def update_turn_buttons(self):
+        """The two Turn buttons work on the selected view (not while a view is still being placed)."""
+        v = next((v for v in self.d.views if v["id"] == self.canvas.sel), None)
+        on = v is not None and v["kind"] == "model" and self.canvas.mode == "select"
+        for k in ("turn_left", "turn_right"):
+            if k in self.act:
+                self.act[k].setEnabled(on)
 
     def show_sheet_label(self):
         """The strip under the sheet: the sheet, and the style and the scale of the selected view (there is no scale of the sheet: every view has its own)."""
@@ -395,7 +410,7 @@ class DrawingTab(QWidget):
                 self.set_sheet(r["size"], r["landscape"], r["first_angle"])
 
     def set_sheet(self, size, landscape, first_angle):
-        old, had = dict(self.d.sheet), len(self.d.annots()) + len(self.d.balloons)
+        old = dict(self.d.sheet)
         ok, _ = self.guard(self.d.set_sheet, size, landscape, first_angle)
         if not ok:
             return False
@@ -404,10 +419,7 @@ class DrawingTab(QWidget):
         self.canvas.r.cache.clear()
         self.commit("sheet")
         self.canvas.fit()
-        gone = had - len(self.d.annots()) - len(self.d.balloons)
-        if gone:
-            self.status.say(f"The projected views look from the other side now: {gone} dimension{'s' if gone != 1 else ''} / mark{'s' if gone != 1 else ''} / balloon{'s' if gone != 1 else ''} on them {'were' if gone != 1 else 'was'} removed (Undo brings {'them' if gone != 1 else 'it'} back).", "warn")
-        return True
+        return True                                                    # (third or first angle changes the next projected view; the views on the sheet are views of their own)
 
     # ------------------------------------------------------------------------------------------------------------------------ models
     def source_text(self, m):
@@ -586,6 +598,7 @@ class DrawingTab(QWidget):
         self.model_panel.show_view()
         self.proj_panel.show_view()
         self.show_sheet_label()
+        self.update_turn_buttons()
         if "delete" in self.act:
             self.act["delete"].setEnabled(vid is not None)
         if self.cmd == "projected" and vid and self.canvas.mode == "select":
@@ -703,11 +716,13 @@ class DrawingTab(QWidget):
         """The view that the buttons and the scale field of the Model View panel (kind "model") or of the Projected View panel ("projected") change: the view that follows the pointer, or the
         selected one.  None: the next view (the panel keeps what it starts with)."""
         v = next((v for v in self.d.views if v["id"] == self.canvas.sel), None)
-        if v is None or v["kind"] != kind:
+        if v is None:
             return None
-        if kind == "projected" and self.canvas.mode == "projected" and v["parent"] != self.canvas.proj_parent:
-            return None                                          # the view that the new ones are projected from is selected, not one of theirs
-        return v
+        if kind == "projected":                                  # the view on the pointer, or the one just put down by this command (it is a view of its own, a model view, from then on)
+            if v["kind"] == "projected":
+                return v if v["parent"] == self.canvas.proj_parent else None      # (the view that the new ones are projected from is selected, not one of theirs)
+            return v if self.canvas.mode == "projected" and v["id"] == self.canvas.last_placed else None
+        return v if v["kind"] == kind else None
 
     def panel_style(self, kind, style):
         """A style button of a panel was clicked (style None for a projected view: its parent's)."""
@@ -718,7 +733,7 @@ class DrawingTab(QWidget):
         if v is None:
             return
         if style is None:
-            style = self.d.view(v["parent"])["style"]
+            style = self.d.view(v["parent"] or self.canvas.proj_parent)["style"]
         if v["id"] == self.canvas.float_id:                      # still on the pointer: it is not in the undo list yet, it is put down with this style
             self.guard(self.d.set_style, v["id"], style)
             self.canvas.update()
@@ -766,9 +781,36 @@ class DrawingTab(QWidget):
         if ok:
             self.commit("style")
 
+    def turn_selected(self, quarters):
+        if self.canvas.mode != "select":
+            return
+        v = next((v for v in self.d.views if v["id"] == self.canvas.sel), None)
+        if v is None:
+            self.status.say("Select a view first: click it on the sheet.", "warn")
+            return
+        self.turn_view(v["id"], quarters)
+
+    def turn_view(self, vid, quarters):
+        """Turns a view on the sheet a quarter to the left (+1) or to the right (-1); what is fixed to the view turns with it (DRW-1)."""
+        ok, v = self.guard(self.d.turn_view, vid, quarters)
+        if not ok:
+            return
+        self.canvas.r.cache.clear()
+        self.commit("turn")
+        lost = len(self.d.lost_annots())
+        tt = M.TURN_TEXT[int(v.get("turn", 0)) % 4]
+        if lost:
+            self.status.say(self.lost_text(lost), "warn")
+        else:
+            self.status.say(f"{v['name']} is {tt}." if tt else f"{v['name']} is the way up it started.", "info")
+
     def set_view_orient(self, vid, name):
         v = self.d.view(vid)
+        if name not in P.ORIENTATIONS:                                 # ("Custom" is what a view shows that looks along none of the nine: nothing to set)
+            return
         if v["orient"] == name:
+            if int(v.get("turn", 0)) % 4:                              # the same orientation again turns the view back upright (what is on the view turns back with it)
+                self.turn_view(vid, -int(v["turn"]))
             return
         had = len(self.d.annots()) + len(self.d.balloons)
         ok, _ = self.guard(self.d.set_orient, vid, name)

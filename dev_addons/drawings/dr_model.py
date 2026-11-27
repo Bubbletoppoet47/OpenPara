@@ -9,16 +9,23 @@ annotations.  Saved as an .opdraw file (JSON).
     d.add_view(mid, orient, center, scale=None, style="hlv")      a model view: Front, Back, Left, Right, Top, Bottom, Isometric, Trimetric, Dimetric, placed with the middle of its
                                                 lines at `center` (mm on the sheet); the scale defaults to d.scale, the scale a new model view starts at
                                                 (the first view sets it so the whole model fits); every view has a scale and a style of its own
-    d.add_projected(parent, side, pos, style=None, scale=None)     a view projected from `parent` to the "right" / "left" / "up" / "down" of it (third-angle: it shows the side
-                                                you moved to; first-angle: the opposite side).  It starts at the scale and the style of its parent (or the ones given), then has
-                                                its own, and stays ALIGNED: it can only slide along its axis
-    d.move_view(vid, x, y)                      moves a view (a projected one only along its axis; its own projected views move with it)
+    d.add_projected(parent, side, pos, style=None, scale=None, linked=False)     a view projected from `parent` to the "right" / "left" / "up" / "down" of it (third-angle: it
+                                                shows the side you moved to; first-angle: the opposite side).  It is made from the direction of its parent, at its scale and style
+                                                (or the ones given), and after that it is a view of its own, a model view (DRW-2): its own orientation, scale, style, position and
+                                                turn; nothing that happens to the parent happens to it, except that every view is drawn again when the model changes.  linked=True
+                                                is the view that still follows the pointer while it is being placed (kind "projected": aligned with its parent); d.detach_view(vid)
+                                                puts it down
+    d.move_view(vid, x, y)                      moves a view (a view that is still being placed only along its axis)
+    d.turn_view(vid, quarters)                  turns the picture of a view on the sheet, like a sheet of paper: +1 = 90 degrees to the left, -1 = to the right (DRW-1); the
+                                                orientation does not change; what is fixed to the view turns with it
     d.set_scale(vid, s), d.set_style(vid, style), d.set_orient(vid, name)
     d.add_note / set_note / add_balloon / set_balloon_text / add_item / set_tip / move_item / drag_handle      notes, balloons and the lines, rectangles, circles and arcs of the sheet
     d.set_pattern(note, remove=False, a1=, s1=, c1=, a2=, s2=, c2=)     the Linear Note Pattern of a note: c1 notes s1 mm apart along a1 degrees, in c2 rows s2 mm apart along a2
     d.to_json() / Drawing.from_json(text)       the file; the lines of every view are in it (a drawing opens at once and shows without its models)
 
-A view has: id, name ("Drawing View1"), kind ("model" | "projected"), model, orient, eye / up (the direction it looks from, in the model's frame), parent, side, origin (where the model's
+A view has: id, name ("Drawing View1"), kind ("model"; "projected" only while it is being placed), model, orient (a standard orientation, or "Custom" for a direction that is none of
+them: a view projected from an isometric one), turn (0..3 quarter turns to the left since the orientation was set), eye / up (the direction it looks from, and the direction that is
+up on the sheet, in the model's frame), parent, side, origin (where the model's
 origin is on the sheet, mm: the lines are drawn at origin + scale * point), scale (a number: 2 means 2:1, 0.5 means 1:2), style, geom (the projection).
 """
 import copy
@@ -46,6 +53,8 @@ SCALES = [("1:1", 1.0), ("1:2", 0.5), ("1:4", 0.25), ("1:5", 0.2), ("1:10", 0.1)
 FIT_FRACTION = 0.5                                                # the first view fills at most this much of the sheet's width and height
 ANNOT = ("notes", "dims", "balloons", "marks", "lines")          # what is drawn on top of the views
 SIDES = ("right", "left", "up", "down")
+CUSTOM = "Custom"                                                 # the orientation of a view whose direction is none of the nine
+TURN_TEXT = ("", "turned 90 degrees left", "turned 180 degrees", "turned 90 degrees right")
 OPPOSITE = {"right": "left", "left": "right", "up": "down", "down": "up"}
 
 
@@ -237,7 +246,7 @@ class Drawing:
             raise DrawingError(f"'{style}' is not a display style.")
         self.counter["view"] += 1
         n = self.counter["view"]
-        return {"id": f"v{n}", "name": f"Drawing View{n}", "kind": kind, "model": mid, "orient": orient, "eye": [float(x) for x in eye], "up": [float(x) for x in up],
+        return {"id": f"v{n}", "name": f"Drawing View{n}", "kind": kind, "model": mid, "orient": orient, "turn": 0, "eye": [float(x) for x in eye], "up": [float(x) for x in up],
                 "parent": None, "side": None, "origin": [0.0, 0.0], "scale": float(scale), "style": style, "geom": None}
 
     def project(self, v):
@@ -293,9 +302,10 @@ class Drawing:
             return up, -eye
         return -up, eye
 
-    def add_projected(self, parent_id, side, pos, style=None, scale=None):
+    def add_projected(self, parent_id, side, pos, style=None, scale=None, linked=False):
         """A view projected from `parent_id` to its `side` ("right", "left", "up", "down"); `pos` = (x, y) where the person clicked: only the coordinate along the axis counts (the
-        other is the parent's: the views are aligned), and the lines are put there by the middle."""
+        other is the parent's: the views are aligned), and the lines are put there by the middle.  It is a view of its own from then on (DRW-2: a model view that is free to move, to
+        change orientation, scale, style and turn); linked=True keeps it tied to its parent, which is what a view needs while it is still following the pointer (detach_view lets go)."""
         if side not in SIDES:
             raise DrawingError(f"'{side}' is not a side: right, left, up or down.")
         par = self.view(parent_id)
@@ -311,6 +321,62 @@ class Drawing:
         else:
             v["origin"] = [par["origin"][0], float(pos[1]) - s * cy]
         self.views.append(v)
+        if not linked:
+            self.detach_view(v["id"])
+        return v
+
+    def orient_name_of(self, eye, up, tol=1e-6):
+        """The standard orientation that looks along `eye` with `up` on top of the sheet, or "Custom"."""
+        for name in P.ORIENTATIONS:
+            e, u, _r = P.view_axes(name)
+            if all(abs(float(x) - float(y)) <= tol for x, y in zip(e, eye)) and all(abs(float(x) - float(y)) <= tol for x, y in zip(u, up)):
+                return name
+        return CUSTOM
+
+    def detach_view(self, vid):
+        """A view that was projected from another one becomes a view of its own (a model view): nothing ties it to its parent any more.  Its orientation is the standard one it
+        looks along (a view to the right of the Front view is the Right view), or "Custom"."""
+        v = self.view(vid)
+        if v["kind"] == "projected":
+            v["orient"] = self.orient_name_of(v["eye"], v["up"])
+            v["kind"], v["parent"], v["side"] = "model", None, None
+        return v
+
+    def turn_view(self, vid, quarters):
+        """Turns the picture of a view on the sheet by `quarters` quarter turns, like a piece of paper: +1 = 90 degrees to the left (counter-clockwise), -1 = to the right; it can be
+        done again and again.  The orientation (Isometric, Front ...) does not change; the view stays where its middle is.  The dimensions and marks of the view, its balloons and the leaders
+        of notes that point into it turn with it.  -> the view."""
+        v = self.view(vid)
+        if v["kind"] != "model":
+            raise DrawingError("Put the view down first.")
+        q = int(quarters) % 4
+        if q == 0:
+            return v
+        steps = [-1] if q == 3 else [1] * q
+        bx0, by0, bx1, by1 = self.bbox(v)
+        centre = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0)                 # (the middle of the lines on the sheet: it does not move)
+        for st in steps:
+            _eye, up, right = P.frame_of(v["eye"], v["up"])
+            v["up"] = [float(x) for x in (right if st > 0 else -right)]
+            for a in self.dims + self.marks:
+                if a.get("view") == vid:
+                    A.turn_annot(a, st)
+            for n in self.notes:
+                ld = n.get("leader")
+                if ld and ld.get("view") == vid:
+                    ld["p"] = list(A._rot(ld["p"], st))
+            for b in self.balloons:
+                if b.get("view") == vid:
+                    b["tip"] = list(A._rot(b["tip"], st))
+                    dx, dy = b["pos"][0] - centre[0], b["pos"][1] - centre[1]
+                    rx, ry = A._rot((dx, dy), st)
+                    b["pos"] = [centre[0] + rx, centre[1] + ry]
+        v["turn"] = (int(v.get("turn", 0)) + q) % 4
+        pr = self.project(v)
+        x0, y0, x1, y1 = pr.bbox()
+        s = v["scale"]
+        v["origin"] = [centre[0] - s * (x0 + x1) / 2.0, centre[1] - s * (y0 + y1) / 2.0]
+        self._annots_follow(v, True)
         return v
 
     def side_of(self, parent_id, pos):
@@ -404,7 +470,7 @@ class Drawing:
             raise DrawingError("A projected view looks along its parent: change the orientation of the parent.")
         eye, up, _r = P.view_axes(name)
         before = (v["eye"], v["up"])
-        v["orient"], v["eye"], v["up"] = name, [float(x) for x in eye], [float(x) for x in up]
+        v["orient"], v["turn"], v["eye"], v["up"] = name, 0, [float(x) for x in eye], [float(x) for x in up]          # (a standard orientation starts upright)
         self.project(v)
         self._annots_follow(v, _same_dir(before, (v["eye"], v["up"])))
         for c in self.children(vid):
@@ -702,6 +768,13 @@ class Drawing:
                     n["pattern"] = None
             else:
                 n["pattern"] = None
+        for v in o.views:                                          # a drawing from before DRW-2: a projected view is a view of its own now, where it was and looking as it did
+            v.setdefault("turn", 0)
+            if v.get("kind") == "projected":
+                try:
+                    o.detach_view(v["id"])
+                except (DrawingError, KeyError, TypeError, ValueError):
+                    v["kind"], v["parent"], v["side"], v["orient"] = "model", None, None, CUSTOM
         view_ids = {v["id"] for v in o.views}
         o.balloons = [b for b in o.balloons if b["view"] in view_ids]
         return o

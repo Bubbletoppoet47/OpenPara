@@ -1,9 +1,10 @@
-"""dr_canvas.py - the drawing area: a grey canvas with the white sheet on it, the views drawn at their scale, and the mouse: click a view to select it, drag it to move it (a projected view
-slides along its axis only), the wheel zooms, the middle button (or Space + drag) pans.
+"""dr_canvas.py - the drawing area: a grey canvas with the white sheet on it, the views drawn at their scale, and the mouse: click a view to select it, drag it to move it (every view
+moves where it is put), the wheel zooms, the middle button (or Space + drag) pans.
 
 Placing (like SolidWorks): begin_model(vid)       the view `vid` (just made by the document) follows the pointer; a click puts it down, Esc / right click takes it away again
                            begin_projected(pid)  pick a side of the view `pid` by moving the pointer to it: the projected view appears there and slides along its axis; a click puts it
-                                                 down (and the next one can be placed from the same parent), Esc / right click ends
+                                                 down as a view of its own (DRW-2: it moves, turns and changes independently; the next one can be placed from the same parent),
+                                                 Esc / right click ends
 
 Annotation tools (tool_begin(name): "dim" Dimension, "center_mark", "centerline", "note", "balloon", "note_pattern"; the Sketch tools "line", "rect", "circle", "arc"):
           dim          the person picks the TYPE first (set_dim_type: Horizontal, Vertical, Length / distance, Diameter, Radius, Angle, as in the Part sketcher); the clicks must fit the type
@@ -68,6 +69,7 @@ class SheetCanvas(QWidget):
         self.float_id = None                        # the view that follows the pointer
         self.float_side = None
         self.proj_parent = None
+        self.last_placed = None                     # the view just put down by the Projected View command (the panel of the command still changes it)
         self.proj_style = None                      # the style of a new projected view (None: its parent's)
         self.proj_scale = None                      # the scale of a new projected view (None: its parent's)
         self.drag = None                            # {"vid", "last": (x, y), "moved": bool} while a view is dragged, or {"pan": last QPointF}
@@ -176,6 +178,7 @@ class SheetCanvas(QWidget):
         self.tool_end(emit=False)
         self.end_place(emit=False)
         self.mode, self.proj_parent, self.float_id, self.float_side = "projected", parent_id, None, None
+        self.last_placed = None
         self.set_selected(parent_id)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.placing.emit(True)
@@ -196,6 +199,7 @@ class SheetCanvas(QWidget):
                 self.sel = None
                 self.selection_changed.emit(None)
         self.mode, self.float_id, self.float_side, self.proj_parent = "select", None, None, None
+        self.last_placed = None
         self.unsetCursor()
         if was and emit:
             self.placing.emit(False)
@@ -218,7 +222,7 @@ class SheetCanvas(QWidget):
                 self.d.remove_view(self.float_id)
                 self.float_id = None
             if side is not None and self.float_id is None:
-                v = self.d.add_projected(self.proj_parent, side, (x, y), style=self.proj_style, scale=self.proj_scale)
+                v = self.d.add_projected(self.proj_parent, side, (x, y), style=self.proj_style, scale=self.proj_scale, linked=True)          # (tied to its parent while it follows the pointer)
                 self.float_id = v["id"]
             self.float_side = side
             if self.float_id is not None:
@@ -231,12 +235,14 @@ class SheetCanvas(QWidget):
             return
         vid = self.float_id
         self.float_id, self.float_side = None, None
+        self.d.detach_view(vid)                                    # put down, a projected view is a view of its own (DRW-2): free to move, to turn, to change
         if self.mode == "model":
             self.mode = "select"
             self.unsetCursor()
             self.placing.emit(False)
             self.hint.emit("")
         else:
+            self.last_placed = vid
             self.hint.emit("Placed.  Move to another side for another view, or press Esc to finish.")
         self.set_selected(vid)
         self.changed.emit("place")

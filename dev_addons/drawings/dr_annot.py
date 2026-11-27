@@ -572,6 +572,47 @@ def rematch(annots, proj, bbox, tol=0.12):
     return lost
 
 
+# ---------------------------------------------------------------------------------------------------------------------------- turning a view
+def _rot(p, step):
+    """(x, y) of the view's frame after the view was turned a quarter: step +1 = 90 degrees to the left (counter-clockwise), -1 = to the right."""
+    return (-p[1], p[0]) if step > 0 else (p[1], -p[0])
+
+
+def turn_ref(ref, step):
+    r = dict(ref)
+    for k in ("p", "a", "b", "c"):
+        if k in r:
+            r[k] = _rot(r[k], step)
+    if r.get("k") == "arc":
+        r["a0"], r["a1"] = (r["a0"] + step * math.pi / 2) % TAU, (r["a1"] + step * math.pi / 2) % TAU
+    return r
+
+
+def turn_box(bb, step):
+    """(xmin, ymin, xmax, ymax) of a box after the quarter turn."""
+    pts = [_rot(p, step) for p in ((bb[0], bb[1]), (bb[2], bb[1]), (bb[2], bb[3]), (bb[0], bb[3]))]
+    return [min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts)]
+
+
+def turn_annot(a, step):
+    """A dimension or a mark of a view that was turned a quarter (step +1 left, -1 right): what it holds on to turns with the view, so it measures the same thing.  A horizontal
+    dimension of two points is a vertical one now (and the other way round); the side of its line and where its number sits keep their meaning."""
+    a["refs"] = [turn_ref(r, step) for r in a["refs"]]
+    if a.get("bb"):
+        a["bb"] = turn_box(a["bb"], step)
+    t = a.get("type")
+    if t == "linear":
+        refs = a["refs"]
+        by_line = len(refs) > 1 and any(r["k"] == "line" for r in refs)          # (a line sets the direction itself: nothing to change)
+        mode = a.get("mode", "a")
+        if not by_line and mode in ("h", "v"):
+            if (step > 0 and mode == "v") or (step < 0 and mode == "h"):         # the direction it measures along is the opposite one of the new axis: the side and the place flip
+                a["side"], a["t"] = -a.get("side", 1), -a.get("t", 0.0)
+            a["mode"] = "v" if mode == "h" else "h"
+    elif t in ("diameter", "radius") and a.get("lab"):
+        a["lab"] = list(_rot(a["lab"], step))
+
+
 # ---------------------------------------------------------------------------------------------------------------------------- hit test
 def distance(shp, p):
     """How far p is from the lines of a dimension / mark (and from its number): sheet mm."""

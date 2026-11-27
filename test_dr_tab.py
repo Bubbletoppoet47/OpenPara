@@ -220,8 +220,9 @@ ok(g["side"] == "down", "below the parent it is the view to the down side")
 QTest.mouseMove(cv, at(100, 70))
 QTest.mouseClick(cv, Qt.MouseButton.LeftButton, pos=at(100, 70))
 settle()
-pv = [v for v in t.d.views if v["kind"] == "projected"]
-ok(len(pv) == 1 and pv[0]["side"] == "down" and near(pv[0]["origin"][0], v1["origin"][0]) and len(t.undo_stack) == 1, "a click puts it down: aligned with the parent, one undo step")
+pv = [v for v in t.d.views if v["id"] != v1["id"]]
+ok(len(pv) == 1 and pv[0]["kind"] == "model" and pv[0]["orient"] == "Bottom" and pv[0]["parent"] is None and pv[0]["side"] is None and near(pv[0]["origin"][0], v1["origin"][0]) and len(t.undo_stack) == 1,
+   "a click puts it down as a view of its own (the Bottom view, as it was put below the Front view), where it was put and in line with the other one, one undo step (DRW-2)")
 b = cv.r.view_box(pv[0])
 ok(near(b[2] - b[0], 100.0) and near(b[3] - b[1], 20.0, 1e-6), "third angle: the view below the Front view is the Top view: 100 x 20 mm")
 ok(cv.mode == "projected", "(the command stays open for another view from the same parent)")
@@ -229,7 +230,7 @@ QTest.keyClick(cv, Qt.Key.Key_Escape)
 settle()
 ok(cv.mode == "select" and len(t.d.projection(pv[0]).vis) > 0, "Esc ends it")
 t.finish_command()
-# dragging a projected view: only along its axis; its parent can be dragged anywhere and takes it along
+# dragging the view that was projected: it goes where it is put (DRW-2); the view it was projected from can be dragged anywhere and does not take it along
 cv.set_selected(None)
 cx0, cy0 = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
 x_before = t.d.view(pv[0]["id"])["origin"][0]
@@ -240,8 +241,8 @@ QTest.mouseRelease(cv, Qt.MouseButton.LeftButton, pos=at(b[0] + 40, cy0 + 15))
 settle()
 pv0 = t.d.view(pv[0]["id"])
 b2 = cv.r.view_box(pv0)
-ok(near((b2[0] + b2[2]) / 2, cx0, 1e-6) and near((b2[1] + b2[3]) / 2, cy0 + 15, 1.5 / cv.k) and near(pv0["origin"][0], x_before),
-   "dragged sideways and up, a view below its parent only moved up (along its axis): it stays in line")
+ok(near((b2[0] + b2[2]) / 2, cx0 + 40, 1.5 / cv.k) and near((b2[1] + b2[3]) / 2, cy0 + 15, 1.5 / cv.k) and near(pv0["origin"][0], x_before + 40, 1.5 / cv.k),
+   "dragged sideways and up, a view that was projected moved both ways: it is free")
 ok(len(t.undo_stack) == 2, "the drag is one undo step")
 o_par, o_kid = list(v1["origin"]), list(pv0["origin"])
 b1 = cv.r.view_box(v1)
@@ -252,19 +253,20 @@ QTest.mouseRelease(cv, Qt.MouseButton.LeftButton, pos=at(b1[0] + 30, 132))
 settle()
 n_par, n_kid = t.d.view(v1["id"])["origin"], t.d.view(pv[0]["id"])["origin"]
 ok(near(n_par[0] - o_par[0], 30.0, 1.5 / cv.k) and near(n_par[1] - o_par[1], 12.0, 1.5 / cv.k), "the parent view moves where it is dragged")
-ok(near(n_kid[0] - o_kid[0], n_par[0] - o_par[0]) and near(n_kid[1] - o_kid[1], n_par[1] - o_par[1]) and near(n_kid[0], n_par[0]), "and its projected view goes with it, still in line")
+ok(near(n_kid[0], o_kid[0]) and near(n_kid[1], o_kid[1]), "and the view that was projected from it stays where it is")
 t.do_undo()
-ok(near(t.d.view(v1["id"])["origin"][0], o_par[0]) and near(t.d.view(pv[0]["id"])["origin"][1], o_kid[1]), "undo puts both back")
+ok(near(t.d.view(v1["id"])["origin"][0], o_par[0]) and near(t.d.view(pv[0]["id"])["origin"][1], o_kid[1]), "undo puts the parent back")
 
 # ---------------------------------------------------------------------------------------------------------------------------- the Details
 t.canvas.set_selected(v1["id"])
 settle()
+kid0, kid_scale0 = list(t.d.view(pv[0]["id"])["origin"]), t.d.view(pv[0]["id"])["scale"]
 t.set_view_scale(v1["id"], "1:2")
 b3 = cv.r.view_box(t.d.view(v1["id"]))
 ok(near(b3[2] - b3[0], 50.0) and near(b3[3] - b3[1], 5.0), "a scale typed in the Details (1:2) makes the view half the size")
 ok(t.outline.v_scale.currentText() == "1:2", "and the Details show it")
 pv_now = t.d.view(pv[0]["id"])
-ok(near(pv_now["origin"][0], t.d.view(v1["id"])["origin"][0]), "the projected view stays in line with the parent")
+ok(near(pv_now["origin"][0], kid0[0]) and near(pv_now["origin"][1], kid0[1]) and pv_now["scale"] == kid_scale0, "the view that was projected from it keeps its own scale and place")
 t.status.say("")
 t.set_view_scale(v1["id"], "abc")
 ok("not a scale" in t.status.text() and near(t.d.view(v1["id"])["scale"], 0.5), "a scale that is not a number is refused, with the reason, and the view keeps its scale")

@@ -51,6 +51,9 @@ DRAWINGS = {
     "dr_delete": ('<path class="n" stroke-width="2.600" d="M6 6l12 12M18 6L6 18"/>', "cut"),
     "dr_undo": ('<path class="n" stroke-width="2.200" d="M9 5L4 9.500 9 14M4.500 9.500H14a5.500 5.500 0 0 1 0 11h-4"/>', "feat"),
     "dr_redo": ('<path class="n" stroke-width="2.200" d="M15 5l5 4.500-5 4.500M19.500 9.500H10a5.500 5.500 0 0 0 0 11h4"/>', "feat"),
+    # turning a view on the sheet (a square with an arrow over it that goes round to the left or to the right)
+    "dr_turn_left": ('<path class="a" d="M8 13h8v8H8z"/><path class="n" stroke-width="2" d="M19 11A7 7 0 0 0 5 11M2.800 9l2.200 2.500L7.400 9"/>', "feat"),
+    "dr_turn_right": ('<path class="a" d="M8 13h8v8H8z"/><path class="n" stroke-width="2" d="M5 11A7 7 0 0 1 19 11M16.600 9l2.400 2.500L21.200 9"/>', "feat"),
     # the views
     "dr_model_view": ('<path class="p" d="M3 7h12v12H3z"/><path class="a" d="M3 7l4-4h12l-4 4z"/><path class="b" d="M15 7l4-4v12l-4 4z"/>', "feat"),
     "dr_proj_view": ('<path class="a" d="M3 8h8v8H3z"/><path class="p" d="M14 8h7v8h-7z"/><path class="n" stroke-width="1.800" d="M11.500 12h2M12.500 10.500L14 12l-1.500 1.500"/><path class="l" stroke-dasharray="1.500 1.500" d="M3 20h18"/>', "feat"),

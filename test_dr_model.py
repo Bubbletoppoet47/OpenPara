@@ -80,27 +80,27 @@ ok(v1b["scale"] == d.scale and v1b["name"] == "Drawing View2", "a later model vi
 d.remove_view(v1b["id"])
 
 # ---- projected views
-vr = d.add_projected(v1["id"], "right", (200.0, 90.0))
+vr = d.add_projected(v1["id"], "right", (200.0, 90.0), linked=True)
 ok(vr["kind"] == "projected" and vr["parent"] == v1["id"] and vr["side"] == "right" and vr["scale"] == v1["scale"], "a projected view has its parent and its side, and the scale of its parent")
 ok(near(vr["origin"][1], v1["origin"][1]), "to the right: it has the height of its parent (the origin of the model is at the same height: aligned)")
 rx0, ry0, rx1, ry1 = d.bbox(vr)
 ok(near((rx0 + rx1) / 2, 200.0), f"and is put by the middle of its lines where it was clicked ({(rx0 + rx1) / 2:.2f})")
 ok(near(rx1 - rx0, 20.0) and near(ry1 - ry0, 10.0), "its size is that of the Right view of the bar: 20 x 10")
 ok(np.allclose(vr["eye"], (1, 0, 0)) and np.allclose(vr["up"], (0, 0, 1)), "third-angle: the view on the right shows the right side (eye on +X, Z up)")
-vt = d.add_projected(v1["id"], "up", (100.0, 170.0))
+vt = d.add_projected(v1["id"], "up", (100.0, 170.0), linked=True)
 ok(near(vt["origin"][0], v1["origin"][0]) and np.allclose(vt["eye"], (0, 0, 1)) and np.allclose(vt["up"], (0, 1, 0)), "above: the Top view (eye +Z, the back at the top), in line with its parent")
 tx0, ty0, tx1, ty1 = d.bbox(vt)
 ok(near(tx1 - tx0, 100.0) and near(ty1 - ty0, 20.0), "100 x 20: the plan of the bar")
-vd = d.add_projected(v1["id"], "down", (100.0, 60.0))
-vl = d.add_projected(v1["id"], "left", (20.0, 120.0))
+vd = d.add_projected(v1["id"], "down", (100.0, 60.0), linked=True)
+vl = d.add_projected(v1["id"], "left", (20.0, 120.0), linked=True)
 ok(np.allclose(vd["eye"], (0, 0, -1)) and np.allclose(vd["up"], (0, -1, 0)) and np.allclose(vl["eye"], (-1, 0, 0)), "below the Bottom view (front at its top), on the left the Left view")
-vv = d.add_projected(vr["id"], "up", (200.0, 160.0))
+vv = d.add_projected(vr["id"], "up", (200.0, 160.0), linked=True)
 ok(near(vv["origin"][0], vr["origin"][0]) and vv["parent"] == vr["id"] and np.allclose(vv["eye"], (0, 0, 1)), "a view can be projected from a projected view (above the Right view: the Top view again)")
 ok([c["id"] for c in d.children(v1["id"])] == [vr["id"], vt["id"], vd["id"], vl["id"]] and {c["id"] for c in d.descendants(v1["id"])} == {vr["id"], vt["id"], vd["id"], vl["id"], vv["id"]}, "children and descendants")
 for pos, want in (((150, 120), "right"), ((50, 120), "left"), ((100, 150), "up"), ((100, 90), "down")):
     ok(d.side_of(v1["id"], pos) == want, f"a click at {pos} is on the {want} of the parent")
 try:
-    d.add_projected(v1["id"], "diagonal", (0, 0))
+    d.add_projected(v1["id"], "diagonal", (0, 0), linked=True)
     ok(False, "a side must be one of four")
 except M.DrawingError:
     ok(True, "a projected view goes to the right, left, up or down only")

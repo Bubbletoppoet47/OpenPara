@@ -426,7 +426,7 @@ class ProjectedPanel(QWidget):
             self.show_view()
             return
         self.parent_lbl.setText(f"{view['name']}  ({view['orient']}, {M.scale_text(view['scale'])})")
-        self.hint.setText("Move the pointer to the side of the parent where the new view should go, then click.  The view stays aligned with its parent: it only slides along its axis.")
+        self.hint.setText("Move the pointer to the side of the parent where the new view should go, then click.  Where you click it is put in line with the parent, and from then on it is a view of its own: move, scale, turn or change it as you like.")
         self.show_view(view)
 
     def show_view(self, parent=None):
@@ -886,8 +886,14 @@ class OutlinePanel(QWidget):
         for n in P.ORIENTATIONS:
             self.v_orient.addItem(I.icon(I.ORIENT_ICON[n], 18), n, n)
         self.v_orient.activated.connect(lambda _i: self.tab.set_view_orient(self.cur_id, self.v_orient.currentData()))
-        self.v_proj = QLabel("")
-        self.v_proj.setWordWrap(True)
+        self.v_turn = QLabel("")                                  # how the view is turned on the sheet (DRW-1)
+        self.v_turn.setWordWrap(True)
+        self.v_turn_l = QPushButton("Turn left 90\u00b0")
+        self.v_turn_l.setToolTip("Turn the picture of this view 90 degrees to the left on the sheet, like a sheet of paper.  The dimensions and notes of the view turn with it.")
+        self.v_turn_l.clicked.connect(lambda _c=False: self.tab.turn_view(self.cur_id, 1))
+        self.v_turn_r = QPushButton("Turn right 90\u00b0")
+        self.v_turn_r.setToolTip("Turn the picture of this view 90 degrees to the right on the sheet, like a sheet of paper.  The dimensions and notes of the view turn with it.")
+        self.v_turn_r.clicked.connect(lambda _c=False: self.tab.turn_view(self.cur_id, -1))
         self.v_style = QComboBox()
         for k, label in M.STYLES:
             self.v_style.addItem(I.icon(I.STYLE_ICON[k], 18), label, k)
@@ -899,7 +905,13 @@ class OutlinePanel(QWidget):
         f.addRow("Name", self.v_name)
         f.addRow("Model", self.v_model)
         f.addRow("Orientation", self.v_orient)
-        f.addRow("", self.v_proj)
+        trow = QWidget()
+        tl = QHBoxLayout(trow)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.addWidget(self.v_turn_l)
+        tl.addWidget(self.v_turn_r)
+        f.addRow("Turn", trow)
+        f.addRow("", self.v_turn)
         f.addRow("Style", self.v_style)
         f.addRow("Scale", self.v_scale)
         self.v_del = QPushButton("Delete view")
@@ -1009,7 +1021,8 @@ class OutlinePanel(QWidget):
         items, aitems = {}, {}
 
         def add(v, parent):
-            it = QTreeWidgetItem(parent, [f"{v['name']}   {v['orient']}, {M.scale_text(v['scale'])}"])
+            turned = M.TURN_TEXT[int(v.get("turn", 0)) % 4]
+            it = QTreeWidgetItem(parent, [f"{v['name']}   {v['orient']}, {M.scale_text(v['scale'])}" + (f", {turned}" if turned else "")])
             it.setIcon(0, I.icon(I.ORIENT_ICON.get(v["orient"], "dr_view"), 18))
             it.setData(0, Qt.ItemDataRole.UserRole, ("view", v["id"]))
             items[v["id"]] = it
@@ -1018,11 +1031,8 @@ class OutlinePanel(QWidget):
                 at.setIcon(0, I.icon(annot_icon(a), 18))
                 at.setData(0, Qt.ItemDataRole.UserRole, ("annot", a["id"]))
                 aitems[a["id"]] = at
-            for c in d.children(v["id"]):
-                add(c, it)
         for v in d.views:
-            if v.get("parent") is None:
-                add(v, vroot)
+            add(v, vroot)                                          # (a view projected from another is a view of its own: no nesting)
         for title, icon, recs in (("Notes", "dr_note", d.notes), ("Drawn on the sheet", "dr_draw_line", d.lines)):
             if not recs:
                 continue
@@ -1099,6 +1109,16 @@ class OutlinePanel(QWidget):
         self.busy = False
         self.show_details()
 
+    def set_orient_item(self, orient):
+        """The orientation box shows the standard orientation of the view; a view that looks along none of them (one projected from an Isometric view) shows "Custom" as a last item
+        that is there only while it is selected."""
+        n = len(P.ORIENTATIONS)
+        while self.v_orient.count() > n:
+            self.v_orient.removeItem(self.v_orient.count() - 1)
+        if orient not in P.ORIENTATIONS:
+            self.v_orient.addItem(I.icon("dr_view", 18), M.CUSTOM, M.CUSTOM)
+        self.v_orient.setCurrentIndex(max(0, self.v_orient.findData(orient)))
+
     def show_details(self):
         d = self.tab.d
         k = self.cur_kind
@@ -1122,15 +1142,12 @@ class OutlinePanel(QWidget):
                 v = d.view(self.cur_id)
                 self.v_name.setText(v["name"])
                 self.v_model.setText(d.model(v["model"])["name"])
-                proj = v["kind"] == "projected"
-                self.v_orient.setVisible(not proj)
-                self.v_form.labelForField(self.v_orient).setVisible(not proj)
-                self.v_proj.setVisible(proj)
-                if proj:
-                    par = d.view(v["parent"])
-                    self.v_proj.setText(f"Projected from {par['name']}, to its {v['side']}.  It slides along its axis only.")
-                else:
-                    self.v_orient.setCurrentIndex(max(0, self.v_orient.findData(v["orient"])))
+                self.set_orient_item(v["orient"])
+                tt = M.TURN_TEXT[int(v.get("turn", 0)) % 4]
+                self.v_turn.setText(f"This view is {tt}." if tt else "")
+                self.v_turn.setVisible(bool(tt))
+                self.v_turn_l.setEnabled(v["kind"] == "model")
+                self.v_turn_r.setEnabled(v["kind"] == "model")
                 self.v_style.setCurrentIndex(max(0, self.v_style.findData(v["style"])))
                 self.v_scale.setCurrentText(M.scale_text(v["scale"]))
                 self.details.setCurrentIndex(3)

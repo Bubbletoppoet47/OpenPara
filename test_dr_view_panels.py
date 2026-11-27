@@ -173,7 +173,7 @@ ghost = t.d.view(cv.float_id)
 ok(near(ghost["scale"], 0.5) and near(cv.proj_scale, 0.5) and near(f1["scale"], 0.25) and not t.undo_stack, "the scale field: the view on the pointer takes it, the parent keeps its own")
 QTest.mouseClick(cv, Qt.MouseButton.LeftButton, pos=at(cxp, cyp - 30))
 settle()
-kids = [v for v in t.d.views if v["kind"] == "projected"]
+kids = [v for v in t.d.views if v["id"] != f1["id"]]
 ok(len(kids) == 1 and kids[0]["style"] == "wireframe" and near(kids[0]["scale"], 0.5) and len(t.undo_stack) == 1, "put down: the projected view has the style and the scale set in the panel (one undo step)")
 k1 = kids[0]
 ok(cv.sel == k1["id"] and pp.target.text() == f"These change {k1['name']}." and pp.scale.currentText() == "1:2" and checked(pp) == ["wireframe"], "it is selected and the panel shows it")
