@@ -158,15 +158,15 @@ for zoom in (1.0, 2.5, 6.0):
     assert got == ("edge" if dd <= 4.0 else "face")
 w.plotter.reset_camera(); Pw = viewpick.project_display(w.plotter, hit[None, :])[0]; cx, cy = float(Pw[0]), float(Pw[1])
 settings.set_many({"pick3d_px": 4.0})
-w.pick_filter.update(edge=False, vertex=False); assert w.pick_item(cx, cy)["kind"] == "face"
-w.pick_filter.update(face=False, edge=True); assert w.pick_item(cx, cy)["kind"] == "edge", "faces off: edges get a wider reach"
-w.pick_filter.update(face=False, edge=False, vertex=True)
+# the selector beside Show says what a click may pick (it replaced the Faces / Edges / Points toggles of the Mate panel)
+w.selector.set_kind("face"); assert w.pick_item(cx, cy)["kind"] == "face"
+w.selector.set_kind("edge"); assert w.pick_item(cx, cy)["kind"] == "edge", "Edge selected: edges get their own, wider reach"
+w.selector.set_kind("point")
 assert w.pick_item(cx, cy) is None, "nothing picked when only points are on and none is near"
-w.pick_filter.update(face=True, edge=True, vertex=True)
-w.mate_start(); bar = w.pick_filter_bar(); assert len(bar.findChildren(__import__("PyQt6.QtWidgets").QtWidgets.QPushButton)) == 3
-w.set_pick_filter("face", False); w.set_pick_filter("edge", False); w.set_pick_filter("vertex", False)
+w.selector.set_kind("general")
+w.mate_start(); assert w.selector.widget.isEnabled(), "the selector can be used in the Mate tool"
+assert not any(b.text().strip() in ("Faces", "Edges", "Points") for b in w.props.findChildren(__import__("PyQt6.QtWidgets").QtWidgets.QPushButton))
 assert any(w.pick_filter.values()), "one kind always stays on"
-w.pick_filter.update(face=True, edge=True, vertex=True)
 # hover
 w.hover_key = None
 w.on_hover(cx, cy); print("hover", w.hover_key, w.hover_actor is not None); assert w.hover_key is not None and w.hover_actor is not None

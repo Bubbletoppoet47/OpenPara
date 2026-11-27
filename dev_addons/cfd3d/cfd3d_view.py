@@ -12,6 +12,7 @@ import numpy as np
 
 import result_style
 import solid_view as sv
+import view3d
 
 pv = sv.pv
 
@@ -90,7 +91,7 @@ class FluidView(sv.SolidView):
         self.clear_result()
         nodes = np.asarray(nodes, float)
         values = np.asarray(values, float)
-        grey = np.array(sv.GREY) * 255.0
+        grey = np.array(view3d.part_rgb()) * 255.0
         n_part = 0
         if len(part_tris):
             used, inv = np.unique(np.asarray(part_tris).ravel(), return_inverse=True)

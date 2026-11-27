@@ -1,4 +1,4 @@
-"""The Mate panel: nine icon buttons for the types (the picked one pressed), three pick toggles, picking a type switches the mate."""
+"""The Mate panel: nine icon buttons for the types (the picked one pressed), picking a type switches the mate; what a click may pick is the selector beside Show."""
 import faulthandler; faulthandler.dump_traceback_later(170, exit=True)
 import os, sys, tempfile
 os.environ["QT_QPA_PLATFORM"] = "offscreen"; os.environ["OPARA_USER_DIR"] = tempfile.mkdtemp(prefix="opara_ud_")
@@ -17,11 +17,13 @@ btns = {b.text().strip(): b for b in w.props.findChildren(QPushButton)}
 for name in assembly.MATE_NAMES.values():
     assert name in btns and not btns[name].icon().isNull() and btns[name].isCheckable(), name
 for name in ("Faces", "Edges", "Points"):
-    assert name in btns and btns[name].isCheckable() and not btns[name].icon().isNull(), name
+    assert name not in btns, f"the old {name} toggle is gone from the panel: the selector beside Show replaces it"
+assert w.selector is not None and set(w.selector.buttons) == {"general", "point", "edge", "face", "body"}
 assert not w.props.findChildren(QRadioButton), "no radio buttons any more"
 btns["Concentric"].setChecked(True); app.processEvents()
 assert w.mate_type == "concentric"
 btns = {b.text().strip(): b for b in w.props.findChildren(QPushButton)}
 assert btns["Concentric"].isChecked() and not btns["Parallel"].isChecked()
-btns["Edges"].setChecked(False); assert w.pick_filter["edge"] is False and w.pick_filter["face"] is True
+w.selector.buttons["edge"].click(); assert w.selector.kind == "edge" and w.pick_filter == {"face": False, "edge": True, "vertex": False}
+w.selector.buttons["general"].click(); assert w.pick_filter == {"face": True, "edge": True, "vertex": True}
 print("PASS"); os._exit(0)

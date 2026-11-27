@@ -7,9 +7,11 @@ setup = {
   ... the keys of solid_base.SolidBase.new_setup(): "dims", "splits", "bond_tol", "body_mats", "body_h", "h", "mesh" ...,
   "material": {"name", "k": W/(m K), "rho": kg/m3, "cp": J/(kg K), "gen": W/m3},          the part's material (and the one an assembly's bodies fall back on)
   "body_mats": {body name: {"name", "k", "rho", "cp", "gen"}}       an ASSEMBLY: the material of the bodies that were changed from the one found for their name
-  "temps":  [{"name", "faces": [face signature], "T": K}]                       fixed temperature
+  "temps":  [{"name", "faces": [face signature], "T": K}]                       fixed temperature; also "edges": [edge signature], "points": [vertex signature]: every node
+                                                                                 of the mesh ALONG the edge, or at the point, is held at T (a mesh with none there is an error)
   "fluxes": [{"name", "faces", "q": W/m2}]                                       heat flux INTO the body
-  "powers": [{"name", "faces", "P": W}]                                          heat flow INTO the body, spread over the area of the faces
+  "powers": [{"name", "faces", "P": W}]                                          heat flow INTO the body, spread over the area of the faces; or (instead of faces) "edges", spread
+                                                                                 over their length, or "points", shared equally
   "convs":  [{"name", "faces", "h": W/(m2 K), "Tinf": K}]                        convection to a fluid
   "rads":   [{"name", "faces", "eps", "Ts": K}]                                  radiation to surroundings (not between the faces of the model)
   "ins":    [{"name", "faces"}]                                                  insulated (nothing is added; it makes the choice visible and checked)
@@ -126,9 +128,19 @@ def resolve(geom, setup):
         items = []
         for i, c in enumerate(setup.get(key) or []):
             nm = sm.name_of(NAMES[key], i, c)
-            it = {k: copy.deepcopy(v) for k, v in c.items() if k != "faces"}
+            it = {k: copy.deepcopy(v) for k, v in c.items() if k not in ("faces", "edges", "points")}
             it["name"] = nm
-            it["fids"] = sm._fids(geom, c["faces"], nm)
+            it["fids"] = sm._fids(geom, c.get("faces") or [], nm)
+            eids, vids = sm.geo_ids(geom, c, nm)
+            if (eids or vids) and key not in ("temps", "powers"):
+                raise fem.FemError(f"{nm}: {NAMES[key]} acts on faces. On an edge or a point use Fixed temperature or Heat flow.")
+            if key == "powers" and sum(1 for x in (it["fids"], eids, vids) if x) > 1:
+                raise fem.FemError(f"{nm}: a heat flow acts on faces, or on edges, or on points, not on a mix. Make one for each.")
+            if not (it["fids"] or eids or vids):
+                raise fem.FemError(f"{nm}: it has no face, edge or point.")
+            it["eids"], it["vids"] = eids, vids
+            it["edges"] = [{"id": e, "pts": geom["edges"][e]["pts"], "sag": geom["edges"][e].get("sag", 0.0), "length": geom["edges"][e]["length"]} for e in eids]
+            it["diag"] = geom["diag"]
             items.append(it)
         r[key] = items
     for k in ("analysis", "T0", "t_end", "steps", "theta", "frames"):

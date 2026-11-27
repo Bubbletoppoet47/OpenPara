@@ -185,10 +185,12 @@ QMessageBox.warning = staticmethod(lambda *a, **k: MSGS.append(a[2] if len(a) > 
 # --- Supports and Loads: the same one-line hint at the top, stacked icon buttons
 HINT = {"1D FEA": "Select the joints (or members) first (click them in the view), then press a button.",
         "2D FEA": "Select the edge(s) or point(s) first (click them in the view), then press a button.",
-        "3D FEA": "Select the face(s) first (click them in the view), then press a button."}
+        "3D FEA": "Select the face(s), edge(s) or point(s) first (pick the kind above the view, then click them), then press a button."}
+HINT_SUPPORTS = {"3D FEA": HINT["3D FEA"] + "  On an edge or a point only Fixed and Displacement can be used."}      # the 3D window takes edges and points too (VW-4)
 for name, hint in HINT.items():
     for title in ("Supports", "Loads"):
-        assert first_label_text(tabs[name], title) == hint, (name, title, first_label_text(tabs[name], title))
+        want_ = HINT_SUPPORTS.get(name, hint) if title == "Supports" else hint
+        assert first_label_text(tabs[name], title) == want_, (name, title, first_label_text(tabs[name], title))
 assert first_label_text(beam, "Joints") == HINT["1D FEA"]
 assert btn_texts(beam, "Joints") == ["Rigid joint", "Pinned joint"]
 # Joints are stacked buttons like the supports: one under the other
@@ -281,7 +283,7 @@ assert solid.add_load("gravity", {"g": 9.81, "dir": [0.0, 0.0, -1.0]})
 t3 = solid.cond_table
 assert t3.rowCount() == 4 and solid.sup_list.count() == 2 and solid.load_list.count() == 2
 assert [t3.item(i, 1).text() for i in range(4)] == ["Fixed", "One direction (normal)", "Force", "Gravity"], [t3.item(i, 1).text() for i in range(4)]
-assert t3.item(2, 2).text() == "1 face(s)" and "1000" in t3.item(2, 3).text() and t3.item(3, 2).text() == "whole part"
+assert t3.item(2, 2).text() == "1 face" and "1000" in t3.item(2, 3).text() and t3.item(3, 2).text() == "whole part"
 assert t3.item(0, 3).text() == "", "a support has no value"
 # rename a support from the table
 t3.item(1, 0).setText("Top slider")

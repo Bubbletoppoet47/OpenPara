@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, Q
 
 import addons
 import ext
+import settings
 import sim_project
 import sim_tags
 import sim_meshui
@@ -52,6 +53,7 @@ import solid_progress
 import solid_view as sv
 import unitctl
 import units
+import view3d
 
 
 # --- the program's global units (File > Units).  The solvers work in mm; these convert only what is shown or typed.
@@ -117,6 +119,9 @@ class SolidBase(QWidget):
     MESH_SEC = 5                                # the numbers of the Mesh and the Results sections
     RESULTS_SEC = 6
     CONDITION_KINDS = ()                        # (name, key in the setup) of the lists of conditions that act on faces: splitting a face has to look in them
+    SELECT_KINDS = view3d.KINDS                 # the kinds of the geometry selector this window can use (a window whose conditions act on faces only gives fewer)
+    SELECT_WHY = ""                             # what the greyed kinds say
+    GENERAL_IS = "general"                      # what the selector's General picks in the view ("face": faces only, for a window whose conditions all act on faces)
     def __init__(self, shell=None, path=None, threaded=True):
         super().__init__()
         self.shell = shell
@@ -136,6 +141,9 @@ class SolidBase(QWidget):
         self.cache = {}
         self.sel_faces = []
         self.sel_vertex = None
+        self.sel_edges = []                     # ids of the picked edges of the geometry (see solid_geom: g["edges"])
+        self.sel_points = []                    # ids of the picked corners (g["verts"])
+        self.sel_body = None                    # the picked part (an index of g["bodies"]; 0 for a single part): its material and element size are in the tables
         self.job = None
         self.job_page = "solve"
         self.last_tracker = None
@@ -171,10 +179,19 @@ class SolidBase(QWidget):
         split.setStretchFactor(0, 0)
         self.view = self.make_view()
         self.view.on_pick = self.picked
+        self.view.on_select = self.selected_item
         self.view.mesh_source = self.focus_mesh
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
+        self.selector = view3d.SelectorBar.make(self, self.selector_changed)          # General / Point / Edge / Face / Body, above the view
+        self.selector.allow(self.SELECT_KINDS, self.SELECT_WHY)
+        self.view.set_kind(self.view_kind(self.selector.kind))
+        srow = QHBoxLayout()
+        srow.setContentsMargins(4, 2, 4, 0)
+        srow.addWidget(self.selector.widget)
+        srow.addStretch(1)
+        rl.addLayout(srow)
         if self.view.widget is not None:
             rl.addWidget(self.view.widget, 1)
         else:
@@ -1051,6 +1068,7 @@ class SolidBase(QWidget):
             return False
         self.geom = g
         self.sel_faces, self.sel_vertex = [], None
+        self.sel_edges, self.sel_points, self.sel_body = [], [], None
         self.mesh_q = None
         self.result = None
         mat = None if asm else self.source.doc.material
@@ -1067,6 +1085,7 @@ class SolidBase(QWidget):
         self.fill_part_sizes()
         P, T, F = sg.display_mesh(g)
         self.view.set_geometry(P, T, F, keep_camera=keep_view)
+        self.put_topology()
         self.view.set_lines("grid", sg.patch_outlines(g))
         self.view.set_lines("preview", [])
         self.set_geo_text()
@@ -1135,6 +1154,7 @@ class SolidBase(QWidget):
             return
         P, T, F = sg.display_mesh(self.geom)
         self.view.set_geometry(P, T, F, keep_camera=True)
+        self.put_topology()
         self.view.set_lines("grid", sg.patch_outlines(self.geom))
         self._prev_key = None
         self.view.set_lines("preview", [])
@@ -1219,11 +1239,16 @@ class SolidBase(QWidget):
     # ------------------------------------------------------------------ picking and the lists
     def faces_selected(self):
         self.sel_faces = sorted(self.faces.row(i) for i in self.faces.selectedItems())
+        self.sel_edges, self.sel_points, self.sel_body = [], [], None
         self.colour()
         self.preview_grid()
 
     def picked(self, fid, point):
         mods = QApplication_keyboard()
+        if not mods:
+            self.sel_edges, self.sel_points, self.sel_body = [], [], None            # a plain click starts a new selection; Ctrl / Shift adds to it
+        elif self.sel_body is not None:
+            self.sel_body = None
         if mods and fid in self.sel_faces:
             self.sel_faces.remove(fid)
         elif mods:
@@ -1240,11 +1265,129 @@ class SolidBase(QWidget):
         self.faces.blockSignals(False)
         self.colour()
         self.preview_grid()
-        self.say(f"Picked {self.face_label(fid).lower()}" + (f" (nearest vertex {self.sel_vertex + 1})" if self.sel_vertex is not None else ""))
+        self.say(f"Picked {self.face_label(fid).lower()}" + (f" (nearest vertex {self.sel_vertex + 1})" if self.sel_vertex is not None and self.selector.kind == "general" else ""))
+
+    # ------------------------------------------------------------------ the geometry selector: points, edges and bodies as well as faces
+    def put_topology(self):
+        """Tells the view the edges, the corners and the bodies of the part on show."""
+        g = self.geom
+        if g is None:
+            return
+        fb = [(-1 if f.get("interface") else (f["body"] if f.get("body") is not None else 0)) for f in g["faces"]]
+        self.view.set_topology([e["pts"] for e in g.get("edges") or []], g.get("verts") or [], fb)
+
+    def settings_changed(self, keys):
+        """File > Settings was applied (the shell tells every window): the colours of the part, of what is picked and of the hover."""
+        keys = set(keys)
+        if keys & {"part_color", "select_color", "hover_color"} and self.geom is not None:
+            self.colour()
+            self.view.clear_hover(render=True)
+        if "hover" in keys and not settings.get("hover"):
+            self.view.clear_hover(render=True)
+
+    def view_kind(self, kind):
+        return self.GENERAL_IS if kind == "general" else kind
+
+    def selector_changed(self, kind):
+        self.view.set_kind(self.view_kind(kind))
+        self.say({"general": "Selecting: whatever is under the cursor (a corner, an edge or a face).", "point": "Selecting points (corners).",
+                  "edge": "Selecting edges.", "face": "Selecting faces.", "body": "Selecting a whole part (its material and element size are in the tables)."}[kind])
+
+    def edge_label(self, eid):
+        e = self.geom["edges"][eid]
+        kind = {"line": "straight", "circle": "circular"}.get(e["kind"], e["kind"])
+        return f"Edge {eid + 1} ({kind}, {format(l_out(e['length']), '.4g')} {UD()['L']} long)"
+
+    def point_label(self, vid):
+        p = self.geom["verts"][vid]
+        return f"Point {vid + 1} ({', '.join(format(l_out(c), '.4g') for c in p)} {UD()['L']})"
+
+    def selected_item(self, it):
+        """The view took an edge, a point or a body (or, for those kinds, nothing).  Ctrl / Shift adds to the selection; a plain click replaces it."""
+        if self.geom is None:
+            return
+        add = bool(QApplication_keyboard())
+        if it is None:
+            if not add:
+                self.clear_selection()
+            return
+        k, i = it["kind"], int(it["idx"])
+        if not add:
+            self.sel_faces, self.sel_edges, self.sel_points, self.sel_body = [], [], [], None
+        elif k != "body" and self.sel_body is not None:
+            self.sel_body = None
+        if k == "edge":
+            self.sel_edges = [x for x in self.sel_edges if x != i] if (add and i in self.sel_edges) else self.sel_edges + [i]
+            msg = f"Picked {self.edge_label(i).lower()}"
+        elif k == "point":
+            self.sel_points = [x for x in self.sel_points if x != i] if (add and i in self.sel_points) else self.sel_points + [i]
+            self.sel_vertex = i
+            msg = f"Picked {self.point_label(i).lower()}"
+        else:
+            self.sel_body = i
+            self.sel_faces, self.sel_edges, self.sel_points = [], [], []
+            self.show_body_row(i)
+            msg = f"Picked {self.part_names()[i] if i < len(self.part_names()) else 'the part'}"
+        self.sync_face_list()
+        self.colour()
+        self.preview_grid()
+        self.say(msg)
+
+    def clear_selection(self):
+        self.sel_faces, self.sel_edges, self.sel_points, self.sel_body = [], [], [], None
+        self.sync_face_list()
+        self.colour()
+        self.preview_grid()
+
+    def sync_face_list(self):
+        self.faces.blockSignals(True)
+        self.faces.clearSelection()
+        for f in self.sel_faces:
+            self.faces.item(f).setSelected(True)
+        self.faces.blockSignals(False)
+
+    def show_body_row(self, b):
+        """A picked part: its row is selected in the tables of the parts (the element size, and the material in an assembly)."""
+        for name in ("size_table", "body_table"):
+            t = getattr(self, name, None)
+            if t is not None and 0 <= b < t.rowCount():
+                t.selectRow(b)
+
+    def select_edges(self, eids):
+        """Selects edges without the mouse (also used by the tests)."""
+        self.sel_edges = sorted(set(int(e) for e in eids))
+        self.sel_faces, self.sel_points, self.sel_body = [], [], None
+        self.sync_face_list()
+        self.colour()
+
+    def select_points(self, vids):
+        self.sel_points = sorted(set(int(v) for v in vids))
+        self.sel_faces, self.sel_edges, self.sel_body = [], [], None
+        if self.sel_points:
+            self.sel_vertex = self.sel_points[0]
+        self.sync_face_list()
+        self.colour()
+
+    def select_body(self, b):
+        self.sel_body = None if b is None else int(b)
+        self.sel_faces, self.sel_edges, self.sel_points = [], [], []
+        if b is not None:
+            self.show_body_row(int(b))
+        self.sync_face_list()
+        self.colour()
+
+    def selection_text(self):
+        """What is picked, in words ('2 faces, 1 edge'), or ''."""
+        parts = []
+        for n, word in ((len(self.sel_faces), "face"), (len(self.sel_edges), "edge"), (len(self.sel_points), "point")):
+            if n:
+                parts.append(f"{n} {word}{'' if n == 1 else 's'}")
+        return ", ".join(parts)
 
     def select_faces(self, fids):
         """Selects faces without the mouse (also used by the tests)."""
         self.sel_faces = sorted(set(fids))
+        self.sel_edges, self.sel_points, self.sel_body = [], [], None
         self.faces.blockSignals(True)
         self.faces.clearSelection()
         for f in self.sel_faces:
@@ -1614,9 +1757,12 @@ class SolidBase(QWidget):
             c = f.get("center")
             if c is not None and len(c) == 3:
                 return tuple(float(x) for x in c)
-        v = item.get("vertex")
-        if v and v.get("point") is not None:
-            return tuple(float(x) for x in v["point"])
+        for e in item.get("edges") or []:
+            if e.get("mid") is not None and len(e["mid"]) == 3:
+                return tuple(float(x) for x in e["mid"])
+        for v in (item.get("points") or []) + ([item["vertex"]] if item.get("vertex") else []):
+            if v.get("point") is not None:
+                return tuple(float(x) for x in v["point"])
         return None
 
     def select_face_size(self, r):
@@ -1653,9 +1799,35 @@ class SolidBase(QWidget):
         if self.is_asm():
             cols = {f["id"]: self.body_colour(f["body"]) for f in self.geom["faces"] if not f["interface"]}
         self.condition_colours(cols)
+        sel = view3d.select_rgb()
         for f in self.sel_faces:
-            cols[f] = sv.PICK
+            cols[f] = sel
+        if self.sel_body is not None:
+            for f in self.geom["faces"]:
+                if not f.get("interface") and (f.get("body") if self.is_asm() else 0) == self.sel_body:
+                    cols[f["id"]] = sel
         self.view.colour_faces(cols)
+        self.put_marks()
+
+    def condition_marks(self):
+        """[{"colour", "edges": [edge ids], "points": [corner ids]}]: the conditions that sit on edges or corners, to be drawn over the part (a window with such conditions gives them)."""
+        return []
+
+    def put_marks(self):
+        """The picked edges and corners (in the hover colour) and the edges and corners of the conditions (in their colours) over the part."""
+        g = self.geom
+        if g is None or not hasattr(self.view, "set_marks"):
+            return
+        edges, verts = g.get("edges") or [], g.get("verts") or []
+        groups = {}
+        cond = []
+        for m in self.condition_marks():
+            cond.append({"colour": m["colour"], "edges": [edges[e]["pts"] for e in m.get("edges") or [] if e < len(edges)], "width": 6.0,
+                         "points": [verts[v] for v in m.get("points") or [] if v < len(verts)], "size": 13.0})
+        groups["cond"] = cond
+        groups["sel"] = [{"colour": view3d.hover_rgb(), "edges": [edges[e]["pts"] for e in self.sel_edges if e < len(edges)], "width": 6.0,
+                          "points": [verts[v] for v in self.sel_points if v < len(verts)], "size": 13.0}]
+        self.view.set_marks(groups)
 
     def after_edit(self):
         self.refresh_lists()

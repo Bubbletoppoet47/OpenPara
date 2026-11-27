@@ -189,7 +189,7 @@ print("settings")
 import settings_dialog
 dlg = settings_dialog.SettingsDialog()
 names = [dlg.sections.item(i).text() for i in range(dlg.sections.count())]
-ok(names[0] == "General" and names[1:] == ["Curves & Surfaces", "Outlines", "Dimensions", "Picking & Snapping", "Navigation", "Performance"], names)
+ok(names[0] == "General" and names[1:] == ["Curves & Surfaces", "Outlines", "Dimensions", "3D View", "Picking & Snapping", "Navigation", "Performance"], names)
 ok(dlg.reopen.isChecked() and dlg.reopen.text() == "Reopen my tabs after an update", "the tick is on")
 dlg.reopen.setChecked(False)
 dlg.apply()

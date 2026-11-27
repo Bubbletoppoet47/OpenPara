@@ -21,6 +21,15 @@
         {"name": "pressed fill", "hex": "#cfe3fb", "use": "The background of a checked ribbon button", "source": "addons_src/annotator/app/annotator_ribbon.py, BUTTON_QSS"},
         {"name": "pressed edge", "hex": "#6aa0e0", "use": "The border of a checked ribbon button", "source": "addons_src/annotator/app/annotator_ribbon.py, BUTTON_QSS"}
       ]
+    },
+    "viewport": {
+      "title": "The 3D view",
+      "role": "How a part looks in the part, assembly and 3D simulation windows (planning/design/viewport): a neutral grey body, an orange outline under the cursor, a blue fill on what is selected. All three are settings in File > Settings > 3D View; these are their defaults.",
+      "colours": [
+        {"name": "part grey", "hex": "#999999", "use": "The colour of a part or component that has no colour of its own (60 % grey)", "source": "settings.py, part_color"},
+        {"name": "hover orange", "hex": "#ff7300", "use": "The outline of the face, edge or point under the cursor, and of a selected edge or point", "source": "settings.py, hover_color"},
+        {"name": "select blue", "hex": "#00b4ff", "use": "The fill of a selected face or body", "source": "settings.py, select_color"}
+      ]
     }
   }
 }

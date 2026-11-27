@@ -19,6 +19,7 @@ import pm_model as pm, sk_tools as sk
 import solid_model as sm
 import solid_tab
 import solid_view as sv
+import view3d
 import sim_project as sp
 import unitctl, units
 
@@ -75,7 +76,7 @@ def colour_of(fid):
 
 ok(colour_of(left) == tuple(np.round(sv.SUPPORT, 3)) and colour_of(right) == tuple(np.round(sv.LOAD, 3)), f"a support face and a load face have their colours: {colour_of(left)} {colour_of(right)}")
 w.select_faces([left])
-ok(colour_of(left) == tuple(np.round(sv.PICK, 3)) and colour_of(right) == tuple(np.round(sv.LOAD, 3)), "and a picked face is coloured over its support")
+ok(colour_of(left) == tuple(np.round(view3d.select_rgb(), 3)) and colour_of(right) == tuple(np.round(sv.LOAD, 3)), "and a picked face is coloured over its support")
 w.select_faces([])
 
 # --- a new source asks before it replaces supports and loads; with none it does not ask

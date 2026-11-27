@@ -134,6 +134,9 @@ class FluidWindow(SolidBase):
     MESH_SEC = 5
     RESULTS_SEC = 6
     CONDITION_KINDS = cm.CONDITION_KINDS
+    SELECT_KINDS = ("general", "face", "body")          # the conditions of a flow act on faces: no points or edges here
+    SELECT_WHY = "A fluid flow has its conditions on faces (and the mesh size on a part): Point and Edge are not used here."
+    GENERAL_IS = "face"                                  # General picks faces
     _box_key = None
 
     def __init__(self, *a, **k):

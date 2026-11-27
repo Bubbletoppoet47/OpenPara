@@ -59,6 +59,10 @@ def make_show_bar(win):
     sm.addAction(wl)
     sb.setMenu(sm)
     bl.addWidget(sb)
+    import view3d
+    win.selector = view3d.SelectorBar.make(win, win.selector_changed)       # General / Point / Edge / Face / Body, right beside Show
+    bl.addSpacing(8)
+    bl.addWidget(win.selector.widget)
     bl.addStretch(1)
     bar.setFixedHeight(28)
     return bar

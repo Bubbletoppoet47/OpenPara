@@ -40,11 +40,17 @@ SPEC = {
     "line_px": (1.2, 0.5, 4.0, "Outline thickness"),
     "pull_px": (2.0, 0.0, 8.0, "Outline pull toward viewer"),
     "outline_mode": (_outline_default(), None, OUTLINE_MODES, "Outline drawing (assembly view)"),
-    "pick3d_px": (4.0, 1.0, 20.0, "3D pick distance"),
+    "pick3d_px": (4.0, 1.0, 20.0, "3D pick distance (General)"),
+    "pick_point_px": (14.0, 2.0, 40.0, "Point pick distance (Point selected)"),          # view3d.py: the wider reach of the chosen kind
+    "pick_edge_px": (10.0, 2.0, 40.0, "Edge pick distance (Edge selected)"),
     "snap_px": (12.0, 4.0, 40.0, "Sketch snap distance"),
     "pick_px": (9.0, 3.0, 30.0, "Sketch pick distance"),
     "label_px": (16.0, 6.0, 40.0, "Dimension label click area"),
     "hover": (True, False, True, "Highlight what is under the cursor"),
+    "shadow": (True, False, True, "Shadow under the part"),                                  # view3d.py: the soft floor shadow
+    "part_color": ("#999999", None, "color", "Part colour"),                                # 60 % grey; a colour set on a part or component wins
+    "hover_color": ("#ff7300", None, "color", "Hover outline colour"),
+    "select_color": ("#00b4ff", None, "color", "Selected face colour"),
     "zoom_pct": (8.0, 1.0, 30.0, "Zoom per wheel notch (%)"),
     "dim_line_px": (1.1, 0.5, 4.0, "Dimension line thickness"),
     "dim_line_style": ("solid", None, LINE_STYLES, "Dimension line style"),

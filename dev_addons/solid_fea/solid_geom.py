@@ -15,6 +15,28 @@ class GeomError(Exception):
     pass
 
 
+def _edge_records(solid):
+    """[{id, kind, length, mid, pts, sag}] of the edges of a solid: `pts` is the edge as a polyline (2 points for a line, 65 for a curve), in the order of
+    solid.edges(); `sag` is how far the curve bulges away from the polyline at most (0 for a line)."""
+    out = []
+    for i, e in enumerate(solid.edges()):
+        kind = str(e.geom_type).split(".")[-1].lower()
+        try:
+            ts = (0.0, 1.0) if kind == "line" else tuple(np.linspace(0.0, 1.0, 65))
+            pts = [[p.X, p.Y, p.Z] for p in (e.position_at(t) for t in ts)]
+            m = e.position_at(0.5)
+            sag = 0.0
+            if kind != "line":
+                P = np.asarray(pts)
+                tm = [(ts[k] + ts[k + 1]) / 2 for k in range(len(ts) - 1)]
+                Q = np.array([[q.X, q.Y, q.Z] for q in (e.position_at(t) for t in tm)])
+                sag = float(np.linalg.norm(Q - (P[:-1] + P[1:]) / 2, axis=1).max())
+            out.append({"id": i, "kind": kind, "length": float(e.length), "mid": [m.X, m.Y, m.Z], "pts": pts, "sag": sag})
+        except Exception:                                                      # noqa: BLE001 (an odd edge: it is just not offered)
+            out.append({"id": i, "kind": kind, "length": 0.0, "mid": [0.0, 0.0, 0.0], "pts": [], "sag": 0.0})
+    return out
+
+
 def _analyze_solid(solid, full=True):
     """{faces, verts, step, diag, volume, bbox, tess} of one build123d Solid; full=False leaves out the tessellation and the STEP (not needed)."""
     import build123d as b
@@ -52,7 +74,7 @@ def _analyze_solid(solid, full=True):
             except OSError:
                 pass
     verts = [[v.X, v.Y, v.Z] for v in solid.vertices()]
-    return {"faces": faces, "verts": verts, "step": step, "diag": diag, "volume": float(solid.volume), "tess": tess,
+    return {"faces": faces, "verts": verts, "edges": _edge_records(solid), "step": step, "diag": diag, "volume": float(solid.volume), "tess": tess,
             "bbox": [[bb.min.X, bb.min.Y, bb.min.Z], [bb.max.X, bb.max.Y, bb.max.Z]]}
 
 
@@ -427,6 +449,103 @@ def match_faces(g, sig):
 
 def vert_sig(g, vid):
     return {"type": "vertex", "point": list(g["verts"][vid])}
+
+
+def edge_sig(g, eid):
+    """The signature of an edge to remember: its kind, where its middle is, how long it is and where it ends."""
+    e = g["edges"][eid]
+    pts = e["pts"]
+    return {"type": "edge", "kind": e["kind"], "mid": list(e["mid"]), "length": e["length"], "ends": [list(pts[0]), list(pts[-1])] if pts else []}
+
+
+def match_edge(g, sig, tol=0.6):
+    """The id of the edge of `g` that the signature means, or None: the same kind of curve, the nearest middle, a similar length."""
+    best, bd = None, None
+    d0 = max(g["diag"], 1e-12)
+    for e in g.get("edges") or []:
+        if e["kind"] != sig["kind"] or not e["pts"]:
+            continue
+        dist = float(np.linalg.norm(np.asarray(e["mid"]) - sig["mid"])) / d0
+        dist += 0.1 * abs(e["length"] - sig["length"]) / max(sig["length"], 1e-12) * (1 if dist > 0.02 else 0.2)
+        if bd is None or dist < bd:
+            best, bd = e["id"], dist
+    return best if bd is not None and bd <= tol else None
+
+
+def edge_chain(g, eid, nodes, n_corner, order=2):
+    """The mesh nodes along edge `eid` of the geometry `g`.  `nodes` = every node of the mesh, the first `n_corner` of them are the corners of the elements, the rest (a
+    quadratic mesh) the middles of the element edges.  -> {"nodes": node ids along the edge (corners and middles, in order), "w": the share of a load along the edge that
+    each carries (sums to 1), "cover": the part of the edge's length the chain spans (0..1), "closed", "ok": every piece between neighbouring nodes is an element edge,
+    "n": how many pieces}.  "nodes" is empty when the mesh has no node along the edge: it does not follow it (nothing is approximated)."""
+    e = g["edges"][eid]
+    return poly_chain(e["pts"], nodes, n_corner, g["diag"], e.get("sag", 0.0), order)
+
+
+def poly_chain(pts, nodes, n_corner, diag, sag=0.0, order=2):
+    """edge_chain for an edge given as a polyline.  A corner node of the mesh is on the edge when it lies on the edge's curve (within the sag of the polyline and a hair); the
+    middle node of an element edge between two neighbours on the edge is found as their midpoint (a quadratic mesh has straight element edges)."""
+    out = {"nodes": np.zeros(0, int), "w": np.zeros(0), "cover": 0.0, "closed": False, "ok": False, "n": 0}
+    pts = np.asarray(pts, float)
+    if len(pts) < 2:
+        return out
+    N = np.asarray(nodes, float)
+    n_corner = int(n_corner)
+    tol = 2e-5 * max(diag, 1e-12) + 1.2 * float(sag)
+    lo, hi = pts.min(axis=0) - tol, pts.max(axis=0) + tol
+    cand = np.where(np.all((N[:n_corner] >= lo) & (N[:n_corner] <= hi), axis=1))[0]
+    if len(cand) < 2:
+        return out
+    a, b = pts[:-1], pts[1:]
+    ab = b - a
+    seg = np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-24)
+    X = N[cand]
+    t = np.clip(np.einsum("nsj,sj->ns", X[:, None, :] - a[None], ab) / seg[None], 0.0, 1.0)
+    d = np.linalg.norm(a[None] + ab[None] * t[:, :, None] - X[:, None, :], axis=2)
+    k = d.argmin(axis=1)
+    rows = np.arange(len(cand))
+    keep = d[rows, k] <= tol
+    if keep.sum() < 2:
+        return out
+    seglen = np.sqrt(seg)
+    start = np.concatenate([[0.0], np.cumsum(seglen)])[:-1]
+    total = float(seglen.sum())
+    s_arc = start[k[keep]] + t[rows[keep], k[keep]] * seglen[k[keep]]
+    idx = cand[keep]
+    closed = bool(np.linalg.norm(pts[0] - pts[-1]) <= 1e-9 * max(diag, 1.0))
+    if closed:
+        s_arc = np.where(s_arc >= total - 1e-9 * max(total, 1.0), 0.0, s_arc)             # the seam node is the start
+    order_ = np.argsort(s_arc)
+    idx, s_arc = idx[order_], s_arc[order_]
+    cover = 1.0 if closed else float((s_arc[-1] - s_arc[0]) / total if total > 0 else 0.0)
+    pairs = list(zip(idx[:-1], idx[1:])) + ([(idx[-1], idx[0])] if closed and len(idx) > 2 else [])
+    ok = True
+    if order == 2:
+        mid_idx = np.arange(n_corner, len(N))
+        MN = N[mid_idx] if len(mid_idx) else np.zeros((0, 3))
+    acc = {}
+    for p, q_ in pairs:
+        L = float(np.linalg.norm(N[p] - N[q_]))
+        if order == 2:
+            m = None
+            if len(MN):
+                dd = np.linalg.norm(MN - (N[p] + N[q_]) / 2, axis=1)
+                j = int(dd.argmin())
+                if dd[j] <= 1e-6 * max(diag, 1.0):
+                    m = int(mid_idx[j])
+            if m is None:
+                ok = False
+                continue
+            for node, w in ((p, L / 6), (m, 4 * L / 6), (q_, L / 6)):
+                acc[node] = acc.get(node, 0.0) + w
+        else:
+            for node, w in ((p, L / 2), (q_, L / 2)):
+                acc[node] = acc.get(node, 0.0) + w
+    if not acc:
+        return out
+    ids = sorted(acc, key=lambda nd: (np.dot(N[nd] - N[idx[0]], N[idx[-1]] - N[idx[0]]), nd)) if not closed else sorted(acc)
+    tot = sum(acc.values())
+    out.update({"nodes": np.array(ids, int), "w": np.array([acc[nd] / tot for nd in ids]), "cover": cover, "closed": closed, "ok": ok, "n": len(pairs)})
+    return out
 
 
 def match_face(g, sig, tol=0.6):

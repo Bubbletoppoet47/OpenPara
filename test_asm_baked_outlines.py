@@ -7,7 +7,7 @@ HERE = os.path.dirname(os.path.abspath(__file__)); sys.path[:0] = [HERE, os.path
 import numpy as np
 from PyQt6.QtWidgets import QApplication
 app = QApplication([])
-import pm_model as pm, sk_tools as sk, gpd_app, settings, assembly
+import pm_model as pm, sk_tools as sk, gpd_app, settings, assembly, view3d
 tmp = tempfile.mkdtemp()
 def make_part(name, rect, depth):
     d = pm.Document(); s = d.add(pm.new_feature("sketch", plane={"base": "Top"})); d.rebuild(); m = d.models[s["id"]]
@@ -34,9 +34,9 @@ for cid, e in w.entries.items():
 # 2. the colour of a part is per cell: selecting recolours the surfaces, never the lines
 w.sel_comp = blk["id"]; w.set_selected_color()
 mb, nl = w.entries[blk["id"]]["baked"]; rgb = np.asarray(mb.cell_data["rgb"])
-assert (rgb[nl:] == w.rgb255(assembly.SEL_COL)).all() and (rgb[:nl] == w.LINE_RGB).all()
+assert (rgb[nl:] == w.rgb255(view3d.select_rgb())).all() and (rgb[:nl] == w.LINE_RGB).all()
 w.sel_comp = None; w.set_selected_color()
-assert not (np.asarray(mb.cell_data["rgb"])[nl:] == w.rgb255(assembly.SEL_COL)).all()
+assert not (np.asarray(mb.cell_data["rgb"])[nl:] == w.rgb255(view3d.select_rgb())).all()
 # 3. opacity still applies to the actor
 w.display_live()
 # 4. moving a part moves both the visible mesh and its picking copy

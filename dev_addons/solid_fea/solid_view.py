@@ -3,6 +3,8 @@
 
 The result surface is built once; an animation only moves its points and recolours them (set_ramp), so a frame is cheap.
 """
+import time
+
 import numpy as np
 
 from PyQt6.QtCore import QEvent, QObject
@@ -10,7 +12,10 @@ from PyQt6.QtGui import QImage, QPainter
 
 import legend_draw
 import result_style
+import settings
 import sim_tags
+import view3d
+import viewpick
 
 try:
     import pyvista as pv
@@ -26,8 +31,8 @@ def _surface(g):
         return g.extract_surface()
 
 
-GREY = (0.78, 0.80, 0.84)
-PICK = (1.0, 0.62, 0.1)
+GREY = (0.60, 0.60, 0.60)                           # the neutral part colour (the setting "Part colour" of File > Settings > 3D View says what is really used: view3d.part_rgb())
+PICK = (0.0, 0.706, 1.0)                            # the selected-face colour (the setting "Selected colour": view3d.select_rgb())
 SUPPORT = (0.25, 0.5, 0.95)
 LOAD = (0.9, 0.25, 0.25)
 BODY_COLOURS = [(0.78, 0.80, 0.84), (0.84, 0.78, 0.62), (0.66, 0.80, 0.72), (0.76, 0.70, 0.84), (0.86, 0.74, 0.76), (0.66, 0.78, 0.86),
@@ -119,6 +124,16 @@ class SolidView:
         self.tags = []                             # the lettered tags (sim_tags) to draw now
         self.tag_names = []                        # names of the point-label actors of the tags on the model
         self.tag_logo = None                       # the list of the tags in the upper-left corner: {"rep", "widget", "w", "h"}
+        self.kind = "general"                      # the geometry selector (view3d.KINDS): what a click or the hover takes
+        self.on_select = None                      # fn(item) for a click that took an edge, a point or a body (item = {"kind", "idx", ...}) or nothing (None, for those kinds)
+        self.edges = []                            # the edges of the part as polylines (n, 3): see set_topology
+        self.verts = np.zeros((0, 3))              # the corners of the part
+        self.face_body = np.zeros(0, int)          # the body (part) of every face: 0 for a single part, -1 for a face inside an assembly
+        self.diag = 1.0
+        self.hover_layer = None
+        self._t_move = 0.0
+        self.mark_actors = {}                      # name -> actors of the edges and points drawn over the part (see set_marks)
+        self.mark_data = {}                        # name -> the items last given to set_marks
         if QtInteractor is None:
             return
         try:
@@ -127,6 +142,8 @@ class SolidView:
             self.plotter.set_background("white")
             self.plotter.iren.add_observer("LeftButtonPressEvent", self._press)
             self.plotter.iren.add_observer("LeftButtonReleaseEvent", self._release)
+            self.plotter.iren.add_observer("MouseMoveEvent", self._move)
+            self.hover_layer = view3d.HoverLayer(self.plotter)
         except Exception:
             self.plotter = None
             self.widget = None
@@ -140,9 +157,11 @@ class SolidView:
         """keep_camera: the part is the same part with other faces (a split was changed): the view stays where it is."""
         keep_camera = keep_camera and self.actor is not None
         self.cell_face = F
-        self.rgb = np.tile(GREY, (len(T), 1))
+        self.rgb = np.tile(view3d.part_rgb(), (len(T), 1))
+        self.diag = float(np.linalg.norm(np.ptp(np.asarray(P, float), axis=0))) if len(P) else 1.0
         if self.plotter is None:
             return
+        self.clear_hover()
         self.clear_result()
         for name in list(self.lines):
             self.set_lines(name, [])
@@ -154,7 +173,7 @@ class SolidView:
         faces = np.hstack([np.full((len(T), 1), 3), T]).ravel()
         self.poly = pv.PolyData(P, faces)
         self.poly.cell_data["rgb"] = (self.rgb * 255).astype(np.uint8)
-        self.actor = self.plotter.add_mesh(self.poly, scalars="rgb", rgb=True, show_edges=False, pickable=True, reset_camera=False)
+        self.actor = self.plotter.add_mesh(self.poly, scalars="rgb", rgb=True, show_edges=False, pickable=True, reset_camera=False, **view3d.SHADING)
         if not keep_camera:
             self.plotter.reset_camera()
         self.apply_focus()
@@ -179,8 +198,8 @@ class SolidView:
         self.plotter.render()
 
     def colour_faces(self, colours):
-        """colours: {face id: (r, g, b)}; every other face is grey."""
-        self.rgb = np.tile(GREY, (len(self.cell_face), 1))
+        """colours: {face id: (r, g, b)}; every other face has the neutral part colour (File > Settings > 3D View)."""
+        self.rgb = np.tile(view3d.part_rgb(), (len(self.cell_face), 1))
         for fid, c in colours.items():
             self.rgb[self.cell_face == fid] = c
         if self.plotter is not None and self.poly is not None:
@@ -210,13 +229,15 @@ class SolidView:
         self.pick_at(up[0], up[1])
 
     def pick_at(self, x, y):
-        """Picks the face under the display point (x, y); calls on_pick(face id, point).  The face id, or None."""
+        """Picks what is under the display point (x, y) as the geometry selector says: a face calls on_pick(face id, point); an edge, a point or a body calls
+        on_select({"kind", "idx"}); nothing under a Point / Edge / Body pick calls on_select(None).  What was picked: the face id, the index of the edge, the corner or
+        the body, or None."""
         if self.plotter is None or self.actor is None:
             return None
-        import vtk
-        pk = vtk.vtkCellPicker()
-        pk.SetTolerance(0.0005)
         if self.probe_mode:                                      # a probe reads the result surface on screen, not a face of the part
+            import vtk
+            pk = vtk.vtkCellPicker()
+            pk.SetTolerance(0.0005)
             shown = self.result_actor if self.result_actor is not None else self.mesh_actor
             if shown is None:
                 if self.on_probe:
@@ -229,17 +250,225 @@ class SolidView:
             if self.on_probe and self.result_actor is not None:
                 self.on_probe(tuple(pk.GetPickPosition()))
             return -1
-        pk.AddPickList(self.actor)
-        pk.PickFromListOn()
-        if not pk.Pick(x, y, 0, self.plotter.renderer):
+        it = self.what_is_under(x, y)
+        if it is None:
+            if self.kind in ("point", "edge", "body") and self.on_select:
+                self.on_select(None)
             return None
-        cid = pk.GetCellId()
+        if it["kind"] == "face":
+            if self.on_pick:
+                self.on_pick(it["idx"], it["point"])
+        elif self.on_select:
+            self.on_select(it)
+        return it["idx"]
+
+    # ------------------------------------------------------------------ the geometry selector: what is under the cursor
+    def set_kind(self, kind):
+        if kind in view3d.KINDS:
+            self.kind = kind
+            self.clear_hover(render=True)
+
+    def set_topology(self, edges, verts, face_body):
+        """The corners, the edges (polylines) and the body of every face of the part on show: what the Point / Edge / Body picks and the hover look in."""
+        self.edges = [np.asarray(e, float).reshape(-1, 3) for e in edges]
+        self.verts = np.asarray(verts, float).reshape(-1, 3)
+        self.face_body = np.asarray(face_body, int)
+        pts, owner, a, b = [], [], [], []
+        n = 0
+        for k, e in enumerate(self.edges):
+            if len(e) < 2:
+                continue
+            a += list(range(n, n + len(e) - 1))
+            b += list(range(n + 1, n + len(e)))
+            owner += [k] * (len(e) - 1)
+            pts.append(e)
+            n += len(e)
+        self._ep = np.vstack(pts) if pts else np.zeros((0, 3))
+        self._ea, self._eb, self._eo = np.array(a, int), np.array(b, int), np.array(owner, int)
+        self.clear_hover()
+
+    def _world_tol(self, px=6.0):
+        return max(px * viewpick.world_per_pixel(self.plotter), 2e-3 * self.diag)
+
+    def _visible(self, xyz, sx, sy):
+        """True when the point xyz (which shows at the pixel sx, sy) is not behind the part."""
+        try:
+            hit = viewpick.pick_actor(self.plotter, sx, sy, self.actor)
+        except Exception:                                        # noqa: BLE001
+            return True
+        return hit is None or np.linalg.norm(np.asarray(hit) - xyz) <= self._world_tol()
+
+    def vertex_at(self, x, y, reach):
+        """Index of the corner within `reach` pixels of the cursor and not hidden behind the part, or None."""
+        if not len(self.verts):
+            return None
+        scr = viewpick.project_display(self.plotter, self.verts)
+        dd = np.hypot(scr[:, 0] - x, scr[:, 1] - y)
+        dd[np.isnan(dd)] = np.inf
+        for i in np.argsort(dd)[:3]:
+            if dd[i] > reach * self.dpr():
+                break
+            if self._visible(self.verts[i], scr[i][0], scr[i][1]):
+                return int(i)
+        return None
+
+    def edge_at(self, x, y, reach):
+        """Index of the edge within `reach` pixels of the cursor and not hidden behind the part, or None."""
+        if not len(self._ep):
+            return None
+        scr = viewpick.project_display(self.plotter, self._ep)
+        A, B = scr[self._ea], scr[self._eb]
+        ok = ~(np.isnan(A).any(axis=1) | np.isnan(B).any(axis=1))
+        if not ok.any():
+            return None
+        d = np.full(len(A), np.inf)
+        d[ok] = viewpick.seg_distance_px(np.array([x, y], float), A[ok], B[ok])
+        tol = reach * self.dpr()
+        seen = set()
+        for k in np.argsort(d)[:12]:
+            if d[k] > tol:
+                break
+            e = int(self._eo[k])
+            if e in seen:
+                continue
+            seen.add(e)
+            P0, P1, a, b = self._ep[self._ea[k]], self._ep[self._eb[k]], A[k], B[k]
+            ab = b - a
+            t = float(np.clip(np.dot(np.array([x, y]) - a, ab) / max(float(ab @ ab), 1e-12), 0.0, 1.0))
+            q = P0 + (P1 - P0) * t
+            sx, sy = a + ab * t
+            if self._visible(q, sx, sy):
+                return e
+            if len(seen) >= 5:
+                break
+        return None
+
+    def what_is_under(self, x, y, kind=None):
+        """What a click at the display point (x, y) would take as the selector says (the hover outlines the same thing): {"kind": "point" | "edge" | "face" |
+        "body", "idx": corner / edge / face id / body index, "point": where the surface was hit, "face": its face} or None."""
+        if self.plotter is None or self.actor is None or not self.actor.GetVisibility():
+            return None
+        kind = kind or self.kind
+        if kind in ("general", "point"):
+            v = self.vertex_at(x, y, view3d.pick_px("point") if kind == "point" else view3d.pick_px("general"))
+            if v is not None:
+                return {"kind": "point", "idx": v, "point": tuple(self.verts[v])}
+            if kind == "point":
+                return None
+        if kind in ("general", "edge"):
+            e = self.edge_at(x, y, view3d.pick_px("edge") if kind == "edge" else 8.0)
+            if e is not None:
+                return {"kind": "edge", "idx": e}
+            if kind == "edge":
+                return None
+        r = viewpick.pick_surface(self.plotter, x, y)
+        if r is None or not viewpick.same_actor(self.actor, r[1]):
+            return None
+        cid = int(r[2])
         if cid < 0 or cid >= len(self.cell_face):
             return None
         fid = int(self.cell_face[cid])
-        if self.on_pick:
-            self.on_pick(fid, tuple(pk.GetPickPosition()))
-        return fid
+        if kind == "body":
+            b = int(self.face_body[fid]) if fid < len(self.face_body) else 0
+            if b < 0:
+                return None
+            return {"kind": "body", "idx": b, "face": fid, "point": tuple(r[0])}
+        return {"kind": "face", "idx": fid, "point": tuple(r[0])}
+
+    # ------------------------------------------------------------------ the hover outline
+    def _move(self, *_a):
+        now = time.monotonic()
+        if now - self._t_move < 0.05 or self.plotter is None:
+            return
+        self._t_move = now
+        try:
+            x, y = self.plotter.iren.interactor.GetEventPosition()
+        except Exception:                                        # noqa: BLE001
+            return
+        self.on_hover(x, y)
+
+    def clear_hover(self, render=False):
+        if self.hover_layer is not None:
+            self.hover_layer.clear(render=render)
+
+    def on_hover(self, x, y):
+        """The cursor is at the display point (x, y): outline what a click would pick (a face by its border, an edge, a corner, a whole body).  Returns the item."""
+        hl = self.hover_layer
+        if hl is None:
+            return None
+        try:
+            if (not settings.get("hover")) or self.probe_mode or self.actor is None or not self.actor.GetVisibility():
+                if hl.actor is not None:
+                    hl.clear(render=True)
+                return None
+            it = self.what_is_under(x, y)
+            key = None if it is None else (it["kind"], it["idx"])
+            if key == hl.key and (hl.actor is not None or key is None):
+                return it
+            hl.clear()
+            hl.key = key
+            if it is not None:
+                k = it["kind"]
+                if k == "face":
+                    cs = np.where(np.asarray(self.cell_face) == it["idx"])[0]
+                    if len(cs):
+                        hl.show_outline(self.poly.extract_cells(cs), key=key)
+                elif k == "edge":
+                    hl.show_lines(self._lines_poly([self.edges[it["idx"]]]), key=key)
+                elif k == "point":
+                    hl.show_point(it["point"], key=key)
+                elif k == "body":
+                    cs = np.where(np.isin(np.asarray(self.cell_face), np.where(self.face_body == it["idx"])[0]))[0]
+                    if len(cs):
+                        hl.show_fill(self.poly.extract_cells(cs), key=key)
+            self.plotter.render()
+            return it
+        except Exception:                                        # noqa: BLE001 - the hover is a nicety: it never breaks the window
+            return None
+
+    @staticmethod
+    def _lines_poly(polys):
+        pts, cells, n = [], [], 0
+        for e in polys:
+            if len(e) < 2:
+                continue
+            pts.append(e)
+            cells += [len(e)] + list(range(n, n + len(e)))
+            n += len(e)
+        if not pts:
+            return None
+        return pv.PolyData(np.vstack(pts), lines=np.array(cells, np.int64))
+
+    # ------------------------------------------------------------------ edges and points drawn over the part (the selected ones, the ones with a condition)
+    def set_marks(self, groups):
+        """groups = {name: [{"edges": [polyline (n, 3)], "points": [xyz], "colour": (r, g, b), "width": px}]}: the edges and points drawn over the part; a name that is
+        not given again is taken away."""
+        self.mark_data = {k: list(v) for k, v in groups.items()}
+        if self.plotter is None:
+            return
+        for name in list(self.mark_actors):
+            for a in self.mark_actors.pop(name):
+                try:
+                    self.plotter.remove_actor(a)
+                except Exception:                                # noqa: BLE001
+                    pass
+        for name, items in groups.items():
+            acts = []
+            for it in items:
+                col = it.get("colour") or view3d.hover_rgb()
+                ln = self._lines_poly(it.get("edges") or [])
+                if ln is not None:
+                    a = self.plotter.add_mesh(ln, color=col, line_width=float(it.get("width", 4.0)), lighting=False, pickable=False, reset_camera=False)
+                    view3d.HoverLayer._bias(a)
+                    acts.append(a)
+                pts = [p for p in (it.get("points") or [])]
+                if pts:
+                    a = self.plotter.add_mesh(pv.PolyData(np.asarray(pts, float).reshape(-1, 3)), color=col, point_size=float(it.get("size", 11.0)),
+                                              render_points_as_spheres=True, lighting=False, pickable=False, reset_camera=False)
+                    view3d.HoverLayer._bias(a)
+                    acts.append(a)
+            self.mark_actors[name] = acts
+        self.plotter.render()
 
     # ------------------------------------------------------------------ the colour legend (drawn like the 1D FEA one)
     def dpr(self):
@@ -422,7 +651,7 @@ class SolidView:
             return False
         self.clear_result()
         g = _grid(nodes, conn)
-        self.mesh_actor = self.plotter.add_mesh(_surface(g), color=GREY, show_edges=True, edge_color=(0.35, 0.38, 0.42), reset_camera=False)
+        self.mesh_actor = self.plotter.add_mesh(_surface(g), color=view3d.part_rgb(), show_edges=True, edge_color=(0.35, 0.38, 0.42), reset_camera=False, **view3d.SHADING)
         if self.actor is not None:
             self.actor.SetVisibility(False)
         self.apply_focus()
@@ -457,6 +686,9 @@ class SolidView:
                 else:
                     show = True
                 self.actor.SetVisibility(show)
+            for acts in self.mark_actors.values():
+                for a in acts:
+                    a.SetVisibility(bool(self.actor is not None and self.actor.GetVisibility()))
             if self.legend is not None:
                 try:
                     self.legend["widget"].SetEnabled(f in (None, "results"))
@@ -480,8 +712,8 @@ class SolidView:
         if self.focus_mesh_actor is not None:
             self.plotter.remove_actor(self.focus_mesh_actor)
         nodes, conn = data
-        self.focus_mesh_actor = self.plotter.add_mesh(_surface(_grid(nodes, conn)), color=GREY, show_edges=True, edge_color=(0.35, 0.38, 0.42), reset_camera=False,
-                                                      pickable=False)
+        self.focus_mesh_actor = self.plotter.add_mesh(_surface(_grid(nodes, conn)), color=view3d.part_rgb(), show_edges=True, edge_color=(0.35, 0.38, 0.42),
+                                                      reset_camera=False, pickable=False, **view3d.SHADING)
         self._focus_mesh_of = data
 
     def _put_tags(self):

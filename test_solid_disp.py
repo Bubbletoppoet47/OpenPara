@@ -187,7 +187,7 @@ assert w.ready() is None, w.ready()
 # the table and the list
 tb = w.cond_table
 rows = [[tb.item(i, c).text() for c in range(4)] for i in range(tb.rowCount())]
-assert rows[0] == ["Displacement support 1", "Displacement (ux, uy, uz) (mm)", "1 face(s)", "0, free, free"], rows[0]
+assert rows[0] == ["Displacement support 1", "Displacement (ux, uy, uz) (mm)", "1 face", "0, free, free"], rows[0]
 assert rows[1][3] == "0.05, free, free" and rows[2][3] == "free, 0, free" and rows[3][3] == "free, free, 0", rows
 assert "displacement (ux held, uy free, uz free)" in w.sup_list.item(0).text() and "ux 0.05 mm" in w.sup_list.item(1).text(), w.sup_list.item(1).text()
 # editing: the dialog opens with the numbers of the row

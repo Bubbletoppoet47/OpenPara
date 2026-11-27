@@ -309,11 +309,25 @@ class ThermalWindow(SolidBase):
                 if not self.cond_wants("Conditions", c):
                     continue
                 try:
-                    fids = sm._fids(self.geom, c["faces"], sm.name_of(tm.NAMES[key], i, c))
+                    fids = sm._fids(self.geom, c.get("faces") or [], sm.name_of(tm.NAMES[key], i, c))
                 except fem.FemError:
                     continue
                 for f in fids:
                     cols[f] = COLOURS[key]
+
+    def condition_marks(self):
+        """The conditions that sit on edges and points, in their colours."""
+        out = []
+        for key in tm.KEYS:
+            for i, c in enumerate(self.setup.get(key) or []):
+                if not (c.get("edges") or c.get("points")) or not self.cond_wants("Conditions", c):
+                    continue
+                try:
+                    eids, vids = sm.geo_ids(self.geom, c, sm.name_of(tm.NAMES[key], i, c))
+                except fem.FemError:
+                    continue
+                out.append({"colour": COLOURS[key], "edges": eids, "points": vids})
+        return out
 
     def reset_source_setup(self):
         keep = {k: self.setup[k] for k in ("mesh",) if k in self.setup}
@@ -464,15 +478,19 @@ class ThermalWindow(SolidBase):
 
     def build_condition_section(self):
         v = self.sec(3, "Conditions", True, summary=lambda: f"{sum(len(self.setup.get(k) or []) for k in tm.KEYS)} condition(s)",
-                     help_text="Select the face(s) in the view first (click them; Ctrl or Shift for several), then press a button. Fixed temperature holds the "
-                               "faces at a temperature. Heat flux and Heat flow push heat into the body (positive heats it). Convection: the faces lose "
+                     help_text="Select the face(s), edge(s) or point(s) in the view first (choose the kind above the view, click them; Ctrl or Shift for several), then "
+                               "press a button. Fixed temperature holds the faces, edges or points at a temperature. Heat flux and Heat flow push heat into the body "
+                               "(positive heats it); a Heat flow can also go into edges (shared by length) or points (shared equally), a Heat flux, Convection, "
+                               "Radiation and Insulated need faces. Convection: the faces lose "
                                "heat to a fluid at the temperature you give. Radiation: they radiate to surroundings at the temperature you give (not to "
                                "other faces of the model). A face with no condition is insulated. A steady problem needs at least one fixed temperature, "
                                "convection or radiation to settle on. Double-click a Name to rename it; double-click a value to change it.")
-        v.addWidget(self.hint("Select the face(s) first (click them in the view), then press a button."))
-        for text, icn, key, tip in (("Fixed temperature...", "fixed", "temps", "Holds the selected faces at a temperature."),
+        v.addWidget(self.hint("Select the face(s), edge(s) or point(s) first (choose the kind above the view, then click them), then press a button.  Edges and points take "
+                              "Fixed temperature and Heat flow only."))
+        for text, icn, key, tip in (("Fixed temperature...", "fixed", "temps", "Holds the selected faces, edges or points at a temperature."),
                                     ("Heat flux...", "pressure", "fluxes", "Heat per unit of area through the selected faces (positive = into the body)."),
-                                    ("Heat flow (watts)...", "force", "powers", "Watts put into the body through the selected faces, spread over their area."),
+                                    ("Heat flow (watts)...", "force", "powers", "Watts put into the body through the selected faces (spread over their area), edges (over their length) "
+                                                                                 "or points (shared equally)."),
                                     ("Convection...", "wind", "convs", "The selected faces lose heat to a fluid: coefficient and fluid temperature."),
                                     ("Radiation...", "snow", "rads", "The selected faces radiate to surroundings: emissivity and temperature."),
                                     ("Insulated", None, "ins", "No heat goes through the selected faces (an adiabatic face or a plane of symmetry). Faces with no "
@@ -798,12 +816,18 @@ class ThermalWindow(SolidBase):
 
     def applied_text(self, key, i, c):
         try:
-            fids = sm._fids(self.geom, c["faces"], sm.name_of(tm.NAMES[key], i, c)) if self.geom is not None else []
+            nm = sm.name_of(tm.NAMES[key], i, c)
+            fids = sm._fids(self.geom, c.get("faces") or [], nm) if self.geom is not None else []
+            if self.geom is not None:
+                sm.geo_ids(self.geom, c, nm)
         except fem.FemError:
-            return "face lost: select it again"
+            return "lost: select it again"
         k = l_out(1.0)
+        if not fids:
+            return sm.where_text(c)
         area = sum(self.geom["faces"][f]["area"] for f in fids) * k * k
-        return f"{len(fids)} face(s), {R.num(area, 4)} {UD()['L']}2"
+        more = [t for t in (sm.where_text({"edges": c.get("edges")}) if c.get("edges") else "", sm.where_text({"points": c.get("points")}) if c.get("points") else "") if t]
+        return ", ".join([f"{len(fids)} face(s), {R.num(area, 4)} {UD()['L']}2"] + more)
 
     def refresh_lists(self):
         t = self.cond_table
@@ -905,14 +929,23 @@ class ThermalWindow(SolidBase):
         """A condition button: asks for the numbers, then puts the condition on the selected faces."""
         return self.add_condition(key)
 
-    def add_condition(self, key, values=None, fids=None, name=None):
-        """Adds a condition of kind `key` (one of tm.KEYS) on faces (the selected ones by default).  Without `values` a small box asks for them."""
+    def add_condition(self, key, values=None, fids=None, name=None, eids=None, vids=None):
+        """Adds a condition of kind `key` (one of tm.KEYS) on faces, edges and points (the selected ones by default).  Without `values` a small box asks for them.  Only a
+        fixed temperature and a heat flow can act on edges and points (a heat flow on one kind of them)."""
         if self.geom is None:
             self.say("Import a part first.")
             return False
         fids = self.sel_faces if fids is None else fids
-        if not fids:
-            self.say("Select the face(s) first.")
+        eids = self.sel_edges if eids is None else eids
+        vids = self.sel_points if vids is None else vids
+        if not (fids or eids or vids):
+            self.say("Select the face(s), edge(s) or point(s) first." + (" (A whole part is for its material and element size.)" if self.sel_body is not None else ""))
+            return False
+        if (eids or vids) and key not in ("temps", "powers"):
+            self.say(f"{tm.NAMES[key]} acts on faces: select faces, or use Fixed temperature or Heat flow on edges and points.")
+            return False
+        if key == "powers" and sum(1 for x in (fids, eids, vids) if x) > 1:
+            self.say("A heat flow acts on faces, or on edges, or on points, not on a mix: select one kind, add it, then the next.")
             return False
         if any(self.geom["faces"][f].get("interface") for f in fids):
             self.say("A face between two bodies is inside the assembly: put the condition on an outside face.")
@@ -928,6 +961,10 @@ class ThermalWindow(SolidBase):
                 return False
         n = len(self.setup[key]) + 1
         item = {"name": name or f"{tm.NAMES[key]} {n}", "faces": [sg.face_sig(self.geom, f) for f in fids]}
+        if eids:
+            item["edges"] = [sg.edge_sig(self.geom, e) for e in eids]
+        if vids:
+            item["points"] = [sg.vert_sig(self.geom, v) for v in vids]
         item.update(values)
         self.setup[key].append(item)
         self.after_edit()

@@ -155,6 +155,7 @@ class SolidWindow(SolidBase):
             r = sm.resolve(self.geom, self.setup)
         except fem.FemError:
             r = {"supports": [], "loads": []}
+        self._resolved = r                                                     # (condition_marks draws the edges and points of the same conditions)
         for item, s in zip(self.setup["supports"], r["supports"]):
             if self.cond_wants("Supports", item):
                 for f in s["fids"]:
@@ -163,6 +164,18 @@ class SolidWindow(SolidBase):
             if self.cond_wants("Loads", item):
                 for f in l.get("fids", []):
                     cols[f] = sv.LOAD
+
+    def condition_marks(self):
+        """The supports and loads that sit on edges and points, in the colours of the faces' ones."""
+        r = getattr(self, "_resolved", None) or {"supports": [], "loads": []}
+        out = []
+        for item, s in zip(self.setup["supports"], r["supports"]):
+            if (s.get("eids") or s.get("vids")) and self.cond_wants("Supports", item):
+                out.append({"colour": sv.SUPPORT, "edges": s.get("eids") or [], "points": s.get("vids") or []})
+        for item, l in zip(self.setup["loads"], r["loads"]):
+            if (l.get("eids") or l.get("vids")) and self.cond_wants("Loads", item):
+                out.append({"colour": sv.LOAD, "edges": l.get("eids") or [], "points": l.get("vids") or []})
+        return out
 
     def use_source_material(self, mat):
         e = mat.get("E_MPa")
@@ -251,9 +264,10 @@ class SolidWindow(SolidBase):
         self.put_material(self.setup["material"])
         # --- 3 supports
         v = self.sec(3, "Supports", True, summary=lambda: f"{len(self.setup['supports'])} support(s)")
-        v.addWidget(self.hint("Select the face(s) first (click them in the view), then press a button."))
-        for mode, icn, tip in (("fixed", "fixed", "Holds the selected faces in every direction."),
-                               ("disp", "disp", "Says for x, y and z what the selected faces do: blank = free, 0 = held, a number = moved by exactly that much."),
+        v.addWidget(self.hint("Select the face(s), edge(s) or point(s) first (pick the kind above the view, then click them), then press a button.  On an edge or a point only "
+                              "Fixed and Displacement can be used."))
+        for mode, icn, tip in (("fixed", "fixed", "Holds the selected faces, edges or points in every direction."),
+                               ("disp", "disp", "Says for x, y and z what the selected faces, edges or points do: blank = free, 0 = held, a number = moved by exactly that much."),
                                ("slide", "ux", "Holds the selected faces only in the direction normal to them; they slide freely along it."),
                                ("bearing", "bolt", "For the round (cylindrical) face of a hole: select that face itself, not its edge.  It holds the face against moving "
                                                    "sideways (in or out along the radius) and along the axis of the hole; the face can still turn about the axis.  "
@@ -266,10 +280,10 @@ class SolidWindow(SolidBase):
         v.addWidget(self.sup_list)
         # --- 4 loads
         v = self.sec(4, "Loads", True, summary=lambda: f"{len(self.setup['loads'])} load(s)")
-        v.addWidget(self.hint("Select the face(s) first (click them in the view), then press a button."))
-        for text, icn, kind, tip in (("Force on face(s)...", "force", "force", "A total force spread over the selected faces."),
+        v.addWidget(self.hint("Select the face(s), edge(s) or point(s) first (pick the kind above the view, then click them), then press a button."))
+        for text, icn, kind, tip in (("Force on face(s) or edge(s)...", "force", "force", "A total force spread over the selected faces (by area) or over the selected edges (by length)."),
                                      ("Pressure on face(s)...", "pressure", "pressure", "Pressure on the selected faces; positive pushes into the part."),
-                                     ("Force at vertex...", "force", "point", "A force at the selected vertex (a click on a face picks its nearest vertex)."),
+                                     ("Force at point(s)...", "force", "point", "A force at the selected point (the force is shared equally when you select several points)."),
                                      ("Gravity...", "line_load", "gravity", "The weight of the part (body load).")):
             b = sim_ui.icon_button(text, icn, tip)
             b.clicked.connect(lambda _c=False, k=kind: self.add_load(k))
@@ -664,7 +678,7 @@ class SolidWindow(SolidBase):
     def refresh_lists(self):
         self.sup_list.clear()
         for i, s in enumerate(self.setup["supports"]):
-            self.sup_list.addItem(f"{sm.name_of('Support', i, s)}: {self.support_text(s)} on {len(s['faces'])} face(s)")
+            self.sup_list.addItem(f"{sm.name_of('Support', i, s)}: {self.support_text(s)} on {sm.where_text(s)}")
         self.load_list.clear()
         for i, l in enumerate(self.setup["loads"]):
             self.load_list.addItem(f"{sm.name_of('Load', i, l)}: {self.load_text(l)}")
@@ -693,7 +707,7 @@ class SolidWindow(SolidBase):
     @classmethod
     def support_cells(cls, s):
         """(type, applied to, value) of a support for the conditions table."""
-        n = f"{len(s['faces'])} face(s)"
+        n = sm.where_text(s)
         if s["mode"] == "disp":
             vals = ", ".join(sim_disp.fmt(None if s.get(k) is None else l_out(s[k])) or "free" for k in sim_disp.KEYS[3])
             return f"Displacement (ux, uy, uz) ({UD()['L']})", n, vals
@@ -705,11 +719,11 @@ class SolidWindow(SolidBase):
         D = UD()
         k = l["kind"]
         if k == "force":
-            return "Force", f"{len(l['faces'])} face(s)", f"({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']}"
+            return "Force", sm.where_text(l), f"({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']}"
         if k == "pressure":
-            return "Pressure", f"{len(l['faces'])} face(s)", f"{s_out(l['p']):.5g} {D['S']}"
+            return "Pressure", sm.where_text(l), f"{s_out(l['p']):.5g} {D['S']}"
         if k == "point":
-            return ("Force at vertex", "1 vertex", f"({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']}")
+            return ("Force at point", sm.where_text(l), f"({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']}")
         return "Gravity", "whole part", f"{l['g']:g} m/s2 along {tuple(l['dir'])}"
 
     def cond_ref(self, r):
@@ -773,12 +787,13 @@ class SolidWindow(SolidBase):
         D = UD()
         k = l["kind"]
         if k == "force":
-            return f"force ({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']} on {len(l['faces'])} face(s)"
+            return f"force ({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']} on {sm.where_text(l)}"
         if k == "pressure":
-            return f"pressure {s_out(l['p']):.5g} {D['S']} on {len(l['faces'])} face(s)"
+            return f"pressure {s_out(l['p']):.5g} {D['S']} on {sm.where_text(l)}"
         if k == "point":
-            return (f"point force ({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']} at "
-                    f"({', '.join(format(l_out(x), '.4g') for x in l['vertex']['point'])}) {D['L']}")
+            pts = l.get("points") or ([l["vertex"]] if l.get("vertex") else [])
+            at = "; ".join("(" + ", ".join(format(l_out(x), ".4g") for x in v["point"]) + ")" for v in pts)
+            return f"point force ({', '.join(format(f_out(x), '.5g') for x in l['f'])}) {D['F']} at {at} {D['L']}"
         return f"gravity {l['g']:g} m/s2 along {tuple(l['dir'])}"
 
     def remove_item(self, key, lst):
@@ -810,11 +825,17 @@ class SolidWindow(SolidBase):
         self.after_edit()
         return True
 
-    def add_support(self, mode=None, fids=None, values=None):
-        """Adds a support on the selected faces.  A Displacement takes `values` ({"ux", "uy", "uz"} in mm, None = free, 0 = held) or asks for them."""
+    def add_support(self, mode=None, fids=None, values=None, eids=None, vids=None):
+        """Adds a support on the selected faces, edges and points.  A Displacement takes `values` ({"ux", "uy", "uz"} in mm, None = free, 0 = held) or asks for them.
+        On an edge or a point only Fixed and Displacement can be used: every node of the mesh along the edge, or at the point, is held."""
         fids = self.sel_faces if fids is None else fids
-        if self.geom is None or not fids:
-            self.say("Select the face(s) of the support first.")
+        eids = self.sel_edges if eids is None else eids
+        vids = self.sel_points if vids is None else vids
+        if self.geom is None or not (fids or eids or vids):
+            self.say("Select the face(s), edge(s) or point(s) of the support first." + (" (A whole part is for its material and element size, not a support.)" if self.sel_body is not None else ""))
+            return False
+        if (eids or vids) and (mode or "fixed") not in ("fixed", "disp"):
+            self.say(f"{self.SUPPORT_TYPES.get(mode, mode)} needs a face: it works along the normal of a face (or a hole). On an edge or a point use Fixed or Displacement.")
             return False
         if any(self.geom["faces"][f].get("interface") for f in fids):
             self.say("A face between two parts is inside the assembly: put the support on an outside face.")
@@ -837,17 +858,31 @@ class SolidWindow(SolidBase):
                 return False
             extra = {k: (None if values.get(k) is None else float(values[k])) for k in sim_disp.KEYS[3]}
         n = sum(1 for s in self.setup["supports"] if s["mode"] == mode) + 1
-        self.setup["supports"].append({"mode": mode, "faces": [sg.face_sig(self.geom, f) for f in fids], "name": f"{'Displacement' if mode == 'disp' else mode.capitalize()} support {n}", **extra})
+        item = {"mode": mode, "faces": [sg.face_sig(self.geom, f) for f in fids], "name": f"{'Displacement' if mode == 'disp' else mode.capitalize()} support {n}", **extra}
+        if eids:
+            item["edges"] = [sg.edge_sig(self.geom, e) for e in eids]
+        if vids:
+            item["points"] = [sg.vert_sig(self.geom, v) for v in vids]
+        self.setup["supports"].append(item)
         self.after_edit()
         return True
 
-    def add_load(self, kind, values=None, fids=None, vertex=None):
-        """Adds a load.  Without `values` a small dialog asks for them."""
+    def add_load(self, kind, values=None, fids=None, vertex=None, eids=None, vids=None):
+        """Adds a load.  Without `values` a small dialog asks for them.  A force acts on faces (spread by area) or on edges (spread by length), not both; a force at a point
+        takes the picked points (shared equally) or `vertex`."""
         if self.geom is None:
             return False
         fids = self.sel_faces if fids is None else fids
-        if kind in ("force", "pressure") and not fids:
-            self.say("Select the face(s) the load acts on first.")
+        eids = self.sel_edges if eids is None else eids
+        vids = self.sel_points if vids is None else vids
+        if kind == "pressure" and not fids:
+            self.say("Select the face(s) the pressure acts on first." + (" A pressure acts on faces, not on edges." if eids else ""))
+            return False
+        if kind == "force" and not (fids or eids):
+            self.say("Select the face(s) or edge(s) the force acts on first.")
+            return False
+        if kind == "force" and fids and eids:
+            self.say("A force acts on faces or on edges, not both: select one kind, add the force, then the other.")
             return False
         if kind in ("force", "pressure") and any(self.geom["faces"][f].get("interface") for f in fids):
             self.say("A face between two parts is inside the assembly: put the load on an outside face.")
@@ -862,10 +897,17 @@ class SolidWindow(SolidBase):
         item["name"] = f"{sm.KINDS[kind]} {n}"
         if kind in ("force", "pressure"):
             item["faces"] = [sg.face_sig(self.geom, f) for f in fids]
+            if eids and kind == "force":
+                item["edges"] = [sg.edge_sig(self.geom, e) for e in eids]
         elif kind == "point":
-            vid = vertex if vertex is not None else (self.sel_vertex if self.sel_vertex is not None else item.pop("vertex_index", 0))
+            pick = [vertex] if vertex is not None else list(vids)
+            if not pick:
+                pick = [self.sel_vertex if self.sel_vertex is not None else item.pop("vertex_index", 0)]
             item.pop("vertex_index", None)
-            item["vertex"] = sg.vert_sig(self.geom, vid)
+            if len(pick) == 1:
+                item["vertex"] = sg.vert_sig(self.geom, pick[0])
+            else:
+                item["points"] = [sg.vert_sig(self.geom, v) for v in pick]
         self.setup["loads"].append(item)
         self.after_edit()
         return True
@@ -897,7 +939,7 @@ class SolidWindow(SolidBase):
             fv = (cur or {}).get("f", [0.0, 0.0, 0.0])
             for i, a in enumerate("xyz"):
                 add("f" + a, f"F{a} ({UD()['F']})", f_out(fv[i]))
-        if kind == "point":
+        if kind == "point" and not (cur is None and self.sel_points) and not (cur or {}).get("points"):
             vcombo = QComboBox()
             for i, p in enumerate(self.geom["verts"]):
                 vcombo.addItem(f"Vertex {i + 1}: ({l_out(p[0]):.4g}, {l_out(p[1]):.4g}, {l_out(p[2]):.4g}) {UD()['L']}")

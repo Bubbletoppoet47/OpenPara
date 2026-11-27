@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 app = QApplication([])
 QMessageBox.information = staticmethod(lambda *a, **k: None)
 QMessageBox.warning = staticmethod(lambda *a, **k: None)
-import pm_model as pm, sk_tools as sk, gpd_app, ext, assembly, settings
+import pm_model as pm, sk_tools as sk, gpd_app, ext, assembly, settings, view3d
 addons.startup(); addons.register_extensions(ext); addons.activate()
 import lab_tab, lab_highlight
 
@@ -110,7 +110,7 @@ w.mate_sel[:] = [pick(base["id"], fb[2])]; w.draw_highlights(render=False)
 
 # ---- 4. the part colour stays under the tints: selecting a part, a colour change, a rebuild
 w.sel_comp = base["id"]; w.set_selected_color()
-assert colours(base["id"], fb[0]) == {tuple(w.rgb255(assembly.SEL_COL))} and only(base["id"], fb[2], HI), "selected part: blue with the orange face still on it"
+assert colours(base["id"], fb[0]) == {tuple(w.rgb255(view3d.select_rgb()))} and only(base["id"], fb[2], HI), "selected part: blue with the orange face still on it"
 fake_pick({"cid": base["id"], "kind": "face", "idx": fb[4], "label": "Face"}); w.on_hover(20, 10); assert len(colours(base["id"], fb[4])) == 1
 fake_pick(None); w.on_hover(21, 10)
 assert others_plain(base["id"], fb[2])

@@ -6,11 +6,14 @@ setup = {
   "h": element size (mm, 0 = automatic): of a single part, or of the parts of an assembly that have no size of their own,
   "body_h": {body name: mm}              an ASSEMBLY: the element size of the parts that have one of their own (a blank or missing one gets "h"); the parts are
                                       still meshed as one mesh, so the nodes of the faces they share stay shared (see solid_mesh)
-  "supports": [{"mode": "fixed" | "slide" | "bearing" | "disp", "faces": [face signature]}],      a bearing is for the round face(s) of a hole;
+  "supports": [{"mode": "fixed" | "slide" | "bearing" | "disp", "faces": [face signature], "edges": [edge signature], "points": [vertex signature]}],
+              a bearing is for the round face(s) of a hole; "edges" and "points" are optional (a support on an edge or a corner is "fixed" or "disp": every node of the
+              mesh ALONG the edge, or the node at the corner, is held; a mesh that has no node there is an error, nothing is approximated);
               a "disp" (Displacement) also has "ux", "uy", "uz" (mm): None = free, 0 = held, a number = the faces are moved by exactly that much
   "loads":    [{"kind": "force", "faces": [sig], "f": [Fx, Fy, Fz]}              total force spread over the faces (N)
+              | {"kind": "force", "faces": [], "edges": [edge sig], "f": [...]}   total force spread over the length of the edges
               | {"kind": "pressure", "faces": [sig], "p": MPa}                    positive pushes into the part
-              | {"kind": "point", "vertex": vertex signature, "f": [Fx, Fy, Fz]}
+              | {"kind": "point", "vertex": vertex signature, "f": [Fx, Fy, Fz]}  (several corners: "points": [sig, ...], the force shared equally)
               | {"kind": "gravity", "g": m/s2, "dir": [x, y, z]}],
   "probe": [x, y, z] or None,
   "bond_tol": mm, 0 = automatic        an ASSEMBLY: faces within this distance are bonded (see solid_asm)
@@ -92,6 +95,46 @@ def _fids(geom, sigs, nm):
     return fids
 
 
+def geo_ids(geom, it, nm):
+    """(edge ids, corner ids) of the edges and points of a condition (a support, a load): fem.FemError for one that is gone."""
+    eids, vids = [], []
+    for sig in it.get("edges") or []:
+        e = sg.match_edge(geom, sig)
+        if e is None:
+            raise fem.FemError(f"{nm}: its edge is not in the part any more (the geometry changed too much). Pick it again.")
+        if e not in eids:
+            eids.append(e)
+    sigs = list(it.get("points") or []) + ([it["vertex"]] if it.get("vertex") else [])
+    for sig in sigs:
+        v = sg.match_vertex(geom, sig)
+        if v is None:
+            raise fem.FemError(f"{nm}: its point is not in the part any more. Pick it again.")
+        if v not in vids:
+            vids.append(v)
+    return eids, vids
+
+
+def where_text(it):
+    """'2 faces, 1 edge' for the faces, edges and points a condition acts on (what the lists of conditions say)."""
+    parts = []
+    for n, word in ((len(it.get("faces") or []), "face"), (len(it.get("edges") or []), "edge"),
+                    (len(it.get("points") or []) + (1 if it.get("vertex") else 0), "point")):
+        if n:
+            parts.append(f"{n} {word}{'' if n == 1 else 's'}")
+    return ", ".join(parts) or "nothing"
+
+
+def edge_nodes(geom, q, eid, name):
+    """The mesh nodes along edge `eid` and the share of a line load each carries: (node ids, weights).  fem.FemError when the mesh has no nodes along the edge or does not
+    follow all of it - nothing is approximated."""
+    c = sg.edge_chain(geom, eid, q["nodes"], q.get("n_corner") or len(q["nodes"]), q.get("order", 2))
+    if not len(c["nodes"]):
+        raise fem.FemError(f"{name}: this mesh has no nodes along that edge (edge {eid + 1}), so nothing can be put on it. Use a face, or a mesh type with nodes along the edges.")
+    if c["cover"] < 0.98 or not c["ok"]:
+        raise fem.FemError(f"{name}: the mesh does not follow all of edge {eid + 1} (its nodes cover {c['cover']:.0%} of it). Use a face, or a finer mesh.")
+    return c["nodes"], c["w"]
+
+
 def resolve(geom, setup):
     """-> {"supports": [{mode, fids, name}], "loads": [...], ...}; fem.FemError for a face that is gone."""
     r = {"material": dict(setup["material"]), "h": float(setup.get("h") or 0.0), "supports": [], "loads": [], "probe": setup.get("probe"),
@@ -102,12 +145,17 @@ def resolve(geom, setup):
         r["material"] = dict(r["materials"][0])
     for i, s in enumerate(setup["supports"]):
         nm = name_of("Support", i, s)
-        fids = _fids(geom, s["faces"], nm)
+        fids = _fids(geom, s.get("faces") or [], nm)
+        eids, vids = geo_ids(geom, s, nm)
+        if (eids or vids) and s["mode"] not in ("fixed", "disp"):
+            raise fem.FemError(f"{nm}: {MODES[s['mode']].split(' (')[0]} needs a face. On an edge or a point use Fixed or Displacement.")
+        if not (fids or eids or vids):
+            raise fem.FemError(f"{nm}: it has no face, edge or point.")
         if s["mode"] == "bearing":
             for f in fids:
                 if not geom["faces"][f].get("cyl"):
                     raise fem.FemError(f"{nm}: a bearing needs the round (cylindrical) face of a hole, and that face is a {geom['faces'][f]['kind']}.")
-        it = {"mode": s["mode"], "fids": fids, "name": nm}
+        it = {"mode": s["mode"], "fids": fids, "name": nm, "eids": eids, "vids": vids}
         if s["mode"] == "disp":
             it.update({k: (None if s.get(k) is None else float(s[k])) for k in ("ux", "uy", "uz")})
             if all(it[k] is None for k in ("ux", "uy", "uz")):
@@ -115,15 +163,23 @@ def resolve(geom, setup):
         r["supports"].append(it)
     for i, l in enumerate(setup["loads"]):
         nm = name_of("Load", i, l)
-        it = {k: copy.deepcopy(v) for k, v in l.items() if k not in ("faces", "vertex")}
+        it = {k: copy.deepcopy(v) for k, v in l.items() if k not in ("faces", "vertex", "edges", "points")}
         it["name"] = nm
         if l["kind"] in ("force", "pressure"):
-            it["fids"] = _fids(geom, l["faces"], nm)
+            it["fids"] = _fids(geom, l.get("faces") or [], nm)
+            it["eids"] = geo_ids(geom, l, nm)[0]
+            if l["kind"] == "pressure" and it["eids"]:
+                raise fem.FemError(f"{nm}: a pressure acts on faces, not on an edge.")
+            if it["fids"] and it["eids"]:
+                raise fem.FemError(f"{nm}: a force acts on faces or on edges, not on both. Make one load for the faces and one for the edges.")
+            if not (it["fids"] or it["eids"]):
+                raise fem.FemError(f"{nm}: it has no face or edge.")
         elif l["kind"] == "point":
-            vid = sg.match_vertex(geom, l["vertex"])
-            if vid is None:
+            vids = geo_ids(geom, l, nm)[1]
+            if not vids:
                 raise fem.FemError(f"{nm}: its vertex is not in the part any more. Pick it again.")
-            it["vid"] = vid
+            it["vids"] = vids
+            it["vid"] = vids[0]
         r["loads"].append(it)
     return r
 
@@ -187,8 +243,9 @@ def set_split(setup, geom, fid, cols, rows, kinds=CONDITION_KINDS):
         keep = []
         for it in setup.get(key) or []:
             if "faces" in it:
+                had = bool(it["faces"])
                 it["faces"] = [s for s in it["faces"] if not ("cell" in s and sg.match_face(o, s["parent"]) == pid)]
-                if not it["faces"]:
+                if had and not it["faces"] and not (it.get("edges") or it.get("points")):
                     continue
             keep.append(it)
         setup[key] = keep
@@ -321,10 +378,30 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None, the
             else:
                 cons.append((nd, face_normal(q, geom, fid) if s["mode"] == "slide" else None))
             names.append(s["name"])
+        held = {"disp": (s.get("ux"), s.get("uy"), s.get("uz"))} if s["mode"] == "disp" else None
+        for eid in s.get("eids") or []:                                          # every node of the mesh along the edge
+            cons.append((edge_nodes(geom, q, eid, s["name"])[0], held))
+            names.append(s["name"])
+        for vid in s.get("vids") or []:
+            nd = q["verts"].get(vid)
+            if nd is None:
+                raise fem.FemError(f"{s['name']}: the mesh has no node at that point (point {vid + 1}).")
+            cons.append((np.array([int(nd)]), held))
+            names.append(s["name"])
     force = np.zeros(3 * nn)
     applied = np.zeros(3)
     for l in r["loads"]:
         k = l["kind"]
+        if k == "force" and l.get("eids"):                                       # a force along edges: the total is shared by the length each node carries
+            lens = [float(geom["edges"][e]["length"]) for e in l["eids"]]
+            f = np.asarray(l["f"], float)
+            for e, le in zip(l["eids"], lens):
+                nd, w = edge_nodes(geom, q, e, l["name"])
+                share = f * (le / max(sum(lens), 1e-300))
+                for c in range(3):
+                    np.add.at(force, 3 * nd + c, w * share[c])
+            applied += f
+            continue
         if k in ("force", "pressure"):
             tris = [(fid, ftri[fid], q["faces"][fid]) for fid in l["fids"] if fid in ftri]
             if not tris:
@@ -345,12 +422,14 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None, the
                         np.add.at(force, 3 * t6[:, j] + c, fe[:, c])
                 applied += fe.sum(axis=0) * 3
         elif k == "point":
-            nd = q["verts"].get(l["vid"])
-            if nd is None:
-                raise fem.FemError(f"{l['name']}: the mesh has no node at that vertex.")
-            f = np.asarray(l["f"], float)
-            force[3 * nd:3 * nd + 3] += f
-            applied += f
+            vids = l.get("vids") or [l["vid"]]
+            f = np.asarray(l["f"], float) / len(vids)                          # several corners share the force equally
+            for vid in vids:
+                nd = q["verts"].get(vid)
+                if nd is None:
+                    raise fem.FemError(f"{l['name']}: the mesh has no node at that point (point {vid + 1}).")
+                force[3 * nd:3 * nd + 3] += f
+            applied += np.asarray(l["f"], float)
         elif k == "gravity":
             d = np.asarray(l["dir"], float)
             d = d / max(np.linalg.norm(d), 1e-12)

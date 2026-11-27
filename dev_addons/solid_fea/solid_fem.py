@@ -445,7 +445,7 @@ def quadratic(mesh):
             ms.append(nn + p)
         tri6[fid] = np.stack([tr[:, 0], tr[:, 1], tr[:, 2], ms[0], ms[1], ms[2]], axis=1)
     out = dict(mesh)
-    out.update({"nodes": np.vstack([nodes, mid]), "conn": tetconn, "groups": groups, "tri6": tri6, "ftri": tri6, "order": 2,
+    out.update({"nodes": np.vstack([nodes, mid]), "conn": tetconn, "groups": groups, "tri6": tri6, "ftri": tri6, "order": 2, "n_corner": nn,
                 "viewcells": view_cells(mesh)})
     return out
 
@@ -457,7 +457,7 @@ def linear(mesh):
     tetconn = groups[0]["conn"]
     groups = _by_body(groups, mesh)
     out.update({"conn": tetconn, "groups": groups, "ftri": {fid: np.asarray(tr).copy() for fid, tr in mesh["faces"].items()}, "order": 1,
-                "viewcells": view_cells(mesh)})
+                "n_corner": len(mesh["nodes"]), "viewcells": view_cells(mesh)})
     return out
 
 

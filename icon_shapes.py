@@ -68,6 +68,12 @@ CORE = {
     "m_face": ('<path class="b" d="M3 18l5-12h13l-5 12z"/>', "asm"),
     "m_edge": ('<rect class="b" x="4" y="10" width="10" height="10"/><path class="l" d="M4 10l5-5h10l-5 5M19 5v10l-5 5"/><path class="n" stroke-width="3" d="M4 20h10"/>', "asm"),
     "m_vertex": ('<path class="l" stroke-width="1.800" d="M12 12L4 17M12 12l8 5M12 12V3"/><circle class="d" cx="12" cy="12" r="2.800"/>', "asm"),
+    # ---- the geometry selector of the 3D views (view3d.py): General, Point, Edge, Face, Body
+    "sel_general": ('<path class="b" d="M6 3.500l12 9.500-5.500 1 3.200 5.800-2.600 1.400-3.200-5.800-3.900 3.800z"/>', "feat"),
+    "sel_point": ('<path class="l" d="M4 9h10v10H4zM9 4h10v10H9zM4 9l5-5M14 9l5-5M14 19l5-5"/><circle class="d" cx="14" cy="9" r="2.600"/>', "feat"),
+    "sel_edge": ('<path class="l" d="M4 9h10v10H4zM9 4h10v10H9zM4 9l5-5M14 9l5-5M14 19l5-5"/><path class="n" stroke-width="3" d="M4 9h10"/>', "feat"),
+    "sel_face": ('<path class="b" d="M9 4h10v10H9z" opacity="0.5"/><path class="l" d="M4 9h10v10H4zM9 4h10v10H9zM4 9l5-5M14 9l5-5M14 19l5-5"/><rect class="a" x="4" y="9" width="10" height="10"/>', "feat"),
+    "sel_body": ('<path class="b" d="M4 9l5-5h10v10l-5 5H4z"/><path class="l" d="M4 9h10v10H4zM9 4h10v10H9zM4 9l5-5M14 9l5-5M14 19l5-5"/>', "feat"),
     # ---- loads and supports (sim_icons.py names, with l_ in front)
     "l_pressure_cfd": ('<path class="n" stroke-width="1.800" d="M3.500 3.500L8.500 8.500M4.500 8.500h4v-4M20.500 3.500L15.500 8.500M19.500 8.500h-4v-4M3.500 20.500L8.500 15.500M4.500 15.500h4v4M20.500 20.500L15.500 15.500M19.500 15.500h-4v4"/><path class="b" d="M12 9l3 3-3 3-3-3z"/>', "ana"),
     "l_pressure": ('<path class="n" stroke-width="1.800" d="M6 3v9M12 3v9M18 3v9M3.500 9.500L6 12l2.500-2.500M9.500 9.500L12 12l2.500-2.500M15.500 9.500L18 12l2.500-2.500"/><rect class="b" x="3" y="14.500" width="18" height="4" rx="1"/>', "ana"),

@@ -239,19 +239,37 @@ class Model:
                 label = c.get("name") or f"{KINDS[kind]} {k + 1}"
                 rec = {"index": ci, "kind": kind, "name": label, "fids": list(c.get("fids") or [])}
                 ci += 1
-                tris = self._tris(q, c, label)
+                on_geo = bool(c.get("edges") or c.get("vids"))
+                tris = self._tris(q, c, label) if (c.get("fids") or not on_geo) else None
                 if kind == "temp":
                     T = float(c["T"])
                     if not T > 0:
                         raise ThermalError(f"{label}: the temperature must be above 0 K.")
-                    for nd in np.unique(tris):
-                        nd = int(nd)
+                    held = [] if tris is None else [int(nd) for nd in np.unique(tris)]
+                    for e in c.get("edges") or []:
+                        held += [int(nd) for nd in self._edge_nodes(q, c, e, label)[0]]
+                    for vid in c.get("vids") or []:
+                        held.append(self._vertex_node(q, vid, label))
+                    for nd in sorted(set(held)):
                         prev = self.dirichlet.get(nd)
                         if prev is not None and abs(prev[0] - T) > 1e-9:
                             self.notes.append("Two fixed temperatures with different values meet along an edge: the later one is used there.")
                         self.dirichlet[nd] = (T, rec["index"])
                     rec["T"] = T
-                    rec["area"] = _Faces(tris, self.nodes_m).area()
+                    rec["area"] = _Faces(tris, self.nodes_m).area() if tris is not None else 0.0
+                elif kind == "power" and tris is None:                           # a heat flow on edges or points: shared by length, or equally
+                    P = float(c["P"])
+                    rec.update(P=P, q=0.0, area=0.0, Q_direct=P)
+                    edges = list(c.get("edges") or [])
+                    if edges:
+                        tot = sum(float(e["length"]) for e in edges)
+                        for e in edges:
+                            nd, w = self._edge_nodes(q, c, e, label)
+                            self.F[nd] += P * (float(e["length"]) / max(tot, 1e-300)) * w
+                    else:
+                        vids = list(c.get("vids") or [])
+                        for vid in vids:
+                            self.F[self._vertex_node(q, vid, label)] += P / len(vids)
                 else:
                     fc = _Faces(tris, self.nodes_m)
                     rec["faces"] = fc
@@ -286,6 +304,24 @@ class Model:
                             self.rad.append((fc, eps * SIGMA * fc.A, Ts))
                             self.ground[fc.conn.ravel()] = True
                 self.conds.append(rec)
+
+    def _edge_nodes(self, q, c, e, label):
+        """(the nodes along the edge e (a record with "pts", "sag", "length", "id"), the share of a line load each carries).  Nothing is approximated: a mesh with no nodes
+        along the edge, or that does not follow all of it, is an error."""
+        import solid_geom as sg
+        ch = sg.poly_chain(e["pts"], q["nodes"], q.get("n_corner") or len(q["nodes"]), c.get("diag") or 1.0, e.get("sag", 0.0), q.get("order", 2))
+        if not len(ch["nodes"]):
+            raise ThermalError(f"{label}: this mesh has no nodes along that edge (edge {int(e['id']) + 1}), so nothing can be put on it. Use a face.")
+        if ch["cover"] < 0.98 or not ch["ok"]:
+            raise ThermalError(f"{label}: the mesh does not follow all of edge {int(e['id']) + 1} (its nodes cover {ch['cover']:.0%} of it). Use a face, or a finer mesh.")
+        return ch["nodes"], ch["w"]
+
+    @staticmethod
+    def _vertex_node(q, vid, label):
+        nd = (q.get("verts") or {}).get(int(vid))
+        if nd is None:
+            raise ThermalError(f"{label}: the mesh has no node at that point (point {int(vid) + 1}).")
+        return int(nd)
 
     def _conv_field(self, rec, fc, c, label):
         """Convection whose coefficient and fluid temperature change over the faces (a flowing fluid that a Coupled Physics solve gives): c["h_at"](points (n, 3) in mesh units) and
@@ -648,7 +684,7 @@ def _balance(mdl, T, storage):
         if kind == "temp":
             item["Q"] = per_cond.get(ci, 0.0)                          # into the body
         elif kind in ("flux", "power"):
-            item["Q"] = rec["q"] * rec["area"]
+            item["Q"] = rec["Q_direct"] if "Q_direct" in rec else rec["q"] * rec["area"]
         elif kind == "conv" and rec["h"] > 0 and "h_g" in rec:
             item["Q"] = -float(np.sum(fc.A[:, None] * fc.wg[None] * rec["h_g"] * (fc.interp(T) - rec["Tinf_g"])))
         elif kind == "conv" and rec["h"] > 0:

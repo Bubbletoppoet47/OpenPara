@@ -37,6 +37,7 @@ import unitctl
 import pm_app
 import part_refgeo
 import nav
+import view3d
 import viewpick
 
 try:
@@ -48,8 +49,8 @@ except Exception as _ex:                                   # the window still op
 else:
     VIEW_ERROR = None
 
-PALETTE = [(0.62, 0.70, 0.82), (0.84, 0.72, 0.60), (0.66, 0.80, 0.66), (0.80, 0.66, 0.80), (0.82, 0.80, 0.60), (0.60, 0.80, 0.82)]
-SEL_COL, HI_COL = (0.45, 0.72, 1.0), (1.0, 0.45, 0.0)
+PALETTE = [(0.62, 0.70, 0.82), (0.84, 0.72, 0.60), (0.66, 0.80, 0.66), (0.80, 0.66, 0.80), (0.82, 0.80, 0.60), (0.60, 0.80, 0.82)]     # (no longer used: every component is the neutral part colour)
+SEL_COL, HI_COL = (0.45, 0.72, 1.0), (1.0, 0.45, 0.0)          # the old fixed colours; the windows use view3d.select_rgb() / hover_rgb() (File > Settings > 3D View)
 MATE_NAMES = {"coincident": "Coincident", "parallel": "Parallel", "perpendicular": "Perpendicular", "tangent": "Tangent",
               "concentric": "Concentric", "lock": "Lock", "distance": "Distance", "angle": "Angle", "symmetric": "Symmetric"}
 MATE_BTN_CSS = ("QPushButton { text-align:left; padding:4px 8px; border:1px solid #cfd6e0; border-radius:6px; background:white; } "
@@ -228,7 +229,9 @@ class AssemblyWindow(QMainWindow):
         self.measure_timer.setSingleShot(True)
         self.measure_timer.setInterval(80)
         self.measure_timer.timeout.connect(lambda: self.measure_update())
-        self.pick_filter = {"face": True, "edge": True, "vertex": True}     # what a click in the mate / reference tools may pick
+        self.selector = None              # General / Point / Edge / Face / Body (view3d.SelectorBar, made with the Show bar); decides what a click may pick
+        self.pick_sel = []                # the point / edge / face picked with the selector in the normal mode (drawn like a tool's picks)
+        self.hover_layer, self.shadow = None, None
         self.hover_key, self.hover_actor = None, None
         self.mesh_cache = {}              # (part path, id(solid)) -> (mesh, edge polylines, local bbox centre)
         self.embed_edit = {}              # embedded part key -> the temporary file it is being edited in (Edit Component), see sync_embedded
@@ -338,6 +341,7 @@ class AssemblyWindow(QMainWindow):
             self.ed = ViewGeom(self.plotter)
             self.setup_fps()
             self.setup_pick_renderer()
+            self.shadow = view3d.Shadow(self.plotter)
             self.hook = viewpick.ClickHook(self.plotter, self.on_click, on_move=self.on_hover)
             self.drag_hook = DragHook(self.plotter, self)
             self.nav = nav.NavHook(self.plotter, self)         # installed last: it sees the mouse events first
@@ -404,7 +408,7 @@ class AssemblyWindow(QMainWindow):
         out = []
         for k, c in enumerate(self.asm.components):
             if not c.get("derived"):
-                out.append((c["name"], c, "hidden", PALETTE[k % len(PALETTE)]))
+                out.append((c["name"], c, "hidden", view3d.part_rgb()))
         return out
 
     def display_changed(self):
@@ -782,6 +786,8 @@ class AssemblyWindow(QMainWindow):
         pl.clear()
         pl.add_axes()
         self.hover_key, self.hover_actor = None, None
+        if self.shadow is not None:
+            self.shadow.actor = None
         self.entries, self.hi_actors, self.pull_actors, self.hover_pull = {}, [], [], None
         baked = settings.get("outline_mode") == "baked"
         if getattr(self, "pick_ren", None) is not None:
@@ -793,14 +799,14 @@ class AssemblyWindow(QMainWindow):
             if hit is None:
                 continue
             m, polys, lc = hit
-            col = SEL_COL if c["id"] == self.sel_comp else self.base_color(c, k)
+            col = view3d.select_rgb() if c["id"] == self.sel_comp else self.base_color(c, k)
             opa = self.opacity_of(c)
             if self.pat is not None and (c.get("derived") or {}).get("pat") == self.pat["data"]["id"]:
                 col, opa = PREVIEW_COL, PREVIEW_FADE                # the copies the pattern / mirror being made will add: faded blue until OK
             if baked:
                 mb, n_lines = self.baked_mesh(m, polys, col)
                 a = pl.add_mesh(mb, scalars="rgb", rgb=True, preference="cell", opacity=opa, smooth_shading=False, pickable=False, show_edges=False,
-                                reset_camera=False, line_width=settings.get("line_px"), ambient=0.28, diffuse=0.78, specular=0.30, specular_power=22)
+                                reset_camera=False, line_width=settings.get("line_px"), **view3d.SHADING)
                 try:                    # faces sit a hair behind, lines a hair in front - one mesh, so the lines are hidden exactly where the part is
                     mp = a.mapper
                     pp = settings.get("pull_px")
@@ -820,7 +826,7 @@ class AssemblyWindow(QMainWindow):
                     a.SetPickable(True)
             else:
                 a = pl.add_mesh(m, color=col, opacity=opa, smooth_shading=False, pickable=True, show_edges=False, reset_camera=False,
-                                ambient=0.28, diffuse=0.78, specular=0.30, specular_power=22)
+                                **view3d.SHADING)
                 ml = pm_app.MainWindow.merged_lines(polys)
                 ea = pl.add_mesh(ml, color=(0.13, 0.15, 0.20), line_width=settings.get("line_px"), pickable=False, reset_camera=False) if ml is not None else None
                 if ea is not None:          # pull the outlines a little more towards the viewer, so a joint between two parts always shows its line
@@ -834,6 +840,7 @@ class AssemblyWindow(QMainWindow):
         self.hook_edge_pull(pl)
         asm_refs.draw_world(self, pl, pv)             # the origin, its planes, reference planes and axes
         self.update_poses(render=False)
+        self.update_shadow()
         self.draw_highlights(render=False)
         if self.cam is not None:
             pl.camera_position = self.cam
@@ -845,6 +852,20 @@ class AssemblyWindow(QMainWindow):
             pl.reset_camera()
         try:
             pl.render()
+        except Exception:
+            pass
+
+    def update_shadow(self):
+        """The soft floor shadow under the components (drawn again when the scene is rebuilt, not while a component is being dragged)."""
+        if self.shadow is None:
+            return
+        try:
+            ms = []
+            for cid, e in self.entries.items():
+                c = self.asm.comp(cid)
+                if c is not None and e.get("mesh") is not None:
+                    ms.append((e["mesh"], self.asm.T4(c)))
+            self.shadow.update(ms)
         except Exception:
             pass
 
@@ -974,7 +995,7 @@ class AssemblyWindow(QMainWindow):
     def base_color(self, c, k):
         base = self.part_base(c)
         pd = base.display if base is not None else {}
-        return c.get("color") or pd.get("color") or PALETTE[k % len(PALETTE)]
+        return c.get("color") or pd.get("color") or view3d.part_rgb()
 
     def opacity_of(self, c):
         base = self.part_base(c)
@@ -985,7 +1006,7 @@ class AssemblyWindow(QMainWindow):
             c = self.asm.comp(cid)
             if self.pat is not None and (c.get("derived") or {}).get("pat") == self.pat["data"]["id"]:
                 continue                                              # the faded blue preview copies keep their colour
-            col = SEL_COL if cid == self.sel_comp else self.base_color(c, e["k"])
+            col = view3d.select_rgb() if cid == self.sel_comp else self.base_color(c, e["k"])
             self.paint(e, col)
         if self.plotter is not None:
             self.plotter.render()
@@ -998,7 +1019,7 @@ class AssemblyWindow(QMainWindow):
             except Exception:
                 pass
         self.hi_actors = []
-        for it in self.mate_sel + (self.pat.get("hi", []) if self.pat else []) + (self.rg["refs"] if self.rg else []) + (self.measure_items if self.mode == "measure" else []):
+        for it in self.mate_sel + (self.pat.get("hi", []) if self.pat else []) + (self.rg["refs"] if self.rg else []) + (self.measure_items if self.mode == "measure" else []) + self.pick_sel:
             if it["kind"] in ("plane", "axis", "origin") or it["cid"] == "@":
                 a = asm_refs.highlight_extra(self, pl, pv, it)
                 if a is not None:
@@ -1011,13 +1032,13 @@ class AssemblyWindow(QMainWindow):
             if it["kind"] == "face":
                 cs = np.where(np.array(e["mesh"].cell_data["face"]) == it["idx"])[0]
                 if len(cs):
-                    a = part_refgeo.add_face_highlight(pl, e["mesh"].extract_cells(cs), HI_COL)      # lifted + depth-biased: no speckle
+                    a = part_refgeo.add_face_highlight(pl, e["mesh"].extract_cells(cs), view3d.select_rgb())      # lifted + depth-biased: no speckle
             elif it["kind"] == "edge" and it["idx"] < len(e["polys"]):
                 ml = pm_app.MainWindow.merged_lines([e["polys"][it["idx"]]])
-                a = pl.add_mesh(ml, color=HI_COL, line_width=5, pickable=False, reset_camera=False)
+                a = pl.add_mesh(ml, color=view3d.hover_rgb(), line_width=5, pickable=False, reset_camera=False)
                 self.pull_actors.append((a, it["cid"]))
             elif it["kind"] == "vertex":
-                a = pl.add_mesh(pv.PolyData(np.array([it["pt"]])), color=HI_COL, point_size=12, render_points_as_spheres=True,
+                a = pl.add_mesh(pv.PolyData(np.array([it["pt"]])), color=view3d.hover_rgb(), point_size=12, render_points_as_spheres=True,
                                 pickable=False, reset_camera=False)
                 self.pull_actors.append((a, it["cid"]))
             if a is not None:
@@ -1923,7 +1944,7 @@ class AssemblyWindow(QMainWindow):
         M = self.asm.T4(c)
         wpp = viewpick.world_per_pixel(self.plotter)
         flt = self.pick_filter
-        px = settings.get("pick3d_px") * (1.0 if flt["face"] else 3.0)    # nothing else to hit when faces are off: be generous
+        px = view3d.pick_px(self.selector.kind if self.selector is not None else "general")     # General: the usual reach; Point / Edge: their own, wider one
         near = max(1e-6, 30.0 * px * wpp)           # only a loose test in space (an edge behind the surface is not meant); the real one is in pixels
         cur = np.array([float(x), float(y)])
         # a vertex close to the cursor (measured on the screen, in pixels)
@@ -1968,7 +1989,9 @@ class AssemblyWindow(QMainWindow):
                 "label": {"PLANE": "Face", "CYLINDER": "Cylindrical face", "SPHERE": "Spherical face"}.get(face.geom_type.name, "Face")}
 
     # ------------------------------------------------------------------ hover highlight and settings
-    HOVER_COL = (1.0, 0.85, 0.25)
+    @property
+    def HOVER_COL(self):
+        return view3d.hover_rgb()                       # File > Settings > 3D View
 
     def settings_changed(self, keys):
         """File > Settings was changed: redraw what depends on it."""
@@ -1980,6 +2003,13 @@ class AssemblyWindow(QMainWindow):
                 self.rebuild_scene()
             except Exception:
                 pass
+        if keys & {"part_color", "select_color", "hover_color"}:
+            try:
+                self.rebuild_scene()
+            except Exception:
+                pass
+        if "shadow" in keys and self.shadow is not None:
+            self.shadow.set_enabled(bool(settings.get("shadow")))
         if "hover" in keys and not settings.get("hover"):
             self.clear_hover()
 
@@ -1993,13 +2023,26 @@ class AssemblyWindow(QMainWindow):
             except Exception:
                 pass
 
+    def hover_item(self, x, y):
+        """What the cursor is over, for the outline: in a tool what a click would pick; in the normal mode only with Body, Face, Edge or Point chosen
+        (with General a click picks a whole component and nothing is outlined)."""
+        kind = self.selector.kind if self.selector is not None else "general"
+        if self.mode in self.TOOL_MODES:
+            return self.pick_item(x, y)
+        if self.mode is not None or kind == "general":
+            return None
+        if kind == "body":
+            h = self.surface_hit(x, y)
+            return None if h is None else {"cid": h[1], "kind": "body", "idx": 0}
+        return self.pick_item(x, y)
+
     def on_hover(self, x, y):
-        """The cursor moved over the view while picking: light up the face / edge / point a click would take."""
-        if self.mode not in ("mate", "refgeo", "pattern", "mirror_plane", "axis_pick", "measure") or not settings.get("hover") or self.plotter is None:
+        """The cursor moved over the view while picking: outline the face / edge / point (or tint the body) a click would take."""
+        if not settings.get("hover") or self.plotter is None:
             if self.hover_actor is not None:
                 self.clear_hover()
             return
-        it = self.pick_item(x, y)
+        it = self.hover_item(x, y)
         key = None if it is None else (it["cid"], it["kind"], it["idx"])
         if key == self.hover_key:
             return
@@ -2014,8 +2057,13 @@ class AssemblyWindow(QMainWindow):
             if it["kind"] == "face":
                 cs = np.where(np.array(e["mesh"].cell_data["face"]) == it["idx"])[0]
                 if len(cs):
-                    a = part_refgeo.add_face_highlight(pl, e["mesh"].extract_cells(cs), self.HOVER_COL)
-                    a.prop.opacity = 0.8
+                    lines = view3d.face_outline(view3d._lift(e["mesh"].extract_cells(cs), 4e-4))
+                    if lines is not None:
+                        a = pl.add_mesh(lines, color=self.HOVER_COL, line_width=view3d.HoverLayer.LINE_PX, lighting=False, pickable=False, reset_camera=False)
+                        view3d.HoverLayer._bias(a)
+            elif it["kind"] == "body":
+                a = pl.add_mesh(e["mesh"], color=self.HOVER_COL, opacity=0.35, lighting=False, pickable=False, reset_camera=False)
+                view3d.HoverLayer._bias(a)
             elif it["kind"] == "edge" and it["idx"] < len(e["polys"]):
                 a = pl.add_mesh(pm_app.MainWindow.merged_lines([e["polys"][it["idx"]]]), color=self.HOVER_COL, line_width=4, pickable=False, reset_camera=False)
             elif it["kind"] == "vertex":
@@ -2024,7 +2072,7 @@ class AssemblyWindow(QMainWindow):
             if a is not None:
                 try:
                     a.user_matrix = e["actor"].user_matrix       # it sits where its component sits
-                    if it["kind"] != "face":                    # lines and points get the same depth bias as the outlines
+                    if it["kind"] in ("edge", "vertex"):         # lines and points get the same depth bias as the outlines
                         self.hover_pull = (a, np.array(e["actor"].user_matrix))
                         a.user_matrix = getattr(self, "_pull_S", np.eye(4)) @ self.hover_pull[1]
                 except Exception:
@@ -2069,10 +2117,24 @@ class AssemblyWindow(QMainWindow):
                 if it is not None:
                     self.pat_set_entity(it)
                 return
+            kind = self.selector.kind if self.selector is not None else "general"
+            self.pick_sel = []
+            if kind in ("point", "edge", "face"):                       # the selector asks for geometry: that is what is picked, not the component
+                it = self.pick_item(x, y)
+                self.sel_comp = None
+                if it is not None:
+                    self.pick_sel = [it]
+                    c = self.asm.comp(it["cid"])
+                    self.say(f"{it['label']} of {c['name'] if c else '?'}")
+                self.set_selected_color()
+                self.refresh_tree()
+                self.draw_highlights()
+                return
             h = self.surface_hit(x, y)
             self.sel_comp = h[1] if h is not None else None
             self.set_selected_color()
             self.refresh_tree()
+            self.draw_highlights()
             self.show_comp_props()                      # a click only selects: Properties is opened by hand
         except Exception:
             self.say("Click failed: " + traceback.format_exc(limit=2))
@@ -2102,6 +2164,10 @@ class AssemblyWindow(QMainWindow):
         if self.mode in ("pattern", "mirror_plane", "axis_pick") and mode not in ("pattern", "mirror_plane", "axis_pick") and self.pat is not None:
             self.pattern_cancel(quiet=True)
         self.mode = mode
+        if mode in self.TOOL_MODES:                         # a tool picks geometry: Body means nothing to it, so the selector goes back to General
+            self.pick_sel = []
+            if self.selector is not None and self.selector.kind == "body":
+                self.selector.set_kind("general", quiet=True)
         if not quiet:
             self.say({"move": "Move Component: drag a component (Esc to stop).", "rotate": "Rotate Component: drag a component (Esc to stop).",
                       None: "Select a component by clicking it."}.get(mode, ""))
@@ -2425,33 +2491,23 @@ class AssemblyWindow(QMainWindow):
         if "tk" in m:
             m["tk"] = "int" if m["tk"] == "ext" else "ext"
 
-    def pick_filter_bar(self):
-        """Faces / Edges / Points toggle buttons: what a click may pick (a thin cut face is easiest with Edges and Points off)."""
-        w = QWidget()
-        row = QHBoxLayout(w)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(4)
-        for key, text, tip in (("face", "Faces", "Faces can be picked"), ("edge", "Edges", "Edges can be picked"), ("vertex", "Points", "Points (corners) can be picked")):
-            b = QPushButton("  " + text)
-            b.setIcon(mate_icons.icon(key))
-            b.setIconSize(QSize(20, 20))
-            b.setCheckable(True)
-            b.setMinimumHeight(28)
-            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            b.setStyleSheet(MATE_BTN_CSS)
-            b.setToolTip(tip + ".  With only Faces on a click never lands on a neighbouring edge or corner; with Faces off, edges and points get a wider reach.")
-            b.setChecked(self.pick_filter[key])
-            b.toggled.connect(lambda on, k=key: self.set_pick_filter(k, on))
-            row.addWidget(b)
-        return w
+    @property
+    def pick_filter(self):
+        """What a click in the mate / reference / measure tools may pick: {"face", "edge", "vertex"} -> bool, from the selector (view3d.filter_of)."""
+        return view3d.filter_of(self.selector.kind if self.selector is not None else "general")
 
-    def set_pick_filter(self, key, on):
-        self.pick_filter[key] = bool(on)
-        if not any(self.pick_filter.values()):          # at least one kind must stay on
-            self.pick_filter[key] = True
-            if self.mode == "mate":
-                self.show_mate_panel()
+    TOOL_MODES = ("mate", "refgeo", "pattern", "mirror_plane", "axis_pick", "measure")
+
+    def selector_changed(self, kind):
+        """The selector (beside Show) was changed: the old hover and pick go, and a tool that was waiting for a pick starts again with the new kind."""
         self.clear_hover()
+        if self.pick_sel:
+            self.pick_sel = []
+            self.draw_highlights()
+        self.say({"general": "Selecting: whatever is under the cursor.", "point": "Selecting points (corners).", "edge": "Selecting edges.",
+                  "face": "Selecting faces.", "body": "Selecting whole components."}[kind])
+        if self.mode == "mate":
+            self.show_mate_panel()
 
     def show_mate_panel(self):
         self.clear_props()
@@ -2473,7 +2529,6 @@ class AssemblyWindow(QMainWindow):
         w = QWidget()
         w.setLayout(row)
         self.props_lay.addWidget(w)
-        self.props_lay.addWidget(self.pick_filter_bar())
         grp = QButtonGroup(self.props)
         grp.setExclusive(True)
         for ty in am.TYPES:

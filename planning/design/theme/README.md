@@ -11,7 +11,7 @@
 | The kit: ink, body, paper, edge, grey | `icon_kit.py`, `LOOK` | The navy of the logo, a cool blue-grey body, white, and two greys. Every icon is drawn with them. |
 | The kit: eight accent hues | `icon_kit.py`, `HUES` | `feat` blue, `cut` red, `ref` amber, `asm` teal, `ana` purple, `cfg` slate, `ai` magenta, `dat` green. An icon uses one, mixed toward the grey (20 %, blue 10 %). |
 | The kit: the tones it draws | worked out from the two above | Four shades of each hue (accent shape, line, dot, tube). The checker works them out the way the kit does, and the test checks that it agrees. |
-| The Workbench, the ribbon | [`palette.json`](palette.json) | The few colours the approved designs add: block edge, wire navy, the four toolbox groups, the pressed ribbon button. Each has what it is for and where it is used. |
+| The Workbench, the ribbon, the 3D view | [`palette.json`](palette.json) | The few colours the approved designs add: block edge, wire navy, the four toolbox groups, the pressed ribbon button, and the three defaults of the 3D view (part grey, hover orange, select blue). Each has what it is for and where it is used. |
 
 `icon_kit.py` and `palette.json` are the palette. This page and the picture are a view of them, and the picture is drawn from them (`python tools/check_palette.py --swatches planning/design/theme/swatches.png`), so a change to either means drawing the picture again.
 

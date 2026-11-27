@@ -36,6 +36,7 @@ import part_refgeo
 import part_preview
 import part_repeat
 import part_section
+import view3d
 import viewpick
 
 try:
@@ -47,9 +48,8 @@ except Exception as _ex:                                   # the window still op
 else:
     VIEW_ERROR = None
 
-PART = (0.62, 0.70, 0.82)
 SKETCH_COL, SKETCH_SEL = (0.95, 0.55, 0.05), (0.1, 0.45, 1.0)
-FACE_SEL, EDGE_SEL = (0.3, 0.65, 1.0), (1.0, 0.45, 0.0)
+# the part colour, the fill of a selected face and the orange of an outline are settings (File > Settings > 3D View): view3d.part_rgb() and so on
 
 
 add_face_highlight = part_refgeo.add_face_highlight
@@ -295,6 +295,9 @@ class MainWindow(QMainWindow):
         sm.addAction(wl)
         sb.setMenu(sm)
         bl.addWidget(sb)
+        self.selector = view3d.SelectorBar.make(self, self.selector_changed)       # General / Point / Edge / Face / Body, right beside Show
+        bl.addSpacing(8)
+        bl.addWidget(self.selector.widget)
         bl.addStretch(1)
         bar.setFixedHeight(28)
         body = QHBoxLayout()
@@ -302,6 +305,8 @@ class MainWindow(QMainWindow):
         body.addWidget(self.left, 0)
         self.plotter = None
         self.ed = None
+        self.hover_layer, self.shadow = None, None
+        self.sel_points, self.sel_body, self.sel_sig = [], False, None
         if pv is None:
             body.addWidget(QLabel("The 3D view needs:  pip install pyvista pyvistaqt\n\n" + (VIEW_ERROR or "")), 1)
         else:
@@ -334,7 +339,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self.plotter.add_axes()
-            self.hook = viewpick.ClickHook(self.plotter, self.on_click)
+            self.hover_layer = view3d.HoverLayer(self.plotter)
+            self.shadow = view3d.Shadow(self.plotter)
+            self.hook = viewpick.ClickHook(self.plotter, self.on_click, on_move=self.on_hover)
             self.ed = sketch_edit.SketchEditor(self)
             self.sk_hook = sketch_edit.SketchHook(self.plotter, self.ed)
             self.sync_sketch_buttons()
@@ -538,6 +545,11 @@ class MainWindow(QMainWindow):
             self.act["sketch"].setVisible(not inside)
         if self.act.get("exit") is not None:
             self.act["exit"].setVisible(inside)
+        sel = getattr(self, "selector", None)
+        if sel is not None:
+            sel.set_enabled(not inside)                              # a sketch picks with its own editor
+            if inside and self.hover_layer is not None:
+                self.hover_layer.clear()
 
     stale = False
 
@@ -1688,7 +1700,7 @@ class MainWindow(QMainWindow):
         self.update_all(keep_props=True)
 
     def display_items(self):
-        return [(self.title().rsplit(".", 1)[0], self.doc.display, None, PART)]
+        return [(self.title().rsplit(".", 1)[0], self.doc.display, None, view3d.part_rgb())]
 
     def display_changed(self):
         self.draw()
@@ -1712,7 +1724,7 @@ class MainWindow(QMainWindow):
                 vtk.vtkMapper.SetResolveCoincidentTopologyLineOffsetParameters(-settings.get("pull_px"), -settings.get("pull_px"))
             except Exception:
                 pass
-        if keys & {"edge_gap", "surf_gap", "line_px", "pull_px"} and self.plotter is not None:
+        if keys & {"edge_gap", "surf_gap", "line_px", "pull_px", "part_color", "hover_color", "select_color", "shadow"} and self.plotter is not None:
             try:
                 self.draw()
             except Exception:
@@ -2058,8 +2070,14 @@ class MainWindow(QMainWindow):
             self.cam = None
         pl.clear()
         pl.add_axes()
+        if self.hover_layer is not None:
+            self.hover_layer.actor, self.hover_layer.key = None, None
+        if self.shadow is not None:
+            self.shadow.actor = None
         d = self.doc
         solid = self.shown_solid()
+        if self.sel_sig is not solid:                              # a selected point or body belongs to the solid it was picked on
+            self.sel_points, self.sel_body, self.sel_sig = [], False, None
         pick = self.pick_solid()
         self.actor_part, self.view_cells, self.edge_polys = None, None, []
         if solid is not None:
@@ -2073,19 +2091,28 @@ class MainWindow(QMainWindow):
                 m = pv.PolyData(np.vstack(verts), np.concatenate(cells))
                 m.cell_data["face"] = np.array(face_id)
                 self.view_cells = m
-                self.actor_part = pl.add_mesh(m, color=d.display.get("color") or PART, opacity=self.part_opacity(),
+                self.actor_part = pl.add_mesh(m, color=d.display.get("color") or view3d.part_rgb(), opacity=self.part_opacity(),
                                               smooth_shading=False, pickable=True, show_edges=False, reset_camera=False,
-                                              ambient=0.28, diffuse=0.78, specular=0.30, specular_power=22)
+                                              **view3d.SHADING)
                 if self.measuring:
                     for it in self.meas_items:
                         if it["kind"] == "face":
                             cs = np.where(np.array(face_id) == it["idx"])[0]
                             if len(cs):
-                                add_face_highlight(pl, m.extract_cells(cs), FACE_SEL)
+                                add_face_highlight(pl, m.extract_cells(cs), view3d.select_rgb())
                 if self.sel_face is not None and solid is d.solid:
                     cs = np.where(np.array(face_id) == self.sel_face["index"])[0]
                     if len(cs):
-                        add_face_highlight(pl, m.extract_cells(cs), FACE_SEL)
+                        add_face_highlight(pl, m.extract_cells(cs), view3d.select_rgb())
+                if self.sel_body:
+                    add_face_highlight(pl, m, view3d.select_rgb())
+                if self.sel_points:
+                    pl.add_mesh(pv.PolyData(np.array([it["pt"] for it in self.sel_points], float)), color=view3d.hover_rgb(), point_size=12,
+                                render_points_as_spheres=True, lighting=False, pickable=False, reset_camera=False)
+                if self.shadow is not None:
+                    self.shadow.update([(m, None)])
+            elif self.shadow is not None:
+                self.shadow.clear()
         if pick is not None:
             self.edge_polys = d.edge_lines(pick)
             if self.vis["edges"]:
@@ -2103,18 +2130,18 @@ class MainWindow(QMainWindow):
                     pass
             ml = self.merged_lines(polys)
             if ml is not None:
-                pl.add_mesh(ml, color=EDGE_SEL, line_width=5, pickable=False, reset_camera=False)
+                pl.add_mesh(ml, color=view3d.hover_rgb(), line_width=5, pickable=False, reset_camera=False)
         if self.measuring:
             if self.meas_sig is not solid:
                 self.meas_sig, self.meas_items, self.meas_segs = solid, [], []
             mp = [self.edge_polys[it["idx"]] for it in self.meas_items if it["kind"] == "edge" and it["idx"] < len(self.edge_polys)]
             ml = self.merged_lines(mp)
             if ml is not None:
-                pl.add_mesh(ml, color=EDGE_SEL, line_width=5, pickable=False, reset_camera=False)
+                pl.add_mesh(ml, color=view3d.hover_rgb(), line_width=5, pickable=False, reset_camera=False)
             vp = [tuple(it["shape"].center()) for it in self.meas_items if it["kind"] == "vertex"]
             vp += [p for sg in self.meas_segs for p in (tuple(sg[0]), tuple(sg[1]))]
             if vp:
-                pl.add_mesh(pv.PolyData(np.array(vp)), color=EDGE_SEL, point_size=11, render_points_as_spheres=True, pickable=False, reset_camera=False)
+                pl.add_mesh(pv.PolyData(np.array(vp)), color=view3d.hover_rgb(), point_size=11, render_points_as_spheres=True, pickable=False, reset_camera=False)
             ml = self.merged_lines([np.array(sg) for sg in self.meas_segs])
             if ml is not None:
                 pl.add_mesh(ml, color=(0.95, 0.45, 0.05), line_width=3, pickable=False, reset_camera=False)
@@ -2179,6 +2206,7 @@ class MainWindow(QMainWindow):
             self.say("Leave the sketch first.")
             return
         self.measuring = True
+        self.tool_wants_general()
         if "measure" in self.act:
             self.act["measure"].setCheckable(True)
             self.act["measure"].setChecked(True)
@@ -2216,18 +2244,9 @@ class MainWindow(QMainWindow):
         ed = self.ed
         wpp = viewpick.world_per_pixel(self.plotter)
         item = None
-        verts = solid.vertices()
-        if verts:
-            pts = np.array([tuple(v.center()) for v in verts])
-            scr = np.array(ed.to_screen(pts))
-            dd = np.hypot(scr[:, 0] - x, scr[:, 1] - y)
-            for i in np.argsort(dd)[:3]:
-                if dd[i] > 9.0 * self.plotter.devicePixelRatioF():
-                    break
-                hit = viewpick.pick_actor(self.plotter, scr[i][0], scr[i][1], self.actor_part) if self.actor_part is not None else None
-                if hit is None or np.linalg.norm(np.array(hit) - pts[i]) <= max(0.5, 6.0 * wpp):
-                    item = {"kind": "vertex", "idx": int(i), "shape": verts[i]}
-                    break
+        v = self.vertex_at(x, y, 9.0)
+        if v is not None:
+            item = {"kind": "vertex", "idx": v[0], "shape": v[1]}
         if item is None:
             ei = self.pick_edge(x, y)
             ps = self.pick_solid()
@@ -2286,13 +2305,14 @@ class MainWindow(QMainWindow):
             menu.addAction(label).triggered.connect(lambda _c=False, f=fn: f())
         menu.exec(gpos)
 
-    def pick_edge(self, x, y):
-        """Index of the edge (in the shown solid) closest to the pixel and not hidden behind the part, or None."""
+    def pick_edge(self, x, y, reach=None):
+        """Index of the edge (in the shown solid) closest to the pixel and not hidden behind the part, or None.  reach: how many pixels away it may be
+        (8 when not given; the selector gives a wider one)."""
         solid = self.pick_solid()
         if solid is None or not self.edge_polys or self.ed is None:
             return None
         ed = self.ed
-        tol = 8.0 * self.plotter.devicePixelRatioF()
+        tol = (8.0 if reach is None else float(reach)) * self.plotter.devicePixelRatioF()
         cands = []
         for i, pts in enumerate(self.edge_polys):
             try:
@@ -2312,6 +2332,133 @@ class MainWindow(QMainWindow):
                 return i
         return None
 
+    def vertex_at(self, x, y, reach):
+        """(index, vertex) of the corner of the shown solid within `reach` pixels of the cursor and not hidden behind the part, or None."""
+        solid = self.shown_solid()
+        if solid is None or self.ed is None:
+            return None
+        verts = solid.vertices()
+        if not verts:
+            return None
+        wpp = viewpick.world_per_pixel(self.plotter)
+        pts = np.array([tuple(v.center()) for v in verts])
+        scr = np.array(self.ed.to_screen(pts))
+        dd = np.hypot(scr[:, 0] - x, scr[:, 1] - y)
+        for i in np.argsort(dd)[:3]:
+            if dd[i] > reach * self.plotter.devicePixelRatioF():
+                break
+            hit = viewpick.pick_actor(self.plotter, scr[i][0], scr[i][1], self.actor_part) if self.actor_part is not None else None
+            if hit is None or np.linalg.norm(np.array(hit) - pts[i]) <= max(0.5, 6.0 * wpp):
+                return int(i), verts[i]
+        return None
+
+    # ------------------------------------------------------------------ the geometry selector and the hover outline
+    def sel_kind(self):
+        """The kind the selector asks for now: General inside a sketch and while rounding (Fillet / Chamfer take edges and faces)."""
+        if self.selector is None or (self.ed is not None and self.ed.active):
+            return "general"
+        f = self.doc.feature(self.sel) if self.sel else None
+        if f is not None and f["kind"] in ("fillet", "chamfer"):
+            return "general"
+        return self.selector.kind
+
+    def selector_changed(self, kind):
+        if self.hover_layer is not None:
+            self.hover_layer.clear(render=True)
+        self.say({"general": "Selecting: whatever is under the cursor.", "point": "Selecting points (corners).", "edge": "Selecting edges.",
+                  "face": "Selecting faces.", "body": "Selecting the whole body."}[kind])
+
+    def tool_wants_general(self):
+        """A tool that picks several kinds (Measure, Fillet, Chamfer, ...) puts the selector back to General when it starts."""
+        if self.selector is not None and self.selector.kind != "general":
+            self.selector.set_kind("general")
+
+    def what_is_under(self, x, y, kind=None):
+        """What a click at (x, y) would take, by the selector: {"kind": "point" | "edge" | "face" | "body", ...} or None.  Used by the hover outline and
+        by the picks, so what lights up is what is picked."""
+        if self.plotter is None or self.shown_solid() is None or self.ed is None or self.actor_part is None:
+            return None
+        kind = kind or self.sel_kind()
+        if kind in ("general", "point"):
+            v = self.vertex_at(x, y, view3d.pick_px("point") if kind == "point" else view3d.pick_px("general"))
+            if v is not None:
+                return {"kind": "point", "idx": v[0], "shape": v[1], "pt": tuple(v[1].center())}
+            if kind == "point":
+                return None
+        if kind in ("general", "edge"):
+            ei = self.pick_edge(x, y, view3d.pick_px("edge") if kind == "edge" else None)
+            ps = self.pick_solid()
+            if ei is not None and ps is not None:
+                return {"kind": "edge", "idx": int(ei)}
+            if kind == "edge":
+                return None
+        r = viewpick.pick_surface(self.plotter, x, y)
+        if r is None or not viewpick.same_actor(self.actor_part, r[1]):
+            return None
+        if kind == "body":
+            return {"kind": "body"}
+        return {"kind": "face", "idx": int(self.view_cells.cell_data["face"][r[2]])}
+
+    def on_hover(self, x, y):
+        """The cursor moved over the view: outline what a click would pick (a face by its edges, an edge, a point, a whole body)."""
+        hl = self.hover_layer
+        if hl is None:
+            return
+        try:
+            if not settings.get("hover") or (self.ed is not None and self.ed.active):
+                if hl.actor is not None:
+                    hl.clear(render=True)
+                return
+            it = self.what_is_under(x, y)
+            key = None if it is None else (it["kind"], it.get("idx"))
+            if key == hl.key and (hl.actor is not None or key is None):
+                return
+            hl.clear()
+            hl.key = key
+            if it is not None:
+                k = it["kind"]
+                if k == "face":
+                    cs = np.where(np.array(self.view_cells.cell_data["face"]) == it["idx"])[0]
+                    if len(cs):
+                        hl.show_outline(self.view_cells.extract_cells(cs), key=key)
+                elif k == "edge":
+                    hl.show_lines(self.merged_lines([self.edge_polys[it["idx"]]]), key=key)
+                elif k == "point":
+                    hl.show_point(it["pt"], key=key)
+                elif k == "body":
+                    hl.show_fill(self.view_cells, key=key)
+            self.plotter.render()
+        except Exception:
+            pass
+
+    def pick_point_select(self, x, y, shift, it=None):
+        it = it or self.what_is_under(x, y, "point")
+        if it is None:
+            self.sel_points, self.sel_body = ([] if not shift else self.sel_points), False
+            self.draw()
+            return
+        pt = it["pt"]
+        same = [q for q in self.sel_points if q["idx"] == it["idx"]]
+        self.sel_points = [q for q in self.sel_points if q not in same] if same else (self.sel_points + [it] if shift else [it])
+        self.sel_body, self.sel_sig = False, self.shown_solid()
+        self.sel_face, self.sel_plane, self.sel_edges = None, None, []
+        self.refresh_tree()
+        self.show_props()
+        self.draw()
+        u = unitctl.length_unit()
+        self.say("Point selected: (" + ", ".join(f"{unitctl.to_disp(c):.5g}" for c in pt) + f") {u}")
+
+    def pick_body_select(self, x, y):
+        it = self.what_is_under(x, y, "body")
+        self.sel_body = it is not None
+        self.sel_points = []
+        self.sel_sig = self.shown_solid() if self.sel_body else None
+        self.sel_face, self.sel_plane, self.sel_edges = None, None, []
+        self.refresh_tree()
+        self.show_props()
+        self.draw()
+        self.say("Body selected." if self.sel_body else "Nothing under the cursor.")
+
     def pick_model(self, x, y, shift=False):
         """A click on the part: an edge when the cursor is close to one, else the face (or a plane).  Works in a sketch too."""
         pl = self.plotter
@@ -2329,7 +2476,26 @@ class MainWindow(QMainWindow):
             return
         f = self.doc.feature(self.sel) if self.sel else None
         solid = self.shown_solid()
-        ei = self.pick_edge(x, y)
+        kind = self.sel_kind()
+        if kind == "point":
+            self.pick_point_select(x, y, shift)
+            return
+        if kind == "body":
+            self.pick_body_select(x, y)
+            return
+        if kind == "general" and not sketching and (f is None or f["kind"] not in ("fillet", "chamfer")):      # a corner right under the cursor is a point
+            v = self.vertex_at(x, y, view3d.pick_px("general"))
+            if v is not None:
+                self.pick_point_select(x, y, shift, {"kind": "point", "idx": v[0], "shape": v[1], "pt": tuple(v[1].center())})
+                return
+        ei = None if kind == "face" else self.pick_edge(x, y, view3d.pick_px("edge") if kind == "edge" else None)
+        if kind == "edge" and ei is None:                            # Edge picks edges only: a click elsewhere picks nothing
+            if not shift:
+                self.sel_edges, self.sel_face, self.sel_plane = [], None, None
+            self.sel_points, self.sel_body = [], False
+            self.show_props()
+            self.draw()
+            return
         if ei is not None and self.pick_solid() is not None:
             ref = self.doc.edge_ref(self.pick_solid().edges()[ei])
             if f is not None and f["kind"] in ("fillet", "chamfer") and not sketching:
@@ -2346,6 +2512,7 @@ class MainWindow(QMainWindow):
             else:
                 self.sel_edges = [ref]
             self.sel_face, self.sel_plane = None, None
+            self.sel_points, self.sel_body = [], False
             if not sketching:
                 self.sel = None
                 self.refresh_tree()
@@ -2357,6 +2524,7 @@ class MainWindow(QMainWindow):
             return
         r = viewpick.pick_surface(pl, x, y)
         if r is None:
+            self.sel_points, self.sel_body = [], False
             if not shift:
                 self.sel_face = self.sel_plane = None
                 self.sel_edges = []
@@ -2384,6 +2552,7 @@ class MainWindow(QMainWindow):
             self.fc_toggle_face(f, face)                    # a face while rounding: all of its edges
             return
         flat = face.geom_type.name == "PLANE"
+        self.sel_points, self.sel_body = [], False
         self.sel_face = {"ref": self.doc.face_ref(face) if flat else None, "index": idx}
         self.sel_plane, self.sel_edges = None, ([] if not shift else self.sel_edges)
         if sketching:

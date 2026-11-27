@@ -243,7 +243,12 @@ HINTS = {
     "line_px": "Thickness of outlines.",
     "pull_px": "How far outlines move toward you. Lower it if thin faces are covered.",
     "outline_mode": "Baked: lines are part of each part's mesh. Old: separate line objects.",
-    "pick3d_px": "Distance from an edge or corner at which a click picks it.",
+    "pick3d_px": "Distance from an edge or corner at which a click picks it (selector: General).",
+    "pick_point_px": "Distance from a corner at which a click picks it while the selector is on Point.",
+    "pick_edge_px": "Distance from an edge at which a click picks it while the selector is on Edge.",
+    "part_color": "The colour parts are drawn in. A colour set on a part or component wins.",
+    "hover_color": "Outline of what is under the cursor, and the mark of selected edges and points.",
+    "select_color": "The fill of a selected face, or of every face of a selected body.",
     "snap_px": "Distance at which a new sketch point snaps.",
     "pick_px": "Distance at which a click selects a sketch item.",
     "zoom_pct": "How much one notch of the mouse wheel zooms, in every view. Lower is gentler.",
@@ -261,7 +266,7 @@ HINTS = {
     "dim_sel_color": "Colour of a selected dimension.",
     "dim_driven_color": "Colour of a driven dimension (it measures; label in brackets).",
 }
-UNITS = {"autosave_s": "min:sec", "zoom_pct": "%", "line_px": "px", "pull_px": "px", "pick3d_px": "px", "snap_px": "px", "pick_px": "px", "label_px": "px", "dim_line_px": "px",
+UNITS = {"autosave_s": "min:sec", "zoom_pct": "%", "line_px": "px", "pull_px": "px", "pick3d_px": "px", "pick_point_px": "px", "pick_edge_px": "px", "snap_px": "px", "pick_px": "px", "label_px": "px", "dim_line_px": "px",
          "ext_line_px": "px", "ext_gap_pct": "%", "ext_over_pct": "%", "arrow_pct": "%", "text_pt": "pt"}
 LENGTHY = ("edge_gap", "surf_gap")
 
@@ -445,9 +450,19 @@ class SettingsDialog(QDialog):
         self.section("Dimensions", [("dim_line_px", None), ("dim_line_style", None), ("ext_line_px", None), ("ext_line_style", None),
                                     ("ext_gap_pct", None), ("ext_over_pct", None), ("arrow_pct", None), ("arrow_style", None),
                                     ("text_pt", None), ("dim_color", None), ("dim_sel_color", None), ("dim_driven_color", None)], top=self.dimprev)
-        self.hover = QCheckBox("Highlight the face, edge or point under the cursor while picking")
+        self.hover = QCheckBox("Outline the face, edge or point under the cursor")
         self.hover.setChecked(bool(settings.get("hover")))
-        self.section("Picking && Snapping", [("pick3d_px", None), ("snap_px", None), ("pick_px", None), ("label_px", None)], extra=self.hover)
+        self.hover.setToolTip("In the part window whenever a click would pick something; in the assembly while a tool is picking, or with Body, Face, Edge or Point chosen.")
+        self.shadow = QCheckBox("Soft shadow on the floor under the part")
+        self.shadow.setChecked(bool(settings.get("shadow")))
+        self.shadow.setToolTip("A picture drawn when the model changes; it costs almost nothing while you turn the view. Off for a bare view.")
+        look_extra = QWidget()
+        lv = QVBoxLayout(look_extra)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.addWidget(self.hover)
+        lv.addWidget(self.shadow)
+        self.section("3D View", [("part_color", None), ("hover_color", None), ("select_color", None)], extra=look_extra)
+        self.section("Picking && Snapping", [("pick3d_px", None), ("pick_point_px", None), ("pick_edge_px", None), ("snap_px", None), ("pick_px", None), ("label_px", None)])
         self.section("Navigation", [("zoom_pct", None)])
         self.slow = QCheckBox("Record the moments when the window stops answering (slow.log in OpenPara's data folder)")
         self.slow.setChecked(bool(settings.get("slow_log")))
@@ -505,7 +520,7 @@ class SettingsDialog(QDialog):
     def update_previews(self):
         v = self.values()
         self.curve.gap, self.surf.gap, self.line.px, self.pull.pull = v["edge_gap"], v["surf_gap"], v["line_px"], v["pull_px"]
-        self.dimprev.values = {k: x for k, x in v.items() if k not in ("hover",)}
+        self.dimprev.values = {k: x for k, x in v.items() if k not in ("hover", "shadow")}
         for w in (self.curve, self.surf, self.line, self.pull, self.dimprev):
             w.update()
         try:
@@ -524,6 +539,7 @@ class SettingsDialog(QDialog):
     def values(self):
         out = {k: f.value for k, f in self.fields.items()}
         out["hover"] = self.hover.isChecked()
+        out["shadow"] = self.shadow.isChecked()
         out["slow_log"] = self.slow.isChecked()
         out["reopen_tabs"] = self.reopen.isChecked()
         return out
@@ -534,6 +550,7 @@ class SettingsDialog(QDialog):
             f.note.setText("")
             f.set_value(d[k])
         self.hover.setChecked(bool(d["hover"]))
+        self.shadow.setChecked(bool(d["shadow"]))
         self.slow.setChecked(bool(d["slow_log"]))
         self.reopen.setChecked(bool(d["reopen_tabs"]))
 

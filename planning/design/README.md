@@ -15,7 +15,7 @@ This folder keeps the designs we have agreed, as pictures you can open without a
 | FEA Outline and Details (every analysis window) | [`fea-outline/`](fea-outline/README.md) | Outline and Details column built; whether each analysis matches the outline board is unchecked | `6324847` | none |
 | Workbench look: the quiet header | [`workbench-look/`](workbench-look/README.md) | Option 3 of 4, built | `77f5c57` | none |
 | Visualize node (Workbench block, result window, render studio, Export, what moves out of the simulation windows) | [`visualize/`](visualize/README.md) | Drawn 2026-11-26. Waiting for Ian to approve. Not built | none | VIS-1 |
-| 3D view: look, hover and the geometry selector (part, assembly and 3D simulation windows) | [`viewport/`](viewport/README.md) | Asked for and confirmed by Ian, 2026-11-27. No boards (his reference was another program's screenshots, not filed) | in progress | VW-1 to VW-4 |
+| 3D view: look, hover and the geometry selector (part, assembly and 3D simulation windows) | [`viewport/`](viewport/README.md) | Asked for and confirmed by Ian, 2026-11-27. No boards (his reference was another program's screenshots, not filed). Built and pushed to `dev` the same day; Ian has not yet looked at it in a running window | `HASH` | VW-1 to VW-4 (done) |
 | Theme and palette | [`theme/`](theme/README.md) | Written from the code; the plan approved by Ian 2026-11-26; swatch sheet not yet looked at by him | `tools/check_palette.py`, `test_palette.py` | GEN-5 |
 
 **Status words.** *Approved* means Ian said so, with the date. *Built* means it is in the program, with the commit. A design that is built has no separate sign-off recorded unless it says *Approved*.
