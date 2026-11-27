@@ -5,8 +5,8 @@ with smooth colours and a little shading.  A test can look at every one of them.
 
 Nothing is solved here and nothing is written back: the picture shows what the solve gave.  Lengths are in mm, the temperature in degC, the stress in MPa (the solvers' own units).
 
-The animation is the one of the 2D picture (coupled_viz_core: 120 frames at 24 frames per second; the body is bent from nothing to its solved shape over the first half, smooth), and in the second
-half the view turns once round the part (`turn_at`), so that the shape is seen from every side; the last frame is the still picture, seen from the view that was set.
+The animation is the one of the 2D picture (coupled_viz_core: 120 frames at 24 frames per second; the body is bent from nothing to its solved shape over the first half, smooth, and stays
+there for the second half); the camera is the same in every frame, the view that was set, and the last frame is the still picture.
 The displacement is far smaller than the part, so the shape is drawn `exaggeration` times larger than it is; the default is the factor that makes the largest displacement 8 % of the size of the
 part (`auto_exaggeration`), and the picture says which factor it used.  The colours are the solved fields, except the displacement colour, which grows with the bend."""
 import numpy as np
@@ -143,16 +143,6 @@ def frame_positions(data, k, exaggeration=None, n=None):
     n = int(n or data["options"]["frames"])
     b = V.bend_at(k, n)
     return data["X"] + b * ex * data["U"], b
-
-
-def turn_at(k, n=None):
-    """How many degrees the view has turned round the part in frame k (1 .. n): nothing during the first half (the part is bending), then one smooth turn all the way round, which is over at the last
-    frame, so the last frame looks as the middle one does and the still picture is seen from the view that was set."""
-    n = int(n or V.DEFAULTS["frames"])
-    if k >= n:
-        return 0.0
-    t = (float(k) - n / 2.0) / (n / 2.0)
-    return 360.0 * V.ease(t) if t > 0 else 0.0
 
 
 def reach_radius(data, exaggeration=None):

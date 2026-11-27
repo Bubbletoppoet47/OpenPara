@@ -195,8 +195,7 @@ ok([f[0] for f in C.available_fields(d2)] == ["u"], "with no heat result and no 
 ok(C.auto_exaggeration(Xb, u) == 40.0, f"the bend is drawn 40 times larger (8 % of 100 mm over 0.2 mm; {C.auto_exaggeration(Xb, u)})")
 ok(C.auto_exaggeration(Xb, np.zeros_like(u)) == 1.0 and C.auto_exaggeration(Xb, u * 1e-9) == 10000.0, "no displacement: 1; a hair of displacement: capped at 10000")
 ok(abs(C.bend_reach3d(d) - 0.2) < 1e-12 and C.bend_reach3d(d, k=0) == 0.0, f"the bend reaches the displacement of the solve ({C.bend_reach3d(d):.4g} mm) and is nothing before the first frame")
-tv = [C.turn_at(k) for k in range(1, 121)]
-ok(max(tv[:60]) == 0.0 and tv[119] == 0.0 and abs(tv[89] - 180.0) < 1e-9 and all(b >= a for a, b in zip(tv[59:118], tv[60:119])) and tv[118] > 359.0, "the view stays while the part bends, then turns once round without going back, and the last frame is back where it was set")
+ok(not hasattr(C, "turn_at"), "the view never turns by itself: there is no turn of the camera in the animation (CPL-5)")
 ok(abs(C.bend_reach3d(d, exaggeration=7.0) - 0.2) < 1e-12, "whatever the exaggeration is, taking it out again gives the real displacement")
 P120, b120 = C.frame_positions(d, 120)
 P30, b30 = C.frame_positions(d, 30)

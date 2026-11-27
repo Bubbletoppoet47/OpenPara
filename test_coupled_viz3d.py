@@ -118,13 +118,17 @@ ok(pg.field == "u", "and back to the displacement")
 # the animation: the part bends from nothing, then stays
 f1, f30, f60, f90, f120 = (pg.view.render_image(k, 1.0) for k in (1, 30, 60, 90, 120))
 ok(not np.array_equal(ink(f1), ink(f30)) and not np.array_equal(ink(f30), ink(f60)), "frame 1, frame 30 and frame 60 are different pictures (the part is bending)")
-pg.turn_on = False
 g60, g90, g120 = (pg.view.render_image(k, 1.0) for k in (60, 90, 120))
-pg.turn_on = True
-ok(np.array_equal(ink(g60), ink(g90)) and np.array_equal(ink(g90), ink(g120)), "with the turning switched off the picture does not change from the middle on (the part has bent and stays)")
-ok(np.array_equal(ink(f60), ink(f120)) and not np.array_equal(ink(f60), ink(f90)), "with it on, the view is turned half way round at frame 90, and back where it was set at the last frame (the still picture)")
-ok(C3.turn_at(60) == 0.0 and C3.turn_at(120) == 0.0 and abs(C3.turn_at(90) - 180.0) < 1e-9 and 0.0 < C3.turn_at(75) < C3.turn_at(90) < C3.turn_at(105) < 360.0, "the view does not turn while the part bends, turns once round smoothly, and is back at the last frame")
-ok(not (C3.turn_at(90) == 0.0), "check shown to FAIL: 'it does not turn at frame 90' is refused")
+ok(np.array_equal(ink(g60), ink(g90)) and np.array_equal(ink(g90), ink(g120)), "the picture does not change from the middle on: the part has bent and stays, and the camera is the same in every frame (CPL-5)")
+ok(np.array_equal(ink(f60), ink(f120)), "frame 60 and the last frame, the still picture, are the same picture")
+cam0 = (pg.cam.azimuth, pg.cam.elevation, pg.cam.zoom, tuple(pg.cam.pan))
+_ = [pg.view.render_image(k, 1.0) for k in (1, 45, 90, 119, 120)]
+ok((pg.cam.azimuth, pg.cam.elevation, pg.cam.zoom, tuple(pg.cam.pan)) == cam0, "drawing the frames of an animation does not move the camera")
+ok(not hasattr(C3, "turn_at") and not hasattr(pg, "turn_on") and not hasattr(pg, "cb_turn") and not hasattr(pg.view, "camera_at"), "the turning of the view, its switch and its box are gone")
+pg.cam.azimuth += 40.0
+h90 = pg.view.render_image(90, 1.0)
+pg.cam.azimuth -= 40.0
+ok(not np.array_equal(ink(h90), ink(g90)), "check shown to FAIL: a view the person turns is a different picture, so 'same picture' is not true of any camera")
 pg.layers3["bent"] = False
 nb1, nb120 = (pg.view.render_image(k, 1.0) for k in (1, 120))
 pg.layers3["bent"] = True
@@ -199,8 +203,13 @@ out = pg.save_animation(path_fmt=(gif, "gif"))
 ok(out == gif and os.path.getsize(gif) > 3000, f"Save animation writes a file ({out})")
 try:
     from PIL import Image
-    nf = Image.open(gif).n_frames
-    ok(nf == 12, f"with every frame of the animation in it ({nf} frames)")
+    im_ = Image.open(gif)
+    durs = []
+    for i_ in range(im_.n_frames):
+        im_.seek(i_)
+        durs.append(im_.info.get("duration", 0))
+    # the view no longer turns, so the frames from the middle on are the same picture: the GIF writer joins them into one frame that lasts as long as they did
+    ok(abs(sum(durs) - 12 * min(durs)) <= 12 and im_.n_frames >= 2, f"with every frame of the animation in it: {im_.n_frames} different pictures that last {sum(durs)} ms, 12 frames of {min(durs)} ms")
 except ImportError:
     ok(True, "(the frames of the file were not counted: no PIL here)")
 pg.data["options"]["frames"] = 120

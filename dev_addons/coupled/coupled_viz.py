@@ -159,16 +159,6 @@ class VizCanvas(QWidget):
                 p.drawText(QRectF(x + 20, yy - 8, w - x - 22, 16), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), f"{t:.3g}")
 
     # ------------------------------------------------------------------ the 3D part
-    def camera_at(self, k):
-        """The camera of frame k: the view that was set, turned round the part by the animation (the second half of it) unless that is switched off."""
-        pg, cam = self.page, self.page.cam
-        off = V3.turn_at(k, pg.data["options"]["frames"]) if pg.turn_on else 0.0
-        if off == 0.0:
-            return cam
-        c = V3.Camera(cam.azimuth + off, cam.elevation, cam.zoom)
-        c.pan = cam.pan
-        return c
-
     def solid_image(self, d, w, h, k, scale):
         """The part as a picture of the size of the area, and its depth: (QImage, scr, P, zbuf, ss).  Drawn at `ss` times the size (smoother edges) unless the mouse is turning it or the animation
         is playing; the last one is kept while nothing in it changed (the still part of an animation is the same picture for half of its frames)."""
@@ -180,7 +170,7 @@ class VizCanvas(QWidget):
         ex = pg.exaggeration3()
         fld = pg.active_field()
         bend = V3.frame_positions(d, k, ex)[1] if pg.layers3["bent"] else 0.0
-        cam = self.camera_at(k)
+        cam = pg.cam                                   # the same camera for every frame: the view that was set (CPL-5)
         key = (id(d), W, H, round(cam.azimuth, 3), round(cam.elevation, 3), round(cam.zoom, 4), round(float(cam.pan[0]), 2), round(float(cam.pan[1]), 2), fld, round(bend, 5), round(ex, 4),
                round(V.bend_at(k, d["options"]["frames"]), 5) if fld == "u" else 0)
         if self._solid is not None and self._solid[0] == key:
@@ -222,7 +212,7 @@ class VizCanvas(QWidget):
                     p.drawLine(QPointF(S1[a, 0], S1[a, 1]), QPointF(S1[b, 0], S1[b, 1]))
         if flux:
             self.draw_tracers3d(p, scr, ss, d, k)
-        self.paint_triad(p, self.camera_at(k), 40, h - 40)                      # (the axes reach 34 pixels each way from here: they stay in the picture whatever the view)
+        self.paint_triad(p, self.page.cam, 40, h - 40)                      # (the axes reach 34 pixels each way from here: they stay in the picture whatever the view)
         fld = pg.active_field()
         f = next(f for f in V3.FIELDS if f[0] == fld)
         lo, hi = d["ranges"][fld]
@@ -363,7 +353,6 @@ class VizPage:
         self.field = "u"                               # what colours the part (T, u or vm),
         self.layers3 = {"bent": True, "edges": True, "rest": True, "tracers": True}
         self.exa3 = None                               # the exaggeration of the bend of a 3D part (None: the automatic one)
-        self.turn_on = True                            # the view turns once round the part in the second half of the animation
         self.build_panel()
         self.build_picture()
 
@@ -430,11 +419,6 @@ class VizPage:
             cb.toggled.connect(lambda on, k=key: self.layer3_toggled(k, on))
             g3.addWidget(cb)
             self.boxes3[key] = cb
-        self.cb_turn = QCheckBox("Turn the part in the second half of the animation")
-        self.cb_turn.setToolTip("The view goes once round the part after it has bent, so that its shape is seen from every side. The last frame, and the picture you save, are seen from the view you set.")
-        self.cb_turn.setChecked(True)
-        self.cb_turn.toggled.connect(self.turn_toggled)
-        g3.addWidget(self.cb_turn)
         r1 = QHBoxLayout()
         r1.addWidget(QLabel("Exaggeration of the bend (x)"))
         self.e_ex3 = QDoubleSpinBox()
@@ -576,8 +560,8 @@ class VizPage:
                                         "the surface: it is for the picture only." + (" The air of a 3D flow is not drawn yet." if fl else ""))
             else:
                 self.lbl_trace3.setText("There are no tracers for this solve: the air of a 3D flow is not drawn yet." if fl else "There are no tracers: this solve has no flow in it.")
-            self.lbl_anim.setText(f"{V.DEFAULTS['frames']} frames at {V.DEFAULTS['fps']} frames per second. The result is steady: the part bends from nothing to its solved shape over the first half, and the view "
-                                  "goes once round it in the second half (switch that off above). The last frame is the still picture, seen from the view you have set.")
+            self.lbl_anim.setText(f"{V.DEFAULTS['frames']} frames at {V.DEFAULTS['fps']} frames per second. The result is steady: the part bends from nothing to its solved shape over the first half and then stays. "
+                                  "The view is the same in every frame: the one you have set. The last frame is the still picture.")
         else:
             self.lbl_anim.setText(f"{V.DEFAULTS['frames']} frames at {V.DEFAULTS['fps']} frames per second. The result is steady: the body bends from nothing to its final shape over the first "
                                   "half, and every particle goes once along its line. How fast the particles go on the screen is not how fast the air goes. The last frame is the still picture.")
@@ -828,7 +812,7 @@ class VizPage:
         self.lbl_frame.setText(f"Frame {self.player.frame} of {self.player.n}")
         self.b_play.setText("Pause" if self.player.playing else "Play")
         three = has and self.data.get("kind") == "body3d"
-        for w in (self.cmb_field, self.e_ex3, self.b_auto, self.cb_turn, *self.boxes3.values(), *self.view_buttons.values()):
+        for w in (self.cmb_field, self.e_ex3, self.b_auto, *self.boxes3.values(), *self.view_buttons.values()):
             w.setEnabled(three)
         if three:
             has_tr = bool(self.data.get("tracers") and self.data["tracers"]["lines"])
@@ -928,10 +912,6 @@ class VizPage:
         """The colouring in use: the one chosen when this solve has it, else the displacement."""
         d = self.data
         return self.field if d is not None and d.get("ranges", {}).get(self.field) is not None else "u"
-
-    def turn_toggled(self, on):
-        self.turn_on = bool(on)
-        self.view.update()
 
     def layer3_toggled(self, key, on):
         self.layers3[key] = bool(on)
