@@ -6,6 +6,7 @@ name: Playground (dev build)
 on:
   push:
     branches: ["dev"]
+    paths-ignore: ["planning/**"]          # the issue list and the design notes are not part of the program: a push that only changes them does not build
   workflow_dispatch:
     inputs:
       publish:
