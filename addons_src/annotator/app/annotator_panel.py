@@ -20,6 +20,7 @@ THUMB_W, THUMB_H = 44, 33
 ROW_H = 40
 ROLE_COUNT, ROLE_COLOR = Qt.ItemDataRole.UserRole + 1, Qt.ItemDataRole.UserRole + 2     # a class row: how many boxes of it the open image has, its colour
 ROLE_ID, ROLE_STATE = Qt.ItemDataRole.UserRole, Qt.ItemDataRole.UserRole + 3            # a frame row: its id, "done" / "ai" / "todo"
+ROLE_NAME = Qt.ItemDataRole.UserRole + 4                                                  # a frame row: the name written in it (the id without its set)
 GLYPHS = {"done": ("✓", "#2e7d32"), "ai": ("?", "#a05000"), "todo": ("○", MUTED)}
 
 
@@ -122,7 +123,7 @@ class FrameDelegate(QStyledItemDelegate):
         right_w = p.fontMetrics().horizontalAdvance(info) + 10 if info else 0
         p.setPen(QColor(INK))
         p.drawText(QRect(tx + THUMB_W + 8, r.top(), max(10, r.width() - (tx - r.left()) - THUMB_W - 16 - right_w), r.height()),
-                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, p.fontMetrics().elidedText(img_id, Qt.TextElideMode.ElideMiddle, max(10, r.width() - (tx - r.left()) - THUMB_W - 16 - right_w)))
+                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, p.fontMetrics().elidedText(index.data(ROLE_NAME) or img_id, Qt.TextElideMode.ElideMiddle, max(10, r.width() - (tx - r.left()) - THUMB_W - 16 - right_w)))
         if info:
             p.setPen(QColor(MUTED))
             p.drawText(QRect(r.left(), r.top(), r.width() - 8, r.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, info)

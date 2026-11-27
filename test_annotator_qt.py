@@ -69,8 +69,8 @@ R = w.ribbon
 assert w.menuWidget() is None, "no menu bar"
 assert [R.tabText(i) for i in range(R.count())] == ["Annotate", "Data", "Models", "Analyse", "Setup"]
 def page_texts(name):
-    return [b.text().replace("\n", " ") for b in R.widget(R.page_index[name]).widget().findChildren(QToolButton)]
-assert page_texts("Annotate") == ["Confirm image", "Previous image", "Next image", "Fit to screen", "Rotate 90°", "Delete frame…", "LiDAR distance", "Clear distance", "Delete box", "Clear and retry AI"], page_texts("Annotate")
+    return [b.text().replace("\n", " ").replace("&&", "&") for b in R.widget(R.page_index[name]).widget().findChildren(QToolButton)]
+assert page_texts("Annotate") == ["Confirm image", "Previous image", "Next image", "Fit to screen", "Rotate 90°", "Delete frame…", "LiDAR distance", "Clear distance", "Delete box", "Clear & retry AI"], page_texts("Annotate")
 assert page_texts("Data") == ["Import video…", "Import zip…", "Export zip…", "Tablet mode…", "Sessions…", "Sync deleted files"], page_texts("Data")
 assert page_texts("Models") == ["Load AI model", "Download models…", "AI confidence…"], page_texts("Models")
 assert page_texts("Setup") == ["Classes…", "Hotkeys…", "My name…"], page_texts("Setup")

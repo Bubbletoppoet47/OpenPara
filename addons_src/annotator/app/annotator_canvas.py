@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QWidget
 import annotator_core as ac
 
 CANVAS_BG = "#1e1e1e"
+CHIP_TEXT, QUIET_TEXT = "#e6e9ee", "#8793ad"                   # the text of a chip and of a message on the dark canvas (#e6e9ee is an old colour of the baseline, #8793ad one of the palette)
 DEPTH_NEAR_M, DEPTH_FAR_M = 0.5, 6.0     # colour scale of the LiDAR depth overlay
 ZOOM_MAX = 8.0                           # scroll-wheel zoom limit (1 = whole image)
 ZOOM_STEP = 1.25                         # one wheel notch
@@ -185,6 +186,7 @@ class ImageCanvas(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(CANVAS_BG))
         if a.current_pil_image is None or self._qimg is None:
+            self.paint_nothing(p)
             p.end()
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -193,14 +195,12 @@ class ImageCanvas(QWidget):
         off_x, off_y = self.offset
         small = QFont(self.font())
         small.setPointSize(9)
-        small.setBold(True)
         p.setFont(small)
         if a.pick_check.isChecked():
             pts = a.current_depth_points()
-            note = (f"LiDAR depth: {len(pts[0])} points, {DEPTH_NEAR_M:g} m (red) to {DEPTH_FAR_M:g} m (blue)"
+            note = (f"LiDAR depth: {len(pts[0]):,} points, {DEPTH_NEAR_M:g} m (red) to {DEPTH_FAR_M:g} m (blue)"
                     if pts is not None else "No LiDAR depth for this image")
-            p.setPen(QColor("#ffffff"))
-            p.drawText(QPointF(off_x + 8, off_y + 20), note)
+            self.chip(p, note, max(10, off_x + 10), max(10, off_y + 10) + p.fontMetrics().height() + 10, False)       # (a chip: dark behind it, so it reads on a light sky too)
         pending = a.project.is_ai_pending(a.current_image_id)
         img_w, img_h = a.current_pil_image.size
         for i, (cls, xc, yc, w, h) in enumerate(a.boxes):
@@ -220,9 +220,8 @@ class ImageCanvas(QWidget):
                 label += " (AI)"
             pk = a.box_dist[i] if i < len(a.box_dist) else None
             if pk:
-                label += f"  {pk['distance_m']:.2f} m"
-            p.setPen(color)
-            p.drawText(QPointF(cx1 + 4, cy1 - 2), label)
+                label += f" {pk['distance_m']:.1f} m"
+            self.box_label(p, label, QRectF(QPointF(cx1, cy1), QPointF(cx2, cy2)).normalized(), color)
             if pk:
                 mx, my = self.to_canvas(pk['u'], pk['v'])
                 p.setPen(QPen(QColor("#ffffff"), 2))
@@ -243,6 +242,44 @@ class ImageCanvas(QWidget):
         self.paint_chips(p)
         p.end()
 
+    def paint_nothing(self, p):
+        """No picture is open although the project has some (the empty project has its own panel): say so, and what to do."""
+        try:
+            has = bool(self.app.project.list_images())
+        except Exception:
+            has = False
+        if not has:
+            return
+        f = QFont(self.font())
+        f.setPointSize(12)
+        p.setFont(f)
+        p.setPen(QColor(CHIP_TEXT))
+        p.drawText(QRectF(0, self.height() / 2 - 30, self.width(), 30), Qt.AlignmentFlag.AlignCenter, "No picture is open")
+        f.setPointSize(10)
+        p.setFont(f)
+        p.setPen(QColor(QUIET_TEXT))
+        p.drawText(QRectF(0, self.height() / 2, self.width(), 24), Qt.AlignmentFlag.AlignCenter, "Choose a frame in the list on the left. Nothing is shown here when the list has no frame to choose.")
+
+    def box_label(self, p, text, box, color):
+        """The class and the distance on a tab of the class's colour, on the top edge of the box (inside it when the box is at the top of the picture)."""
+        p.save()
+        f = QFont(self.font())
+        f.setPointSize(10)
+        f.setBold(True)
+        p.setFont(f)
+        r = p.fontMetrics().boundingRect(text)
+        w, h = r.width() + 14, r.height() + 6
+        top = box.top() - h
+        if top < 0:
+            top = box.top()
+        tab = QRectF(box.left(), top, w, h)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(color)
+        p.drawRect(tab)
+        p.setPen(QColor("#ffffff"))
+        p.drawText(tab, Qt.AlignmentFlag.AlignCenter, text)
+        p.restore()
+
     def paint_chips(self, p):
         """Two quiet labels over the picture: what the mouse does (bottom left) and which frame this is (bottom right)."""
         f = QFont(self.font())
@@ -262,7 +299,7 @@ class ImageCanvas(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(20, 24, 30, 200))
         p.drawRoundedRect(rect, 3, 3)
-        p.setPen(QColor("#e6e9ee"))
+        p.setPen(QColor(CHIP_TEXT))
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
     def paint_hover(self, p):

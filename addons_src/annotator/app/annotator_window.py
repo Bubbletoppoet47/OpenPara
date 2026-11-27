@@ -187,7 +187,7 @@ class AnnotatorWindow(QMainWindow):
         self.ai_choice.blockSignals(True)
         self.ai_choice.setCurrentIndex(0)
         self.ai_choice.blockSignals(False)
-        self.ai_status.setText("No model loaded")
+        self.ai_status.setText("No AI model loaded")
         self._refresh_ai_choices()
         self._build_ai_assist_checkboxes()
         self._bind_hotkeys()
@@ -244,7 +244,7 @@ class AnnotatorWindow(QMainWindow):
         # status line: what is open at the left, the AI model and any running job at the right
         self.status_label = QLabel("No project loaded")
         self.progress_label = QLabel("")
-        self.ai_status = QLabel("No model loaded")
+        self.ai_status = QLabel("No AI model loaded")
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addPermanentWidget(self.progress_label)
         self.statusBar().addPermanentWidget(self.ai_status)
@@ -286,7 +286,7 @@ class AnnotatorWindow(QMainWindow):
             B("clear_dist", "ann_clear_dist", "Clear\ndistance", "Remove the distance of the selected box.", self.clear_selected_distance),
             B("delete_box", "ann_delete_box", "Delete\nbox", "", self.delete_selected_box),
             "|",
-            B("retry_ai", "ann_retry_ai", "Clear and\nretry AI", "Wipes this image's boxes and predicts again.", self.clear_and_retry_ai),
+            B("retry_ai", "ann_retry_ai", "Clear &&\nretry AI", "Wipes this image's boxes and predicts again.", self.clear_and_retry_ai),
         ])
         self.confirm_btn, self.fit_button, self.pick_check = made["confirm"], made["fit"], made["lidar"]
         self.pick_check.toggled.connect(self._on_pick_toggle)
@@ -357,7 +357,7 @@ class AnnotatorWindow(QMainWindow):
         try:
             n = len(self.project.list_images())
             name = self.title() if self.path else "A new project (not saved yet)"
-            lb.setText(f"<b>{name}</b> - {n} image{'s' if n != 1 else ''}")
+            lb.setText(f"<b>{name}</b> · {n} image{'s' if n != 1 else ''}")
         except Exception:
             lb.setText("")
 
@@ -715,7 +715,7 @@ class AnnotatorWindow(QMainWindow):
         return [i for i in ids if i == self.current_image_id or not self.project.is_annotated(i)]
 
     def _refresh_session_combo(self):
-        """'All sets' plus one entry per imported set, marked [A] once every frame in it is annotated, with (annotated/total)."""
+        """'All sets' plus one entry per imported set, marked [A] once every frame in it is annotated, with annotated / total."""
         prog = self.project.session_progress()
         hidden = self._hidden_sessions()
         prog = {sid: v for sid, v in prog.items() if sid not in hidden}
@@ -724,11 +724,11 @@ class AnnotatorWindow(QMainWindow):
         keys, labels = [None], []
         tot = sum(t for t, _ in prog.values())
         ann = sum(a for _, a in prog.values())
-        labels.append(f"All sets  ({ann}/{tot})")
+        labels.append(f"All sets   {ann} / {tot}")
         for sid in sorted(prog):
             t, a = prog[sid]
             keys.append(sid)
-            labels.append(("[A] " if t and a == t else "") + f"{sid}  ({a}/{t})")
+            labels.append(("[A] " if t and a == t else "") + f"{sid}   {a} / {t}")
         self._session_keys = keys
         self.session_combo.blockSignals(True)
         self.session_combo.clear()
@@ -752,9 +752,20 @@ class AnnotatorWindow(QMainWindow):
         self.canvas.redraw()
         self._update_status()
 
+    def _short_name(self, img_id):
+        """What is written in a frame row: inside a set the frame's number alone (vid_20261125_184611_000001 -> 000001); over all sets the whole id."""
+        sid = self.active_session
+        if sid is not None and sid in img_id:
+            tail = img_id.split(sid, 1)[1].lstrip("_- ")
+            return tail or img_id
+        return img_id
+
     def _refresh_image_list(self):
         self._refresh_session_combo()
         ids = self._visible_image_ids()
+        if not ids and self.project.list_images() and not self.panel.show_all() and self.current_image_id is None:
+            self.panel.set_show_all(True, notify=False)          # nothing left to do: show every frame (a dark picture area with an empty list tells nothing)
+            ids = self._visible_image_ids()
         self._note_cache = {}
         self.image_list.blockSignals(True)
         self.image_list.clear()
@@ -762,6 +773,7 @@ class AnnotatorWindow(QMainWindow):
             state = "done" if self.project.is_annotated(img_id) else ("ai" if self.project.is_ai_pending(img_id) else "todo")
             it = QListWidgetItem(f"[{ {'done': '✓', 'ai': '?', 'todo': ' '}[state] }] {img_id}")
             it.setData(pnl.ROLE_ID, img_id)
+            it.setData(pnl.ROLE_NAME, self._short_name(img_id))
             it.setData(pnl.ROLE_STATE, state)
             self.image_list.addItem(it)
         if self.current_image_id in ids:
@@ -1373,27 +1385,27 @@ class AnnotatorWindow(QMainWindow):
         self.model_assist = None
         self._ai_kind = None
         if choice == AI_CHOICES[0]:
-            self.ai_status.setText("No model loaded")
+            self.ai_status.setText("No AI model loaded")
             return
         self._scan_models()
         self._refresh_ai_choices()
         entry = self._ai_entries.get(choice)
         if entry is None:
             self._set_choice(AI_CHOICES[0])
-            self.ai_status.setText("No model loaded")
+            self.ai_status.setText("No AI model loaded")
             qtk.error(self, "Model not found", f"'{choice}' is not there (any more). Download models with Models tab > Download models.")
             return
         path = entry['path']
         if not os.path.exists(path):
             self._set_choice(AI_CHOICES[0])
-            self.ai_status.setText("No model loaded")
+            self.ai_status.setText("No AI model loaded")
             qtk.error(self, "Model file missing", f"The model file is gone:\n{path}")
             return
         try:
             import gimble_assist
         except ImportError as e:
             self._set_choice(AI_CHOICES[0])
-            self.ai_status.setText("No model loaded")
+            self.ai_status.setText("No AI model loaded")
             qtk.error(self, "Missing package", f"{e}\n\nModel-assisted labeling needs ultralytics and torch:\n\n    pip install ultralytics")
             return
         self.ai_status.setText("Loading model...")
@@ -1414,7 +1426,7 @@ class AnnotatorWindow(QMainWindow):
                     return                      # the user already picked something else
                 if error:
                     self._set_choice(AI_CHOICES[0])
-                    self.ai_status.setText("No model loaded")
+                    self.ai_status.setText("No AI model loaded")
                     qtk.error(self, "Couldn't load checkpoint", error)
                     return
                 self.model_assist = assist
@@ -1427,7 +1439,7 @@ class AnnotatorWindow(QMainWindow):
 
     def _refresh_ai_status(self):
         if self.model_assist is None:
-            self.ai_status.setText("No model loaded")
+            self.ai_status.setText("No AI model loaded")
             return
         kind = self._ai_kind
         desc = f"{(kind or 'model').lower()}: " + self.model_assist.describe()
@@ -1570,9 +1582,9 @@ class AnnotatorWindow(QMainWindow):
             status = "AI pre-labeled - needs review"
         else:
             status = "not yet annotated"
-        info = self.project.manifest['images'].get(self.current_image_id, {})
-        depth_txt = f"{info.get('depth_pixels', 0)} LiDAR pts" if self.project.has_depth(self.current_image_id) else "no depth"
-        self._show_status(
-            f"{self.current_image_id}  |  {len(self.boxes)} box(es) ({sum(1 for d in self.box_dist if d)} with distance)  |  {status}  |  "
-            f"{depth_txt}  |  {len(self.project.list_images())} image(s) in project"
-            + (f"  |  set: {self.active_session}" if self.active_session else ""))
+        n_box, n_img = len(self.boxes), len(self.project.list_images())
+        parts = [self.current_image_id, f"{n_box} box{'' if n_box == 1 else 'es'} ({sum(1 for d in self.box_dist if d)} with distance)", status]
+        if not self.project.has_depth(self.current_image_id):
+            parts.append("no LiDAR depth")                      # (with depth the picture's caption says how many points)
+        parts.append(f"{n_img} image{'' if n_img == 1 else 's'} in project")
+        self._show_status("  |  ".join(parts))
