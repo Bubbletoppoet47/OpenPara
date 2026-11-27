@@ -16,7 +16,7 @@ every chat and every build sees the same list.
 - Design choices and mock-ups are in `planning/design/` (start with its `README.md`), and an item can point to them.
 - Dates are the day it was reported or done (Phoenix time).
 
-Areas: ANN Annotator, TRN Trainer, WB Workbench, DRW Drawings, VIS Visualize, CPL Coupled Physics, GEN whole program and tests.
+Areas: ANN Annotator, TRN Trainer, WB Workbench, DRW Drawings, VIS Visualize, CPL Coupled Physics, VW 3D view (look and selection), GEN whole program and tests.
 
 ---
 
@@ -115,6 +115,21 @@ Areas: ANN Annotator, TRN Trainer, WB Workbench, DRW Drawings, VIS Visualize, CP
 - 2026-11-26 `228a685` (local, not pushed) **CPL-5** The Viz tab no longer turns the part by itself: the box, `turn_on`, `camera_at` and `turn_at` are gone, and the camera is the same for every frame of the animation, of a saved animation and of a saved picture (the view the person set). Tests: `test_coupled_viz3d.py`, `test_coupled_viz3d_core.py`. Full rotations and a picked view come with the Visualize node (VIS-1).
 - 2026-11-26 `970764c` Viz: heat-flux tracers for a 2D heat and stress solve with no flow (before it was not drawn), and inside a 3D part. Tests: `test_coupled_viz_heat.py`, `test_coupled_viz3d_tracers.py`.
 - 2026-11 `e9a58d7` Viz draws a 3D heat and stress solve (software z-buffer, no OpenGL).
+
+---
+
+## VW: 3D view (look and selection)
+
+Design: `planning/design/viewport/README.md`. Asked for by Ian, 2026-11-27.
+
+### Open
+
+- **VW-1** Parts and assemblies are drawn in colours (six in rotation in an assembly), there is no hover outline in the part window, the hover in the assembly fills the face and only while picking, and there is no shadow. *Fixed when:* one neutral 60 % grey, an orange hover outline, a blue selected face and a floor shadow, all four settings in File > Settings > 3D View, a colour set on a part still wins (`test_view3d.py`).
+- **VW-2** Picking a point, an edge or a face is hard to do reliably; the part window picks an edge within a fixed 8 px, points only in Measure, and the assembly has three toggles in the Mate panel only. *Fixed when:* a General / Point / Edge / Face / Body selector sits beside Show in the part and assembly windows, the chosen kind gets its own pick distance (Settings), and Body picks a whole part or component.
+- **VW-3** The 3D simulation windows (Structural, Thermal, CFD) pick faces only. *Fixed when:* they have the same selector and Body chooses a part.
+- **VW-4** Supports, loads and heat can only sit on faces (and a point load on a vertex chosen by the nearest face click). *Fixed when:* Structural and Thermal take a support, load or heat on a picked edge or point, and where a mesh type has no nodes on the geometric edges or corners the window says so instead of approximating. CFD keeps Face and Body (an inlet or outlet is a face).
+
+### Done
 
 ---
 
