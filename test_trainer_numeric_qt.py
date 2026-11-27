@@ -98,8 +98,8 @@ w.type_box.setCurrentIndex(w.type_box.findData("classical_regress")); app.proces
 sizes = [w.size_box.itemText(i) for i in range(w.size_box.count())]
 assert sizes == ["All five, compared", "Formula k / height", "Log-linear regression", "k nearest neighbours", "Gradient boosting", "Gaussian process"], sizes
 assert w.size_box.currentData() == "all" and w.tp.settings["model"]["type"] == "classical_regress"
-assert not w.cont_on.isEnabled() and not w.more["patience"].isEnabled() and not w.more["batch"].isEnabled() and w.more["imgsz"].isEnabled()
-assert w.seeds.isHidden() and w.lrs_box.isHidden() and w.seeds_hint.isHidden()
+assert not w.cont_on.isEnabled() and w.more["patience"].isHidden() and w.more["batch"].isHidden() and w.more["imgsz"].isHidden() and w.size_label.text() == "Regressor"
+assert not w.seeds.isEnabled() and not w.lrs_box.isEnabled() and not w.cl_folds.isHidden() and w.net_loss.isHidden()
 assert "no distorted copies are made" in w.dist_note.text()
 ok("a distance-only type is offered after the YOLO types with sizes named for what they train; continue-from, early stopping and batch are off for it")
 
@@ -107,22 +107,22 @@ ok("a distance-only type is offered after the YOLO types with sizes named for wh
 assert w.env["problems"], "this computer has no torch: the YOLO types are not possible here"
 assert "Training is not possible" not in w.env_label.text() and "numpy" in w.env_label.text() and w.btn_train.isEnabled(), w.env_label.text()
 w.type_box.setCurrentIndex(w.type_box.findData("yolo")); app.processEvents()
-assert "Training is not possible" in w.env_label.text() and w.cont_on.isEnabled() and w.more["batch"].isEnabled() and w.dist_note.text() != "" and "no distorted copies are made" not in w.dist_note.text()
+assert "Training is not possible" in w.env_label.text() and w.cont_on.isEnabled() and not w.more["batch"].isHidden() and w.more["batch"].isEnabled() and w.dist_note.text() != "" and "no distorted copies are made" not in w.dist_note.text()
 MSG.clear(); w.start()
 assert MSG and "torch" in MSG[-1][1], MSG
 ok("a distance-only type needs numpy and no torch: Start is allowed; the YOLO types still say torch is missing and refuse")
 
 # ---- the network type: seeds and learning rates
 w.type_box.setCurrentIndex(w.type_box.findData("nn_ladder")); app.processEvents()
-assert [w.size_box.itemText(i) for i in range(3)] == ["Rung 6", "The whole ladder (rungs 0 - 8)", "Rung 0"] and w.size_box.currentData() == "6"
-assert not w.seeds.isHidden() and not w.lrs_box.isHidden() and w.seeds.value() == 1 and w.lrs_box.currentData() is None
+assert [w.size_box.itemText(i) for i in range(3)] == ["The whole ladder (rungs 0 - 8)", "1986 baseline (rung 0)", "tanh (rung 1)"] and w.size_box.currentData() == "6", [w.size_box.itemText(i) for i in range(3)]
+assert w.size_label.text() == "Recipe" and w.seeds.isEnabled() and w.lrs_box.isEnabled() and w.seeds.value() == 1 and w.lrs_box.currentData() is None and not w.net_loss.isHidden() and w.cl_folds.isHidden()
 w.seeds.setValue(3); w.lrs_box.setCurrentIndex(w.lrs_box.findData("grid")); app.processEvents()
-assert w.tp.settings["model"]["params"] == {"seeds": 3, "lrs": "grid"}
+assert w.tp.settings["model"]["params"] == {"seeds": 3, "lrs": "grid"}, w.tp.settings["model"]["params"]
 w.refresh_all(); app.processEvents()
 assert w.seeds.value() == 3 and w.lrs_box.currentData() == "grid" and w.type_box.currentData() == "nn_ladder"
 w.type_box.setCurrentIndex(w.type_box.findData("classical_regress")); app.processEvents()
-assert w.seeds.isHidden() and w.lrs_box.isHidden()
-ok("seeds and learning rates show for the network only and are kept in the project's settings")
+assert not w.seeds.isEnabled() and not w.lrs_box.isEnabled()
+ok("seeds and learning rates are for the network only and are kept in the project's settings")
 
 # ---- a run
 w.type_box.setCurrentIndex(w.type_box.findData("nn_ladder")); app.processEvents()
@@ -141,8 +141,16 @@ assert os.path.isfile(w.models_list.item(0).data(0x100)) and w.models_list.item(
 assert not os.path.exists(os.path.join(tc.annotator_models_dir(), "Scratch")) and not os.path.exists(os.path.join(tc.annotator_models_dir(), "Assist"))
 ok("Start training runs the network in the background without torch; the model is listed as 'network, rung 6 - distance only' with its error")
 
+# ---- the Train page followed the run (live.json) and says how it ended
+assert os.path.isfile(os.path.join(w.tp.runs_dir, sorted(os.listdir(w.tp.runs_dir))[-1], "live.json"))
+assert w.runs_table.rowCount() == 1 and w.runs_table.item(0, 0).text() == "0.001, seed 0" and w.runs_table.item(0, 1).text().endswith(" %"), (w.runs_table.rowCount(), w.runs_table.item(0, 1).text())
+assert w.now_table.item(0, 1).text() == "4 of 4" and w.now_table.item(1, 1).text().endswith(" %") and w.now_table.item(2, 1).text().endswith(" %"), [w.now_table.item(r, 1).text() for r in range(4)]
+assert w.live_plots["error"].spec["series"][0]["name"] == "Validation" and len(w.live_plots["error"].spec["series"][0]["points"]) == 4 and w.live_plots["error"].spec["hlines"]
+assert len(w.live_plots["grad"].spec["series"]) == 2 and w.btn_stop.text() == "Stop" and not w.btn_stop.isEnabled() and w.btn_train.isEnabled()
+ok("the Train page lists the run with its error, shows the last epoch and draws the error and the gradient norm of the four epochs")
+
 # ---- the run has charts
-assert w.run_tabs.tabText(0) == "Log" and w.run_tabs.tabText(1) == "Charts" and w.run_tabs.currentWidget() is w.charts, "a finished network run opens its charts"
+assert [w.run_tabs.tabText(i) for i in range(3)] == ["Live charts", "Log", "Finished runs"] and w.run_tabs.currentWidget() is w.charts, "a finished network run opens its charts"
 assert w.charts.data is not None and w.charts.data.keys == ["rung6"] and w.charts.run_box.count() == 1 and w.charts.fig_box.currentData() == "learning"
 sp = w.charts.spec()
 assert any(len(s["points"]) == 4 for s in sp["series"] if s["legend"]) and not sp["empty"], "four epochs of the run"

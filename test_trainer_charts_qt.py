@@ -200,5 +200,28 @@ pane.set_runs_dir(RUNS)
 assert pane.run_box.itemText(0).endswith("(opened)") and pane.run_box.currentIndex() == 0 and pane.data.dir == out["p"], "a run opened from disk stays in the list while it is shown"
 ok("a folder that is not a run is refused in a sentence (the run shown stays); a run folder opened from disk is shown and stays in the list")
 
+# ---------------------------------------------------------------- the neurons-per-layer bars of the Model tab
+from PyQt6.QtGui import QColor  # noqa: E402
+
+bars = tch.LayerBars()
+bars.resize(480, 300)
+assert bars.labels() == [] and bars.grab().toImage().pixelColor(240, 150) == QColor(tch.SURFACE), "no layers: an empty surface"
+bars.set_layers([6, 32, 32, 32, 32, 1])
+assert bars.labels() == ["In", "H1", "H2", "H3", "H4", "Out"] and bars.sizes == [6, 32, 32, 32, 32, 1]
+img = bars.grab().toImage()
+slot = (480 - bars.LEFT - bars.RIGHT) / 6
+y_low = 300 - bars.BOTTOM - 3
+cols = [img.pixelColor(int(bars.LEFT + slot * (i + 0.5)), y_low) for i in range(6)]
+want = [QColor(tch.INK)] + [QColor(tch.PALETTE[0])] * 4 + [QColor(tch.INK)]
+assert cols == want, ([c.name() for c in cols], [c.name() for c in want])
+tall = img.pixelColor(int(bars.LEFT + slot * 1.5), 300 - bars.BOTTOM - int((300 - bars.TOP - bars.BOTTOM) * 0.6))
+short = img.pixelColor(int(bars.LEFT + slot * 5.5), 300 - bars.BOTTOM - int((300 - bars.TOP - bars.BOTTOM) * 0.6))
+assert tall == QColor(tch.PALETTE[0]) and short in (QColor(tch.SURFACE), QColor(tch.GRID)), "a layer of 32 is tall, the output of 1 is short"
+bars.set_layers([6, 8, 1])
+assert bars.labels() == ["In", "H1", "Out"] and bars.grab().toImage() != img
+bars.set_layers([4])
+assert bars.labels() == [] and bars.grab().toImage().pixelColor(240, 150) == QColor(tch.SURFACE), "one number is not a network: nothing drawn"
+ok("the layer bars: the input and the output in the ink, the hidden layers in the first colour of the palette, a bar as tall as its neurons, nothing for no network")
+
 pane.close()
 print("trainer charts qt ok", flush=True)

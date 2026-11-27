@@ -86,29 +86,30 @@ assert spec["kind"] == "trainer" and spec["project_folder"] == {"marker": "train
 w = tt.make_tab(None); w.host = host; w.resize(1200, 800); w.show(); pump(4)
 assert isinstance(w, tt.TrainerTab) and w.title() == "Trainer" and not w.is_dirty() and w.temp_root
 assert "No pictures yet" in w.data_info.text()
-# the look of the family: the bar (what it is, which project, its commands on the right), three numbered foldable steps, the main action in teal
+# the look of the family: the bar (what it is, which project, its commands on the right), a page for each tab
 assert "not saved yet" in w.bar_lbl.text() and [b.text() for b in w.bar_buttons][:3] == ["Import\ndataset zip...", "Take from\nAnnotator", "Save project\nas..."]
 # the look of the Annotator: a ribbon of tabs of big buttons on top, a status bar at the bottom
-assert [w.ribbon.tabText(i) for i in range(w.ribbon.count())] == ["Data", "Model", "Models", "Train", "Setup"] and w.take_btn.isHidden() and not w.save_as_btn.isHidden()
-assert w.btn_train.text() == "Start\ntraining" and w.btn_stop.text() == "Stop" and not w.btn_stop.isEnabled()
-assert [(s.number, s.title) for s in w.sections] == [(1, "Data"), (2, "Distortions"), (3, "Model")]
+assert [w.ribbon.tabText(i) for i in range(w.ribbon.count())] == ["Data", "Model", "Train", "Setup"] and w.take_btn.isHidden() and not w.save_as_btn.isHidden()
+assert [w.pages.widget(i) for i in range(4)] == [w.data_page, w.model_page, w.train_page, w.setup_page] and w.pages.currentWidget() is w.data_page
+assert w.btn_train.text() == "Start\ntraining" and w.btn_stop.text() == "Stop" and not w.btn_stop.isEnabled() and not w._model_stop.isEnabled() and w._model_start.text() == w.btn_train.text()
 assert not w.findChildren(tt.QGroupBox), "no grey group boxes"
 assert "font-weight:600" in w.btn_train.styleSheet()
-assert w.panel_scroll.viewport().width() >= w.panel.minimumSizeHint().width(), "the left panel shows its contents whole"
+# the Model tab: the ribbon chooses the kind (four buttons, one pressed), and the kind box that holds it is never shown
+assert [k for k, b in w._kind_buttons.items() if b.isChecked()] == [w.type_box.currentData()] and w.type_box.isHidden() and len(w._kind_buttons) == w.type_box.count()
+w.ribbon.setCurrentIndex(w.ribbon.page_index["Model"]); assert w.pages.currentWidget() is w.model_page
 assert w.type_box.findData("fake") >= 0 and w.type_box.findData("yolo") >= 0 and w.type_box.findData("yolo_scratch") < 0
 # only random-weight types are offered: nothing in the type box or its explanation offers a pretrained start
 assert [w.type_box.itemText(i) for i in range(2)] == ["Classes + boxes", "Classes + boxes + distance"]
 assert not any("pretrained" in w.type_box.itemText(i).lower() for i in range(w.type_box.count()))
 assert "random weights" in tt.HINTS["type"] and "nothing pretrained" in tt.HINTS["type"]
-# every type's name is shown whole in the type box, and the table's last column is not cut off
-fm = w.type_box.fontMetrics()
-assert max(fm.horizontalAdvance(w.type_box.itemText(i)) for i in range(4)) + 40 <= w.type_box.width(), w.type_box.width()
+# the table's last column is not cut off
+w.ribbon.setCurrentIndex(w.ribbon.page_index["Data"])
 assert w.sets_table.columnWidth(3) >= 110 and not w.sets_table.horizontalScrollBar().isVisible()
 import re
 labels = {b.text() for b in w.findChildren(tt.QPushButton)} | {b.text() for b in w.findChildren(QToolButton)}
 assert "Export master zip..." not in labels and "My name..." not in labels and "Import\ndataset zip..." in labels
 assert not hasattr(w, "start_box") and w.cont_on.text() == "Continue from existing model" and not w.cont_row.isEnabled()
-hints = " ".join(l.text() for l in w.findChildren(tt.QLabel))
+hints = " ".join(l.text() for l in w.findChildren(tt.QLabel)) + " " + " ".join(sp.toolTip() for sp in w.more.values()) + " " + w.epochs.toolTip()     # (the Model page's hints are tooltips)
 for word in ("lighter or darker", "grain", "JPEG quality", "distorted versions", "resized to this many pixels", "One epoch"):
     assert word in hints, word
 assert w.dist_count.toolTip() and w.more["imgsz"].toolTip() and w.dist_checks["blur"].toolTip()
@@ -156,10 +157,11 @@ w.start()
 # the run is prepared in the background (distorted copies, the run's copy of the data): the window is not blocked, it shows a bar,
 # Stop reads Cancel and the steps of the left panel wait
 assert w.preparing() and not w.running() and not w.btn_train.isEnabled() and w.btn_stop.isEnabled() and w.btn_stop.text() == "Cancel"
-assert not w.panel.isEnabled() and not w.prep_bar.isHidden() and not all(b.isEnabled() for b in w.bar_buttons)
+assert not w.data_page.isEnabled() and not w.model_page.isEnabled() and not w.prep_bar.isHidden() and not all(b.isEnabled() for b in w.bar_buttons)
+assert w.pages.currentWidget() is w.train_page, "Start shows the Train page"
 wait(lambda: w.running())
-assert not w.preparing() and w.btn_stop.text() == "Stop" and w.btn_stop.isEnabled() and not w.btn_train.isEnabled()
-assert w.panel.isEnabled() and w.prep_bar.isHidden() and all(b.isEnabled() for b in w.bar_buttons)
+assert not w.preparing() and w.btn_stop.text() == "Stop" and w.btn_stop.isEnabled() and not w.btn_train.isEnabled() and not w._model_start.isEnabled() and w._model_stop.isEnabled()
+assert w.data_page.isEnabled() and w.model_page.isEnabled() and w.prep_bar.isHidden() and all(b.isEnabled() for b in w.bar_buttons)
 assert sum(1 for v in w.tp.data.manifest["distortions"].values() if v) == 4        # training pictures only
 lg = w.log.toPlainText()
 assert "Distorted copies ready for 4 training pictures" in lg and "The run's copy of the data is ready:" in lg and "Prepared in" in lg, lg
@@ -182,7 +184,7 @@ assert w.size_box.currentData() == "n" and w.tp.settings["model"]["type"] == "yo
 assert "Boxes with a distance - training: 0, validation: 0" in w.data_info.text() and "cannot be trained from this data" in w.data_info.text(), w.data_info.text()
 MSG.clear(); w.start(); wait(lambda: not w.preparing())
 assert not w.running() and MSG and "has a distance" in MSG[-1][1] and "Classes + boxes" in MSG[-1][1], MSG
-assert w.run_label.text() == "Training did not start." and w.btn_train.isEnabled() and w.panel.isEnabled() and w.btn_stop.text() == "Stop"
+assert w.run_label.text() == "Training did not start." and w.btn_train.isEnabled() and w.model_page.isEnabled() and w.btn_stop.text() == "Stop"
 w.type_box.setCurrentIndex(w.type_box.findData("yolo"))
 assert "Boxes with a distance" not in w.data_info.text() and "cannot be trained" not in w.data_info.text()
 # continuing a model.  One that has a distance model keeps it: picking it switches the type to Classes + boxes + distance and locks it.
@@ -208,7 +210,7 @@ assert labels[vplain].endswith("(this project)"), labels
 listed = [w.models_list.item(i).text() for i in range(w.models_list.count())]
 assert any("classes + boxes + distance (earlier kind)" in t for t in listed) and any("Small   classes + boxes   20" in t for t in listed), listed
 w.type_box.setCurrentIndex(w.type_box.findData("yolo"))
-assert w.dist_only.isHidden() and w.dist_only_hint.isHidden()                     # nothing to keep or not: no model is continued
+assert w.dist_only.isHidden()                     # nothing to keep or not: no model is continued
 w.cont_box.setCurrentIndex(w.cont_box.findData(vtwo)); w.cont_on.setChecked(True)
 assert w.type_box.currentData() == "yolo_distance" and w.tp.settings["model"]["type"] == "yolo_distance" and not w.type_box.isEnabled()
 assert "Boxes with a distance" in w.data_info.text()
@@ -264,14 +266,14 @@ w.btn_stop.click()
 assert "Cancelling" in w.run_label.text() and not w.btn_stop.isEnabled()
 wait(lambda: not w.preparing(), 20)
 assert seen["stops"] == 1 and not w.running() and w.job is None and "Cancelled before training started" in w.run_label.text()
-assert w.btn_train.isEnabled() and w.panel.isEnabled() and w.prep_bar.isHidden() and w.btn_stop.text() == "Stop" and not w.btn_stop.isEnabled()
+assert w.btn_train.isEnabled() and w.model_page.isEnabled() and w.prep_bar.isHidden() and w.btn_stop.text() == "Stop" and not w.btn_stop.isEnabled()
 assert len(os.listdir(w.tp.runs_dir)) == n_runs and w.log.toPlainText().rstrip().endswith("Cancelled.")
 # something going wrong while preparing is told, and the window is usable again
 def broken_start(me_name, progress_cb=None, python=None, stop=None, **kw):
     progress_cb("copy", 3, 10); raise OSError("disk full")
 w.tp.start_run = broken_start
 MSG.clear(); w.start(); wait(lambda: not w.preparing())
-assert MSG and "disk full" in MSG[-1][1] and w.btn_train.isEnabled() and w.panel.isEnabled() and "did not start" in w.run_label.text()
+assert MSG and "disk full" in MSG[-1][1] and w.btn_train.isEnabled() and w.model_page.isEnabled() and "did not start" in w.run_label.text()
 w.tp.start_run = real_start
 # ---- stop
 os.environ["FAKE_SLEEP"] = "3"; os.environ["FAKE_EPOCHS"] = "40"

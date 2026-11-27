@@ -310,6 +310,64 @@ class PlotWidget(QWidget):
             QToolTip.hideText()
 
 
+class LayerBars(QWidget):
+    """The bar chart of the Model tab: the neurons of every layer, the input and the output in the ink, the hidden layers in the first colour of the palette."""
+    LEFT, RIGHT, TOP, BOTTOM = 46, 14, 22, 30
+
+    def __init__(self):
+        super().__init__()
+        self.sizes = []                                      # [In, H1 ... Hn, Out]
+        self.setMinimumSize(320, 200)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def set_layers(self, sizes):
+        self.sizes = [int(x) for x in sizes]
+        self.update()
+
+    def labels(self):
+        n = len(self.sizes)
+        return ["In"] + [f"H{i}" for i in range(1, n - 1)] + ["Out"] if n >= 2 else []
+
+    def paintEvent(self, _e):
+        g = QPainter(self)
+        g.setRenderHint(QPainter.RenderHint.Antialiasing)
+        g.fillRect(self.rect(), QColor(SURFACE))
+        n = len(self.sizes)
+        if n < 2:
+            g.end()
+            return
+        fm = QFontMetrics(self.font())
+        plot = QRectF(self.LEFT, self.TOP, self.width() - self.LEFT - self.RIGHT, max(40, self.height() - self.TOP - self.BOTTOM))
+        top = max(self.sizes)
+        ticks = nice_ticks(0, top * 1.12, integer=True)
+        y1 = max(ticks[-1], top)
+
+        def ty(v):
+            return plot.bottom() - plot.height() * v / y1
+
+        for v in ticks:
+            g.setPen(QPen(QColor(GRID), 1))
+            g.drawLine(QPointF(plot.left(), ty(v)), QPointF(plot.right(), ty(v)))
+            g.setPen(QColor(AXIS))
+            g.drawText(QRectF(0, ty(v) - 8, self.LEFT - 6, 16), int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), fmt_tick(v))
+        slot = plot.width() / n
+        bw = min(slot * 0.5, 90.0)
+        for i, (size, label) in enumerate(zip(self.sizes, self.labels())):
+            cx = plot.left() + slot * (i + 0.5)
+            edge = i in (0, n - 1)
+            g.setPen(Qt.PenStyle.NoPen)
+            g.setBrush(QBrush(QColor(INK if edge else PALETTE[0])))
+            g.drawRect(QRectF(cx - bw / 2, ty(size), bw, plot.bottom() - ty(size)))
+            g.setPen(QColor(INK))
+            g.drawText(QRectF(cx - 30, ty(size) - fm.height() - 2, 60, fm.height()), int(Qt.AlignmentFlag.AlignCenter), str(size))
+            g.setPen(QColor(AXIS))
+            g.drawText(QRectF(cx - 30, plot.bottom() + 5, 60, fm.height()), int(Qt.AlignmentFlag.AlignCenter), label)
+        g.setPen(QPen(QColor(AXIS), 1))
+        g.drawLine(QPointF(plot.left(), plot.top()), QPointF(plot.left(), plot.bottom()))
+        g.drawLine(QPointF(plot.left(), plot.bottom()), QPointF(plot.right(), plot.bottom()))
+        g.end()
+
+
 class ChartsPane(QWidget):
     """Which run, which figure, which rungs; the chart or the table of its numbers; a sentence under it."""
     shown = pyqtSignal(str)                                  # the id of the figure that is drawn (for the window's status line)

@@ -68,6 +68,16 @@ ICONS = {
     "ann_tab_boxes": ('<rect class="a" x="3.5" y="4" width="7" height="5"/><path class="l" d="M13 6.5h8"/><rect class="b" x="3.5" y="10" width="7" height="5"/><path class="l" d="M13 12.5h8"/>'
                       '<rect class="p" x="3.5" y="16" width="7" height="5"/><path class="l" d="M13 18.5h8"/>', "feat"),
     "ann_tab_scrub": ('<rect class="p" x="3" y="6" width="18" height="12"/><path class="l" d="M3 9.5h18M3 14.5h18"/><path class="n" d="M12 3v18" stroke-width="2"/>', "ana"),
+    # ---- the Trainer window: the four kinds of model, and Start / Stop
+    "trn_detector": ('<rect class="p" x="3.5" y="5" width="17" height="14" stroke-dasharray="2.5 1.8"/><rect class="a" x="3.5" y="5" width="7" height="3.6"/><path class="l" d="M7 13.5l3 3 5-6" stroke-width="2"/>', "ai"),
+    "trn_detector_dist": ('<rect class="p" x="3.5" y="3.5" width="14" height="11" stroke-dasharray="2.5 1.8"/><rect class="a" x="3.5" y="3.5" width="6" height="3"/>'
+                          '<path class="l" d="M3.5 19.5h17M3.5 17.5v4M20.5 17.5v4M9 19.5l-2-1.6M9 19.5l-2 1.6M15 19.5l2-1.6M15 19.5l2 1.6"/>', "ai"),
+    "trn_dist_classic": ('<path class="l" d="M3 3.5v17h18"/><path class="n" d="M5.5 17.5c3-.5 4.5-2 6-5s3-5 7.5-6" stroke-width="2"/><circle class="d" cx="7" cy="15.5" r="1.3"/><circle class="d" cx="10.5" cy="14" r="1.3"/>'
+                         '<circle class="d" cx="13.5" cy="9" r="1.3"/><circle class="d" cx="18" cy="7.5" r="1.3"/>', "ai"),
+    "trn_dist_network": ('<path class="l" d="M6 7l6 5-6 5M6 7l6-3M6 17l6 3M12 12l6-4M12 12l6 4M12 4l6 4M12 20l6-4"/><circle class="b" cx="6" cy="7" r="2.2"/><circle class="b" cx="6" cy="17" r="2.2"/>'
+                         '<circle class="a" cx="12" cy="12" r="2.4"/><circle class="b" cx="12" cy="4" r="2.2"/><circle class="b" cx="12" cy="20" r="2.2"/><circle class="a" cx="18" cy="8" r="2.2"/><circle class="a" cx="18" cy="16" r="2.2"/>', "ai"),
+    "trn_start": ('<circle class="a" cx="12" cy="12" r="9"/><path class="k" d="M10 7.5v9l7-4.5z"/>', "ai"),
+    "trn_stop": ('<circle class="b" cx="12" cy="12" r="9"/><rect class="k" x="8.2" y="8.2" width="7.6" height="7.6"/>', "cut"),
 }
 
 _done = False

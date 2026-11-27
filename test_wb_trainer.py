@@ -298,14 +298,14 @@ def wait(cond, secs=90):
 
 
 nA = next(x for x in P.nodes.values() if x.kind == "annotator" and x.title == "Cups")
-ok([w.ribbon.tabText(i) for i in range(w.ribbon.count())] == ["Data", "Model", "Models", "Train", "Setup"], "the window has the Annotator's layout: a ribbon of Data, Model, Models, Train and Setup")
+ok([w.ribbon.tabText(i) for i in range(w.ribbon.count())] == ["Data", "Model", "Train", "Setup"], "the window has the Annotator's layout: a ribbon of Data, Model, Train and Setup, each a page of its own")
 ok(not w.take_btn.isHidden() and w.save_as_btn.isHidden(), "Take from Annotator is there, Save project as is not (the project is the block's)")
 ok(f"Fed by {nA.label} Cups" in w.foot_lbl.text() and f"{nT.label} Cup trainer" in w.bar_lbl.text(), f"the status bar says where the data comes from ({w.foot_lbl.text()})")
 ok(w.tp.publish_shared is False and not w.btn_stop.isEnabled(), "its models stay in the project (not also in the Annotator's Models folder)")
 w.ribbon.setCurrentIndex(w.ribbon.page_index["Setup"])
-ok(w.stack.currentIndex() == 1, "the Setup tab shows the Python and its packages")
+ok(w.pages.currentWidget() is w.setup_page, "the Setup tab shows the Python and its packages")
 w.ribbon.setCurrentIndex(w.ribbon.page_index["Train"])
-ok(w.stack.currentIndex() == 0, "the other tabs show the run")
+ok(w.pages.currentWidget() is w.train_page, "the Train tab shows the run")
 
 pr = ac.Project(proj)
 pr.editor_id = "tester1"
