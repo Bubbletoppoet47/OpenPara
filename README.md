@@ -143,7 +143,9 @@ add-on's skeleton (`slicer_engine.py` finds the engine module `orca_core` and sa
 `test_slicer_engine.py`), the Python package around the engine (`engines/orca_core/python/orca_core/`: result tables, errors, and a worker process so that
 a crash in the engine does not close OpenPara; `test_orca_core_results.py`, `test_orca_core_worker.py`, run with a stand-in engine), and in `dev_addons/solid_fea/` a material with different stiffness in different directions (an `ortho` material:
 nine constants and the directions of its axes; `test_solid_ortho.py` checks it against Timoshenko beam theory and an exact patch test,
-`test_solid_ortho_model.py` runs it through a real part). There is no Slicer menu, tab or Workbench block yet.
+`test_solid_ortho_model.py` runs it through a real part), and `print_fabric.py` there, which takes printed paths and gives every element of a mesh
+its stiffness from the plastic and the road directions around it (a `printed` material; `test_print_fabric.py` with paths made by the test, and
+`test_solid_printed_model.py` through a real part). There is no Slicer menu, tab or Workbench block yet, and nothing has been sliced by the real engine.
 
 **Gimble connection** (`addons_src/gimble_link/`, the Annotator's ribbon: Models > Send model to Gimble, Data > Download recordings / Gimble status) works
 through that helper on the Gimble rig's Raspberry Pi, so the thumb drive stays in the Pi. It finds the Gimble folder (the one with

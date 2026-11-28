@@ -8,6 +8,11 @@ setup = {
               (perpendicular to each other)}.  Without it the material is isotropic from E and nu, as always.  A body of an assembly may carry the same entry.
               With "ortho" the von Mises stress is still reported, but it is not a failure criterion for such a material, and "E" and "nu" are only the
               nominal values used for the reference scale and the rigid-body check.  Not yet in: the adaptive mesh loop, thermal strain that differs by direction.
+              "printed" is optional too: a part that was PRINTED, with the stiffness of every element worked out from the toolpaths of the slicer (print_fabric.py):
+              {"fabric": the .npz file made by print_fabric.Fabric.save (or a Fabric), "constants": {"E1", "E2", "E3", "G12", "G23", "G13", "nu12", "nu23", "nu13"} of fully
+              dense printed material (1 along the road, 2 across it, 3 between the layers), "transform": the 4x4 matrix that puts the part on the plate (default: it stands
+              there as it is), "sigma", "sigma_z": the smoothing distance (mm; default from the element size), "phi_power": the exponent of the plastic fraction (default 1)}.
+              It is not combined with "ortho", and (for now) is for one part, not for an assembly.
   "h": element size (mm, 0 = automatic): of a single part, or of the parts of an assembly that have no size of their own,
   "body_h": {body name: mm}              an ASSEMBLY: the element size of the parts that have one of their own (a blank or missing one gets "h"); the parts are
                                       still meshed as one mesh, so the nodes of the faces they share stay shared (see solid_mesh)
@@ -42,6 +47,7 @@ import solid_adapt as sad
 import solid_fem as fem
 import solid_geom as sg
 import solid_mesh as smesh
+import print_fabric as pf
 
 MODES = {"fixed": "Fixed (all directions)", "slide": "One direction (normal to the face)", "disp": "Displacement (each direction free, held or moved)",
          "bearing": "Bearing (the hole face is held against moving sideways and along its axis; it can turn)"}
@@ -318,12 +324,15 @@ def check_ready(setup, geom=None, thermal=False, fluid=False):
                 ortho_matrix(m)
             except fem.FemError as ex:
                 return f"{b['name']}: {ex}"
+            if m.get("printed"):
+                return f"{b['name']}: a printed material (from toolpaths) is for a single part, not yet for an assembly."
         return None
     m = setup["material"]
     if not (m["E"] > 0 and -1 < m["nu"] < 0.5):
         return "The material needs E > 0 and a Poisson's ratio between -1 and 0.5."
     try:
         ortho_matrix(m)
+        check_printed(m)
     except fem.FemError as ex:
         return str(ex)
     return None
@@ -368,7 +377,7 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None, ther
     fluid: None, or {"fids": [...], "p": ...} (see solve_mesh), or a function of the mesh q that gives that (the pressure of a flow, looked up on the nodes of the mesh)."""
     h = r["h"] or auto_h(geom)
     if r.get("adapt"):                                                         # solve, refine, solve again (solid_adapt)
-        if r["material"].get("ortho") or any(m.get("ortho") for m in (r.get("materials") or [])):
+        if r["material"].get("ortho") or r["material"].get("printed") or any(m.get("ortho") for m in (r.get("materials") or [])):
             raise fem.FemError("The adaptive mesh loop does not include a printed (orthotropic) material yet: untick 'Adaptive mesh (h)'.")
         if thermal is not None:
             raise fem.FemError("The adaptive mesh loop does not include a temperature yet: untick 'Adaptive mesh (h)' for a thermal-stress solve.")
@@ -388,6 +397,62 @@ def _ortho_kw(m):
     return {} if D is None else {"D": D}
 
 
+def _printed_fabric(m):
+    """The Fabric of a material dict that has a "printed" entry (loaded from its file when it is a path); FemError in words when it cannot be."""
+    spec = m["printed"]
+    f = spec.get("fabric")
+    if isinstance(f, pf.Fabric):
+        return f
+    if not f:
+        raise fem.FemError("The printed material has no print data: the file of the toolpaths (fabric) is missing.")
+    try:
+        return pf.Fabric.load(f)
+    except (OSError, ValueError, KeyError) as ex:
+        raise fem.FemError(f"The print data of the material could not be read ({f}): {ex}")
+
+
+def check_printed(m):
+    """FemError (a sentence) when the "printed" entry of a material is not usable; nothing when it is or when there is none."""
+    spec = m.get("printed")
+    if not spec:
+        return
+    if m.get("ortho"):
+        raise fem.FemError("A material is either orthotropic (typed axes) or printed (from toolpaths), not both.")
+    try:
+        pf.road_matrix(spec.get("constants") or {})
+        _printed_fabric(m)
+    except pf.FabricError as ex:
+        raise fem.FemError(str(ex))
+    t = spec.get("transform")
+    if t is not None and (np.asarray(t, float).shape != (4, 4) or not np.all(np.isfinite(np.asarray(t, float)))):
+        raise fem.FemError("The transform of the printed part must be a 4 x 4 matrix of numbers.")
+    for k in ("sigma", "sigma_z", "phi_power"):
+        v = spec.get(k)
+        if v is not None and not (np.isfinite(float(v)) and float(v) > 0):
+            raise fem.FemError(f"The printed material's {k} must be greater than zero.")
+
+
+def _printed_groups(nodes, groups, m):
+    """The groups with the stiffness of every element worked out from the toolpaths."""
+    spec = m["printed"]
+    fab = _printed_fabric(m)
+    out, empty, n = [], 0, 0
+    try:
+        for g in groups:
+            cen, vol = pf.group_centroids_volumes(nodes, g)
+            res = pf.element_stiffness(fab, cen, vol, spec["constants"], sigma=spec.get("sigma"), sigma_z=spec.get("sigma_z"), phi_power=float(spec.get("phi_power") or 1.0),
+                                       transform=spec.get("transform"), samples=pf.group_samples(nodes, g))
+            out.append(dict(g, D21=res["D21"]))
+            empty += res["empty"]
+            n += len(cen)
+    except pf.FabricError as ex:
+        raise fem.FemError(str(ex))
+    if n and empty > 0.25 * n:                                               # roads far from most of the part: the part and the print are not in the same place
+        raise fem.FemError(f"The print data does not cover the part: {100 * empty / n:.0f} % of its elements have no printed plastic around them. Check the transform that puts the "
+                           "part on the plate, and that the print data is of this part.")
+    return out
+
+
 def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None, thermal=None, fluid=None):
     """Solves the setup `r` on the mesh `q` (element size `h`) and returns the result dict.
     thermal = {"T": the temperature at every node of the mesh q (kelvin)}: the body is heated or cooled to it from the material's reference temperature
@@ -404,6 +469,10 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None, the
         q = dict(q, groups=groups)
     elif mat.get("ortho"):                                                     # a printed part: the matrix of the elements is not the isotropic one
         groups = [dict(g, **_ortho_kw(mat)) for g in groups]
+        q = dict(q, groups=groups)
+    elif mat.get("printed"):                                                   # a printed part: every element has the stiffness the toolpaths give it
+        check_printed(mat)
+        groups = _printed_groups(nodes, groups, mat)
         q = dict(q, groups=groups)
     nn = len(nodes)
     ftri = q["ftri"]                                                           # the nodes of the triangles of every face: 6 per triangle (quadratic) or 3
