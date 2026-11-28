@@ -1,0 +1,8 @@
+{
+ "id": "slicer",
+ "name": "Slicer",
+ "version": "0.8.6",
+ "description": "Slicer: slice a part or an assembly with Orca Slicer's slicing engine, built into OpenPara, and use the toolpaths and G-code in a Workbench (for example as the print data of an anisotropic 3D analysis). Needs a printer profile and the engine, which is downloaded the first time. Playground only.",
+ "requires": [],
+ "tabs": []
+}

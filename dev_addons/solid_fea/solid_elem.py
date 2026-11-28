@@ -175,6 +175,12 @@ def stiffness(kind, X, D):
     return K
 
 
+def apply_D(strain, D):
+    """The stress of a strain (ne, 6): D is one (6, 6) matrix for every element, or (ne, 6, 6), one for each (a printed part: the road direction changes from
+    element to element).  With one matrix this is exactly `strain @ D.T`."""
+    return strain @ D.T if D.ndim == 2 else np.einsum("er,esr->es", strain, D)
+
+
 _E0 = np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])                    # a thermal strain is the same in every normal direction and has no shear
 
 
@@ -191,7 +197,7 @@ def _inc_thermal(X, D, e0):
         J, det, Ji = _jac(X, dn)
         B = bmat(_grads(Ji, dn))
         Bi = bmat(np.einsum("eba,ma->emb", Ji0, _INC(p)) * (det0 / det)[:, None, None])
-        Ds0 = ((e0 @ n)[:, None] * _E0[None, :]) @ D.T
+        Ds0 = apply_D((e0 @ n)[:, None] * _E0[None, :], D)
         fu += (wi * det)[:, None] * np.einsum("eri,er->ei", B, Ds0)
         fa += (wi * det)[:, None] * np.einsum("eri,er->ei", Bi, Ds0)
     return fu, fa
@@ -212,7 +218,7 @@ def thermal_forces(kind, X, D, e0):
     for n, dn, wi in zip(N, dN, w):
         J, det, Ji = _jac(X, dn)
         B = bmat(_grads(Ji, dn))
-        Ds0 = ((e0 @ n)[:, None] * _E0[None, :]) @ D.T
+        Ds0 = apply_D((e0 @ n)[:, None] * _E0[None, :], D)
         f += (wi * det)[:, None] * np.einsum("eri,er->ei", B, Ds0)
     return f.reshape(ne, nn, 3)
 
@@ -232,7 +238,7 @@ def recover(kind, X, D, ue, e0=None, energy=False):
         nonlocal vmax, mean, vol, en
         if e0 is not None:
             strain = strain - (e0 @ n)[:, None] * _E0[None, :]
-        sg = strain @ D.T
+        sg = apply_D(strain, D)
         vmax = np.maximum(vmax, vm(sg))
         mean += wd[:, None] * sg
         vol += wd

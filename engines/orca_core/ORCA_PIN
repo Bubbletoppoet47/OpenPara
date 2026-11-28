@@ -1,0 +1,8 @@
+# The Orca Slicer release the engine is built from. tools/prepare_orca.py refuses any other tree.
+tag=v2.5.2
+commit=f92a7c065c5718b8ef1baac1cd704df2911238f4
+# Where the pieces that are not part of Orca's tree come from (the versions Orca's own deps/ build uses).
+eigen=5.0.1
+eigen_url=https://github.com/eigen-mirror/eigen (tag 5.0.1, commit bc3b39870ecb690a623a3f49149a358b95c5781d); Orca's own deps/Eigen uses the same release from gitlab.com
+cgal=6.2.1
+boost=1.83

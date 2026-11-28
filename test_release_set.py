@@ -21,7 +21,7 @@ assert channel.name_of_channel() == "release"
 assert addons.status("simulation") == "installed" and addons.status("parametric") == "installed", "the released add-ons of the program folder are put in place"
 assert not addons.is_installed("render") and not addons.is_installed("motor"), "the unreleased ones are not"
 assert "render" not in addons.known() and "motor" not in addons.known() and not ext.present("render")
-assert set(addons.NOT_RELEASED) == {"render", "motor", "remote", "gimble_link", "autotune"}
+assert set(addons.NOT_RELEASED) == {"render", "motor", "remote", "gimble_link", "autotune", "slicer"}
 for aid in ("remote", "gimble_link"):                    # remote control of another computer and the Gimble connection stay in the Playground
     assert aid not in addons.known() and not addons.is_installed(aid) and not ext.present(aid) and not addons.offered(aid), aid
 assert not any("Gimble:" in t for t, _f in ext.MENU_ITEMS.get("annotator.file", [])), "the Annotator's File menu has no Gimble connection items"
@@ -56,7 +56,7 @@ assert "Remote Computer" not in words and "Gimble connection" not in words
 os.environ["OPARA_CHANNEL"] = "playground"
 assert "render" not in addons.known() and not addons.offered("motor")
 os.environ["OPARA_PLAYGROUND_MODE"] = "full"
-assert {"render", "motor", "remote", "gimble_link", "autotune"} <= set(addons.known()) and addons.offered("render") and addons.offered("remote")
+assert {"render", "motor", "remote", "gimble_link", "autotune", "slicer"} <= set(addons.known()) and addons.offered("render") and addons.offered("remote")
 shutil.rmtree(UD, ignore_errors=True)
 print("OK release set")
 os._exit(0)

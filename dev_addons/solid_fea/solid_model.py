@@ -2,7 +2,12 @@
 solid_model.py - the SETUP of a 3D FEA (what the panel edits) and the run that turns it into a result.  No window in it.
 
 setup = {
-  "material": {"E": MPa, "nu", "rho": kg/m3, "sy": MPa, "su": MPa},
+  "material": {"E": MPa, "nu", "rho": kg/m3, "sy": MPa, "su": MPa, "ortho": {...}},
+              "ortho" is optional: an ORTHOTROPIC material (a printed part: one stiffness along the road, another across it, another between the layers) -
+              {"E1", "E2", "E3", "G12", "G23", "G13" (MPa), "nu12", "nu23", "nu13", "axes": [[x, y, z], [x, y, z], [x, y, z]] the directions 1, 2, 3 in the part's own axes
+              (perpendicular to each other)}.  Without it the material is isotropic from E and nu, as always.  A body of an assembly may carry the same entry.
+              With "ortho" the von Mises stress is still reported, but it is not a failure criterion for such a material, and "E" and "nu" are only the
+              nominal values used for the reference scale and the rigid-body check.  Not yet in: the adaptive mesh loop, thermal strain that differs by direction.
   "h": element size (mm, 0 = automatic): of a single part, or of the parts of an assembly that have no size of their own,
   "body_h": {body name: mm}              an ASSEMBLY: the element size of the parts that have one of their own (a blank or missing one gets "h"); the parts are
                                       still meshed as one mesh, so the nodes of the faces they share stay shared (see solid_mesh)
@@ -41,6 +46,27 @@ import solid_mesh as smesh
 MODES = {"fixed": "Fixed (all directions)", "slide": "One direction (normal to the face)", "disp": "Displacement (each direction free, held or moved)",
          "bearing": "Bearing (the hole face is held against moving sideways and along its axis; it can turn)"}
 KINDS = {"force": "Force on faces", "pressure": "Pressure on faces", "point": "Force at a vertex", "gravity": "Gravity"}
+
+
+def ortho_matrix(m):
+    """The (6, 6) material matrix, in the part's own axes, of a material dict that has an "ortho" entry; None for an isotropic material.  FemError when the constants or the axes
+    are not those of a real material."""
+    o = m.get("ortho")
+    if not o:
+        return None
+    try:
+        Dl = fem.orthotropic_matrix(*(float(o[k]) for k in ("E1", "E2", "E3", "G12", "G23", "G13", "nu12", "nu23", "nu13")))
+        ax = np.asarray(o.get("axes", np.eye(3)), float)
+    except (KeyError, TypeError, ValueError) as ex:
+        raise fem.FemError(f"The orthotropic material is incomplete or has a value that is not a number ({ex}).")
+    if ax.shape != (3, 3) or not np.all(np.isfinite(ax)) or np.any(np.linalg.norm(ax, axis=1) < 1e-12):
+        raise fem.FemError("The orthotropic material needs three directions (1, 2 and 3), each given by three numbers that are not all zero.")
+    ax = ax / np.linalg.norm(ax, axis=1)[:, None]
+    if np.abs(ax @ ax.T - np.eye(3)).max() > 1e-6:
+        raise fem.FemError("The three directions of the orthotropic material must be perpendicular to each other.")
+    if np.linalg.det(ax) < 0:                                                   # a left-handed set: turn direction 3 round, the matrix does not depend on its sign
+        ax = ax * np.array([[1.0], [1.0], [-1.0]])
+    return fem.rotate_D(Dl, ax.T)                                               # the columns of R are the directions 1, 2, 3
 
 
 def default_setup():
@@ -288,10 +314,18 @@ def check_ready(setup, geom=None, thermal=False, fluid=False):
         for b, m in zip(geom["bodies"], body_materials(geom, setup)):
             if not (m["E"] > 0 and -1 < m["nu"] < 0.5):
                 return f"{b['name']}: the material needs E > 0 and a Poisson's ratio between -1 and 0.5."
+            try:
+                ortho_matrix(m)
+            except fem.FemError as ex:
+                return f"{b['name']}: {ex}"
         return None
     m = setup["material"]
     if not (m["E"] > 0 and -1 < m["nu"] < 0.5):
         return "The material needs E > 0 and a Poisson's ratio between -1 and 0.5."
+    try:
+        ortho_matrix(m)
+    except fem.FemError as ex:
+        return str(ex)
     return None
 
 
@@ -334,6 +368,8 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None, ther
     fluid: None, or {"fids": [...], "p": ...} (see solve_mesh), or a function of the mesh q that gives that (the pressure of a flow, looked up on the nodes of the mesh)."""
     h = r["h"] or auto_h(geom)
     if r.get("adapt"):                                                         # solve, refine, solve again (solid_adapt)
+        if r["material"].get("ortho") or any(m.get("ortho") for m in (r.get("materials") or [])):
+            raise fem.FemError("The adaptive mesh loop does not include a printed (orthotropic) material yet: untick 'Adaptive mesh (h)'.")
         if thermal is not None:
             raise fem.FemError("The adaptive mesh loop does not include a temperature yet: untick 'Adaptive mesh (h)' for a thermal-stress solve.")
         if fluid is not None:
@@ -347,6 +383,11 @@ def run(geom, r, cache=None, cancel=lambda: False, progress=lambda t: None, ther
     return solve_mesh(geom, r, h, q, cancel, progress, thermal, fluid)
 
 
+def _ortho_kw(m):
+    D = ortho_matrix(m)
+    return {} if D is None else {"D": D}
+
+
 def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None, thermal=None, fluid=None):
     """Solves the setup `r` on the mesh `q` (element size `h`) and returns the result dict.
     thermal = {"T": the temperature at every node of the mesh q (kelvin)}: the body is heated or cooled to it from the material's reference temperature
@@ -358,7 +399,11 @@ def solve_mesh(geom, r, h, q, cancel=lambda: False, progress=lambda t: None, the
     mats = r.get("materials") if geom.get("bodies") else None
     nodes, conn, groups = q["nodes"], q["conn"], q["groups"]
     if mats:                                                                   # an assembly: every body's elements carry its own material
-        groups = [dict(g, mat=(mats[g["body"]]["E"], mats[g["body"]]["nu"]), alpha=mats[g["body"]].get("alpha"), Tref=mats[g["body"]].get("Tref")) for g in groups]
+        groups = [dict(g, mat=(mats[g["body"]]["E"], mats[g["body"]]["nu"]), alpha=mats[g["body"]].get("alpha"), Tref=mats[g["body"]].get("Tref"),
+                       **_ortho_kw(mats[g["body"]])) for g in groups]
+        q = dict(q, groups=groups)
+    elif mat.get("ortho"):                                                     # a printed part: the matrix of the elements is not the isotropic one
+        groups = [dict(g, **_ortho_kw(mat)) for g in groups]
         q = dict(q, groups=groups)
     nn = len(nodes)
     ftri = q["ftri"]                                                           # the nodes of the triangles of every face: 6 per triangle (quadratic) or 3

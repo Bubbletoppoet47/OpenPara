@@ -1,0 +1,57 @@
+Subject: Model.cpp without the readers that need the libraries orca_core leaves out
+
+With ORCA_CORE_SLICING_ONLY defined, Model.cpp does not read STEP, textured meshes, OBJ, glTF, FBX, SVG or DRC (OpenCASCADE, OpenCV,
+assimp, Draco and the SVG to solid code are not built). The readers that remain are STL, 3MF and AMF (and Orca's own .oltp). What
+read_from_file does with any other file name is what Orca's code already did for one it does not know. Anything not under the
+ORCA_CORE_SLICING_ONLY guard is Orca's code unchanged.
+Orca Slicer v2.5.2, commit f92a7c065c5718b8ef1baac1cd704df2911238f4.
+
+diff --git a/src/libslic3r/Model.cpp b/src/libslic3r/Model.cpp
+index c4cff42a..dc67dfef 100644
+--- a/src/libslic3r/Model.cpp
++++ b/src/libslic3r/Model.cpp
+@@ -237,6 +237,7 @@ Model::~Model()
+         Slic3r::remove_backup(*this, true);
+ }
+ 
++#ifndef ORCA_CORE_SLICING_ONLY // STEP import needs OpenCASCADE
+ Model Model::read_from_step(const std::string&                                      input_file,
+                             LoadStrategy                                            options,
+                             ImportStepProgressFn                                    stepFn,
+@@ -290,10 +291,12 @@ _finished:
+ 
+     return model;
+ }
++#endif // ORCA_CORE_SLICING_ONLY
+ 
+ // BBS: add part plate related logic
+ // BBS: backup & restore
+ // Loading model from a file, it may be a simple geometry file as STL or OBJ, however it may be a project file as well.
++#ifndef ORCA_CORE_SLICING_ONLY // textured import needs OpenCV and assimp
+ // Build a plain geometry ModelObject from a textured mesh. The texture itself is carried
+ // separately on Model::texture_mesh and consumed by the texture import dialog.
+ static void add_textured_mesh_to_model(Model& model, const TexturedMesh& tex_mesh, const std::string& input_file)
+@@ -314,6 +317,7 @@ static void add_textured_mesh_to_model(Model& model, const TexturedMesh& tex_mes
+ 
+     model.add_object(object_name.c_str(), input_file.c_str(), TriangleMesh(std::move(its)));
+ }
++#endif // ORCA_CORE_SLICING_ONLY
+ 
+ Model Model::read_from_file(const std::string&                                  input_file,
+                             DynamicPrintConfig*                                 config,
+@@ -354,6 +358,7 @@ Model Model::read_from_file(const std::string&
+         result = load_stl(input_file.c_str(), &model, nullptr, stlFn);
+     else if (boost::algorithm::iends_with(input_file, ".oltp"))
+         result = load_stl(input_file.c_str(), &model, nullptr, stlFn,256);
++#ifndef ORCA_CORE_SLICING_ONLY // OBJ (texture code), glTF/FBX (assimp), SVG (OpenCASCADE) and DRC (Draco) are left out
+     else if (boost::algorithm::iends_with(input_file, ".obj")) {
+         ObjInfo                 obj_info;
+         ObjParser::MtlData      mtl_data;
+@@ -461,6 +466,7 @@ Model Model::read_from_file(const std::string&
+     //else if (boost::algorithm::iends_with(input_file, ".amf") || boost::algorithm::iends_with(input_file, ".amf.xml"))
+     else if (boost::algorithm::iends_with(input_file, ".drc"))
+         result = load_drc(input_file.c_str(), &model);
++#endif // ORCA_CORE_SLICING_ONLY
+     else if (boost::algorithm::iends_with(input_file, ".amf"))
+         //BBS: is_xxx is used for is_inches when load amf
+         result = load_amf(input_file.c_str(), config, config_substitutions, &model, is_xxx);

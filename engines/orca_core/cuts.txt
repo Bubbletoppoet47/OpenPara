@@ -1,0 +1,16 @@
+# What is left out of Orca's libslic3r, one pattern per line (paths relative to src/libslic3r, fnmatch).
+# Text after # is the reason. tools/gen_sources.py reads this and Orca's own CMakeLists.txt, so a new Orca
+# release needs no edit here unless it adds a file that must also go.
+CAD/*                  # parametric Design tab: OpenCASCADE and the SolveSpace solver
+SLA/*                  # resin printers
+TextureBake/*          # texture baking, OpenCV
+TextureToColor/*       # texture to colour, OpenCV
+Format/STEP.*          # STEP import, OpenCASCADE
+Format/svg.*           # SVG to solid, OpenCASCADE
+Format/AssimpImport.*  # assimp (glTF, FBX, ...)
+Format/DRC.*           # Draco
+Format/ModelIO.*       # macOS only
+MacUtils.mm            # macOS only
+ObjColorUtils.*        # OpenCV
+TexturePainting.*      # OpenCV
+Format/OBJ.*           # needs TexturePainting; plain OBJ import can come back later

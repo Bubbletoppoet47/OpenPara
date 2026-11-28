@@ -38,7 +38,7 @@ REPO = "Bubbletoppoet47/OpenPara"
 # Add-ons that are in addons_src/ (so the Playground builds and offers them) but are NOT part of a normal OpenPara yet.  A normal OpenPara -
 # and the Playground in Testing mode, which shows exactly what the next release is - does not know them: no menu, no ribbon tab, no download.
 # The Playground in Full dev mode offers them like any other add-on.  To release one, take its id out of this list.
-NOT_RELEASED = ("render", "motor", "remote", "gimble_link", "autotune")
+NOT_RELEASED = ("render", "motor", "remote", "gimble_link", "autotune", "slicer")
 
 # what the dialog and the "install it?" questions show before anything is downloaded (tests keep it equal to addons_src/*/addon.json)
 CATALOG = {
@@ -84,6 +84,8 @@ CATALOG = {
     "autotune": {"name": "Autotune",
                  "description": "Live autotune: sing or speak into a microphone and hear yourself pulled onto the notes of a key and scale, with a "
                                 "tuner display. Wear headphones. Mainly for fun. Playground only."},
+    "slicer": {"name": "Slicer",
+               "description": "Slicer: slice a part or an assembly with Orca Slicer's slicing engine, built into OpenPara, and use the toolpaths and G-code in a Workbench (for example as the print data of an anisotropic 3D analysis). Needs a printer profile and the engine, which is downloaded the first time. Playground only."},
     "trainer": {"project_marker": {"marker": "training.json", "format": "openpara-training"},
                 "name": "Trainer",
                 "description": "Merge annotator datasets (zips) into one training project, choose training and validation sets and distortions, and "

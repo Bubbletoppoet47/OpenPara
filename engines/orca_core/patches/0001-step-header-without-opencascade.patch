@@ -1,0 +1,63 @@
+Subject: Format/STEP.hpp without OpenCASCADE
+
+Model.hpp includes Format/STEP.hpp, which includes the OpenCASCADE headers. orca_core does not build the CAD kernel, so with
+ORCA_CORE_SLICING_ONLY defined the header keeps only a forward declaration of class Step; everything that needs OpenCASCADE
+(the includes, NamedSolid, the progress indicator, class Step) stays as Orca has it when the symbol is not defined.
+Orca Slicer v2.5.2, commit f92a7c065c5718b8ef1baac1cd704df2911238f4.
+
+diff --git a/src/libslic3r/Format/STEP.hpp b/src/libslic3r/Format/STEP.hpp
+index 5d18f9e8..28c419e5 100644
+--- a/src/libslic3r/Format/STEP.hpp
++++ b/src/libslic3r/Format/STEP.hpp
+@@ -1,13 +1,17 @@
+ #ifndef slic3r_Format_STEP_hpp_
+ #define slic3r_Format_STEP_hpp_
++#ifndef ORCA_CORE_SLICING_ONLY
+ #include "XCAFDoc_DocumentTool.hxx"
+ #include "XCAFApp_Application.hxx"
+ #include "XCAFDoc_ShapeTool.hxx"
+ #include <Standard_TypeDef.hxx>
+ #include <Standard_Handle.hxx>
++#endif
+ #include <boost/filesystem/path.hpp>
+ #include <boost/filesystem.hpp>
++#ifndef ORCA_CORE_SLICING_ONLY
+ #include <Message_ProgressIndicator.hxx>
++#endif
+ #include <atomic>
+ #include <functional>
+ #include <string>
+@@ -34,6 +38,7 @@ const int LOAD_STEP_STAGE_UNIT_NUM           = 5;
+ typedef std::function<void(int load_stage, int current, int total, bool& cancel)> ImportStepProgressFn;
+ typedef std::function<void(bool isUtf8)> StepIsUtf8Fn;
+ 
++#ifndef ORCA_CORE_SLICING_ONLY
+ struct NamedSolid
+ {
+     NamedSolid(const TopoDS_Shape& s,
+@@ -43,6 +48,7 @@ struct NamedSolid
+     const std::string  name;
+     int tri_face_cout = 0;
+ };
++#endif
+ 
+ //BBS: Load an step file into a provided model.
+ extern bool load_step(const char *path, Model *model,
+@@ -79,6 +85,9 @@ private:
+     EncodedType m_encode_type = EncodedType::UTF8;
+ };
+ 
++#ifdef ORCA_CORE_SLICING_ONLY
++class Step; // the slicing-only build has no STEP reader; Model.hpp only names the type
++#else
+ class StepProgressIncdicator : public Message_ProgressIndicator
+ {
+ public:
+@@ -127,6 +136,7 @@ private:
+     Handle(XCAFDoc_ShapeTool) m_shape_tool;
+     std::vector<NamedSolid> m_name_solids;
+ };
++#endif // ORCA_CORE_SLICING_ONLY
+ 
+ }; // namespace Slic3r
+ 

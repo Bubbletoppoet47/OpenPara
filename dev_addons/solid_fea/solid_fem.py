@@ -520,6 +520,66 @@ def material_matrix(E, nu):
     return D
 
 
+# ------------------------------------------------------------------------------------------------------------- orthotropic materials
+# A printed part is not isotropic: along the road, across it in the layer and between the layers it has three different stiffnesses.  An element's material
+# matrix D is then not the same for all elements, so a group of elements may carry its own: g["D"] is one (6, 6) matrix for the whole group (manual axes) or
+# (n, 6, 6), one per element, or g["D21"] is (n, 21) float32, the 21 distinct numbers of each symmetric matrix (a quarter of the memory).  Without any of them the
+# group is isotropic as before, and its results are the same to the last digit.
+_UT = np.triu_indices(6)
+_VOIGT = [(0, 0), (1, 1), (2, 2), (0, 1), (1, 2), (0, 2)]                         # xx yy zz xy yz xz
+
+
+def orthotropic_matrix(E1, E2, E3, G12, G23, G13, nu12, nu23, nu13):
+    """The (6, 6) material matrix (strain order xx yy zz xy yz xz, engineering shear) of an orthotropic material in its own axes 1, 2, 3.
+    nu12 is minus the strain along 2 over the strain along 1 under a stress along 1 (so S12 = -nu12 / E1 = -nu21 / E2).  The constants must belong to a real material:
+    positive and with a stiffness matrix that is positive definite, else FemError."""
+    for name, v in (("E1", E1), ("E2", E2), ("E3", E3), ("G12", G12), ("G23", G23), ("G13", G13)):
+        if not (v > 0 and np.isfinite(v)):
+            raise FemError(f"The orthotropic material needs {name} greater than zero.")
+    S = np.zeros((6, 6))
+    S[0, 0], S[1, 1], S[2, 2] = 1 / E1, 1 / E2, 1 / E3
+    S[0, 1] = S[1, 0] = -nu12 / E1
+    S[0, 2] = S[2, 0] = -nu13 / E1
+    S[1, 2] = S[2, 1] = -nu23 / E2
+    S[3, 3], S[4, 4], S[5, 5] = 1 / G12, 1 / G23, 1 / G13
+    if not np.all(np.isfinite(S)) or np.linalg.eigvalsh(S).min() <= 1e-12 * np.linalg.eigvalsh(S).max():
+        raise FemError("These orthotropic constants cannot belong to a real material (the stiffness is not positive): a Poisson ratio is too large for the "
+                       "moduli it connects. Check nu12, nu13, nu23 against E1, E2, E3 (nu12 x nu21 must be less than 1, where nu21 = nu12 E2 / E1, and so on for the other two pairs).")
+    return np.linalg.inv(S)
+
+
+def stress_rotation(R):
+    """K (6, 6) or (n, 6, 6) with sigma_global = K @ sigma_local, both as (xx yy zz xy yz xz); R (3, 3) or (n, 3, 3) has the material axes 1, 2, 3 as its columns,
+    written in the global axes.  The strain goes the other way: eps_local = K.T @ eps_global (the work is the same in both)."""
+    R = np.asarray(R, float)
+    K = np.zeros(R.shape[:-2] + (6, 6))
+    for I, (a, b) in enumerate(_VOIGT):
+        for J, (i, j) in enumerate(_VOIGT):
+            K[..., I, J] = R[..., a, i] * R[..., b, j] + (R[..., a, j] * R[..., b, i] if i != j else 0.0)
+    return K
+
+
+def rotate_D(D_local, R):
+    """The material matrix in the global axes: D_global = K D_local K.T (one matrix, or one per element when R is (n, 3, 3))."""
+    K = stress_rotation(R)
+    return K @ np.asarray(D_local, float) @ np.swapaxes(K, -1, -2)
+
+
+def pack_D(D):
+    """(n, 6, 6) -> (n, 21) float32: the upper triangle of every symmetric matrix."""
+    D = np.asarray(D, float)
+    return D[..., _UT[0], _UT[1]].astype(np.float32)
+
+
+def unpack_D(P):
+    """(n, 21) -> (n, 6, 6) float64."""
+    P = np.asarray(P)
+    D = np.zeros(P.shape[:-1] + (6, 6))
+    D[..., _UT[0], _UT[1]] = P
+    D[..., _UT[1], _UT[0]] = P
+    return D
+
+
 def _grad_L(nodes, conn, s, e):
     c = nodes[conn[s:e, :4]]
     A = np.ones((e - s, 4, 4))
@@ -589,7 +649,6 @@ def assemble(nodes, groups, E, nu, cancel=lambda: False, on_part=None):
     total, done = max(sum(len(g["conn"]) for g in groups), 1), 0
     for g in groups:
         kind, conn = g["kind"], g["conn"]
-        D = _group_D(g, D0)
         if kind == "tet":
             nne = conn.shape[1]
             dN, gw, _ns = _rule(nne)
@@ -600,6 +659,7 @@ def assemble(nodes, groups, E, nu, cancel=lambda: False, on_part=None):
             if cancel():
                 raise Cancelled()
             e = min(s + chunk, len(conn))
+            D = _group_Dc(g, D0, s, e)
             if kind == "tet":
                 ndof = 3 * nne
                 gL, V = _grad_L(nodes, conn, s, e)
@@ -629,6 +689,17 @@ def _group_D(g, D):
     return material_matrix(float(m[0]), float(m[1])) if m else D
 
 
+def _group_Dc(g, D0, s, e):
+    """The material matrix of the elements s:e of a group: (6, 6) for all of them, or (e - s, 6, 6) when each has its own (see orthotropic_matrix)."""
+    if g.get("D21") is not None:
+        return unpack_D(g["D21"][s:e])
+    D = g.get("D")
+    if D is not None:
+        D = np.asarray(D, float)
+        return D if D.ndim == 2 else D[s:e]
+    return _group_D(g, D0)
+
+
 def _group_thermal(g, thermal, T_nodes_of):
     """The thermal strain alpha (T - Tref) at the nodes of the elements of a group: its own alpha and Tref when it has them (a body of an assembly), else the ones of
     `thermal`.  None when there is no temperature."""
@@ -656,12 +727,12 @@ def stresses(nodes, groups, D, u, thermal=None, energy=False):
     Tn = None if thermal is None else np.asarray(thermal["T"], float)
     for g in groups:
         kind, conn = g["kind"], g["conn"]
-        D = _group_D(g, D0)
         if kind == "tet":
             nne = conn.shape[1]
             dN, _gw, ns = _rule(nne)
             for s in range(0, len(conn), 8000):
                 e = min(s + 8000, len(conn))
+                D = _group_Dc(g, D0, s, e)
                 gL, V = _grad_L(nodes, conn, s, e)
                 vol[base + s:base + e] = V
                 ue = u[_edofs(conn[s:e])]
@@ -672,7 +743,7 @@ def stresses(nodes, groups, D, u, thermal=None, energy=False):
                     strain = np.einsum("eri,ei->er", B, ue)
                     if e0 is not None:
                         strain = strain - (e0 @ n_)[:, None] * np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])[None, :]
-                    sg = strain @ D.T
+                    sg = elem.apply_D(strain, D)
                     vmax = np.maximum(vmax, _vm(sg))
                     sig_mean[base + s:base + e] += sg / len(dN)
                     en_total += 0.5 * float(np.sum(w_ * V * np.einsum("er,er->e", strain, sg)))
@@ -681,6 +752,7 @@ def stresses(nodes, groups, D, u, thermal=None, energy=False):
             for s in range(0, len(conn), 3000):
                 e = min(s + 3000, len(conn))
                 hx = elem.as_hex(kind, conn[s:e])
+                D = _group_Dc(g, D0, s, e)
                 e0 = _group_thermal(g, thermal, None if Tn is None else Tn[hx])
                 vmx, mean, vv, en = elem.recover(kind, nodes[hx], D, u[_edofs(hx)], e0, True)
                 vm[base + s:base + e], sig_mean[base + s:base + e], vol[base + s:base + e] = vmx, mean, vv
@@ -704,24 +776,25 @@ def thermal_load(nodes, groups, E, nu, thermal):
     e0v = np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
     for g in _as_groups(groups):
         kind, conn = g["kind"], g["conn"]
-        D = _group_D(g, D0)
         if kind == "tet":
             nne = conn.shape[1]
             dN, gw, Ns = _rule(nne)
             for s in range(0, len(conn), 4000):
                 e = min(s + 4000, len(conn))
+                D = _group_Dc(g, D0, s, e)
                 gL, V = _grad_L(nodes, conn, s, e)
                 e0 = _group_thermal(g, thermal, Tn[conn[s:e]])
                 fe = np.zeros((e - s, 3 * nne))
                 for d, w, n_ in zip(dN, gw, Ns):
                     B = _bmat(np.einsum("ik,ekx->eix", d, gL))
-                    Ds0 = ((e0 @ n_)[:, None] * e0v[None, :]) @ D.T
+                    Ds0 = elem.apply_D((e0 @ n_)[:, None] * e0v[None, :], D)
                     fe += (w * V)[:, None] * np.einsum("eri,er->ei", B, Ds0)
                 f += np.bincount(_edofs(conn[s:e]).ravel(), weights=fe.ravel(), minlength=len(f))
         else:
             for s in range(0, len(conn), 3000):
                 e = min(s + 3000, len(conn))
                 hx = elem.as_hex(kind, conn[s:e])
+                D = _group_Dc(g, D0, s, e)
                 e0 = _group_thermal(g, thermal, Tn[hx])
                 fe = elem.thermal_forces(kind, nodes[hx], D, e0)
                 f += np.bincount(_edofs(hx).ravel(), weights=fe.reshape(len(hx), -1).ravel(), minlength=len(f))

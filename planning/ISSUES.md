@@ -142,10 +142,10 @@ Design: `planning/design/slicer/` (the plan, `OpenPara_Slicer_Integration_Plan.p
 ### Open
 
 - **SLC-0** Window boards: pictures of the plate, the generated settings pages, the object list and the preview, for Ian to approve. *Fixed when:* Ian has approved or changed them. Nothing waits for it except SLC-6.
-- **SLC-1** Engine build: the cut list as patch files, a build file for the cut-down engine, built on Linux and then on a Windows runner; a cube sliced from a C++ test program. The gate for everything else. *Fixed when:* the engine links and slices on both systems and the first parity comparison (one cube, one preset) matches Orca's own.
+- **SLC-1** Engine build: the cut list as patch files, a build file for the cut-down engine, built on Linux and then on a Windows runner; a cube sliced from a C++ test program. The gate for everything else. *Fixed when:* the engine links and slices on both systems and the first parity comparison (one cube, one preset) matches Orca's own. *Now (2026-11-28):* pinned to Orca Slicer v2.5.2; the file list (223 of 257 files) and the first two patches are in `engines/orca_core/`; the Linux compile is under way and the link and the first slice are not done. The Windows build and the parity comparison are not done.
 - **SLC-2** The module `orca_core`: bindings (a whole job, a staged session), result tables (`paths`, `moves`, `estimate`), the worker process, progress, cancel, errors. *Fixed when:* parity tests T1 and T2 pass on the 12 test models on both systems, and T8 (crash safety) and T9 (cancel and progress) pass.
 - **SLC-3** Profiles: Orca's bundle loaded through the engine's own loader; option definitions and the settings layout exported; the Elegoo bundle selectable. *Fixed when:* T3 and T4 pass and `Profile.load("Elegoo Centauri Carbon 0.4 nozzle", ...)` works.
-- **SLC-4** The add-on `addons_src/slicer`, in `NOT_RELEASED`: the catalog entry; the download of the engine wheel and the profile assets with sha256. *Fixed when:* it installs in the Playground build and imports the module on a clean Windows machine.
+- **SLC-4** The add-on `addons_src/slicer`, in `NOT_RELEASED`: the catalog entry; the download of the engine wheel and the profile assets with sha256. *Skeleton done 2026-11-28 (manifest, catalog entry, `slicer_engine.py`, tests); the download is not, it needs SLC-2's wheel.* *Fixed when:* it installs in the Playground build and imports the module on a clean Windows machine.
 - **SLC-5** The Workbench block: the `slicer` kind and its adapter, the wires, staleness, saving and reopening, the `toolpaths` kind. *Fixed when:* the block tests of plan 7.6 pass and Part, Slicer, Update gives a result in the block.
 - **SLC-6** The window, first version: plate, one or more objects, the three preset boxes, generated settings pages, Slice, Preview, Export G-code. *Fixed when:* workflow steps 1, 2 and 5 to 8 of plan 8.2 can be done and a Part sliced for the Centauri Carbon prints.
 - **SLC-7** The enable and disable rules lifted out of Orca's GUI code. *Fixed when:* changing a setting enables, disables and updates others as in Orca, on 50 recorded cases.
@@ -157,6 +157,8 @@ Design: `planning/design/slicer/` (the plan, `OpenPara_Slicer_Integration_Plan.p
 
 ### Done
 
+- 2026-11-28 **SLC-4 (skeleton)**: `addons_src/slicer/` with `addon.json` and `slicer_engine.py` (finds the engine module `orca_core` and says in words why it cannot slice when it is missing); `slicer` is in `addons.NOT_RELEASED` and `CATALOG`, the add-on tests and the Playground and release workflows know it. No menu, tab or block yet. `test_slicer_engine.py`. `test_addons.py`, `test_release_files.py` and `test_release_set.py` fail on `dev` before and after this (GEN-2); in a copy with the Trainer's version set to the program's they all pass with the new add-on.
+- 2026-11-28 **SLC-1 (started)**: `engines/orca_core/` (`ORCA_PIN`, `cuts.txt`, `tools/gen_sources.py`, `tools/prepare_orca.py`, `CMakeLists.txt`, `patches/0001`, `0002`, `tests/slice_cube.cpp`). **Finding that changes the plan's chapter 6:** cutting the CAD kernel is not "one deleted include line and one guarded function" as drafts 1 wrote it. `Format/STEP.hpp` has to be guarded (patch 0001), `Model.cpp` has to leave out its STEP, textured-mesh, OBJ, glTF, FBX, SVG and DRC readers (patch 0002), and `Format/OBJ.*`, `TexturePainting.*`, `ObjColorUtils.*`, `Format/AssimpImport.*`, `Format/DRC.*`, `Format/svg.*` go too. Eigen has to be 5.0.1 (Ubuntu has 3.4; the GitHub mirror is the source because GitLab is blocked here) and CGAL 6.2. To be written into the plan's revision log when SLC-1 closes.
 - 2026-11-28 **Plan written** (Stage 1): `planning/design/slicer/`, 55 pages. Not yet read by Ian.
 
 ---
@@ -167,15 +169,15 @@ Design: `planning/design/slicer/`, chapter 10. Accuracy is unknown until PA-5; t
 
 ### Open
 
-- **PA-1** Read the two solvers (`dev_addons/solid_fea`, `dev_addons/fea3d`), decide where per-element matrices go, write tests A1 to A7 as failing tests. *Fixed when:* the tests exist and fail for the right reason.
-- **PA-2** Per-element orthotropic stiffness in the solver, with axes and constants typed by the person. *Fixed when:* A1 to A4 and A7 pass and an isotropic project gives identical results to before.
+- **PA-6** Typing the constants and axes of an `ortho` material in the 3D FEA tab (the solver takes them from the part's setup already, PA-2). Adaptive meshing and direction-dependent thermal expansion with an `ortho` material are refused, not supported. *Fixed when:* a person can set an orthotropic material in the window and the project saves and reopens it. (Found while doing PA-2, 2026-11-28.)
 - **PA-3** The fabric grid and mapping from toolpaths, with a "Print data" cell. *Fixed when:* A5 and A6 pass and a sliced cube gives a sensible field in the view. Needs SLC-2.
 - **PA-4** Bond quality, the failure index, result views, printed-material entries in the library. *Fixed when:* the index and its direction show in Results and the project saves and reopens. Needs a working slicer.
 - **PA-5** Coupon tests R1 to R3, calibration of the constants, a written validation report. *Fixed when:* the report states the error, whatever it is. Needs a working slicer and a printer.
 
 ### Done
 
-*(nothing yet)*
+- 2026-11-28 **PA-1, PA-2**: `dev_addons/solid_fea` takes a different stiffness matrix for each element group (`g["D"]`, one 6x6 matrix or one per element, or `g["D21"]`, the 21 numbers of each, float32) and the solver uses it everywhere the isotropic one was used (assembly, stresses, thermal load); `fem.orthotropic_matrix`, `stress_rotation`, `rotate_D`, `pack_D`, `unpack_D`; the setup takes an `"ortho"` material (E1, E2, E3, G12, G23, G13, nu12, nu23, nu13 and the directions of the axes, checked before the solve) in `solid_model.py`. Decision for PA-1: the production solver for this is `solid_fea`; `fea3d` is not touched. Tests: `test_solid_ortho.py` (A1 to A4 and A7: tets and bricks, a cantilever against Timoshenko beam theory (2.389 against 2.400 mm), an exact layered patch test (error 4.5e-17), a million matrices in 84 MB and 0.9 s) and `test_solid_ortho_model.py` (a real part through setup, mesh and solve: the strong direction along x, y or z within 6 %, equal moduli give the isotropic answer, refusals). An isotropic project gives bit-identical K, stresses, energy and thermal loads to before, and the 20 existing `test_solid_*` tests pass. A5, A6 and R1 to R3 wait for PA-3 and PA-5.
+
 
 ---
 
