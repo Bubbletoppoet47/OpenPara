@@ -7,5 +7,6 @@ from .errors import (OrcaCoreError, ConfigError, SliceError, SliceTimeout, Cance
 from .results import Paths, Moves, Estimate, SliceWarning, Result, PATH_COLUMNS
 from .roles import ROLES, role_name, role_id
 from .job import Job
+from .profiles import Profiles, ProfileError
 
 __version__ = "0.0.1"

@@ -207,5 +207,5 @@ import orca_core as oc
 assert pf.PART_ROLES == tuple(oc.role_id(n) for n in ("Inner wall", "Outer wall", "Overhang wall", "Sparse infill", "Internal solid infill", "Top surface", "Bottom surface",
                                                        "Ironing", "Bridge", "Internal Bridge", "Gap infill")), "PART_ROLES is out of step with orca_core.roles"
 print("interface: ok")
-print("pending (need the compiled engine): A5 and A6 on the real paths of a sliced cube; the z of a real path (top of the road?); the mapping of a real mesh")
+print("the real paths of a sliced cube (z of a path, plastic conserved, walls, anisotropy) are in test_print_real.py; still pending: A5 and A6 on them")
 print("PRINT FABRIC OK")
