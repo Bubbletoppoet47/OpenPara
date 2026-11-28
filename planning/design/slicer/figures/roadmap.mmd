@@ -1,0 +1,39 @@
+flowchart TB
+  S0["SLC-0<br/>window boards"]
+  S1["SLC-1<br/>engine build<br/>(the gate)"]
+  S2["SLC-2<br/>Python module"]
+  S3["SLC-3<br/>profiles, Elegoo"]
+  S4["SLC-4<br/>add-on, hidden"]
+  S5["SLC-5<br/>Workbench block"]
+  S6["SLC-6<br/>first usable window"]
+  S7["SLC-7<br/>setting rules"]
+  S8["SLC-8<br/>thumbnails,<br/>user presets"]
+  S9["SLC-9<br/>object list,<br/>modifiers"]
+  S10["SLC-10<br/>painting"]
+  S11["SLC-11<br/>arrange, plates,<br/>calibration"]
+  S12["SLC-12<br/>release"]
+  P1["PA-1<br/>read solvers,<br/>write tests"]
+  P2["PA-2<br/>per-element<br/>stiffness"]
+  P3["PA-3<br/>toolpaths to<br/>properties"]
+  P4["PA-4<br/>bond quality,<br/>failure index"]
+  P5["PA-5<br/>coupon tests,<br/>validation"]
+  S1 --> S2 --> S3
+  S2 --> S4 --> S5
+  S3 --> S6
+  S5 --> S6
+  S0 --> S6
+  S6 --> S7
+  S6 --> S8
+  S6 --> S9 --> S10
+  S9 --> S11
+  S7 --> S12
+  S8 --> S12
+  S10 --> S12
+  S11 --> S12
+  P1 --> P2 --> P3 --> P4 --> P5
+  S2 --> P3
+  S6 --> P4
+  classDef gate fill:#fde7c8,stroke:#b8741a,color:#222;
+  classDef free fill:#dbeafe,stroke:#2b6cb0,color:#222;
+  class S1 gate;
+  class P1,P2 free;

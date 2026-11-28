@@ -16,7 +16,7 @@ every chat and every build sees the same list.
 - Design choices and mock-ups are in `planning/design/` (start with its `README.md`), and an item can point to them.
 - Dates are the day it was reported or done (Phoenix time).
 
-Areas: ANN Annotator, TRN Trainer, WB Workbench, DRW Drawings, VIS Visualize, CPL Coupled Physics, VW 3D view (look and selection), GEN whole program and tests.
+Areas: ANN Annotator, TRN Trainer, WB Workbench, DRW Drawings, VIS Visualize, CPL Coupled Physics, VW 3D view (look and selection), SLC Slicer, PA printed-part analysis, GEN whole program and tests.
 
 ---
 
@@ -132,6 +132,50 @@ Design: `planning/design/viewport/README.md`. Asked for by Ian, 2026-11-27.
 - 2026-11-27 `93808e9` **VW-3** The Structural, Thermal 3D and CFD 3D windows have the General / Point / Edge / Face / Body bar beside Show. A click replaces the selection, Ctrl or Shift adds; Body picks a whole part (all its faces take the selected colour and its rows are selected in the material and element-size tables; a body cannot carry a support or a condition). CFD has General, Face and Body (Point and Edge greyed with the reason). Tested in `test_view3d_sim.py`.
 - 2026-11-27 `93808e9` **VW-2** A General / Point / Edge / Face / Body selector beside Show in the part and assembly windows. Each kind has its own pick distance (Settings: Point 14 px, Edge 10 px, General 4 px as before); Body picks a whole part or component and its hover outlines the whole body. The Faces / Edges / Points toggles of the Mate panel are replaced by the bar. Tools that pick several kinds take the bar back from Body to General. Tested in `test_view3d.py`, `test_mate_panel_ui.py`, `test_lab_highlight.py`.
 - 2026-11-27 `93808e9` **VW-1** One neutral 60 % grey (#999999) in place of the colours (an assembly's six in rotation), an orange (#ff7300) outline under the cursor in the part window and the assembly (the assembly's fill-on-hover is gone), a blue (#00b4ff) fill on the selected face, and a soft shadow on the floor under the part. All of it is in File > Settings > 3D View (hover and shadow on by default, three colours); a colour set on a part or component still wins. New file `view3d.py`; lighting a little brighter. The shadow is a picture (not drawn above about 900 000 triangles, and not in the simulation windows). The three colours are registered in `design/theme/palette.json`. Tested in `test_view3d.py`, `test_asm_baked_outlines.py`.
+
+---
+
+## SLC: Slicer (Orca Slicer's engine inside OpenPara)
+
+Design: `planning/design/slicer/` (the plan, `OpenPara_Slicer_Integration_Plan.pdf`, Draft 1, 2026-11-28). Asked for by Ian, 2026-11-27; he said on 2026-11-28 to go on from the plan into the build and push to `dev`. The add-on stays in `NOT_RELEASED` until SLC-12. Sizes and what each item needs are in chapter 12 of the plan.
+
+### Open
+
+- **SLC-0** Window boards: pictures of the plate, the generated settings pages, the object list and the preview, for Ian to approve. *Fixed when:* Ian has approved or changed them. Nothing waits for it except SLC-6.
+- **SLC-1** Engine build: the cut list as patch files, a build file for the cut-down engine, built on Linux and then on a Windows runner; a cube sliced from a C++ test program. The gate for everything else. *Fixed when:* the engine links and slices on both systems and the first parity comparison (one cube, one preset) matches Orca's own.
+- **SLC-2** The module `orca_core`: bindings (a whole job, a staged session), result tables (`paths`, `moves`, `estimate`), the worker process, progress, cancel, errors. *Fixed when:* parity tests T1 and T2 pass on the 12 test models on both systems, and T8 (crash safety) and T9 (cancel and progress) pass.
+- **SLC-3** Profiles: Orca's bundle loaded through the engine's own loader; option definitions and the settings layout exported; the Elegoo bundle selectable. *Fixed when:* T3 and T4 pass and `Profile.load("Elegoo Centauri Carbon 0.4 nozzle", ...)` works.
+- **SLC-4** The add-on `addons_src/slicer`, in `NOT_RELEASED`: the catalog entry; the download of the engine wheel and the profile assets with sha256. *Fixed when:* it installs in the Playground build and imports the module on a clean Windows machine.
+- **SLC-5** The Workbench block: the `slicer` kind and its adapter, the wires, staleness, saving and reopening, the `toolpaths` kind. *Fixed when:* the block tests of plan 7.6 pass and Part, Slicer, Update gives a result in the block.
+- **SLC-6** The window, first version: plate, one or more objects, the three preset boxes, generated settings pages, Slice, Preview, Export G-code. *Fixed when:* workflow steps 1, 2 and 5 to 8 of plan 8.2 can be done and a Part sliced for the Centauri Carbon prints.
+- **SLC-7** The enable and disable rules lifted out of Orca's GUI code. *Fixed when:* changing a setting enables, disables and updates others as in Orca, on 50 recorded cases.
+- **SLC-8** Thumbnails, user presets, Import from Orca. *Fixed when:* the Centauri Carbon shows a picture and a changed preset is saved and reloaded.
+- **SLC-9** Object list: modifiers, per-object and per-part settings. *Fixed when:* step 3 of plan 8.2 can be done.
+- **SLC-10** Painting: support enforcer and blocker, seam; then fuzzy skin and multi-material. *Fixed when:* step 4 of plan 8.2 can be done for supports and seams.
+- **SLC-11** Arrange, auto-orient, several plates, calibration pages. *Fixed when:* each works as in Orca.
+- **SLC-12** Release: `slicer` out of `NOT_RELEASED`, a user guide, about page and notices, licence reading confirmed. *Fixed when:* a normal OpenPara offers the add-on and Ian has printed with it.
+
+### Done
+
+- 2026-11-28 **Plan written** (Stage 1): `planning/design/slicer/`, 55 pages. Not yet read by Ian.
+
+---
+
+## PA: Printed-part analysis (toolpaths into anisotropic strength)
+
+Design: `planning/design/slicer/`, chapter 10. Accuracy is unknown until PA-5; the plan makes no promise of it. PA-1 and PA-2 do not need the slicer.
+
+### Open
+
+- **PA-1** Read the two solvers (`dev_addons/solid_fea`, `dev_addons/fea3d`), decide where per-element matrices go, write tests A1 to A7 as failing tests. *Fixed when:* the tests exist and fail for the right reason.
+- **PA-2** Per-element orthotropic stiffness in the solver, with axes and constants typed by the person. *Fixed when:* A1 to A4 and A7 pass and an isotropic project gives identical results to before.
+- **PA-3** The fabric grid and mapping from toolpaths, with a "Print data" cell. *Fixed when:* A5 and A6 pass and a sliced cube gives a sensible field in the view. Needs SLC-2.
+- **PA-4** Bond quality, the failure index, result views, printed-material entries in the library. *Fixed when:* the index and its direction show in Results and the project saves and reopens. Needs a working slicer.
+- **PA-5** Coupon tests R1 to R3, calibration of the constants, a written validation report. *Fixed when:* the report states the error, whatever it is. Needs a working slicer and a printer.
+
+### Done
+
+*(nothing yet)*
 
 ---
 

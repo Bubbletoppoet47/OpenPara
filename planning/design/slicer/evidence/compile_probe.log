@@ -1,0 +1,15 @@
+# compile probe 2026-11-28T07:00:41Z  g++ 13 -O1, 2 cores, Orca 1044ef4407d7
+PrintObjectSlice.cpp             rc=0   16.5s  peak(max so far)=  1800MB  errors=0
+PerimeterGenerator.cpp           rc=0   14.2s  peak(max so far)=  1494MB  errors=0
+PrintConfig.cpp                  rc=0   23.8s  peak(max so far)=  1882MB  errors=0
+Support/TreeSupport3D.cpp        rc=0   20.2s  peak(max so far)=  2010MB  errors=0
+Arachne/WallToolPaths.cpp        rc=0    9.5s  peak(max so far)=  1305MB  errors=0
+Print.cpp                        rc=0   44.0s  peak(max so far)=  2740MB  errors=0
+GCode.cpp                        rc=0   37.4s  peak(max so far)=  2607MB  errors=0
+Model.cpp                        rc=1   12.4s  peak(max so far)=  1902MB  errors=10
+      Model.cpp:254:11: error: incomplete type ‘Slic3r::Step’ used in nested name specifier
+      Model.cpp:255:20: error: variable ‘Slic3r::Step step_file’ has initializer but incomplete type
+      Model.cpp:258:5: error: ‘status’ was not declared in this scope
+MeshBoolean.cpp                  rc=0   76.5s  peak(max so far)=  4185MB  errors=0
+CutSurface.cpp                   rc=0   53.0s  peak(max so far)=  2656MB  errors=0
+FINISHED

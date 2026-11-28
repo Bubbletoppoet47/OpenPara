@@ -1,0 +1,20 @@
+flowchart TB
+  PART["Part or Assembly block"]
+  subgraph OP["OpenPara"]
+    direction LR
+    SB["Slicer block<br/>Geometry · Setup · Slicing · Preview"]
+    WIN["Slicer window<br/>plate · settings pages · layer preview"]
+    ST["3D Static Structural<br/>new cell: Print data"]
+  end
+  subgraph WP["Worker process (a crash here cannot close OpenPara)"]
+    W["orca_core: Python layer<br/>_orca_core: pybind11 bindings<br/>Orca libslic3r, cut down to slicing"]
+  end
+  PROF[("Orca profiles<br/>Elegoo first")]
+  ORC["Orca's own program<br/>(tests only, never shipped)"]
+  PART -- geometry --> SB
+  SB <--> WIN
+  SB -- toolpaths --> ST
+  SB -- "job" --> W
+  W -- "result, copied back:<br/>G-code · toolpaths · moves · estimates" --> SB
+  PROF --> W
+  ORC -. "same input,<br/>compare output" .-> W

@@ -1,0 +1,17 @@
+flowchart TB
+  TP["Toolpaths from the slicer<br/>points · direction · width · height · role · layer · order"]
+  MV["Moves from the G-code read-back<br/>layer time · temperature · fan"]
+  PL["Plate transform<br/>(Part frame to plate)"]
+  FG["Fabric grid<br/>plastic fraction and<br/>road-direction tensor per cell"]
+  BQ["Bond quality<br/>between layers and roads<br/>from thermal history"]
+  EL["Per element: stiffness matrix<br/>along · across · between layers,<br/>rotated to the roads"]
+  SV["3D Static Structural solver<br/>(per-element matrices)"]
+  RS["Results: stress, displacement,<br/>printed-strength index and<br/>weakest direction"]
+  CAL[("Coupon tests<br/>fit the constants")]
+  TP --> FG
+  PL --> FG
+  FG --> EL
+  MV --> BQ --> EL
+  EL --> SV --> RS
+  CAL -.-> EL
+  CAL -.-> BQ
