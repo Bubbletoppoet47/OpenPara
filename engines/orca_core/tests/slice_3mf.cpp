@@ -1,6 +1,10 @@
 // slice_3mf: slices a project file the way Orca's own command line does, for the parity test (SLC-1).
 //
-//   orca_core_slice_3mf <in.3mf> <out.gcode>
+//   orca_core_slice_3mf <in.3mf> <out.gcode> [--settings a.json b.json ...]
+//
+// With --settings the project's own settings are not used: the settings come from the given preset files (resolved presets, as
+// tools/resolve_presets.py writes them: machine, process, filament), applied in that order on Orca's defaults. That is the way OpenPara
+// will build a configuration from a profile bundle (SLC-3), so the parity test runs it too.
 //
 // The input is a 3MF that Orca wrote (`orca-slicer --export-3mf`): it carries the model with its placement and the full, resolved settings
 // (Metadata/project_settings.config). This program loads both with Orca's own reader, applies the settings to a Print, slices and writes
@@ -16,6 +20,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <map>
 #include <string>
 
 using namespace Slic3r;
@@ -44,7 +49,18 @@ int main(int argc, char **argv)
     // the defaults first, then the project's settings on top, as the command line does (the file holds every key, so this only fills what an
     // older file lacks)
     DynamicPrintConfig full = DynamicPrintConfig::full_print_config();
-    full.apply(config, true);
+    if (argc > 3 && std::string(argv[3]) == "--settings") {
+        for (int i = 4; i < argc; ++i) {
+            std::map<std::string, std::string> key_values;
+            std::string                        reason;
+            ConfigSubstitutionContext          ctx(ForwardCompatibilitySubstitutionRule::EnableSilent);
+            if (full.load_from_json(argv[i], ctx, false, key_values, reason) != 0) {
+                std::cerr << "cannot read settings " << argv[i] << ": " << reason << "\n";
+                return 5;
+            }
+        }
+    } else
+        full.apply(config, true);
 
     // what OrcaSlicer.cpp does before Print::apply (the single-extruder branch)
     std::vector<int> &filament_map = full.option<ConfigOptionInts>("filament_map", true)->values;

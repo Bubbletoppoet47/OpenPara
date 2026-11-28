@@ -156,19 +156,30 @@ def one_case(name, args):
     rc = run([args.slice_3mf, project, ours], os.path.join(work, "ours.log"), work, env2)
     if rc != 0 or not os.path.isfile(ours):
         return "ENGINE FAILED (code %s; see %s/ours.log)" % (rc, work)
+    # 3b. the engine again, with the settings from the resolved preset files instead of the project's (how OpenPara builds a configuration)
+    ours2 = os.path.join(work, "ours_presets.gcode")
+    rc = run([args.slice_3mf, project, ours2, "--settings", machine, process, fil], os.path.join(work, "ours_presets.log"), work, env2)
+    if rc != 0 or not os.path.isfile(ours2):
+        return "ENGINE FAILED with preset files (code %s; see %s/ours_presets.log)" % (rc, work)
     if name in RANDOM:
         (la, ua), (lb, ub) = totals(ref), totals(ours)
         ok = la == lb and ua and ub and abs(ua - ub) <= RANDOM[name] * ua
         return ("SAME TOTALS (random in Orca itself): %s layers, %.0f vs %.0f mm of filament" if ok else
                 "DIFFERENT TOTALS: %s layers vs %s, %s vs %s mm") % ((la, ua, ub) if ok else (la, lb, ua, ub))
-    a, b = normalise(ref), normalise(ours)
-    diff = [(i + 1, x, y) for i, (x, y) in enumerate(zip(a, b)) if x != y]
-    if not diff and len(a) == len(b):
-        return "IDENTICAL (%d lines)" % len(a)
-    msg = "DIFFERENT: %d vs %d lines, %d differ" % (len(a), len(b), len(diff))
-    for i, x, y in diff[:5]:
-        msg += "\n      line %d\n        orca: %s\n        ours: %s" % (i, x[:140], y[:140])
-    return msg
+    a = normalise(ref)
+    msgs = []
+    for label, path in (("project settings", ours), ("preset files", ours2)):
+        b = normalise(path)
+        diff = [(i + 1, x, y) for i, (x, y) in enumerate(zip(a, b)) if x != y]
+        if not diff and len(a) == len(b):
+            msgs.append(None)
+            continue
+        msg = "DIFFERENT with %s: %d vs %d lines, %d differ" % (label, len(a), len(b), len(diff))
+        for i, x, y in diff[:5]:
+            msg += "\n      line %d\n        orca: %s\n        ours: %s" % (i, x[:140], y[:140])
+        msgs.append(msg)
+    bad = [m for m in msgs if m]
+    return "IDENTICAL (%d lines, both ways of giving the settings)" % len(a) if not bad else "\n    ".join(bad)
 
 
 def main():

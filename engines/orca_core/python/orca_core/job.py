@@ -6,6 +6,13 @@ import numpy as np
 from . import worker
 
 
+def _value(v):
+    """A setting's value as Orca's preset files give it: a string, or a list of strings for the settings that have one value per extruder or filament."""
+    if isinstance(v, (list, tuple)):
+        return [str(x) for x in v]
+    return str(v)
+
+
 class Job:
     """objects with their transforms and per-object settings, and the settings of the print (Orca's option keys, values as strings).
 
@@ -15,7 +22,7 @@ class Job:
     """
 
     def __init__(self, settings=None, threads=None):
-        self.settings = {str(k): str(v) for k, v in (settings or {}).items()}
+        self.settings = {str(k): _value(v) for k, v in (settings or {}).items()}
         self.threads = threads
         self.objects = []
 

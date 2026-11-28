@@ -170,3 +170,18 @@ if (ORCA_CORE_TESTS)
     add_executable(orca_core_slice_3mf tests/slice_3mf.cpp)
     target_link_libraries(orca_core_slice_3mf PRIVATE libslic3r boost_libs TBB::tbb)
 endif ()
+
+# ---- the Python module (SLC-2) -------------------------------------------------------------------------------------------
+# cmake -DORCA_CORE_PYTHON=ON -Dpybind11_DIR=$(python -m pybind11 --cmakedir) ... ; the module is built as orca_core/_orca_core.<tag>
+if (ORCA_CORE_PYTHON)
+    find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+    find_package(pybind11 CONFIG REQUIRED)
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/ORCA_PIN" _pin_commit REGEX "^commit=")
+    string(REPLACE "commit=" "" _pin_commit "${_pin_commit}")
+    pybind11_add_module(_orca_core bindings/orca_core_module.cpp)
+    target_compile_definitions(_orca_core PRIVATE ORCA_CORE_ORCA_COMMIT="${_pin_commit}")
+    target_link_libraries(_orca_core PRIVATE libslic3r boost_libs TBB::tbb)
+    if (NOT MSVC)
+        target_compile_options(_orca_core PRIVATE -w)
+    endif ()
+endif ()
