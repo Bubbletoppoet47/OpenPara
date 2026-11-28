@@ -140,7 +140,8 @@ open decisions, is `planning/design/slicer/PLAN.md` (and the PDF next to it); th
 `planning/ISSUES.md`. What exists so far: the build of the engine as a library from Orca Slicer v2.5.2 (`engines/orca_core/`: the pin, the list of files
 that are left out, the patches, the CMake file and a test program that slices a cube; Orca Slicer is AGPL-3.0, so is anything built from it), this
 add-on's skeleton (`slicer_engine.py` finds the engine module `orca_core` and says in words why it cannot slice when it is not there;
-`test_slicer_engine.py`), and in `dev_addons/solid_fea/` a material with different stiffness in different directions (an `ortho` material:
+`test_slicer_engine.py`), the Python package around the engine (`engines/orca_core/python/orca_core/`: result tables, errors, and a worker process so that
+a crash in the engine does not close OpenPara; `test_orca_core_results.py`, `test_orca_core_worker.py`, run with a stand-in engine), and in `dev_addons/solid_fea/` a material with different stiffness in different directions (an `ortho` material:
 nine constants and the directions of its axes; `test_solid_ortho.py` checks it against Timoshenko beam theory and an exact patch test,
 `test_solid_ortho_model.py` runs it through a real part). There is no Slicer menu, tab or Workbench block yet.
 

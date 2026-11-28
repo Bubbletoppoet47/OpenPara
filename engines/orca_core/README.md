@@ -19,6 +19,7 @@ fetched, not copied here.
 | `tools/prepare_orca.py` | `python tools/prepare_orca.py <Orca checkout>`: checks the checkout is the pinned commit and applies `patches/` in name order. `--check` says whether they apply, `--revert` takes them out again. |
 | `patches/` | The changes to Orca's files, each small and with a message that says why. `0001` stops `Format/STEP.hpp` from including OpenCASCADE when `ORCA_CORE_SLICING_ONLY` is defined; `0002` leaves the readers that need the cut libraries out of `Model.cpp`. |
 | `CMakeLists.txt` | Builds the engine with its own top-level file (not Orca's, which looks for wxWidgets, OpenCASCADE, OpenCV and OpenGL). |
+| `python/orca_core/` | The Python package around the compiled engine (plan 5.1): `results.py` (the paths, moves, estimate, warnings and record, saved to and loaded from a folder), `errors.py`, `roles.py` (Orca's 20 extrusion roles), `job.py` (`Job`: objects, settings, `slice()`), `worker.py` (the engine runs in its own process; progress, cancel, time limit; a crash in the engine becomes `WorkerCrashed` and OpenPara stays open), `_engine.py` (the backend that calls the compiled engine: **not written yet**, it says so) and `_selftest_backend.py` (a stand-in that behaves like an engine, for the tests). Tests: `test_orca_core_results.py`, `test_orca_core_worker.py`. |
 | `tests/slice_cube.cpp` | A test program: a cube, Orca's default print settings, sliced to G-code. The first thing that has to work (SLC-1). |
 
 ## Build (Linux, as done here)
@@ -39,6 +40,6 @@ first run it takes hours; the Windows runner is the intended place to build the 
 
 ## State
 
-SLC-1 is under way. What has been checked: the list of files, the two patches (they apply to the pinned tree and `Model.cpp` and the other
+SLC-1 is under way; of SLC-2 the Python package around the engine is done and tested with the stand-in backend, and the bindings are not. What has been checked for the engine: the list of files, the two patches (they apply to the pinned tree and `Model.cpp` and the other
 files compile), and the CMake configure. What has not: the link, the first slice, the comparison with Orca's own output, and the Windows build.
 This file is updated when each of those is done.
