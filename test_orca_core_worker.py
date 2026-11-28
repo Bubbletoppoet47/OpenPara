@@ -87,9 +87,17 @@ assert e.exit_code == 77 and e.last_progress == "start" and "ended unexpectedly"
 if os.name != "nt":
     e = raises(errors.WorkerCrashed, lambda: job("segfault").slice(backend=BACKEND))
     assert e.exit_code == -11, e.exit_code            # SIGSEGV
-# the engine is not there: said in words, as the error of the kind it is
-e = raises(errors.EngineMissing, lambda: job().slice(backend="orca_core._engine"))
-assert "not built" in str(e) or "not written" in str(e)
+# the engine is not there: said in words, as the error of the kind it is (only where it is not built: with ORCA_CORE_BUILD_DIR set the real
+# engine is found, and test_orca_core_engine.py is the test of that)
+try:
+    from orca_core import _engine
+    _engine._core()
+    engine_built = True
+except errors.EngineMissing:
+    engine_built = False
+if not engine_built:
+    e = raises(errors.EngineMissing, lambda: job().slice(backend="orca_core._engine"))
+    assert "not built" in str(e) or "not written" in str(e)
 # a backend that does not exist at all is a bug, reported as one and not as a crash
 e = raises(errors.OrcaCoreError, lambda: job().slice(backend="orca_core.no_such_backend"))
 assert not isinstance(e, errors.WorkerCrashed) and "no_such_backend" in str(e)
