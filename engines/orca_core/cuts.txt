@@ -3,7 +3,8 @@
 # release needs no edit here unless it adds a file that must also go.
 CAD/*                  # parametric Design tab: OpenCASCADE and the SolveSpace solver
 SLA/*                  # resin printers
-TextureBake/*          # texture baking, OpenCV
++SLA/IndexedMesh.cpp    # but not this: z-contouring (ContourZ.cpp) ray-casts against it
++SLA/Hollowing.cpp     # ... and it needs the drain-hole geometry here (patch 0003 leaves the OpenVDB part out)
 TextureToColor/*       # texture to colour, OpenCV
 Format/STEP.*          # STEP import, OpenCASCADE
 Format/svg.*           # SVG to solid, OpenCASCADE

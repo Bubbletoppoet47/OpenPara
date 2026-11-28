@@ -1,0 +1,58 @@
+Subject: SLA/Hollowing.cpp: keep the drain-hole geometry, leave the OpenVDB part out
+
+Layer::make_contour_z (ContourZ.cpp, the z-contouring of the top surface) uses sla::IndexedMesh, and IndexedMesh::query_ray_hit asks
+sla::DrainHole::get_intersections, which is plain geometry in SLA/Hollowing.cpp. The rest of that file (the hollowing of a mesh and the cutting
+of drain holes out of slices) needs OpenVDB, which orca_core does not build. With ORCA_CORE_SLICING_ONLY defined the file keeps DrainHole and
+leaves the rest out; without the symbol it is as Orca has it.
+Orca Slicer v2.5.2, commit f92a7c065c5718b8ef1baac1cd704df2911238f4.
+
+diff --git a/src/libslic3r/SLA/Hollowing.cpp b/src/libslic3r/SLA/Hollowing.cpp
+index db8402e6..3e966051 100644
+--- a/src/libslic3r/SLA/Hollowing.cpp
++++ b/src/libslic3r/SLA/Hollowing.cpp
+@@ -14,10 +14,14 @@
+ #include <limits>
+ #include <mutex>
+ #include <numeric>
++#ifndef ORCA_CORE_SLICING_ONLY
+ #include <openvdb/openvdb.h>
++#endif
+ #include <optional>
+ 
++#ifndef ORCA_CORE_SLICING_ONLY
+ #include <libslic3r/OpenVDBUtils.hpp>
++#endif
+ #include <libslic3r/TriangleMesh.hpp>
+ #include <libslic3r/TriangleMeshSlicer.hpp>
+ #include <libslic3r/SLA/Hollowing.hpp>
+@@ -41,6 +45,7 @@
+ namespace Slic3r {
+ namespace sla {
+ 
++#ifndef ORCA_CORE_SLICING_ONLY
+ struct Interior {
+     indexed_triangle_set mesh;
+     openvdb::FloatGrid::Ptr gridptr;
+@@ -166,6 +171,7 @@ InteriorPtr generate_interior(const TriangleMesh &   mesh,
+     return interior;
+ }
+ 
++#endif // ORCA_CORE_SLICING_ONLY
+ indexed_triangle_set DrainHole::to_mesh() const
+ {
+     auto r = double(radius);
+@@ -296,6 +302,7 @@ bool DrainHole::get_intersections(const Vec3f& s, const Vec3f& dir,
+     return true;
+ }
+ 
++#ifndef ORCA_CORE_SLICING_ONLY
+ void cut_drainholes(std::vector<ExPolygons> & obj_slices,
+                     const std::vector<float> &slicegrid,
+                     float                     closing_radius,
+@@ -578,5 +585,6 @@ void remove_inside_triangles(TriangleMesh &mesh, const Interior &interior,
+     mesh = TriangleMesh{mesh.its};
+     //FIXME do we want to repair the mesh? Are there duplicate vertices or flipped triangles?
+ }
++#endif // ORCA_CORE_SLICING_ONLY
+ 
+ }} // namespace Slic3r::sla

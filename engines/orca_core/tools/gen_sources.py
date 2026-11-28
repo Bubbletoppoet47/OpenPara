@@ -50,7 +50,9 @@ def main(argv):
         for f in lst:
             if not f.endswith((".cpp", ".c", ".cc")):
                 continue
-            hit = next((why for pat, why in cuts if fnmatch.fnmatch(f, pat)), None)
+            hit = next((why for pat, why in cuts if not pat.startswith("+") and fnmatch.fnmatch(f, pat)), None)
+            if hit is not None and any(pat.startswith("+") and fnmatch.fnmatch(f, pat[1:]) for pat, _why in cuts):
+                hit = None                                 # a "+pattern" line brings a file back that a wider pattern cut
             if hit is not None:
                 cut.append((f, hit))
             else:

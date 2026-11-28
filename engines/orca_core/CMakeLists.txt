@@ -63,11 +63,13 @@ add_compile_definitions(BBL_RELEASE_TO_PUBLIC=1 USE_TBB TBB_USE_CAPTURED_EXCEPTI
 
 set(Boost_NO_SYSTEM_PATHS OFF)
 set(CMAKE_POLICY_DEFAULT_CMP0167 NEW)
-find_package(Boost 1.83 REQUIRED COMPONENTS system filesystem thread log log_setup locale regex chrono atomic date_time iostreams program_options nowide)
+set(ORCA_BOOST_COMPONENTS system filesystem thread log log_setup locale regex chrono atomic date_time iostreams program_options nowide)
+find_package(Boost 1.83 REQUIRED COMPONENTS ${ORCA_BOOST_COMPONENTS})
 find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(PNG REQUIRED)
+find_package(JPEG REQUIRED)
 find_package(EXPAT REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(NLopt REQUIRED)
@@ -98,7 +100,17 @@ set_target_properties(noise::noise PROPERTIES IMPORTED_LOCATION "${LIBNOISE_LIBR
 add_library(boost_headeronly INTERFACE)
 target_include_directories(boost_headeronly SYSTEM INTERFACE ${Boost_INCLUDE_DIRS})
 add_library(boost_libs INTERFACE)
-target_link_libraries(boost_libs INTERFACE boost_headeronly ${Boost_LIBRARIES})
+target_link_libraries(boost_libs INTERFACE boost_headeronly)
+# Boost's own CMake files (config mode) define Boost::<component> targets and do not fill Boost_LIBRARIES. Their files are linked by path:
+# naming the targets themselves would also put Boost's compile definitions on every source file (and rebuild all of them).
+foreach (_c ${ORCA_BOOST_COMPONENTS})
+    if (TARGET Boost::${_c})
+        target_link_libraries(boost_libs INTERFACE "$<TARGET_LINKER_FILE:Boost::${_c}>")
+    endif ()
+endforeach ()
+if (Boost_LIBRARIES)
+    target_link_libraries(boost_libs INTERFACE ${Boost_LIBRARIES})
+endif ()
 
 # ---- Orca's bundled libraries (deps_src), the ones the engine uses ------------------------------------------------------
 set(_deps "${ORCA_SRC}/deps_src")
@@ -106,8 +118,11 @@ foreach (_d agg ankerl earcut fast_float nanosvg nlohmann stb_dxt admesh clipper
     add_subdirectory("${_deps}/${_d}" "${CMAKE_CURRENT_BINARY_DIR}/deps/${_d}")
 endforeach ()
 
+# admesh includes "libslic3r/..." headers; Orca's top-level file puts src/ on every target's include path, ours does it for the ones that need it
+target_include_directories(admesh PRIVATE "${ORCA_SRC}/src")
+
 # ---- the engine ----------------------------------------------------------------------------------------------------------
-add_library(libslic3r STATIC ${ORCA_CORE_SOURCES} "${CMAKE_CURRENT_BINARY_DIR}/libslic3r_version.h")
+add_library(libslic3r STATIC ${ORCA_CORE_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/src/nanosvg_impl.cpp" "${CMAKE_CURRENT_BINARY_DIR}/libslic3r_version.h")
 target_compile_definitions(libslic3r PUBLIC USE_TBB TBB_USE_CAPTURED_EXCEPTION=0 CGAL_LINKED_WITH_TBB ORCA_CORE_SLICING_ONLY)
 target_include_directories(libslic3r
     PRIVATE "${ORCA_SRC}/src/libslic3r"
@@ -118,7 +133,7 @@ if (WIN32)
 endif ()
 target_link_libraries(libslic3r
     PUBLIC  Eigen3::Eigen admesh libigl libnest2d miniz
-    PRIVATE ${CMAKE_DL_LIBS} EXPAT::EXPAT boost_libs cereal::cereal Clipper2 glu-libtess libslic3r_cgal mcut noise::noise
+    PRIVATE ${CMAKE_DL_LIBS} EXPAT::EXPAT ${JPEG_LIBRARIES} boost_libs cereal::cereal Clipper2 glu-libtess libslic3r_cgal mcut noise::noise
             PNG::PNG qhull qoi semver TBB::tbb TBB::tbbmalloc ZLIB::ZLIB OpenSSL::Crypto Threads::Threads)
 
 # libnest2d (the arrange code) links the engine by name
@@ -152,4 +167,6 @@ endif ()
 if (ORCA_CORE_TESTS)
     add_executable(orca_core_slice_cube tests/slice_cube.cpp)
     target_link_libraries(orca_core_slice_cube PRIVATE libslic3r boost_libs TBB::tbb)
+    add_executable(orca_core_slice_3mf tests/slice_3mf.cpp)
+    target_link_libraries(orca_core_slice_3mf PRIVATE libslic3r boost_libs TBB::tbb)
 endif ()

@@ -30,7 +30,8 @@ int main(int argc, char **argv)
         const std::string kv = argv[i];
         const auto        eq = kv.find('=');
         if (eq == std::string::npos) { std::cerr << "expected key=value: " << kv << "\n"; return 2; }
-        if (!config.set_deserialize_nothrow(kv.substr(0, eq), kv.substr(eq + 1))) { std::cerr << "bad setting: " << kv << "\n"; return 2; }
+        ConfigSubstitutionContext ctx(ForwardCompatibilitySubstitutionRule::Disable);
+        if (!config.set_deserialize_nothrow(kv.substr(0, eq), kv.substr(eq + 1), ctx)) { std::cerr << "bad setting: " << kv << "\n"; return 2; }
     }
 
     Model        model;
