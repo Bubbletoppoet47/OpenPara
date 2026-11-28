@@ -281,7 +281,9 @@ py::dict slice(const py::list &objects, const std::string &settings_file, const 
                const std::string &resources_dir, const std::string &cancel_file, const py::object &progress)
 {
     if (!resources_dir.empty()) set_resources_dir(resources_dir);
-    tbb::global_control limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(std::max(1, threads)));
+    // Never fewer than two: with a single TBB thread Orca's G-code export waits for work that only a second thread would do and the slice never ends
+    // (found with threads = 1, which is what a two-core computer gets by default: one core is left for the window).
+    tbb::global_control limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(std::max(2, threads)));
 
     // ---- settings: Orca's defaults, then the file
     std::vector<std::string> setting_warnings;

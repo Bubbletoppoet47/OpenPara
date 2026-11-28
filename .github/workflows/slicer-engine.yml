@@ -1,0 +1,132 @@
+name: Slicer engine (orca_core, Windows)
+
+# Builds the slicing engine of the Slicer add-on (engines/orca_core: Orca Slicer's libslic3r, cut down) on a Windows runner and runs the parity
+# test on it.  A SEPARATE workflow on purpose (plan 6.5): it takes a long time, it can fail while the program itself is fine, and it is started by hand.
+# It does not run on a push and it does not publish anything: the wheel is kept as a workflow artifact for 14 days (no release asset).
+#
+# NOT RUN YET.  The engine was built and tested on Linux (engines/orca_core/README.md).  This file is the Windows recipe written from the same
+# CMake file and the same dependency list; the first run will find what is different (the first full build is SLC-1's Windows gate).  Expect to
+# change it after that run.
+on:
+  workflow_dispatch:
+    inputs:
+      run_parity:
+        description: "Run the parity test (needs Orca's own program: it is downloaded from Orca's release page)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: slicer-engine
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 350
+    env:
+      PYTHON_VERSION: "3.12"
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
+      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}\\vcpkg-cache,readwrite"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Orca Slicer source at the pinned tag
+        shell: pwsh
+        run: |
+          # never a copy of Orca in this repository: the tag and commit are in engines/orca_core/ORCA_PIN
+          $tag = (Select-String -Path engines/orca_core/ORCA_PIN -Pattern '^tag=(.+)$').Matches[0].Groups[1].Value
+          $commit = (Select-String -Path engines/orca_core/ORCA_PIN -Pattern '^commit=(.+)$').Matches[0].Groups[1].Value
+          git clone --depth 1 --branch $tag https://github.com/SoftFever/OrcaSlicer.git orca_src
+          $got = (git -C orca_src rev-parse HEAD)
+          if ($got -ne $commit) { throw "Orca $tag is at $got, the pin says $commit" }
+          "ORCA_TAG=$tag" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: "Our patches (a patch that does not apply fails the job: that is how a new Orca announces itself)"
+        run: python engines/orca_core/tools/prepare_orca.py orca_src
+
+      - name: Cache of the dependencies
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('engines/orca_core/ORCA_PIN', 'engines/orca_core/CMakeLists.txt') }}
+
+      - name: Dependencies (vcpkg)
+        shell: pwsh
+        run: |
+          # the libraries the CMake file asks for: Boost 1.83 (the components listed in CMakeLists.txt), TBB, zlib, libpng, libjpeg, expat, OpenSSL,
+          # NLopt, cereal; CGAL 6.2.1 and Eigen 5.0.1 come from their own sources (ORCA_PIN), libnoise from its source
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
+          & vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          & vcpkg\vcpkg.exe install "boost-system" "boost-filesystem" "boost-thread" "boost-log" "boost-locale" "boost-regex" "boost-chrono" "boost-atomic" "boost-date-time" "boost-iostreams" "boost-program-options" "boost-nowide" "boost-geometry" "boost-multiprecision" "boost-property-tree" "boost-spirit" "boost-polygon" "boost-polygon" "tbb" "zlib" "libpng" "libjpeg-turbo" "expat" "openssl" "nlopt" "cereal" "gmp" "mpfr" "pybind11" --triplet $env:VCPKG_DEFAULT_TRIPLET
+
+      - name: Eigen, CGAL and libnoise from source
+        shell: pwsh
+        run: |
+          $eigen = (Select-String -Path engines/orca_core/ORCA_PIN -Pattern '^eigen=(.+)$').Matches[0].Groups[1].Value
+          $cgal = (Select-String -Path engines/orca_core/ORCA_PIN -Pattern '^cgal=(.+)$').Matches[0].Groups[1].Value
+          git clone --depth 1 --branch $eigen https://gitlab.com/libeigen/eigen.git eigen_src
+          git clone --depth 1 --branch "v$cgal" https://github.com/CGAL/cgal.git cgal_src
+          git clone --depth 1 https://github.com/qutescoop/libnoise.git libnoise_src
+          cmake -S libnoise_src -B libnoise_build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+          cmake --build libnoise_build --config Release
+          cmake --install libnoise_build --config Release --prefix libnoise_install
+
+      - name: Configure and build the engine (MSVC, Release)
+        shell: pwsh
+        run: |
+          $tc = "$env:GITHUB_WORKSPACE\vcpkg\scripts\buildsystems\vcpkg.cmake"
+          cmake -S engines/orca_core -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$tc" -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET `
+            -DORCA_SRC="$env:GITHUB_WORKSPACE\orca_src" -DORCA_EIGEN_DIR="$env:GITHUB_WORKSPACE\eigen_src" -DORCA_CGAL_DIR="$env:GITHUB_WORKSPACE\cgal_src" `
+            -DCMAKE_PREFIX_PATH="$env:GITHUB_WORKSPACE\libnoise_install" -DCMAKE_BUILD_TYPE=Release
+          # one translation unit of the engine (MeshBoolean.cpp) needs about 5 GB of memory: two jobs at a time is what the runner can carry
+          cmake --build build --config Release --parallel 2
+
+      - name: C++ tests, the module and the Python tests
+        shell: pwsh
+        run: |
+          python -m pip install numpy pytest
+          $mod = Get-ChildItem build -Recurse -Filter "_orca_core*.pyd" | Select-Object -First 1
+          if (-not $mod) { throw "the module _orca_core was not built" }
+          $env:ORCA_CORE_BUILD_DIR = $mod.DirectoryName
+          $env:ORCA_CORE_RESOURCES = "$env:GITHUB_WORKSPACE\engines\orca_core\python\orca_core\resources"
+          $env:ORCA_CORE_PROFILES = "$env:GITHUB_WORKSPACE\orca_src\resources\profiles"
+          python test_orca_core_results.py
+          python test_orca_core_worker.py
+          python test_orca_core_engine.py
+          python test_orca_core_profiles.py
+
+      - name: Parity with Orca's own program (when asked)
+        if: ${{ inputs.run_parity }}
+        shell: pwsh
+        run: |
+          # Orca's Windows release is a zip with orca-slicer.exe; the parity test slices the same projects with it and with this engine and compares the G-code
+          $url = "https://github.com/SoftFever/OrcaSlicer/releases/download/$env:ORCA_TAG/OrcaSlicer_Windows_$($env:ORCA_TAG)_portable.zip"
+          Invoke-WebRequest $url -OutFile orca_win.zip
+          Expand-Archive orca_win.zip -DestinationPath orca_win
+          $exe = Get-ChildItem orca_win -Recurse -Filter "orca-slicer.exe" | Select-Object -First 1
+          $mod = Get-ChildItem build -Recurse -Filter "orca_core_slice_3mf.exe" | Select-Object -First 1
+          python engines/orca_core/tests/parity.py --orca-cli $exe.FullName --orca orca_src --slice-3mf $mod.FullName --work parity_work
+
+      - name: The wheel
+        shell: pwsh
+        run: |
+          python -m pip install build wheel
+          $mod = Get-ChildItem build -Recurse -Filter "_orca_core*.pyd" | Select-Object -First 1
+          Copy-Item $mod.FullName engines/orca_core/python/orca_core/
+          # Orca's licence (AGPL-3.0) and notices go into the wheel next to the module
+          Copy-Item orca_src\LICENSE.txt engines/orca_core/python/orca_core/LICENSE-OrcaSlicer.txt
+          python -m pip wheel --no-deps -w wheelhouse engines/orca_core/python
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orca_core-windows
+          path: wheelhouse/*.whl
+          retention-days: 14

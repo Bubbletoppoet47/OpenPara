@@ -266,9 +266,19 @@ def _g_coupled(p):
     p.drawLine(QPointF(8, 8.5), QPointF(10, 6.5))
 
 
+def _g_slicer(p):
+    p.setPen(_pen(NAVY, 1.3))
+    for i, y in enumerate((17.5, 14, 10.5, 7)):
+        p.setBrush(QBrush(ORANGE if i < 3 else BLUE))
+        p.drawRoundedRect(QRectF(5, y, 14, 2.6), 1.0, 1.0)
+    p.setPen(_pen(NAVY, 1.5))
+    p.drawLine(QPointF(3, 4), QPointF(21, 4))
+    p.drawLine(QPointF(12, 4), QPointF(12, 6.4))
+
+
 KIND_GLYPH = {"coupled": _g_coupled, "part": _g_part, "assembly": _g_assembly, "solid": _g_solid, "thermal3d": _g_thermal3d, "fluid3d": _g_fluid3d, "fea": _g_fea, "thermal": _g_thermal, "cfd": _g_cfd,
               "beam": _g_beam, "sheets": _g_sheets, "pdf": _g_pdf, "controls": _g_controls, "circuits": _g_circuits, "visualize": _g_visualize, "motor": _g_motor,
-              "trainer": _g_trainer, "trained_models": _g_trained_models, "model_test": _g_model_test, "annotator": _g_annotator, "truss": _g_truss, "study": _g_study, "drawing": _g_drawing}
+              "trainer": _g_trainer, "trained_models": _g_trained_models, "model_test": _g_model_test, "annotator": _g_annotator, "truss": _g_truss, "study": _g_study, "drawing": _g_drawing, "slicer": _g_slicer}
 
 
 def _g_unknown(p):

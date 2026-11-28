@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orca_core"
+version = "0.0.1"
+description = "Orca Slicer's slicing engine (libslic3r, cut down) as a Python module, for OpenPara"
+requires-python = ">=3.12"
+dependencies = ["numpy"]
+license = { text = "AGPL-3.0-only" }
+
+[tool.setuptools]
+packages = ["orca_core"]
+
+[tool.setuptools.package-data]
+orca_core = ["*.pyd", "*.so", "resources/info/*.json", "resources/README.md", "LICENSE-*.txt"]

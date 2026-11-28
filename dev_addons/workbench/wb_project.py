@@ -173,6 +173,12 @@ register("sheets", "Sheets", "Component Tools",
 register("drawing", "Drawing", "Component Tools",
          [CellSpec("models", "Models", "import", (), ("geometry",), True, True), ("document", "Drawing", "data")],
          "A drawing of the parts and assemblies wired into it: views on a standard sheet, exported as a PDF", ".opdraw")
+# A slicer takes the Parts and Assemblies wired into its Geometry cell (any number) and puts them on the plate of a printer: Setup holds the printer, the print profile, the filament, the
+# settings the person changed and where each part sits; Slicing runs Orca Slicer's engine (the Slicer add-on) and gives the toolpaths (the G-code and where every road of plastic is);
+# Preview shows the layers and exports the G-code.  Nothing of the result is saved in the project: after opening, Slicing says update.
+register("slicer", "Slicer", "Component Tools",
+         [CellSpec("geometry", "Geometry", "import", (), ("geometry",), True, True), ("setup", "Setup", "data"), ("slicing", "Slicing", "compute", ("toolpaths",)), ("preview", "Preview", "view")],
+         "Puts the parts and assemblies wired into it on the plate of a printer and slices them with Orca Slicer's engine; the G-code is exported from it and the toolpaths can feed a printed-part analysis", "folder")
 
 
 # ---------------------------------------------------------------------------------------------------------------------------- the project

@@ -89,6 +89,14 @@ r2 = oc.Result.load(d)
 assert len(r2.paths) == len(r.paths) and np.array_equal(r2.paths.points, r.paths.points) and r2.estimate.time_normal_s == r.estimate.time_normal_s
 print("one cube: %d layers, %d paths, %d moves, %.0f s" % (r.paths.n_layers, len(r.paths), len(r.moves), r.estimate.time_normal_s))
 
+# ---- 1b. one thread: a two-core computer gets one by default; the engine once never finished with a single TBB thread
+j1 = oc.Job(BASE, threads=1)
+j1.add_object(v, f, "cube")
+t0 = time.time()
+r1 = j1.slice(timeout=120)
+assert r1.paths.n_layers == 100 and time.time() - t0 < 60, "a slice with one thread must end"
+assert len(r1.paths) == len(r.paths) and np.array_equal(r1.paths.points, r.paths.points), "and give the same toolpaths as with two"
+
 # ---- 2. settings: a value that cannot be read, settings that cannot work together, a setting on one object
 e = None
 try:

@@ -54,6 +54,8 @@ first run it takes hours; the Windows runner is the intended place to build the 
 
 **SLC-3 (profiles) on Linux is done**: `profiles.py` reads Orca's vendor profiles (72 vendors in the checkout; Elegoo + the generic library in a 2.1 MB zip) and `test_orca_core_profiles.py` checks it on a small made-up vendor (folder and zip) and on the real Elegoo files: the Centauri Carbon in four nozzle sizes has 4, 6, 6 and 5 print profiles and 25 `@ECC` filaments each, every Elegoo printer's own default print and filament profile fits it, and a cube sliced from the three names (`Elegoo Centauri Carbon 0.4 nozzle`, `0.20mm Standard @Elegoo CC 0.4 nozzle`, `Elegoo PLA @ECC`) gives G-code identical to Orca's own program (7,824 lines; only the object's label differs: `cube` and not `cube.stl`).
 
-Not done: the Windows build (SLC-1, needs the runner), the settings pages and option definitions exported from Orca (SLC-6/7), and the parity cases for multi-material, painting and several objects.
+Found while building the Workbench block: a slice with one thread never ended (Orca's G-code export waits for a second thread); `slice` now uses at least two TBB threads, and the engine test slices with one.
+
+Not done: the Windows build (SLC-1; `.github/workflows/slicer-engine.yml` is written and started by hand, it has not been run), the settings pages and option definitions exported from Orca (SLC-6/7), and the parity cases for multi-material, painting and several objects.
 
 Build notes from the run here: `MeshBoolean.cpp` needs about 5 GB, so on a 7 GB machine build with `ninja -j1` until it is done; a full build is a few hours on two cores. Boost is linked by file (`$<TARGET_LINKER_FILE:...>`) on purpose, see the comment in `CMakeLists.txt`.
